@@ -1,0 +1,37 @@
+# 段落号与正文已对照 docs/参考资料/01_审计准则_ASA/ASA_240.pdf (现行编译版, Compilation 8) 核对 (tests/test_knowledge.py
+# 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行.
+# 本项目的审计期间 (截至 2026-06-30 与 2026-09-30) 适用现行版; ASA_240_（2026-12-15起生效）.pdf 适用于 2026-12-15 及以后
+# 开始的期间, 不用. 分录测试的段号以现行编译版第 33(a) 段为准 (新版另行编号); 错报段 (MD-2) 只往本文件追加 ASA240-P36.
+standard: ASA 240
+title: The Auditor's Responsibilities Relating to Fraud in an Audit of a Financial Report
+compiled: "2023-12-14"   # Compilation Number 8
+fragments:
+  - id: ASA240-P32
+    paragraph: "32"
+    topic: management_override_significant_risk
+    text: |
+      Management is in a unique position to perpetrate fraud because of management’s ability to manipulate accounting records and prepare a fraudulent financial report by overriding controls that otherwise appear to be operating effectively. Although the level of risk of management override of controls will vary from entity to entity, the risk is nevertheless present in all entities. Due to the unpredictable way in which such override could occur, it is a risk of material misstatement due to fraud and thus a significant risk.
+    procedures: [GEN-05, GEN-02, PLN-15]
+  - id: ASA240-P33
+    paragraph: "33"
+    subitems: [a]
+    topic: journal_entry_testing
+    text: |
+      Irrespective of the auditor’s assessment of the risks of management override of controls, the auditor shall design and perform audit procedures to:
+      (a) Test the appropriateness of journal entries recorded in the general ledger and other adjustments made in the preparation of the financial report. In designing and performing audit procedures for such tests, the auditor shall:
+      (i) Make enquiries of individuals involved in the financial reporting process about inappropriate or unusual activity relating to the processing of journal entries and other adjustments;
+      (ii) Select journal entries and other adjustments made at the end of a reporting period; and
+      (iii) Consider the need to test journal entries and other adjustments throughout the period.
+    procedures: [GEN-05, GEN-02, PLN-15]
+  - id: ASA240-A44
+    paragraph: "A44"
+    topic: journal_entry_selection_matters
+    text: |
+      When identifying and selecting journal entries and other adjustments for testing and determining the appropriate method of examining the underlying support for the items selected, the following matters are of relevance:
+      The identification and assessment of the risks of material misstatement due to fraud – the presence of fraud risk factors and other information obtained during the auditor’s identification and assessment of the risks of material misstatement due to fraud may assist the auditor to identify specific classes of journal entries and other adjustments for testing.
+      Controls that have been implemented over journal entries and other adjustments – effective controls over the preparation and posting of journal entries and other adjustments may reduce the extent of substantive testing necessary, provided that the auditor has tested the operating effectiveness of the controls.
+      The entity’s financial reporting process and the nature of evidence that can be obtained – for many entities routine processing of transactions involves a combination of manual and automated controls. Similarly, the processing of journal entries and other adjustments may involve both manual and automated controls. When information technology is used in the financial reporting process, journal entries and other adjustments may exist only in electronic form.
+      The characteristics of fraudulent journal entries or other adjustments – inappropriate journal entries or other adjustments often have unique identifying characteristics. Such characteristics may include entries (a) made to unrelated, unusual, or seldom-used accounts, (b) made by individuals who typically do not make journal entries, (c) recorded at the end of the period or as post-closing entries that have little or no explanation or description, (d) made either before or during the preparation of the financial report that do not have account numbers, or (e) containing round numbers or consistent ending numbers.
+      The nature and complexity of the accounts – inappropriate journal entries or adjustments may be applied to accounts that (a) contain transactions that are complex or unusual in nature, (b) contain significant estimates and period-end adjustments, (c) have been prone to misstatements in the past, (d) have not been reconciled on a timely basis or contain unreconciled differences, (e) contain inter-company transactions, or (f) are otherwise associated with an identified risk of material misstatement due to fraud. In audits of entities that have several locations or components, consideration is given to the need to select journal entries from multiple locations.
+      Journal entries or other adjustments processed outside the normal course of business – nonstandard journal entries may not be subject to the same nature and extent of controls as those journal entries used on a recurring basis to record transactions such as monthly sales, purchases and cash disbursements.
+    procedures: [GEN-02]

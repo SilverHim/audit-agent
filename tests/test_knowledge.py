@@ -157,9 +157,11 @@ APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pd
 # knowledge/standards 下每个 YAML 一行; 其余 ASA, AASB 由各组首建该文件时加行
 SOURCES: dict[str, Source] = {
     "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", None),)),
+    "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 32)),)),  # 现行版 (第 32 段至 A44); 2026-12-15 起的新版不用
     "ASA320": Source((("01_审计准则_ASA/ASA_320.pdf", None),)),
     "ASA450": Source((("01_审计准则_ASA/ASA_450.pdf", None),)),
     "ASA505": Source((("01_审计准则_ASA/ASA_505.pdf", None),)),
+    "ASA550": Source((("01_审计准则_ASA/ASA_550.pdf", (10, 16)),)),  # 第 10 段至 Aus 27.2
     "ASA700": Source((("01_审计准则_ASA/ASA_700.pdf", None),)),
     "ASA705": Source((("01_审计准则_ASA/ASA_705.pdf", None),)),
     "CA2001": Source(((CA_VOLUME.format(1), (505, 515)), (CA_VOLUME.format(2), (80, 260))), compiled="2026-08-27"),
