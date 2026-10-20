@@ -524,14 +524,14 @@ def test_xj575_needs_the_expense_claim(fixed: Fixed) -> None:
 @pytest.mark.parametrize(
     ("voucher", "texts"),
     [
-        (  # 银行两侧与对账单期初一致, 840 为董事借款, 比较数转 FIN-12
+        (  # 银行两侧与对账单期初一致, 840 为董事借款; 0630 表缺的余额属未审比较数, 不是本期错报 (Issue #46)
             "XJ-397",
             (
                 "-8,703.20 + 4,130.98 = -4,572.22",
                 "091 opens at AUD 15,081.23",
                 "loan agreement",
                 "confirmation",
-                "FIN-12",
+                "unaudited comparative information, not a misstatement of this period",
             ),
         ),
         (  # 同日同额重复开票, 没有服务记录的已全额冲销
@@ -571,8 +571,9 @@ def test_xj575_needs_the_expense_claim(fixed: Fixed) -> None:
 )
 def test_other_vouchers_are_accepted(fixed: Fixed, voucher: str, texts: tuple[str, ...]) -> None:
     """R135 验收 4: 其余 5 笔 accept, 没有错报草稿, 结论含设计稿第 6.3 节的要点 (只查关键词); 有例外而建议 accept,
-    rule 分项为 0 (只断言分项值, 不比较各判断置信度的高低)."""
+    rule 分项为 0 (只断言分项值, 不比较各判断置信度的高低). 结论与推理链不引已取消的 FIN-12 (Issue #46)."""
     j = fixed.judgments[voucher]
     assert (j.proposed_action, j.misstatement_draft, j.confidence_parts["rule"]) == (ProposedAction.accept, None, 0.0)
     for text in texts:
         assert text in j.conclusion, text
+    assert "FIN-12" not in " ".join([j.conclusion, *(step.text for step in j.reasoning_chain)])

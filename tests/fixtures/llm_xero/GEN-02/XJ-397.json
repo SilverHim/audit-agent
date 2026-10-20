@@ -1,5 +1,5 @@
 {
-  "conclusion": "Journal entry XJ-397 (16 July 2026) is the conversion balance brought into Xero: it debits the Business Bank Account (090) AUD 4,130.98 and the Business Savings Account (091) AUD 15,081.23 and credits Historical Adjustment (840) AUD 19,212.21. Both bank accounts then agree with the statements: 090 opens at AUD -8,703.20 + 4,130.98 = -4,572.22, the balance before the first statement line BT-090-0001, and 091 opens at AUD 15,081.23, the balance before BT-091-0001. The 840 credit is the director's interest-free loan, supported by the loan agreement of 10 September 2018 and the director's confirmation of 16 October 2026, so the entry is appropriate; the 30 June 2026 comparative trial balance has no balance for 091 or 840, which is referred to the comparative information check (FIN-12).",
+  "conclusion": "Journal entry XJ-397 (16 July 2026) is the conversion balance brought into Xero: it debits the Business Bank Account (090) AUD 4,130.98 and the Business Savings Account (091) AUD 15,081.23 and credits Historical Adjustment (840) AUD 19,212.21. Both bank accounts then agree with the statements: 090 opens at AUD -8,703.20 + 4,130.98 = -4,572.22, the balance before the first statement line BT-090-0001, and 091 opens at AUD 15,081.23, the balance before BT-091-0001. The 840 credit is the director's interest-free loan, supported by the loan agreement of 10 September 2018 and the director's confirmation of 16 October 2026, so the entry is appropriate; the 30 June 2026 comparative trial balance has no balance for 091 or 840, which concerns the unaudited comparative information, not a misstatement of this period.",
   "reasoning_chain": [
     {
       "kind": "fact",
@@ -186,7 +186,7 @@
     },
     {
       "kind": "inference",
-      "text": "XJ-397 is an appropriate conversion entry; the absence of 091 and 840 from the 30 June 2026 comparative trial balance is a question for the comparative information check (FIN-12), not a misstatement of this period.",
+      "text": "XJ-397 is an appropriate conversion entry; the absence of 091 and 840 from the 30 June 2026 comparative trial balance concerns the unaudited comparative information, not a misstatement of this period; the comparatives are taken from the Xero prior-period trial balance without restatement.",
       "evidence": [],
       "from_steps": [
         1,

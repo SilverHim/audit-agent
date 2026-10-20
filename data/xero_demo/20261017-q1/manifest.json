@@ -741,7 +741,7 @@
     },
     {
       "path": "llm/GEN-02/XJ-397.json",
-      "sha256": "ff0275aae8fa9aa72e1478fe61c88a77f2ab9773a6169a68804f6f2ae009cb7f",
+      "sha256": "65f9f821bcbdc67fbb298a159e12fb6c9ed5761bf4193ac101a9ea87ebcf2e17",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

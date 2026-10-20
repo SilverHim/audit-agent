@@ -23,7 +23,7 @@
 6. **数据集声明文件 `dataset_traits.json`** 承载跟数据来源有关的事实: 录入时间不可靠, 作废冲回的说明格式, 数据截止日, 上期起始日, 薪酬科目对照. 没有这个文件的数据集 (Numbat) 按默认值运行.
 7. **全量分录扫描 (GEN-05) 已定** (决定 13, 用户: "测试数据加上不可靠跳过, 真实数据应该需要检查"). 数据集声明录入时间不可靠时 (Xero 演示与测试数据), 看录入时间的 4 类规则自动跳过; 真实客户数据照常执行. 另加 4 条不看时间的通用规则 R09 至 R12 (手工非标准分录, 全额贷项冲销, 作废后重录且名称改变, 疑似重复开票), 共 7 条命中 (第 5.3 节).
 8. **银行 09-30 余额账实完全相符**, CSH-02 在演示数据上不出余额差额; 在途款项场景放进注入测试 T4. 储蓄户回函载明 09-30 应计利息 48.53 (决定 15), 账面未计提, CSH-02 新规则 D04 出 1 条例外, 判断认定错报 M-5 (第 5.6, 6.5 节).
-9. **剧本最终计数** (第 7.3 节): 例外 41, 判断 56 (另有 XJ-575 改判产生的人工判断 1 条), 复核任务 53, 闸门决定 10 (ACC-08 单列一次, 依 G5), 人工队列 4, 更正通知 2, 错报 5 (全部 corrected), 大模型调用约 66 次 (不含 A7 独立复核; 加 A7 约 84 次, 第 7.3 节), 文件 29 份.
+9. **剧本最终计数** (第 7.3 节): 例外 41, 判断 56 (另有 XJ-575 改判产生的人工判断 1 条), 复核任务 53, 闸门决定 10 (ACC-08 单列一次, 依 G5), 人工队列 4, 更正通知 2, 错报 5 (全部 corrected), 大模型调用约 66 次 (不含 A7 独立复核; 加 A7 约 84 次, 第 7.3 节), 文件 28 份 (财务报表样例 fs_v1.pdf 不登记).
 10. **新快照已拉取** (计划第 0 节): `data/external/xero/api/20261017-q1/` 已在仓库中 (期间 07-01 至 09-30, 对账单到 10-17). 载入前仍按第 9.2 节逐文件比对 20261017-mock, 确认 Demo 没有在两次拉取之间重置.
 
 ---
@@ -414,8 +414,8 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 16 | 固定资产登记表 (截至 09-30) | 1 | 截至 09-30 "Nil"; 另列 "Additions after the reporting date (for information)": 10-04 家具 6,300 (710), 10-11 笔记本 1,969.99 (720) | GEN-02 (XJ-499), GEN-06 |
 | 17 | 报销单 E003 | 2 | 申请人 Odette Garrison (员工号 E003), 08-14 填报, 08-16 批准; 4 张收据 (08-03 至 08-12) 合计 296.95, 逐张对上 XJ-493 (08-16 入账: 差旅 493 三行, 含税 179.00, 30.45, 80.00; 招待 420 一行 7.50, 不抵扣进项税; 进项税 26.31); 系统录入时把姓误写为 "Grainger" | GEN-02 (XJ-575) |
 | 18 | 工资册与雇佣条款 | 2 | 三人 07-20 入职全职; 双周发薪截至发薪日 (周日); 毛工资每期 Garrison 2,500, Gray 2,400, Green 1,800; 适用 NES 年假 | FIN-15 |
-| 19 | 会计政策摘录 | 1 | 资本化门槛 1,000 (不含税), 排除 Oliver 笔记本净额 886 的资本化问题 | FIN-15, FIN-12 |
-| 20 | 董事借款协议 (2018-09-10) | 2 | 4.6 | GEN-02 (XJ-397), FIN-12 |
+| 19 | 会计政策摘录 | 1 | 资本化门槛 1,000 (不含税), 排除 Oliver 笔记本净额 886 的资本化问题 | FIN-15 |
+| 20 | 董事借款协议 (2018-09-10) | 2 | 4.6 | GEN-02 (XJ-397) |
 | 21 | 董事借款确认函 (2026-10-16) | 1 | 4.6 | 同上, GEN-04 |
 | 22 | 持续经营备忘录与 13 个月现金流预测 (10-16) | 3 | 4.6 | GEN-04, FIN-02 |
 | 23 | 董事支持函 (10-16) | 1 | 4.6 | GEN-04, FIN-02, GEN-06 |
@@ -423,14 +423,14 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 25 | SMART Agency 税务发票 SM0195-70135 (09-05) | 1 | 按 Xero 账单原样: "Design concepts for advertising material", 2,000 含税, 服务交付 09-04, 到期 09-19; 抬头 SMART Agency Pty Ltd, ABN 23 900 043 076 (与 T6 的合成号码相同, 基线登记 mock 中没有这家) | GEN-06; 注入测试 T3, T6 |
 | 26 | Ridgeway University 订单 CRM08-12 (10-02) | 1 | 10 月 5 日起每周 3 天驻场项目管理, 月初预开票 (对上 ORC01025) | GEN-06 |
 | 27 | Jakaranda Maple Systems 报价单 (10-08) | 1 | 新项目报价, 要求 2,000 订金 | GEN-06 |
-| 28 | financial_statements/fs_v1.pdf (10-22 编成, 10-23 董事声明) | 6 | 4.7 | FIN-12, RPT-03 |
+| 28 | financial_statements/fs_v1.pdf (10-22 编成, 10-23 董事声明) | 6 | 4.7 | 无: 只作样例, 不登记 (Issue #46) |
 | 29 | 管理层声明书 (10-23) | 2 | 4.8 | FIN-07, FIN-18 |
 
 另有结构化文件 (不计入 document): fs_v1.json, delivery_notes.csv, contract_links.csv, bank_accounts.csv, receipts.json, registry JSON, planning JSON, client_profile.json, dataset_traits.json, payroll/employees.csv, adjustments CSV, manual/*.json, llm/ fixture.
 
 **文件类型, 证据种类与可靠性**
 
-现状 (R89 合入后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record, other 共 14 类; `judgment_engine.DOCUMENT_EVIDENCE` 映射除 financial_statements 与 other 外的全部类型, 这两类的文件指针在引用级被拒 ("{type} 类文件不作证据"). 本数据集为此新增的是下表 2 类 (agreement, internal_record, R89 一次合并); 供应商发票用上游的 invoice (证据种类 invoice), 待审财报 fs_v1.pdf 用上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
+现状 (R89 合入后): `DocumentType` 有 contract, invoice, confirmation, bank_statement, minutes, financial_statements, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record, other 共 14 类; `judgment_engine.DOCUMENT_EVIDENCE` 映射除 financial_statements 与 other 外的全部类型, 这两类的文件指针在引用级被拒 ("{type} 类文件不作证据"). 本数据集为此新增的是下表 2 类 (agreement, internal_record, R89 一次合并); 供应商发票用上游的 invoice (证据种类 invoice), 财务报表样例 fs_v1.pdf 的类型为上游的 financial_statements (不作证据), 都不另加类型 (第 9 批裁定):
 
 | 新增 DocumentType | 证据种类 | 用于 | 为什么不复用已有类型 |
 |---|---|---|---|
@@ -444,9 +444,9 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | invoice | invoice | 供应商发票: #25 SMART Agency 税务发票 |
 | bank_statement | bank | 不用: 银行流水取自快照, 银行回函为 confirmation |
 | minutes | voucher | 董事决议与委任文件: #1 appointment.pdf |
-| financial_statements | 不作证据 (不在映射里) | 待审财报: #28 fs_v1.pdf, 供 FIN-12 与会计记录勾稽 |
+| financial_statements | 不作证据 (不在映射里) | 不登记: #28 fs_v1.pdf 只作审计师自行上传报表的样例, 上传后只分类 (财务报表以账套为准, Issue #46) |
 
-29 份文件逐一 (reliability 取 DocumentRef). 登记途径即 manifest 的 registration: acceptance, fieldwork, statements 由演示数据导入上传 (acceptance 在承接时停在 ACC-01 闸门, fieldwork 在 P1 开头停在等数据时, statements 在完成阶段按补交请求), A3 分类 (合同随即抽取), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记; manual 经人工任务上传, 同样按 manifest 补登记; registry, confirmation 由登记 mock 与函证 mock 在程序执行时存档 (第 9.5 节):
+29 份文件逐一 (reliability 取 DocumentRef), 登记的 28 份 (#28 不登记). 登记途径即 manifest 的 registration: acceptance, fieldwork 由演示数据导入上传 (acceptance 在承接时停在 ACC-01 闸门, fieldwork 在 P1 开头停在等数据时), A3 分类 (合同随即抽取), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记; manual 经人工任务上传, 同样按 manifest 补登记; registry, confirmation 由登记 mock 与函证 mock 在程序执行时存档 (第 9.5 节):
 
 | # | 文件 | DocumentType | 证据种类 | reliability | 登记途径 |
 |---|---|---|---|---|---|
@@ -472,10 +472,10 @@ ORC1003 与 ORC1005 不做记录: 一张是重复开票, 一张已并入 ORC1006
 | 25 | SMART Agency 发票 | invoice | invoice | external_copy | 同上 |
 | 26 | Ridgeway 订单 | agreement | contract | external_copy | 同上 |
 | 27 | Jakaranda 报价单 | internal_record | voucher | internal_copy (公司发出的报价的留存副本) | 同上 |
-| 28 | fs_v1.pdf | financial_statements | 不作证据; 判断引用 financial_statement_line (G6) | internal_original | statements: 完成阶段按补交请求 REQ-financial_statements 上传 |
+| 28 | fs_v1.pdf | financial_statements | 不作证据 | internal_original (只作说明) | 不登记: 只生成, 演示导入不上传, 不进 manifest.documents 与 index.csv (Issue #46) |
 | 29 | 声明书 | representation_letter | voucher | internal_original (G5 示例) | manual: FIN-07 人工任务上传 (G5) |
 
-documents/index.csv 列 19 份: #1, 2 (承接文件) 与 #12 至 28, 各项与 manifest.json documents 段的同名条目同值; 上传后的补登记一律取 manifest, 含不在 index.csv 的 3 份收入合同与声明书. 摘录与回函由 mock 存档, 不经上传, 也不列. related_ids 列写关联对象 ID (如 #12 至 #14 写 ACN-900043030, #25 写 XJ-548 与 BT-090-0097), 供 GEN-03, GEN-06 按对象取文件.
+documents/index.csv 列 18 份: #1, 2 (承接文件) 与 #12 至 27, 各项与 manifest.json documents 段的同名条目同值; 上传后的补登记一律取 manifest, 含不在 index.csv 的 3 份收入合同与声明书. 摘录与回函由 mock 存档, 不经上传, 也不列. related_ids 列写关联对象 ID (如 #12 至 #14 写 ACN-900043030, #25 写 XJ-548 与 BT-090-0097), 供 GEN-03, GEN-06 按对象取文件.
 
 ### 4.1 appointment.pdf
 
@@ -570,6 +570,8 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 
 ### 4.7 管理层报表 fs_v1 (5 笔更正后)
 
+财务报表以账套为准 (Issue #46): fs_v1 (pdf 与 json) 只作补造样例, 即审计师自行上传报表时的样子; 演示导入不上传, 不登记, 不参与任何程序, 系统不读. 下文的数照旧, 与账套 (09-30 试算表加 5 笔更正) 是否一致由校验脚本核对 (第 9.5 节).
+
 **财务状况表**
 - 资产: 现金 11,581.23; 应收 10,199.50; 其他应收 (应计利息, 620) 48.53; 合计 21,829.26.
 - 负债: 银行透支 10,900.44; 应付 4,005.07 (800 加 860); GST 与 PAYG 8,801.97 (820 为 1,266.97, 825 为 7,535.00); 员工薪酬负债 8,958.56 (804 为 2,010.00, 805 为 2,687.36, 826 为 4,261.20); 董事借款 19,212.21; 合计 51,878.25.
@@ -587,7 +589,7 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 
 **比较数** (截至 2026-06-30 的 12 个月, 未经审计): 按 0630 表加 XJ-397 (转换余额) 编制, 是首次按准则编制, 不是重述: 现金 15,081.23, GST 应收 791.20, 透支 4,572.22, 董事借款 19,212.21, 累计亏损 (7,912.00); 损益: 收入 4,200, 费用 12,112, 亏损 7,912.
 
-**附注** (所依段号见各项; 附注 2 至 4 的编号不变, FIN-02 的闸门理由引 "Note 2")
+**附注** (所依段号见各项; 报告, FIN-02 的闸门理由与 RPT-01 批注不引附注编号)
 1. 编制基础 (AASB 1060 第 10, 11 段): 上期没有编制财报, 是首次按准则编制, 过渡日 2025-07-01, 没有原框架下的财报可调节 (AASB 1060 第 212 段); 期间只有 3 个月及缩短的原因 (履行 06-15 股东协议, 对齐 10 月的合同续约周期), 比较数不完全可比 (AASB 1060 第 16 段); 重要会计政策信息照会计政策摘录 (#19) 写收入, 固定资产门槛与折旧, 员工薪酬与 GST (AASB 1060 第 95 段).
 2. 持续经营 (AASB 1060 第 15 段): ASA 570 第 19(b) 段句式; 写明亏损 22,136.99, 净流动负债 30,048.99, 依赖董事支持与透支额度.
 3. 关联方 (AASB 1060 第 192, 194, 198 段): 董事借款 (含 10 月新增 2,500); 透支担保; VPA 房租 4,500 及其条款 (审计后补入, 第 7 节第 18 步).
@@ -601,7 +603,7 @@ CON-X02 的 4.1 写 "the Customer simultaneously receives and consumes the benef
 - 第 5 页附注 1 (编制基础: 公司法与 Simplified Disclosures, 首次编制, 过渡日 2025-07-01, 依 s323D(2A) 缩短的 3 个月财年及原因, 比较数为 12 个月且含 XJ-397 的转换余额, 不完全可比; 重要会计政策) 与附注 2 (持续经营: 亏损 22,136.99, 流动负债超过流动资产 30,048.99, 透支额度 15,000 随时可收回; 董事自审计报告日起 12 个月不要求还款并追加最多 40,000; 预测在 2026-11 与 2027-01 有缺口; 结论用 ASA 570 第 19(b) 段句式).
 - 第 6 页附注 3 (董事借款 19,212.21 含 1.00 股款, 10 月新增 1,000 与 1,500; 透支个人担保; VPA 为董事与其配偶的公司, 本期房租 4,500 不含 GST, 按月 1,500, 无书面租约, 9-30 终止; Morgan Advisory 无交易; 董事不领薪酬), 附注 4 (10-01 起向 Harbourview 租两年, 年租 12,886.32 加 GST; 10-15 起分租 RM2031; 家具 6,300 用于新租约下的装修, 笔记本 1,969.99, 均不含 GST; 董事 10 月借款 2,500; 2026-10-23 由唯一董事批准报出), 附注 5 (审计费 4,800, 比较数 nil, 没有其他服务) 与董事声明 (s295(4)(c), (d) 两项意见, 按 s295(5) 写明依董事决议作出, 签署与日期).
 - 不写 AASB 1060 的段号 (财报正文不引准则段号, 各附注所依段号见上).
-- 四张表加附注与董事声明是完整财报 (AASB 1060 第 25(c)(d) 段; R293 补了权益变动表与现金流量表). 损益表保持原名, 委托书 (第 4.2 节) 与 RPT-03 审计报告第 1 段的报表列举原样成立. FIN-12 只勾稽财务状况表与损益表的 18 行 (第 6.6 节); 权益变动表与现金流量表的行由校验脚本按这 18 行核对 (第 9.5 节).
+- 四张表加附注与董事声明是完整财报 (AASB 1060 第 25(c)(d) 段; R293 补了权益变动表与现金流量表). 损益表保持原名, 委托书 (第 4.2 节) 与 RPT-03 审计报告第 1 段的报表列举原样成立. 财务状况表与损益表的 18 行与账套勾稽, 权益变动表与现金流量表的行按这 18 行核对, 都由校验脚本做 (第 9.5 节).
 
 ### 4.8 人工队列提交物 (manual/)
 
@@ -751,7 +753,7 @@ GEN-07 合计 9 条. 对 Numbat 的影响: S02 改写后 G3 的 GJ-202607-ECL-2 
 | PLN-19 P01 (两次) | 5 笔更正都不碰收入分类, 基数 32431 不变, change 0, 不出例外 |
 | FIN-09 V01 | 只取 entry_no 以 `audit_adjustment_entry_prefix` (AJE-) 开头的分录; 第 1 轮匹配 AJE-X01-1..3 与 AJE-X05-1..2, 第 2 轮匹配 AJE-X02 至 X04 的 6 行 |
 | FIN-04 (两次) | SCHEDULE v1 / v2: items 与 excluded_trivial_ids 为空, corrected_ids 依次为 [M-1, M-5] 与 [M-1 至 M-5], total 0, materiality 32431, 候选 unqualified |
-| FIN-12 K01, K02 | 全部通过 (6.6 节) |
+| FIN-12 | 取消 (Issue #46): 财务报表以账套为准, 不做财务报告与会计记录的核对 |
 | FIN-18 W01-W07 | 全部通过, must_disclaim 为假 |
 | FIN-10 E01-E05 | E01-E04 通过; E05 attention (GEN-12 未实现); 收费依赖度 0.0020 |
 
@@ -797,7 +799,7 @@ GEN-07 合计 9 条. 对 Numbat 的影响: S02 改写后 G3 的 GJ-202607-ECL-2 
 
 | 判断 | 建议 | 要点 |
 |---|---|---|
-| J-GEN-02-1-XJ-397 | accept | 银行两侧与对账单期初一致 (090: -8,703.20 + 4,130.98 = -4,572.22; 091: 15,081.23); 840 为董事借款, 有 2018 年借款协议与 10-16 确认函 (决定 8); 0630 比较数漏记的余额转 FIN-12 比较数检查 |
+| J-GEN-02-1-XJ-397 | accept | 银行两侧与对账单期初一致 (090: -8,703.20 + 4,130.98 = -4,572.22; 091: 15,081.23); 840 为董事借款, 有 2018 年借款协议与 10-16 确认函 (决定 8); 0630 试算表没有 091 与 840 的余额, 属未审比较数的事, 不是本期错报; 比较数照 Xero 上期期末试算表, 本版不重述 |
 | J-GEN-02-1-XJ-405 (R12) | accept | ORC1003 与 ORC1008 重复, ORC1003 已由 CR1003 在 07-26 全额冲销; ORC1008 有 7 月服务记录并已收款. 上下文按 R12 detail 取行: paired_invoices 的 XJ-408 全部行与 SR-ORC1008, full_credits 的 XJ-430 全部行 (GEN-02 上下文要加这两项) |
 | J-GEN-02-1-XJ-430 | accept | CR1003 说明是重复开票, 全额冲销 |
 | J-GEN-02-1-XJ-449 | accept | ORC1005 当天全额冲销, 已并入 ORC1006 (3 × 450) |
@@ -859,21 +861,14 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 - F01 各科目都 accept, 由 P2 的证据解释: 090 透支扩大 (经营亏损, 持续经营已评价); 091 与 840 来自转换余额 (董事借款); 610 为 9 月发票, 10 月收回; 800 与 820 为正常应付与本季 GST; 825 PAYG 10-28 到期; 第 2 轮 804, 805, 826 由已更正错报解释.
 - F03 至 F05 建议认定错报, 审计师认定后成为 M-2 至 M-4.
 
-### 6.6 计划, 重估, 勾稽与报告
+### 6.6 计划, 重估与报告
 
 **PLN-15**: PLAN-1 v1 (draft) → v2 approved. 装配 CSH-02 (period_end 2026-09-30, subsequent_days 10, lookback_days 5), CSH-04 (as_of 2026-09-30), CSH-05, DOC-06, REV-02 (window 20, threshold_cents 16216), REV-03, REV-08 (window 20), 以及新程序固定集. 叙述: 范围写明 s323D(2A) 与 s293; 首次审计 (ASA 300 第 13 段, ASA 510 第 6 段, ASA 710 第 14 段); 管理层凌驾为特别风险 (ASA 240 第 32, 33(a) 段), 唯一董事兼记账人; 持续经营迹象 (ASA 570 第 10 段); 2.7 的其余重大科目; 送达股东不晚于 2027-01-31. eqr_required 为 false (ASQM 1 第 34(f) 段).
 
 **PLN-19** (两次): 基数不变, J-PLN-19-1-MATERIALITY 与 J-PLN-19-2-MATERIALITY 都是 accept (revise 假); 闸门 approve 不带 materiality, 计划不出新版本.
 
-**FIN-12**: 勾稽对象是冻结的 fs_v1.
-- K01: 财务状况表与损益表的每行 (按报表种类取 financial_position 与 profit_or_loss, 共 18 行) 金额等于 "09-30 试算表加已验证更正分录" 的映射科目之和. 权益变动表与现金流量表的行 (changes_in_equity, cash_flows) 不与试算表勾稽, 其内部一致由校验脚本核对.
-- K02: 映射覆盖 09-30 试算表的 27 个科目 (含余额为 0 的 801) 加 804, 805, 826, 478, 620, 270, 共 33 个.
-- 报表内部: 资产 21,829.26 = 负债 51,878.25 + 权益 (30,048.99); 期初累计亏损 7,912.00 加本期 22,136.99 = 30,048.99.
-- 外部核对: 现金与透支等于回函余额; 其他应收 48.53 等于 BA-091 回函的应计利息; 应收 10,199.50 = 未结发票合计 (1026C 属 10 月, 不冲减).
-- 比较数等于 "0630 表加 XJ-397"; 若直接比 0630 表, 090, 091, 840 会分别差 4,130.98, 15,081.23, 19,212.21, 另设一条带解释的比较数检查.
-
 **RPT-03**: REPORT-1, 无保留意见, 依 s308(1).
-- 持续经营段排在形成意见的基础段之后: 指向附注 2; 写明本期亏损 22,136.99, 流动负债超过流动资产 30,048.99; 写明依赖董事不催收 19,212.21 的借款并提供资金, 以及透支额度; 意见未因此修改.
+- 持续经营段排在形成意见的基础段之后: 提请注意财务报告中披露持续经营的附注 (ASA 570 第 22(a) 段), 不写附注编号; 写明本期亏损 22,136.99, 流动负债超过流动资产 30,048.99; 写明依赖董事不催收 19,212.21 的借款并提供资金, 以及透支额度; 意见未因此修改.
 - 其他事项段: 截至 2026-06-30 年度的比较数未经审计 (ASA 710 第 14 段). 报告结构目前没有这一段, 需要新增.
 - 签署: Jordan Ellis, Sydney, 2026-10-23.
 
@@ -892,7 +887,7 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 
 ### 7.2 剧本 (顺序按规格书 1425 行: 更正验证 → PLN-19 → FIN-04 → FIN-15)
 
-**更正传导**: 本版不实现规格书 1427 行的 "更正后试算表版本加一, 依赖科目的已完成程序标 needs_review" (G4 范围外). 系统试算表不随更正改版; FIN-12, FIN-15, FIN-02 按 "试算表加已验证更正分录" 取数. 若实现, AJE-X01 会使 PLN-07 (710, 711, 820), PLN-01 (total_assets), GEN-04 标 needs_review, AJE-X02 至 X04 会使 PLN-01 (税前利润), GEN-04 标 needs_review; 这些重跑不计入下表.
+**更正传导**: 本版不实现规格书 1427 行的 "更正后试算表版本加一, 依赖科目的已完成程序标 needs_review" (G4 范围外). 系统试算表不随更正改版; FIN-15, FIN-02 按 "试算表加已验证更正分录" 取数. 若实现, AJE-X01 会使 PLN-07 (710, 711, 820), PLN-01 (total_assets), GEN-04 标 needs_review, AJE-X02 至 X04 会使 PLN-01 (税前利润), GEN-04 标 needs_review; 这些重跑不计入下表.
 
 | # | 日期 | 程序 | 产出 | 例外 | 复核任务与演示决定 |
 |---|---|---|---|---|---|
@@ -929,13 +924,13 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 | 31 | 10-22 | PLN-19 第 2 次 | REASSESSMENT v2, change 0 | 无 | 闸门 approve, 不修订 |
 | 32 | 10-22 | FIN-04 第 2 次 | SCHEDULE v2: corrected [M-1 至 M-5], total 0, unqualified | 无 | 无 |
 | 33 | 10-22 | FIN-15 第 2 轮 | 3 条判断 | F01 (804, 805, 826) | 3 条 confirm |
-| 34 | 10-22 | FIN-12 | CHECK-FIN-12 全部通过 | 无 | 无 |
-| 35 | 10-22 | FIN-02 | GOING_CONCERN v1 | — | 闸门 approve material_uncertainty_disclosed. 理由: "Events or conditions indicate a material uncertainty that may cast significant doubt on the Company's ability to continue as a going concern; the going concern basis is appropriate given the director's undertaking, and Note 2 adequately discloses the uncertainty." |
+| 34 | 10-22 | FIN-12 | 取消 (Issue #46), 步号保留 | — | — |
+| 35 | 10-22 | FIN-02 | GOING_CONCERN v1 | — | 闸门 approve material_uncertainty_disclosed. 理由: "Events or conditions indicate a material uncertainty that may cast significant doubt on the Company's ability to continue as a going concern; the going concern basis is appropriate given the director's undertaking, and the financial report adequately discloses the uncertainty." |
 | 36 | 10-22 | FIN-01 | 呈递 SCHEDULE v2 与关联方完整性结论 | — | approve unqualified. 理由: "All five misstatements communicated (AUD 9,757.09 gross) were corrected by management; no uncorrected misstatements remain." |
 | 37 | 10-23 | FIN-07, FIN-18, FIN-10 | REPLETTER v1 (obtained, 10-23, Alex Morgan, 附表空); CHECK-FIN-18, CHECK-FIN-10 通过 | — | FIN-07 人工队列 1 项 |
 | 38 | 10-22/23 | RPT-03 | REPORT-1 | 无 | 无 |
 | 39 | 10-22/23 | RPT-08, RPT-07 | S307C v1 → 签字时 v2; GC-RPT-07-1 (10-22, 书面; 议程 SIG_PRACTICES, DIFFICULTIES, REPORT_FORM, INDEPENDENCE; 已更正错报 5 条; 无 UNCORRECTED 项) | — | RPT-07 人工队列 1 项 |
-| 40 | 10-23 | RPT-01 | 第一次 reject, 批注挂在 going_concern 段: "State the amount by which current liabilities exceed current assets and refer to Note 2." → REPORT-2; 第二次 approve | — | REPORT-2 signed, report_date 2026-10-23, 阶段转 Archived |
+| 40 | 10-23 | RPT-01 | 第一次 reject, 批注挂在 going_concern 段: "State the amount by which current liabilities exceed current assets." → REPORT-2; 第二次 approve | — | REPORT-2 signed, report_date 2026-10-23, 阶段转 Archived |
 
 ### 7.3 全部接入后的计数 (GEN-09 单列一行, 不含更正传导引起的重跑)
 
@@ -951,14 +946,14 @@ M-1 是毛额口径: 报表层面设备净额与 GST 各差 75, 净资产与损�
 | 错报 | **5 条**, 毛额 9,757.09, 全部 corrected; 未更正 0 |
 | 候选意见 / 最终意见 | unqualified / unqualified, 加持续经营重大不确定性段与其他事项段 |
 | 报告版本 | 2 个 (REPORT-2 已签) |
-| document | 29 份 (第 4 节) |
+| document | 28 份 (第 4 节; #28 fs_v1.pdf 不登记) |
 | external_call | 9 行: ACC-04 2, CSH-04 2, GEN-08 5 |
 | 独立复核 (GEN-09) | 复核 9 条 (J-GEN-06-1 的九条, 命中主规则), 都是 consistent; 大模型调用 18 次; 复核任务与决定不变 |
 | 大模型调用 | **约 66 次** (不含 A7 独立复核; 含 GEN-09 共 84 次, 第 8 批): DOC-04 3, DOC-06 2, ACC-08 2 (按 G5 定), PLN-15 1, REV-03 3, REV-02 6, CSH-02 1, GEN-02 7, GEN-03 2, GEN-01 1, GEN-04 1, GEN-06 9, FIN-03 5, FIN-09 5, PLN-19 2, FIN-15 13, FIN-02 1, RPT-03 2 |
 
 A7 独立复核 (GEN-09, 已在 main 上运行) 另复核 GEN-06 的 9 条判断 (L3 accept 命中主规则), 每条 2 次, 共 18 次, 全剧本 84 次 (合并终验定值, 共用裁定第 8 批); 其余判断所在程序为 L1 或 L2, 不进 A7, 推理链含假设步骤或按现有抽样公式 (判断 ID 的 sha256, 抽样率 0.05) 抽中的判断也因此不复核. 若实现改变 A7 的触发或程序的自主度, 同一提交同步本节.
 
-演示数据导入另有: 上传分类 22 次 (全剧本), 合同抽取挪到上传时, 报表行抽取 1 次 (R217). 上传分类: 演示导入上传的 23 份 (第 9.5 节) 中按补交请求上传的 fs_v1.pdf 取请求的类型, 其余 22 份各经 DOC-CLASSIFY 分类一次; 合同抽取挪到上传时: 上表 DOC-04 的 3 次改在上传后由 A3 抽取, 次数不变.
+演示数据导入另有: 上传分类 22 次 (全剧本), 合同抽取挪到上传时. 上传分类: 上传清单的 22 份 (第 9.5 节 uploads, 含 FIN-07 人工任务上传的声明书) 各经 DOC-CLASSIFY 分类一次; 合同抽取挪到上传时: 上表 DOC-04 的 3 次改在上传后由 A3 抽取, 次数不变.
 
 **只开现有 17 条时** (新程序都关, 第 5.1 节改动与 CSH-02 D04 已做; GEN-09 0 次)
 - PLN-07 9 条例外, REV-08 1 条, CSH-02 D04 1 条; 判断 10 条 (REV-03 3, REV-02 6 accept; CSH-02 1 misstatement); 复核任务 10 条.
@@ -1144,12 +1139,12 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 ├── confirmations/12345678.pdf, 12345679.pdf, receipts.json
 ├── payroll/employees.csv                employee_id, name, start_date, employment_type, pay_period_days, gross_per_period_cents
 ├── adjustments/journal_entries.csv      表头同 journal_entries.csv (2.8 节)
-├── documents/index.csv                  path, document_type, reliability, document_date, related_ids; 19 行, 取值见第 4 节类型表
+├── documents/index.csv                  path, document_type, reliability, document_date, related_ids; 18 行, 取值见第 4 节类型表
 ├── documents/engagement/                appointment.pdf, engagement_letter.pdf
 ├── documents/related_party/             租金函, 出售与终止通知, 新租约, 分租协议
 ├── documents/evidence/                  固定资产登记表, 报销单 E003, 工资册与雇佣条款, 会计政策, 董事借款协议与确认函,
 │                                        持续经营备忘录与预测, 董事支持函, DIISR 邮件, SMART Agency 发票, Ridgeway 订单, Jakaranda 报价单
-├── financial_statements/fs_v1.json, fs_v1.pdf
+├── financial_statements/fs_v1.json, fs_v1.pdf  财务报表样例, 不登记, 不载入 (Issue #46)
 ├── representation/representation_letter.pdf
 ├── manual/                              人工队列提交物 (FIN-08 两次回复, 声明书登记, RPT-07 回复), 演示脚本与测试读, 载入器不读
 └── llm/<程序>/<对象>.json, README.md     mock 大模型 fixture 的运行副本 (同 data/demo/llm): 生成脚本从正本
@@ -1176,14 +1171,14 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 4. `planning_presets()`: 有 planning/ 时取它, 否则通用模板.
 5. 登记 mock 与回函 mock 按数据集定位目录: main.build_deps 原来把 MockRegistrySource 与 MockConfirmationChannel 固定在 `data/demo`, 改为按项目的数据集解析 (Numbat → data/demo, Xero → 补造目录). 已实现 (R71): DatasetRegistrySource 与 DatasetConfirmationChannel 按 eid 取项目数据集, 目录取 RoutingDatasetLoader.supplement_dir; RegistrySource 方法加 eid 首参; 没有补造目录的 Xero 数据集 (如 20261017-mock) 登记查不到, 回函为未回函.
 6. 收入合同 PDF (补造目录 contracts/ 的 3 份) 不由载入器登记, 停在等数据时经上传登记 (第 9.5 节 fieldwork). 第 7 至 9 项已实现 (R72): `XeroDatasetLoader.tables` 给出并入补造后的八张表 (含应付账单, R178; 不连库的纯函数, R268 起不再带合同路径), `supplement_tables` 与演示导入清单 (第 9.5 节) 给出补造覆盖的表.
-    - 载入只载快照 (R269): `load` 不并补造表, 不登记文件 (delivery_notes 为 0, contract_id 全空, 开户行为 Xero 科目名); 有补造目录时仍先核对, 篡改时不写. 补造部分由演示数据导入 (`services/demo_import`, 数据管理页按钮见 R270) 按阶段做: acceptance 上传 2 份承接文件; fieldwork 把快照的七张表 (XERO_TABLES, 含应付账单, R178) 当成从 Xero 同步一次写一版 (source xero), 补造表各写一版 (source import, 原文件名为补造目录的来源文件), 上传 19 份 (合同随即抽取); statements 在 REQ-financial_statements 为 open 时按请求上传 fs_v1.pdf. 各阶段上传后按 manifest.documents 指定类型 (分类不符时) 与补登记; 不确认数据已齐. 管理层声明书 (manual) 由审计师在 FIN-07 的人工任务页上传.
+    - 载入只载快照 (R269): `load` 不并补造表, 不登记文件 (delivery_notes 为 0, contract_id 全空, 开户行为 Xero 科目名); 有补造目录时仍先核对, 篡改时不写. 补造部分由演示数据导入 (`services/demo_import`, 数据管理页按钮见 R270) 按阶段做: acceptance 上传 2 份承接文件; fieldwork 把快照的七张表 (XERO_TABLES, 含应付账单, R178) 当成从 Xero 同步一次写一版 (source xero), 补造表各写一版 (source import, 原文件名为补造目录的来源文件), 上传 19 份 (合同随即抽取). 各阶段上传后按 manifest.documents 指定类型 (分类不符时) 与补登记; 不确认数据已齐. 管理层声明书 (manual) 由审计师在 FIN-07 的人工任务页上传.
 7. sales_invoices.contract_id 按 contract_links.csv 的 invoice_no 填.
 8. delivery_notes 按 delivery_notes.csv 读入, invoice_no 换成 SI- ID; 找不到发票时报错.
 9. bank_accounts.bank_name 按 bank_accounts.csv 覆盖.
 10. 更正分录: 不在载入时入库. G4 的 CorrectionNotice (adjustments_posted) 增加 `adjustment_entry_nos`, `load_adjustments` 只载入列出的分录 (本数据集分两轮: AJE-X01 与 AJE-X05; AJE-X02 至 X04). Numbat 只有一轮, 不填时载入全部, 行为不变.
     - 端口已实现 (R73, R271 改): `load_adjustments(eid, dataset, entry_nos=None, *, actor="A1")` 幂等, 有新行时总账整表换一版 (现有行加新行, 经 DataStore.write_tables: 来源 xero, 原文件名 adjustments/journal_entries.csv, 记版本行, 两轮之后 records 为 1022 与 1028), data_version 加一, 试算表不动; 体检的分录与试算表一项不计凭证号以 `audit_adjustment_entry_prefix` (AJE-) 开头的行, 两轮之后照常通过; `adjustment_entries` 与 `adjustment_entry_nos` 列出可载入的凭证. data/demo 目前没有 adjustments 目录, 对 Numbat 调用抛 FileNotFoundError, 不为 Numbat 补数据.
-11. documents/index.csv 列出的 19 份文件不由载入器登记: 经上传接口上传, 类型由 A3 分类, 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表; 第 9.5 节登记途径); 类型取值与证据映射见第 4 节类型表.
-12. fs_v1.json 作为 FIN-12 的财报输入 (G6 的 financial_statements 端口).
+11. documents/index.csv 列出的 18 份文件不由载入器登记: 经上传接口上传, 类型由 A3 分类, 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 18 份的同值表; 第 9.5 节登记途径); 类型取值与证据映射见第 4 节类型表.
+12. fs_v1.json 与 fs_v1.pdf 不载入, 也不登记: 财务报表以账套为准 (Issue #46), 只作补造样例 (第 4.7 节).
 13. dataset_traits.json 供程序参数 `{ref: dataset.<键>}` 解析; payroll/employees.csv 供 FIN-15.
 14. 快照里收款分录的 source_doc 有 "Payment: 客户名" 与 "Payment from 客户名" 两种, 都不带发票号; 若要做 GEN-07 S04, 需从 payments.json 的分配记录生成 "收款与发票对应" 表.
 15. 作废对: 现阶段由规则按 `reversal_reference_pattern` 识别; 若载入器愿意加 `reverses_entry_no` 列 (B 的表结构), 规则可改为直接用列.
@@ -1212,13 +1207,13 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 ### 9.5 文件格式与载入端口 (实现时以此为准)
 
-**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件, 含 README.md: path, sha256, synthetic true, generator, xero_refs; 3 份收入合同另有 base {dataset "CUAD v1", file 底稿在 CUAD master_clauses.csv 中的文件名}), documents (每份 PDF: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
+**manifest.json**: dataset ("xero/20261017-q1"), generator ("data/generate_xero_demo.py"), spec_sha256, snapshot {name "xero/20261017-q1", files: 快照 17 个文件去掉 contacts.json 的 16 个 path 与 sha256}, files (补造目录除 manifest.json 外每个文件, 含 README.md: path, sha256, synthetic true, generator, xero_refs; 3 份收入合同另有 base {dataset "CUAD v1", file 底稿在 CUAD master_clauses.csv 中的文件名}), documents (每份登记的 PDF, 不登记的 fs_v1.pdf 除外: path, sha256, document_id, type, reliability, page_count, document_date, related_ids, registration, synthetic true). 不含时间戳与绝对路径; 正式目录没有 injected 键, 测试副本写 `"injected": "<场景>"`. xero_refs 中每个对象 (SI-, XJ- 分录号或分录行号如 XJ-580-1, BT-, BA-, 科目代码) 都须在快照中找到, 否则生成失败; --inject 重写的副本 manifest 不在生成脚本核对, 由校验脚本对照副本快照核对.
 
-**document 的登记途径 (registration)** 共 29 份 57 页: acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传), fieldwork 19 (3 份收入合同加 index.csv 中除承接文件与 fs_v1.pdf 外的 16 份, 停在等数据时由演示数据导入上传), statements 1 (fs_v1.pdf, 完成阶段按补交请求 REQ-financial_statements 上传), manual 1 (声明书, FIN-07 人工任务经上传接口上传), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时由函证 mock 按银行直达存档). 前四类经上传接口登记, A3 只认类型 (按文件名与首页分类, 合同随即抽取; 按补交请求上传的直接取请求的类型), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 19 份的同值表, 收入合同与声明书只在 manifest).
+**document 的登记途径 (registration)** 共 28 份 51 页: acceptance 2 (appointment.pdf, engagement_letter.pdf, 停在 ACC-01 闸门时由演示数据导入上传), fieldwork 19 (3 份收入合同加 index.csv 中除承接文件外的 16 份, 停在等数据时由演示数据导入上传), manual 1 (声明书, FIN-07 人工任务经上传接口上传), registry 4 (3 份公司摘录与 1 份人员检索, GEN-08 运行时由登记 mock 回执存档), confirmation 2 (两份银行回函, CSH-04 运行时由函证 mock 按银行直达存档). 前三类经上传接口登记, A3 只认类型 (按文件名与首页分类, 合同随即抽取), 可靠性, 文件日期与关联对象按 manifest.json 的 documents 段补登记 (index.csv 是其中 18 份的同值表, 收入合同与声明书只在 manifest). fs_v1.pdf 不登记 (Issue #46): 照样生成并列入 manifest.files, 不进 manifest.documents 与 index.csv (见下文生成规格的 documents 段).
 
 **演示导入清单** (`adapters/xero_supplements.plan(loader, dataset) -> DemoPlan`, 需求 R268; 供演示数据导入 R269): 不连库, 先核对补造目录 (第 9.3 节第 2 项, 不符抛 SupplementMismatch), 没有补造目录抛 FileNotFoundError.
 - tables: 补造覆盖的账表, 按 TableKind 顺序, 各为 DemoTable {kind, file_name (来源文件, 相对补造目录), rows (整表, 写入时整表替换)}: sales_invoices 42 (contract_links.csv, 合同关联并入后 contract_id 非空 6 张), bank_accounts 2 (bank_accounts.csv, 开户行覆盖), delivery_notes 24 (delivery_notes.csv), employees 3 (数据集声明的 payroll_register, 即 payroll/employees.csv). 补造目录里没有来源文件的表不列. `XeroDatasetLoader.supplement_tables(dataset)` 与它相同.
-- uploads: manifest.documents 中登记途径为 acceptance, fieldwork, statements, manual 的 23 份, 按阶段 (同此顺序) 再按文件名排序, 各为 DemoUpload {path, file_name, stage, document_type, reliability, document_date, related_ids, request_id (statements 为 REQ-financial_statements, 其余为空), document_id}, 值同 manifest.documents (type 即 document_type). registry, confirmation 的 6 份由 mock 在程序执行时存档, 不在其中.
+- uploads: manifest.documents 中登记途径为 acceptance, fieldwork, manual 的 22 份, 按阶段 (同此顺序) 再按文件名排序, 各为 DemoUpload {path, file_name, stage, document_type, reliability, document_date, related_ids, document_id} (不带补交请求, R319), 值同 manifest.documents (type 即 document_type). registry, confirmation 的 6 份由 mock 在程序执行时存档, 不在其中.
 - manifest.documents 的类型不是 DocumentType 取值, 登记途径不认识, 缺项或格式不对, 或 documents/index.csv 的行与 manifest.documents 不符 (没有这份文件, 或类型, 可靠性, 文件日期, 关联对象不同) 时抛 ValueError (不是 SupplementMismatch), 消息含该文件的 path.
 
 **登记摘录与人员检索 JSON** (`registry/extracts/{acn}.json`, `registry/persons/{姓-名-yyyymmdd}.json`, 同名 PDF 由 JSON 渲染):
@@ -1229,11 +1224,11 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - PDF 内容只取自同名 JSON (页眉取生成规格): 公司摘录两页都写名称, 带空格的 ACN (900 043 021) 与注册日; 人员检索写姓名, 出生日期与各公司 ACN. 测试副本改 JSON 后用 `render_registry_pdfs` 重绘.
 - 登记 PDF 的登记信息按目录规则推出 (registry/extracts 与 registry/persons 下的 PDF: registry_extract, external_original, registration registry, document_date 为检索日即 data_as_of 2026-10-17), 不在生成规格 documents 段逐份登记; 测试副本新增的摘录 (T6, 第 8.8 节) 也按此登记.
 
-**生成规格的 documents 段**: 每份 PDF 一项 {path, type, reliability, document_date, related_ids, registration, index, xero_refs}; index 为真的进 documents/index.csv. 正文写在规格里的 PDF (承接文件, 合同, 回函等) 另有 footer 与 pages (每页一组行); 3 份收入合同在 pages 之前另有 base {dataset, file, txt (CUAD full_contract_txt 下的文件名), sha256 (该 txt), excerpts [{clause, text}]}; 登记 PDF 不在本段, 由登记 JSON 渲染. 校验脚本核对每页文本层按顺序含来源的每个非空行 (区分大小写, 空白归一).
+**生成规格的 documents 段**: 每份 PDF 一项 {path, type, reliability, document_date, related_ids, registration, index, xero_refs}; index 为真的进 documents/index.csv. registration 为 null 的只生成不登记 (`generate_xero_demo.unregistered`, 现为 fs_v1.pdf): 列入 manifest.files, 不进 manifest.documents 与上传清单, index 为假; 它的 type, reliability, document_date, related_ids 只作说明 (审计师自行上传时的类型等), 生成与校验都不读; 正文与页数照样核对. 正文写在规格里的 PDF (承接文件, 合同, 回函等) 另有 footer 与 pages (每页一组行); 3 份收入合同在 pages 之前另有 base {dataset, file, txt (CUAD full_contract_txt 下的文件名), sha256 (该 txt), excerpts [{clause, text}]}; 登记 PDF 不在本段, 由登记 JSON 渲染. 校验脚本核对每页文本层按顺序含来源的每个非空行 (区分大小写, 空白归一).
 
 **delivery_notes.csv**: id 与 delivery_no 都是 `SR-{发票号}` (如 SR-ORC1026), 24 行, 日期见第 3.3 节; 载入器把 invoice_no 换成 SI- ID, 发票号找不到或重复即报错.
 
-**documents/index.csv** (列 path, document_type, reliability, document_date, related_ids; related_ids 以 ";" 分隔), 19 行:
+**documents/index.csv** (列 path, document_type, reliability, document_date, related_ids; related_ids 以 ";" 分隔), 18 行:
 
 | path | document_type | reliability | document_date | related_ids |
 |---|---|---|---|---|
@@ -1255,7 +1250,6 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 | documents/evidence/smart_agency_invoice_SM0195-70135.pdf | invoice | external_copy | 2026-09-05 | XJ-548;BT-090-0097 |
 | documents/evidence/ridgeway_order_CRM08-12.pdf | agreement | external_copy | 2026-10-02 | XJ-647;BT-090-0092 |
 | documents/evidence/jakaranda_quote.pdf | internal_record | internal_copy | 2026-10-08 | BT-090-0099 |
-| financial_statements/fs_v1.pdf | financial_statements | internal_original | 2026-10-22 | FS |
 
 报销单 E003 只关联员工号 (系统录名错误使它挂不到 XJ-575 上): GEN-02 对 XJ-575 给 more_evidence, 审计师调阅报销单后 override (第 7.2 节第 13 步).
 
@@ -1263,7 +1257,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 **adjustments/journal_entries.csv**: 表头同 journal_entries.csv; 11 行, 行 ID 为 `AJE-X0n-k`, 金额与 source_doc 见第 2.8 节.
 
-**financial_statements/fs_v1.json**: {id "FS", version 1, prepared_at 2026-10-22, directors_declaration_date 2026-10-23, document_id (fs_v1.pdf 的文件 ID, 即 DOC- 加其 sha256 前 12 位), comparative_restatement_entry_nos [XJ-397], lines 35 行} (字段同需求清单 R216 的 FinancialStatements), 每行 {code, statement (financial_position | profit_or_loss | changes_in_equity | cash_flows), name, amount_cents, sign, account_codes, subtotal, prior_amount_cents}; manifest 中它的 xero_refs 为 [XJ-397]. SOFP-, PL- 行 18 行与试算表勾稽 (amount = sign × Σ 映射科目); CE- 行 (权益变动表) 的金额为累计亏损的期初, 本期损益, 其他综合收益 (为 0), 综合收益总额与期末, CF- 行 (现金流量表) 的金额为现金的流入 (正) 与流出 (负), account_codes 写出各行取自哪些科目 (变动行同财务状况表对应行), 不按 sign × Σ 计算:
+**financial_statements/fs_v1.json**: {id "FS", version 1, prepared_at 2026-10-22, directors_declaration_date 2026-10-23, document_id (fs_v1.pdf 的文件 ID, 即 DOC- 加其 sha256 前 12 位), comparative_restatement_entry_nos [XJ-397], lines 35 行} (字段同需求清单 R216 的 FinancialStatements; 契约里的模型已随 Issue #46 删去, 校验脚本用本地模型核对), 每行 {code, statement (financial_position | profit_or_loss | changes_in_equity | cash_flows), name, amount_cents, sign, account_codes, subtotal, prior_amount_cents}; manifest 中它的 xero_refs 为 [XJ-397]. SOFP-, PL- 行 18 行与试算表勾稽 (amount = sign × Σ 映射科目); CE- 行 (权益变动表) 的金额为累计亏损的期初, 本期损益, 其他综合收益 (为 0), 综合收益总额与期末, CF- 行 (现金流量表) 的金额为现金的流入 (正) 与流出 (负), account_codes 写出各行取自哪些科目 (变动行同财务状况表对应行), 不按 sign × Σ 计算:
 
 | code | amount_cents | sign | account_codes | prior_amount_cents |
 |---|---:|---|---|---:|
@@ -1309,7 +1303,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - 不需要快照: 合模型, 与规格一致, 行代码不重复, document_id 正确; 财务状况表与损益表: 同一张表的非小计行之间科目不重复; 小计等于 sign × Σ (所含各行 sign × 金额), 所含各行的科目合起来等于小计的科目; 资产 = 负债 + 权益 (本期与比较数); 期初累计亏损加本期损益等于期末; PDF 文本层有每行的名称, 本期与比较数 (各表在其所在页).
 - 不需要快照, 权益变动表与现金流量表 (R293): 综合收益总额等于本期损益加其他综合收益 (为 0), 期初加综合收益总额等于期末, 期末等于 SOFP-EQ; CF-NP 等于 PL-NP; 各变动行对应财务状况表中科目相同的一行, 金额为其变动对现金的影响 (资产增加为流出, 负债增加为流入), 现金, 透支与累计亏损以外的行都有对应; 经营小计, 净变动, 期初加净变动等于期末; 期末等于现金减透支; 两表本期的期初等于上期的期末; 现金流量表页有现金与透支到现金及现金等价物的调节 (Cash at bank, Bank overdraft, Total).
 - 需要快照: 财务状况表与损益表每行等于 sign × Σ (09-30 试算表加 5 笔更正) 映射科目, 比较数等于 sign × Σ (0630 表加 XJ-397); 非小计行恰好映射 33 个科目; 损益科目只在损益表与累计亏损行. 比较期的期初按第 2.4 节的设定由 XJ-397 推出 (过渡日各行余额 = sign × Σ XJ-397 的映射科目): 各变动行的比较数, CF-OPEN 与 CE-OPEN 的比较数与之一致.
-- documents 段 29 份 57 页与各登记途径的份数只核正式目录 (测试副本会增删 PDF, 如注入 T6 新增摘录).
+- documents 段 28 份 51 页与各登记途径的份数只核正式目录 (测试副本会增删 PDF, 如注入 T6 新增摘录).
 
 **manual/** (人工队列提交物的中性格式, 演示脚本与测试读, 载入器不读; 各程序按自己的结果模型映射, 提交后由程序 owner 整理成领域对象, 不建人工判断):
 - fin08_round1.json: {procedure_id FIN-08, round 1, communicated_at 2026-10-19T04:00:00Z (悉尼 15:00), recipient "Alex Morgan, Director", form written, misstatement_sources [J-GEN-02-1-XJ-499, J-CSH-02-1-BA-091], responded_at 2026-10-19T22:00:00Z (悉尼 10-20 09:00, 早于 AJE-X01 的录入时间), response 第 4.8 节第 1 轮原文, adjustment_entry_nos [AJE-X01, AJE-X05]}.
@@ -1344,7 +1338,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - Demo 重置时的派生快照脚本 `data/derive_xero_period.py` (第 9.2 节备选): 本仓库已有 `20261017-q1`.
 - 从快照裁出最小 fixture 入库 (第 8.1 节).
 - 校验脚本复算第 5 节的规则命中与第 7 节的计数: 分别由各程序的连库测试与合并终验 (需求清单 R258-R263) 核对.
-- 更正传导 (第 7.2 节): 更正后试算表不改版, 依赖科目的已完成程序不标 needs_review; FIN-12, FIN-15, FIN-02 按 "试算表加已验证更正分录" 取数.
+- 更正传导 (第 7.2 节): 更正后试算表不改版, 依赖科目的已完成程序不标 needs_review; FIN-15, FIN-02 按 "试算表加已验证更正分录" 取数.
+- 财务报表以账套为准 (Issue #46): 不取得报表草稿, 不做财务报告与会计记录的核对 (ASA 330 第 20(a) 段, 本版按报表与账一致假设; FIN-12 取消); 比较数照 Xero 上期期末试算表, 不核对也不重述 (ASA 710 第 7, 8 段); 报告与闸门理由不引附注编号. fs_v1 只作补造样例.
 
 ## 待核与待正本
 
@@ -1360,7 +1355,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 
 **T6 审计准则**: ASA 501 关于诉讼的书面声明段号; APES 110 R410 各段.
 
-**T7 AASB 1060** (10-19 收到正本第 7 次汇编, 汇编日 2024-12-31, 适用于 2025-01-01 起的年度期间; R292 按正本补齐段号, 原先本地只有 Key facts 摘要): T7 原列的 8 项结论如下. R292 时与补造数据不一致的 (第 6 至 8 项, 以及第 3, 4 项各缺一项披露) 已由 R293 补齐 fs_v1; 现有程序不核对披露清单, 程序预期不变.
+**T7 AASB 1060** (10-19 收到正本第 7 次汇编, 汇编日 2024-12-31, 适用于 2025-01-01 起的年度期间; R292 按正本补齐段号, 原先本地只有 Key facts 摘要): T7 原列的 8 项结论如下. R292 时与补造数据不一致的 (第 6 至 8 项, 以及第 3, 4 项各缺一项披露) 已由 R293 补齐 fs_v1; 现有程序不核对披露清单, 程序预期不变. Issue #46 起 fs_v1 只作样例, 下表只约束样例的写法.
 
 | 项 | 结论与段号 | 与补造数据 |
 |---|---|---|
