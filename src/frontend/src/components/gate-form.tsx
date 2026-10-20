@@ -53,6 +53,7 @@ import { useI18n } from '@/lib/i18n'
 import { initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
+import { reportPart } from '@/lib/report-sections'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
@@ -378,14 +379,15 @@ export function ReportPreview({
           className="flex flex-col gap-4 rounded-md border bg-white px-6 py-5 font-serif text-[14px] leading-relaxed"
           lang="en"
         >
-          {REPORT_SECTIONS.map((section) => (
-            <section key={section} className="flex flex-col gap-1">
-              <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
-                {t.reportSections[section]}
-              </h3>
-              <p className="m-0 whitespace-pre-wrap">{report.sections[section] || '—'}</p>
-            </section>
-          ))}
+          {REPORT_SECTIONS.map((section) => {
+            const part = reportPart(section, report.sections[section] ?? '', t.reportSections[section])
+            return (
+              <section key={section} className="flex flex-col gap-1">
+                <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">{part.heading}</h3>
+                <p className="m-0 whitespace-pre-wrap">{part.body}</p>
+              </section>
+            )
+          })}
         </div>
       </Panel>
       {decisions.length > 0 ? (
