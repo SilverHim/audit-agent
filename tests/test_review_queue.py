@@ -23,7 +23,6 @@ from backend.contracts.models import (
 )
 from backend.contracts.services import JudgmentOutcome
 from backend.core.config import get_settings
-from backend.services.features import BASELINE
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import NOW, make_run
@@ -32,15 +31,13 @@ LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 QUEUE = ReviewQueue(LIBRARY)
 
 
-def make_outcome(procedure_id: str, level: AutonomyLevel, action: ProposedAction, **extra: Any) -> JudgmentOutcome:
-    """一个判断对象的成功产出; classify 只读自主度与建议动作 (功能 autonomy 打开时另读推理链, 由 extra 给), 其余字段
-    不校验."""
+def make_outcome(procedure_id: str, level: AutonomyLevel, action: ProposedAction) -> JudgmentOutcome:
+    """一个判断对象的成功产出; classify 只读自主度与建议动作, 其余字段不校验."""
     fields: dict[str, Any] = {
         "id": f"J-{procedure_id}-1-S1",
         "procedure_id": procedure_id,
         "autonomy_level": level,
         "proposed_action": action,
-        **extra,
     }
     judgment = Judgment.model_construct(**fields)
     return JudgmentOutcome(judgment=judgment, failure=None, attempts=1, trail_ids=[])
@@ -178,30 +175,50 @@ STATEMENT = EvidencePointer(
     locator="amount_cents",
     reliability=Reliability.external_original,
 )
-AUTONOMY = BASELINE | {"autonomy"}
 
 
 def fact(pointer: EvidencePointer, status: StepStatus = StepStatus.supported) -> ReasoningStep:
     return ReasoningStep(kind=StepKind.fact, text="x", evidence=[pointer], status=status)
 
 
+def l3_judgment(chain: list[ReasoningStep], evidence: list[EvidencePointer]) -> JudgmentOutcome:
+    """CSH-02 的一条完整判断 (经模型校验): L3, accept, 置信度 0.95, 推理链与结论证据按给的."""
+    judgment = Judgment(
+        id="J-CSH-02-1-BA-01",
+        procedure_id="CSH-02",
+        run_id="RUN-CSH-02-1",
+        subject_id="BA-01",
+        conclusion="ok",
+        confidence=0.95,
+        confidence_parts={"llm": 0.95},
+        reasoning_chain=chain,
+        evidence=evidence,
+        counter_argument="none",
+        proposed_action=ProposedAction.accept,
+        exception_ids=[],
+        autonomy_level=AutonomyLevel.L3,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    return JudgmentOutcome(judgment=judgment, failure=None, attempts=1, trail_ids=[])
+
+
 @pytest.mark.parametrize(
-    ("features", "chain", "expected"),
+    ("key_evidence", "chain", "evidence", "expected"),
     [
-        (AUTONOMY, [fact(REPLY)], TaskKind.normal),  # 缺 bank: 置信度 0.95 也交人
-        (AUTONOMY, [fact(REPLY), fact(STATEMENT)], None),  # 两种都有: 自动关闭
-        (AUTONOMY, [fact(REPLY), fact(STATEMENT, StepStatus.unsupported)], TaskKind.normal),  # 所在步骤不受支持, 不算
-        (BASELINE, [fact(REPLY)], None),  # 功能关闭: 不看关键证据 (同现状)
+        (True, [fact(REPLY)], [REPLY], TaskKind.normal),  # 缺 bank: 置信度 0.95 也交人
+        (True, [fact(REPLY), fact(STATEMENT)], [REPLY], None),  # 两种都有: 自动关闭
+        (True, [fact(REPLY), fact(STATEMENT, StepStatus.unsupported)], [REPLY], TaskKind.normal),  # 步骤不受支持, 不算
+        (True, [fact(REPLY)], [REPLY, STATEMENT], TaskKind.normal),  # 只在结论证据里有 bank: 不算
+        (False, [fact(REPLY)], [REPLY], None),  # 功能关闭 (judging_steps 传假): 不看关键证据 (同现状)
     ],
 )
 def test_missing_key_evidence_goes_to_human(
-    features: frozenset[str], chain: list[ReasoningStep], expected: TaskKind | None
+    key_evidence: bool, chain: list[ReasoningStep], evidence: list[EvidencePointer], expected: TaskKind | None
 ) -> None:
-    """合成 L3 hybrid 判断 (CSH-02 去掉 always_review, evidence_required [external, bank]), 置信度 0.95, accept:
-    功能 autonomy 打开时, 受支持步骤里缺任一种要求的证据就建 normal 任务, 不自动关闭 (规格书第 8.4 节: 不允许加权
-    抵消); 补上 bank 的指针后自动关闭."""
-    queue = ReviewQueue(ProcedureLibrary(get_settings().KNOWLEDGE_ROOT, features))
-    template = queue.library.load("CSH-02").model_copy(update={"always_review": False})
+    """CSH-02 去掉 always_review (hybrid, evidence_required [external, bank]) 的 L3 accept 判断, 置信度 0.95:
+    key_evidence 为真 (功能 autonomy 打开) 时, 推理链受支持步骤里缺任一种要求的证据就建 normal 任务, 不自动关闭
+    (规格书第 8.4 节: 不允许加权抵消); 补上 bank 的指针后自动关闭. 结论证据不算 (接口文档第 5 节需要人表)."""
+    template = LIBRARY.load("CSH-02").model_copy(update={"always_review": False})
     assert template.engine == "hybrid" and template.evidence_required == [EvidenceType.external, EvidenceType.bank]
-    outcome = make_outcome("CSH-02", AutonomyLevel.L3, ProposedAction.accept, confidence=0.95, reasoning_chain=chain)
-    assert queue.classify(template, outcome, []) is expected
+    assert QUEUE.classify(template, l3_judgment(chain, evidence), [], key_evidence=key_evidence) is expected

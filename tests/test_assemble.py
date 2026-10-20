@@ -19,7 +19,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import get_settings
-from backend.orchestration.nodes import GraphNodes, apply_patch, uncovered_objectives
+from backend.orchestration.nodes import GraphNodes, apply_patch, assembled_procedure, uncovered_objectives
 from backend.orchestration.runner import GraphRunner, fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services.features import BASELINE
@@ -261,6 +261,21 @@ async def test_assembly_downgrade(autonomy: bool) -> None:
     assert {pid: pack[pid] for pid in [*ASSEMBLED, *UNASSEMBLED]} == expected | {
         pid: (level, []) for pid, level in UNASSEMBLED.items()
     }
+
+
+@pytest.mark.parametrize("levels", [[RiskLevel.significant, RiskLevel.low], [RiskLevel.low, RiskLevel.significant]])
+def test_assembly_takes_highest_of_mixed_risks(levels: list[RiskLevel]) -> None:
+    """装配级降级的风险取关联目标的最高等级, 与目标的顺序无关: REV-08 (模板 L3) 关联收入发生与截止两条目标, 一条
+    significant 一条 low, 两种顺序都为 L1 [significant_risk]."""
+    pairs = (("OBJ-REV-OCC", "Occurrence"), ("OBJ-REV-CUT", "Cutoff"))
+    objectives = [
+        AuditObjective(id=oid, account="Revenue", assertion=assertion, risk_level=level, is_material=True)
+        for (oid, assertion), level in zip(pairs, levels, strict=True)
+    ]
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=frozenset({"autonomy"}) | BASELINE)
+    procedure = assembled_procedure(deps, deps.library.load("REV-08"), objectives)
+    assert procedure.objective_ids == ["OBJ-REV-OCC", "OBJ-REV-CUT"]
+    assert (procedure.autonomy_level, procedure.downgrade_reasons) == (L1, [SIG])
 
 
 # ── R81: P2 固定集 (模板 fixed) ──

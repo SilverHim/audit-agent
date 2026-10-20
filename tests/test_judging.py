@@ -11,7 +11,7 @@ import pytest
 
 from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent, Subject
-from backend.agents.judging import DEFAULT_STEPS, JudgingSteps, downgrade, unchanged
+from backend.agents.judging import DEFAULT_STEPS, Judged, JudgingSteps, downgrade, judgments_patch, unchanged
 from backend.contracts.knowledge import DowngradeRule, ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
@@ -19,6 +19,7 @@ from backend.contracts.models import (
     CriticTrigger,
     CriticVerdict,
     DowngradeCondition,
+    EvidenceType,
     Judgment,
     Misstatement,
     MisstatementUpdate,
@@ -105,10 +106,14 @@ class RecordingQueue(ReviewQueue):
         super().__init__(queue.library)
         self.calls = calls
 
-    def classify(self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Any) -> TaskKind | None:
+    def classify(
+        self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Any, *, key_evidence: bool = False
+    ) -> TaskKind | None:
         subject = outcome.judgment.subject_id if outcome.judgment is not None else "-"
         self.calls.append(("classify", subject))
-        return TaskKind.normal if outcome.judgment is not None else super().classify(template, outcome, rule_findings)
+        if outcome.judgment is not None:
+            return TaskKind.normal
+        return super().classify(template, outcome, rule_findings, key_evidence=key_evidence)
 
     def make_task(
         self,
@@ -385,3 +390,33 @@ async def test_downgrade_amount_sources(
     run_ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
     result = await downgrade(agent.deps, run_ctx, judgment, findings)
     assert (result.id, result.version, result.autonomy_level, result.downgrade_reasons) == (judgment.id, 1, *expected)
+
+
+async def test_downgrade_passes_rule_findings_for_fraud_rules() -> None:
+    """downgrade 把收到的规则例外交给 judgment_level: 例外出自标了 fraud_flag 的规则 (这里给策略标上 REV-08 R01) 时
+    命中 fraud_flag. 例外金额置空, 执行重要性未定 (不命中 amount_over_pm), 运行时 L3, 置信度 0.9 → L1 [fraud_flag]."""
+    agent, ctx, _ = setup("REV-03", [], {}, features=AUTONOMY)
+    deps = replace(agent.deps, autonomy=replace(agent.deps.autonomy, fraud_rules=frozenset({("REV-08", "R01")})))
+    finding = X1.model_copy(update={"amount_cents": None})
+    jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=[finding])
+    judgment = passed()(jctx, ctx.run).judgment
+    procedure = ctx.procedure.model_copy(update={"autonomy_level": L3})
+    run_ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, ctx.state)
+    result = await downgrade(deps, run_ctx, judgment, [finding])
+    assert (result.autonomy_level, result.downgrade_reasons) == (L1, [DowngradeCondition.fraud_flag])
+
+
+@pytest.mark.parametrize(("features", "kind"), [(AUTONOMY, TaskKind.normal), (BASELINE, None)])
+def test_judgments_patch_routes_missing_key_evidence(features: frozenset[str], kind: TaskKind | None) -> None:
+    """judgments_patch 的 classify 按 judging_steps 传 key_evidence: 模板要 bank 证据 (REV-03 改出, 不复核), 判断 L3
+    accept 置信度 0.9 而推理链没有指针. 功能 autonomy 打开时关键证据缺失交人 (normal 任务, 判断待复核), 关闭时
+    自动关闭 (判断 confirmed, 不建任务)."""
+    agent, ctx, _ = setup("REV-03", [], {}, features=features)
+    template = ctx.template.model_copy(update={"evidence_required": [EvidenceType.bank], "always_review": False})
+    ctx = RunContext(ctx.engagement, ctx.procedure, template, ctx.run, ctx.state)
+    jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=[])
+    outcome = passed(autonomy_level=L3, reasoning_chain=[])(jctx, ctx.run)
+    patch = judgments_patch(agent.deps, ctx, [Judged(jctx, outcome)])
+    assert [t.kind for t in patch["review_tasks"]] == ([kind] if kind else [])
+    expected = ReviewStatus.pending if kind else ReviewStatus.confirmed
+    assert [j.review_status for j in patch["judgments"]] == [expected]

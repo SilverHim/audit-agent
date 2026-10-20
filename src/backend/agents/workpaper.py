@@ -10,7 +10,16 @@ from typing import Any, ClassVar, cast, get_args
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.agents.fieldwork import JSON_ROWS, journal_rows
-from backend.agents.judging import Judged, JudgedRun, Subject, Subjects, in_scope, judge_all, judgments_patch
+from backend.agents.judging import (
+    Judged,
+    JudgedRun,
+    Subject,
+    Subjects,
+    in_scope,
+    judge_all,
+    judging_steps,
+    judgments_patch,
+)
 from backend.agents.review import ReviewAgent
 from backend.contracts.llm_outputs import MisstatementClassificationDraft
 from backend.contracts.models import (
@@ -120,7 +129,7 @@ def with_update(item: Judged, misstatements: dict[str, Misstatement], objectives
 
 class WorkpaperAgent(ProcedureAgent[JudgedRun]):
     """A8: 错报分类 (FIN-03, 混合程序). 规则部分定审计目标与期间来源, 大模型判类型与舞弊迹象, 走判断公共流程
-    (agents/judging.py: judge, A7 复核, 降级, classify, 建任务), 判断带分类载荷 misstatement_update (需求 R158).
+    (agents/judging.py: judge, 写上分类载荷 misstatement_update, A7 复核, 降级, classify, 建任务; 需求 R158, R170).
 
     舞弊迹象只记进载荷, 由审计师逐条复核时决定, 确认后带在错报上呈报到 FIN-01 闸门; 规格书 12.2 "为真则进环 3 阻断"
     与 ASA 240 第 37 段的重评舞弊风险本版不做.
@@ -135,15 +144,23 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
 
     async def execute(self, ctx: RunContext) -> JudgedRun:
         """FIN-03 的执行: 未分类的错报 (unclassified) 先按 in_scope 筛选 (rerun_subject_ids 与已交人处理的对象, 同 A6
-        各程序), 再取数 (fin03_subjects) 交判断公共流程, 成功的判断带上分类载荷 (with_update). 没有判断对象时不调
-        大模型."""
+        各程序), 再取数 (fin03_subjects) 交判断公共流程 (步骤按功能, judging_steps). 成功的判断在判断引擎之后即写上
+        分类载荷 (with_update, 经 judge_all 的 annotate), 功能 autonomy 打开时降级按所指错报的金额与舞弊迹象判. 没有
+        判断对象时不调大模型."""
         if ctx.procedure.id != FIN03:
             raise NotImplementedError(ctx.procedure.id)
         targets = {m.id: m for m in unclassified(ctx.state) if in_scope(ctx, m.id)}
         subjects = await self.fin03_subjects(ctx, list(targets.values()))
-        judged = await judge_all(self.deps, ctx, subjects, self.reviewer)
         objectives = ctx.state["audit_objectives"]
-        return JudgedRun([with_update(item, targets, objectives) for item in judged], subjects.outcomes)
+        judged = await judge_all(
+            self.deps,
+            ctx,
+            subjects,
+            self.reviewer,
+            judging_steps(self.deps),
+            annotate=lambda item: with_update(item, targets, objectives),
+        )
+        return JudgedRun(judged, subjects.outcomes)
 
     async def interpret(self, ctx: RunContext, findings: JudgedRun) -> StatePatch:
         """判断公共流程的解读 (judgments_patch: 判断, 复核任务, 执行记录终态), 去掉为空的字段: 没有判断对象时片段只有

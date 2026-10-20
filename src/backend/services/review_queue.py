@@ -34,7 +34,6 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import FinancialDataStore
 from backend.contracts.services import JudgmentOutcome
-from backend.services.features import AUTONOMY
 from backend.services.judgment_engine import critic_chain_ok
 from backend.services.procedure_library import ProcedureLibrary
 
@@ -283,11 +282,16 @@ class ReviewQueue:
         return decisions
 
     def classify(
-        self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Sequence[AuditException]
+        self,
+        template: ProcedureTemplate,
+        outcome: JudgmentOutcome,
+        rule_findings: Sequence[AuditException],
+        *,
+        key_evidence: bool = False,
     ) -> TaskKind | None:
         """某个判断对象的结果需要哪类任务; None 表示自动关闭. 整次执行失败由 A1 另行处理. 级别读判断的有效级别
-        (功能 autonomy 打开时为判断级降级之后的); 功能 autonomy 打开时关键证据缺失 (missing_evidence 非空) 的判断
-        也交人 (需求 R170). 功能集取程序库的 (与 AgentDeps.features 相同)."""
+        (功能 autonomy 打开时为判断级降级之后的); key_evidence 为真时关键证据缺失 (missing_evidence 非空) 的判断
+        也交人 (需求 R170; 判断公共流程按 judging_steps 传, 功能 autonomy 打开时为真)."""
         if outcome.failure == "unattributed":
             return TaskKind.unattributed if rule_findings else TaskKind.failed
         if outcome.failure == "failed" or outcome.judgment is None:
@@ -301,7 +305,7 @@ class ReviewQueue:
             j.autonomy_level in (AutonomyLevel.L1, AutonomyLevel.L2)
             or j.proposed_action in (ProposedAction.misstatement, ProposedAction.more_evidence)
             or template.always_review
-            or (AUTONOMY in self.library.features and missing_evidence(template, j))
+            or (key_evidence and missing_evidence(template, j))
         ):
             return TaskKind.normal
         return None
