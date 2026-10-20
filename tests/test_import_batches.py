@@ -1102,7 +1102,8 @@ def registry_env(*overlays: Path) -> Batch:
 
 
 def registry_outcome(env: Batch) -> tuple[Any, ...]:
-    """处理后可比的结果: 整份文件登记, 摘录的全部抽取记录 (版本, 内容, 写入人, 字段, 理由), 数据变动 (数据版本, 种类)."""
+    """处理后可比的结果: 整份文件登记, 摘录的全部抽取记录 (版本, 内容, 写入人, 字段, 理由), 数据变动 (数据版本,
+    种类)."""
     records = {k: v for k, v in env.data.extractions.items() if k[:2] == (REGISTRY_TARGET, REGISTRY_DOCUMENT)}
     changes = [(c.data_version, c.input) for c in env.data.data_changes]
     return env.document(REGISTRY_DOCUMENT), records, changes
