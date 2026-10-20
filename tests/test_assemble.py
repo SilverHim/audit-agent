@@ -13,6 +13,7 @@ from backend.contracts.models import (
     ProcedureStatus,
     RiskLevel,
     ScheduleRow,
+    TrailKind,
 )
 from backend.contracts.state import EngagementState, initial_state
 from backend.core.config import get_settings
@@ -26,6 +27,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
+    PLANNING_FEATURES,
     EngagementWrite,
     FakeEngagementStore,
     FakeOutputStore,
@@ -128,6 +130,23 @@ async def test_assemble_writes_programs_and_phase_in_one_commit() -> None:
     assert engagement is not None and engagement.phase is Phase.P2_Executing
     for p in added_programs(patch["procedure_pack"]):
         assert await store.get(EID, Procedure, p.id) == p
+
+
+async def test_planning_assembly_writes_programs_but_not_the_phase() -> None:
+    """需求 R205 验收 2: 功能 planning 打开时 assemble_pack 照样一次提交写 7 条 P2 程序第 1 版, 但不写阶段 (engagements
+    仍为 P1_Planning, 片段不带阶段), 也不写阶段的 transition 留痕: 进入 P2 改由 PLN-15 闸门批准计划时写 (同一次提交,
+    见 test_decisions). 功能关闭时同事务写 P2_Executing, 见上一条 (R11)."""
+    nodes, store, engagements, state = after_pln_approve(features=PLANNING_FEATURES)
+
+    patch = await nodes.assemble_pack(state)
+
+    assert [p.id for p in patch["procedure_pack"] if p.phase is Phase.P2_Executing] == P2 and "phase" not in patch
+    [commit] = store.commits
+    assert sorted(o.id for o in commit if isinstance(o, Procedure)) == sorted(P2)
+    assert not [w for w in commit if isinstance(w, EngagementWrite)]
+    engagement = await engagements.get(EID)
+    assert engagement is not None and engagement.phase is Phase.P1_Planning
+    assert not [e for e in nodes.deps.trail.entries if e.kind is TrailKind.transition]
 
 
 async def test_uncovered_objective_blocks_assembly() -> None:

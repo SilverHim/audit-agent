@@ -1,7 +1,11 @@
 """服务之间传递的数据对象, 定义见 开发接口文档.md 第 5 节."""
 
+from datetime import date
 from typing import Any, Generic, Literal, TypeVar
 
+from pydantic import SerializeAsAny
+
+from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
@@ -47,6 +51,9 @@ class JudgmentOutcome(Model):
     failure: Literal["failed", "unattributed"] | None  # 失败类型, 成功时为空
     attempts: int  # 调用大模型的次数, 含重试
     trail_ids: list[str]  # 每次大模型调用的留痕 ID
+    # 通过校验的草稿 (指针已按来源改写), 失败时为空 (需求 R157). 输出模型为 JudgmentDraft 的子类时原样带回 (如 FIN-03
+    # 的 MisstatementClassificationDraft), 调用方从中取判断之外的项 (错报的性质); 序列化按实际的类, 子类字段不丢
+    draft: SerializeAsAny[JudgmentDraft] | None = None
 
 
 class ValidationContext(Model):
@@ -65,6 +72,10 @@ class ValidationContext(Model):
     # 本项目采用版本的客户画像 (需求 R128): client_profile 指针只认它 (ID 相同, locator 为其顶层字段名), 不读
     # EngagementStore; 为空时这类指针解析不了
     client_profile: ClientProfile | None = None
+    # PLN-15 的计划叙述 (AuditPlanDraft, 需求 R204): procedure_notes 须恰好覆盖这些程序 (计划 items 的程序编号),
+    # 时间表不早于 period_end (审计期间止). 其余输出不用, 为空
+    expected_procedure_ids: list[str] | None = None
+    period_end: date | None = None
     # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针
     # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为 None 不核对 (抽取, 分类, 报告与 GEN-09 第二轮等不按引用级
     # 解析准则片段的输出). 必填, 不给缺省值: 新调用方漏传时类型检查即报, 不会静默不核对

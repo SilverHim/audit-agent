@@ -1,10 +1,12 @@
 """R04 重放: 节点写 Store 后, 写检查点前中断, 恢复时重跑. Store 中本次执行已为终态时不调 Agent, 产出从 Store 取回."""
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from langgraph.types import Command
 
+from backend.agents.risk_assessor import RiskAssessorAgent
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AbnRecord,
@@ -39,6 +41,7 @@ from backend.orchestration.merge import Replay, check_refs
 from backend.orchestration.nodes import GraphNodes, apply_patch, fail_run, stored_outputs, update_procedure
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from tests.external import needs
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -69,6 +72,7 @@ from tests.fakes import (
 )
 from tests.test_fieldwork import assembled, dispatch
 from tests.test_nodes import p0_pack, p0_state, single_node
+from tests.test_risk_assessor import plan_context
 
 EID = ENGAGEMENT.id
 
@@ -351,6 +355,27 @@ async def test_pln01_replay_takes_latest_singleton_and_planning_lists() -> None:
     assert patch["materiality_candidates"].version == 2
     assert patch["audit_objectives"] == NUMBAT_OBJECTIVES
     assert patch["risk_register"] == [risk]
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_pln15_replay_takes_its_plan_and_pln07_pln01_do_not() -> None:
+    """需求 R204 验收 8 (X-04): Xero 的 PLN-15 第 1 次执行写出 PLAN-1 v1 后, 同一 Store 里 PLN-07, PLN-01 的重放不带回
+    audit_plans (只取各自声明的产出); PLN-15 的重放 (by_procedure) 取回 RUN-PLN-15-1 与 PLAN-1 v1, 与首次的片段相同."""
+    ctx, deps, _ = await plan_context()
+    first = await RiskAssessorAgent(deps).run(ctx)
+    pln07, pln01 = finished(make_run("PLN-07")), finished(make_run("PLN-01"))
+    numbat, analytics, _ = a4_store(pln07)
+    eid = ctx.engagement.id
+    store = FakeOutputStore([*numbat.rows, pln01, *first["procedure_runs"], *first["audit_plans"]], eid=eid)
+    replay = replace(deps, output_store=store)
+
+    assert await stored_outputs(replay, eid, deps.library.load("PLN-07"), pln07) == {
+        "procedure_runs": [pln07],
+        "analytics": analytics,
+        "exceptions": [],
+    }
+    assert "audit_plans" not in await stored_outputs(replay, eid, deps.library.load("PLN-01"), pln01)
+    assert await stored_outputs(replay, eid, ctx.template, first["procedure_runs"][0]) == first
 
 
 def stored_document(n: str, type: DocumentType, file_name: str, **fields: Any) -> DocumentRef:

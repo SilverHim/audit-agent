@@ -2,8 +2,8 @@
 时补进检查点 (接口文档第 7 节 recover 规则第 2 条, 恢复机制).
 
 决定提交时先在一个事务内写 Store, 再写留痕, 最后以闸门节点身份写检查点. 进程在两者之间中断, 或检查点写入失败,
-Store 就领先检查点. 补做不重算效果, 只把 Store 中已写成的对象搬进检查点: 程序, 风险清单, 审计目标与报告取 Store
-最新版, 项目阶段取 engagements 表; 只在图状态中的重要性三项按决定与重要性候选重算, 意见类型取决定. 补做不写 Store
+Store 就领先检查点. 补做不重算效果, 只把 Store 中已写成的对象搬进检查点: 程序, 风险清单, 审计目标, 报告与计划取
+Store 最新版, 项目阶段取 engagements 表; 只在图状态中的重要性三项按决定与重要性候选重算, 意见类型取决定. 补做不写 Store
 (项目可能已锁定), 只补写缺失的留痕.
 """
 
@@ -42,7 +42,7 @@ async def gate_values(
     deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot, decision: GateDecision
 ) -> StatePatch:
     """一个闸门决定要写进检查点的状态片段, 读 Store 与 engagements 表重建 (同 DecisionSubmit 越过闸门时写的字段):
-    决定, 程序包与阶段的最新版; 通过决定另由登记表的 rebuild 补专属状态 (重要性三项, 意见类型, 签字版);
+    决定, 程序包与阶段的最新版; 通过决定另由登记表的 rebuild 补专属状态 (重要性三项, 意见类型, 签字版, 批准的计划);
     再写决定绑定的材料."""
     eid = engagement.id
     store = deps.output_store
@@ -56,7 +56,7 @@ async def gate_values(
         patch["phase"] = engagement.phase
     if decision.decision is GateVerdict.approve and spec.rebuild is not None:
         patch.update(await spec.rebuild(deps, eid, decision, values))
-    # 决定绑定的材料: 路由按它判断决定是否过期 (RPT-01 签字时已写签字版, 路由另行放行)
+    # 决定绑定的材料: 路由按它判断决定是否过期 (RPT-01 签字, PLN-15 批准时已写新版本, 路由另行放行)
     if spec.material_field not in patch:
         material = await store.get(eid, spec.material_model, decision.target_id, decision.target_version)
         if material is None:

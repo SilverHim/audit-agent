@@ -469,6 +469,7 @@ def test_xj499_is_a_misstatement_of_office_equipment(fixed: Fixed) -> None:
         "assertion": "Existence",
         "amount_cents": 75000,
         "direction": "overstated",
+        "account_code": "710",  # 需求 R156 (第 7 批): AI 草稿从上下文得到科目代码时填
     }
     for text in (
         "no prior period trial balance",

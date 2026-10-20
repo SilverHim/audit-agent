@@ -118,7 +118,7 @@ export type AccountCategoryIn = {
 /**
  * AgentId
  *
- * 智能体编号. A8 本版不实现, 只占位.
+ * 智能体编号.
  */
 export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
 
@@ -258,6 +258,123 @@ export type AuditObjective = {
 };
 
 /**
+ * AuditPlan
+ *
+ * 总体审计计划 (需求 R203; 规格书 12.2 AuditPlan). ID 为 PLAN-{revision}. A4 在 PLN-15 中起草 (第 1 修订与
+ * PLN-15 驳回后的重拟); A1 写闸门效果: PLN-15 批准出 approved 新版本 (R205), PLN-19 带 materiality 的通过直接建出
+ * 下一修订 (approved, R210). 内容修订一律出下一修订 PLAN-{n+1}, 旧修订出新版本置 superseded; 同一修订内只有状态
+ * 变化出新版本 (draft → approved → superseded). 当前计划为 status 不是 superseded 的修订中 revision 最大的.
+ * 计划骨架 (期间, 重要性, 特别风险目标, items) 由 A4 在 PLN-15 中确定性组装, 叙述类各项取 AuditPlanDraft.
+ * 出新版本或新修订须经校验构造, 如 AuditPlan.model_validate({**plan.model_dump(), **update}): model_copy 不跑
+ * approval_fields, 不合规的版本会在之后读回时才报错.
+ */
+export type AuditPlan = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Revision
+     */
+    revision: number;
+    status?: PlanStatus;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Period Start
+     */
+    period_start: string;
+    /**
+     * Period End
+     */
+    period_end: string;
+    /**
+     * Applicable Framework
+     */
+    applicable_framework?: 'tier1_gpfs' | 'tier2_gpfs' | 'spfr' | null;
+    /**
+     * Engagement Letter Document Id
+     */
+    engagement_letter_document_id?: string | null;
+    materiality_choice: MaterialityChoice;
+    /**
+     * Materiality Cents
+     */
+    materiality_cents: number;
+    /**
+     * Performance Materiality Cents
+     */
+    performance_materiality_cents: number;
+    /**
+     * Clearly Trivial Cents
+     */
+    clearly_trivial_cents: number;
+    /**
+     * Significant Risk Objective Ids
+     */
+    significant_risk_objective_ids?: Array<string>;
+    /**
+     * Items
+     */
+    items: Array<PlanItem>;
+    /**
+     * Narrative
+     */
+    narrative: Array<PlanSection>;
+    /**
+     * Procedure Notes
+     */
+    procedure_notes: Array<ProcedureNote>;
+    /**
+     * Timetable
+     */
+    timetable: Array<Milestone>;
+    eqr_recommendation: EqrRecommendation;
+    /**
+     * Expert Assessment
+     */
+    expert_assessment: string;
+    /**
+     * Standards Cited
+     */
+    standards_cited: Array<string>;
+    /**
+     * Eqr Required
+     */
+    eqr_required?: boolean | null;
+    /**
+     * Eqr Basis
+     */
+    eqr_basis?: string | null;
+    /**
+     * Auditor Expert Not Required
+     */
+    auditor_expert_not_required?: boolean | null;
+    /**
+     * Addresses Decision Id
+     */
+    addresses_decision_id?: string | null;
+    /**
+     * Revision Reason
+     */
+    revision_reason?: string | null;
+    /**
+     * Approved By
+     */
+    approved_by?: string | null;
+    /**
+     * Approved At
+     */
+    approved_at?: string | null;
+};
+
+/**
  * AuditReportVersion
  *
  * 审计报告的一个修订版本, 签字后锁定.
@@ -303,6 +420,66 @@ export type AuditReportVersion = {
      * Approved At
      */
     approved_at?: string | null;
+};
+
+/**
+ * AuditorAppointment
+ *
+ * 依 s325(1) 委任审计师的决议.
+ */
+export type AuditorAppointment = {
+    /**
+     * Appointed By
+     */
+    appointed_by: string | null;
+    /**
+     * Resolution On
+     */
+    resolution_on: string | null;
+    /**
+     * Auditor Name
+     */
+    auditor_name: string | null;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
+ * AuditorConsent
+ *
+ * 审计师依 s328A 给公司的书面同意.
+ */
+export type AuditorConsent = {
+    /**
+     * Given On
+     */
+    given_on: string | null;
+    /**
+     * Signed By
+     */
+    signed_by: string | null;
+    /**
+     * Firm Name
+     */
+    firm_name: string | null;
+    /**
+     * Registered Auditor No
+     */
+    registered_auditor_no: string | null;
+    /**
+     * Firm Name Signed
+     */
+    firm_name_signed: boolean;
+    /**
+     * Own Name Signed
+     */
+    own_name_signed: boolean;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
 };
 
 /**
@@ -2071,11 +2248,104 @@ export type EngagementSummary = {
 };
 
 /**
+ * EngagementTerms
+ *
+ * 约定条款与委任核验 (ACC-08): 抽出的事实, T01-T07 的核对, 例外与 AI 建议判断, ACC-08 闸门的呈报材料. 项目里
+ * 只有一份, ID 固定为 TERMS (TERMS_ID); 重读出新版本.
+ */
+export type EngagementTerms = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Framework
+     */
+    framework: 'tier1_gpfs' | 'tier2_gpfs' | 'spfr' | null;
+    /**
+     * Framework Evidence
+     */
+    framework_evidence?: Array<EvidencePointer>;
+    /**
+     * Elements
+     */
+    elements: Array<TermsItem>;
+    /**
+     * Acknowledgements
+     */
+    acknowledgements: Array<TermsItem>;
+    /**
+     * Letter Dated On
+     */
+    letter_dated_on: string | null;
+    /**
+     * Letter Signed By
+     */
+    letter_signed_by: string | null;
+    /**
+     * Letter Signed On
+     */
+    letter_signed_on: string | null;
+    /**
+     * Letter Evidence
+     */
+    letter_evidence?: Array<EvidencePointer>;
+    direction: ShareholderDirection | null;
+    appointment: AuditorAppointment | null;
+    consent: AuditorConsent | null;
+    year_change: FinancialYearChange | null;
+    /**
+     * Run Id
+     */
+    run_id: string;
+    /**
+     * Checks
+     */
+    checks: Array<TermsCheck>;
+    /**
+     * Exception Ids
+     */
+    exception_ids: Array<string>;
+    /**
+     * Judgment Id
+     */
+    judgment_id: string | null;
+    /**
+     * Document Ids
+     */
+    document_ids: Array<string>;
+    /**
+     * Addresses Decision Id
+     */
+    addresses_decision_id?: string | null;
+};
+
+/**
  * Engine
  *
  * 程序的执行方式.
  */
 export type Engine = 'rule' | 'llm' | 'hybrid' | 'manual';
+
+/**
+ * EqrRecommendation
+ *
+ * 是否需要项目质量复核的建议 (ASQM 1 第 34(f) 段); 审计师在 PLN-15 批准时另行确认 (PlanConfirmation).
+ */
+export type EqrRecommendation = {
+    /**
+     * Required
+     */
+    required: boolean;
+    /**
+     * Basis
+     */
+    basis: string;
+};
 
 /**
  * EvidencePointer
@@ -2342,6 +2612,38 @@ export type FinancialStatements = {
 };
 
 /**
+ * FinancialYearChange
+ *
+ * 董事依 s323D(2A) 缩短财年的决议.
+ */
+export type FinancialYearChange = {
+    /**
+     * Resolved On
+     */
+    resolved_on: string | null;
+    /**
+     * Previous Year End
+     */
+    previous_year_end: string | null;
+    /**
+     * New Year End
+     */
+    new_year_end: string | null;
+    /**
+     * Prior Shortened Within 5 Years
+     */
+    prior_shortened_within_5_years: boolean | null;
+    /**
+     * Good Faith Reason
+     */
+    good_faith_reason: string | null;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
  * GateDecision
  *
  * 审计师在闸门作出的决定, 附该闸门特有的内容 (重要性, 意见类型, 批注等).
@@ -2486,6 +2788,8 @@ export type GateView = {
     } & AcceptanceMaterial) | ({
         kind: 'PLN-01/03';
     } & PlanningMaterial) | ({
+        kind: 'PLN-15';
+    } & PlanMaterial) | ({
         kind: 'FIN-01';
     } & CompletionMaterial) | ({
         kind: 'RPT-01';
@@ -2770,6 +3074,7 @@ export type Judgment = {
     counter_argument: string;
     proposed_action: ProposedAction;
     misstatement_draft?: MisstatementDraft | null;
+    misstatement_update?: MisstatementUpdate | null;
     /**
      * Exception Ids
      */
@@ -3146,9 +3451,27 @@ export type MaterialityChoice = {
 };
 
 /**
+ * Milestone
+ *
+ * 计划时间表的一项, 如外勤完成, 报告签署, 送达股东.
+ */
+export type Milestone = {
+    /**
+     * Milestone
+     */
+    milestone: string;
+    /**
+     * Due
+     */
+    due: string;
+};
+
+/**
  * Misstatement
  *
- * 已认定的错报, 来自某条判断或例外. 本版一律按未更正处理.
+ * 已认定的错报, 来自某条判断或例外; 规格书 12.2 Misstatement 与 12.3 的生命周期 (需求 R156, 迁移表见接口文档
+ * 第 2.5 节). 人认定时建第 1 版, 功能 misstatement 打开为 identified, 关闭为 uncorrected (旧口径, 不经沟通, basis
+ * 为空); 之后的分类, 沟通与验证各出新版本 (model_copy, version +1). 新字段都有缺省, Store 中的旧行照常读回.
  */
 export type Misstatement = {
     /**
@@ -3183,9 +3506,74 @@ export type Misstatement = {
     amount_cents: number;
     direction: Direction;
     /**
-     * Status
+     * Account Code
      */
-    status?: 'uncorrected';
+    account_code?: string | null;
+    status?: MisstatementStatus;
+    /**
+     * Objective Id
+     */
+    objective_id?: string | null;
+    /**
+     * Fraud Indicative
+     */
+    fraud_indicative?: boolean | null;
+    /**
+     * Fraud Reason
+     */
+    fraud_reason?: string | null;
+    /**
+     * Origin
+     */
+    origin?: 'current_period' | 'prior_period_uncorrected' | null;
+    /**
+     * Classification Judgment Id
+     */
+    classification_judgment_id?: string | null;
+    /**
+     * Communicated At
+     */
+    communicated_at?: string | null;
+    /**
+     * Communicated To
+     */
+    communicated_to?: string | null;
+    /**
+     * Responded At
+     */
+    responded_at?: string | null;
+    /**
+     * Management Response
+     */
+    management_response?: string | null;
+    /**
+     * Needs Recommunication
+     */
+    needs_recommunication?: boolean;
+    /**
+     * Uncorrected Basis
+     */
+    uncorrected_basis?: 'refused' | 'stopped_waiting' | null;
+    /**
+     * Correction Notice Id
+     */
+    correction_notice_id?: string | null;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Corrected Cents
+     */
+    corrected_cents?: number;
+    /**
+     * Residual Cents
+     */
+    residual_cents?: number | null;
+    /**
+     * Verified By Judgment Id
+     */
+    verified_by_judgment_id?: string | null;
 };
 
 /**
@@ -3205,6 +3593,10 @@ export type MisstatementDraft = {
      */
     amount_cents: number;
     direction: Direction;
+    /**
+     * Account Code
+     */
+    account_code?: string | null;
 };
 
 /**
@@ -3226,11 +3618,75 @@ export type MisstatementReport = {
 };
 
 /**
+ * MisstatementStatus
+ *
+ * 错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement
+ * 关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写.
+ */
+export type MisstatementStatus = 'identified' | 'communicated' | 'verifying' | 'corrected' | 'partially_corrected' | 'uncorrected' | 'evaluated' | 'closed';
+
+/**
  * MisstatementType
  *
  * 错报类型.
  */
 export type MisstatementType = 'factual' | 'judgmental' | 'projected';
+
+/**
+ * MisstatementUpdate
+ *
+ * 判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
+ * base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
+ * 时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFICATION_STATUSES.
+ */
+export type MisstatementUpdate = {
+    /**
+     * Misstatement Id
+     */
+    misstatement_id: string;
+    /**
+     * Base Version
+     */
+    base_version: number;
+    /**
+     * Kind
+     */
+    kind: 'classification' | 'verification';
+    type?: MisstatementType | null;
+    /**
+     * Fraud Indicative
+     */
+    fraud_indicative?: boolean | null;
+    /**
+     * Fraud Reason
+     */
+    fraud_reason?: string | null;
+    /**
+     * Origin
+     */
+    origin?: 'current_period' | 'prior_period_uncorrected' | null;
+    /**
+     * Objective Id
+     */
+    objective_id?: string | null;
+    status?: MisstatementStatus | null;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string> | null;
+    /**
+     * Corrected Cents
+     */
+    corrected_cents?: number | null;
+    /**
+     * Residual Cents
+     */
+    residual_cents?: number | null;
+    /**
+     * Needs Recommunication
+     */
+    needs_recommunication?: boolean | null;
+};
 
 /**
  * MonthlyFigures
@@ -3374,6 +3830,89 @@ export type PlanConfirmation = {
      */
     auditor_expert_not_required: boolean;
 };
+
+/**
+ * PlanItem
+ *
+ * 总体审计计划中的一条程序: 该修订组装时程序包里的那一版 (旧修订不随之后的改动变).
+ */
+export type PlanItem = {
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Name
+     */
+    name: string;
+    /**
+     * Template Commit
+     */
+    template_commit: string;
+    /**
+     * Objective Ids
+     */
+    objective_ids?: Array<string>;
+    /**
+     * Params
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * PlanMaterial
+ *
+ * PLN-15 闸门的呈报材料 (需求 R205, 功能 planning).
+ */
+export type PlanMaterial = {
+    /**
+     * Kind
+     */
+    kind?: 'PLN-15';
+    plan: AuditPlan;
+    terms: EngagementTerms | null;
+    /**
+     * Materiality Cents
+     */
+    materiality_cents: number;
+    /**
+     * Performance Materiality Cents
+     */
+    performance_materiality_cents: number;
+    /**
+     * Clearly Trivial Cents
+     */
+    clearly_trivial_cents: number;
+    /**
+     * Previous Decisions
+     */
+    previous_decisions: Array<GateDecision>;
+};
+
+/**
+ * PlanSection
+ *
+ * 计划叙述的一段. 用列表保段序: 存进 JSONB 的字典不保留键序.
+ */
+export type PlanSection = {
+    /**
+     * Section
+     */
+    section: string;
+    /**
+     * Text
+     */
+    text: string;
+};
+
+/**
+ * PlanStatus
+ *
+ * 总体审计计划一个修订的状态 (需求 R203).
+ */
+export type PlanStatus = 'draft' | 'approved' | 'superseded';
 
 /**
  * PlanningMaterial
@@ -3632,6 +4171,22 @@ export type ProcedureDetail = {
      * Superseded Run Ids
      */
     superseded_run_ids?: Array<string>;
+};
+
+/**
+ * ProcedureNote
+ *
+ * 一条程序计划的性质, 时间与范围 (ASA 300 第 9(c) 段: 认定层次的进一步审计程序).
+ */
+export type ProcedureNote = {
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Nature Timing Extent
+     */
+    nature_timing_extent: string;
 };
 
 /**
@@ -4081,6 +4636,7 @@ export type ReviewRecord = {
      */
     override_conclusion?: string | null;
     misstatement_draft?: MisstatementDraft | null;
+    misstatement_update?: MisstatementUpdate | null;
     /**
      * Rerun Params
      */
@@ -4372,6 +4928,42 @@ export type ServiceOrganisation = {
      * Report Ref
      */
     report_ref?: string | null;
+};
+
+/**
+ * ShareholderDirection
+ *
+ * 股东依 s293 给小型私人公司的指示 (委任文件中): 谁签, 持多少股, 何时, 是否要求审计.
+ */
+export type ShareholderDirection = {
+    /**
+     * Signed By
+     */
+    signed_by: string | null;
+    /**
+     * Shares Held
+     */
+    shares_held: number | null;
+    /**
+     * Total Shares
+     */
+    total_shares: number | null;
+    /**
+     * Votes Pct
+     */
+    votes_pct: number | null;
+    /**
+     * Made On
+     */
+    made_on: string | null;
+    /**
+     * Requires Audit
+     */
+    requires_audit: boolean;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
 };
 
 /**
@@ -4743,6 +5335,58 @@ export type TaskStatus = 'pending' | 'decided';
  * 合同条款类型.
  */
 export type TermType = 'payment' | 'control_transfer' | 'return_right' | 'rebate' | 'termination' | 'guarantee' | 'related_party';
+
+/**
+ * TermsCheck
+ *
+ * ACC-08 的一项核对 (T01-T07).
+ */
+export type TermsCheck = {
+    /**
+     * Check
+     */
+    check: 'T01' | 'T02' | 'T03' | 'T04' | 'T05' | 'T06' | 'T07';
+    status: TermsCheckStatus;
+    /**
+     * Blocking
+     */
+    blocking: boolean;
+    /**
+     * Basis
+     */
+    basis: string;
+    /**
+     * Detail
+     */
+    detail: string;
+};
+
+/**
+ * TermsCheckStatus
+ *
+ * ACC-08 一项核对的结果.
+ */
+export type TermsCheckStatus = 'passed' | 'failed' | 'not_applicable';
+
+/**
+ * TermsItem
+ *
+ * 约定书中的一项要素 (TermsElement) 或管理层的一项确认 (TermsAcknowledgement): 有没有写明, 写在哪.
+ */
+export type TermsItem = {
+    /**
+     * Item
+     */
+    item: 'objective_scope' | 'auditor_responsibilities' | 'management_responsibilities' | 'framework' | 'report_form' | 'prepare_fr' | 'internal_control' | 'access_information' | 'additional_information' | 'unrestricted_access';
+    /**
+     * Present
+     */
+    present: boolean;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
 
 /**
  * Token

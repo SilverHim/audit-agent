@@ -14,6 +14,7 @@ from backend.contracts.models import (
     FinancialStatementLine,
     Milestone,
     MisstatementDraft,
+    MisstatementType,
     Model,
     Officeholder,
     ProcedureNote,
@@ -37,6 +38,22 @@ class JudgmentDraft(Model):
     proposed_action: ProposedAction  # 建议动作
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
     self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1, 计入置信度的 llm 分项
+
+
+class MisstatementNature(Model):
+    """错报的性质 (FIN-03): 类型 (ASA 450 第 A6 段) 与舞弊迹象 (ASA 240 第 36 段). 本系统不做审计抽样, 类型只取
+    factual 或 judgmental, 为 projected 判语义失败 (judgment_engine.nature_semantics); 舞弊迹象为真须写理由."""
+
+    type: MisstatementType  # 错报类型: factual 无疑问的, judgmental 管理层判断 (含会计估计) 不合理的
+    fraud_indicative: bool  # 是否有舞弊迹象
+    fraud_reason: str | None = None  # 舞弊迹象的理由; fraud_indicative 为真时必填
+
+
+class MisstatementClassificationDraft(JudgmentDraft):
+    """FIN-03 对一条错报的分类草稿 (需求 R157): 判断草稿的各项 (结论, 推理链, 证据, 建议动作等, 规则同 JudgmentDraft)
+    加错报的性质. 校验后由判断引擎补全为 Judgment, 性质由 A8 写进判断的 misstatement_update (需求 R158)."""
+
+    nature: MisstatementNature  # 错报的性质
 
 
 class ExtractedTerm(Model):

@@ -24,3 +24,15 @@ fragments:
       (a) The size and nature of the misstatements, both in relation to particular classes of transactions, account balances or disclosures and the financial report as a whole, and the particular circumstances of their occurrence; and
       (b) The effect of uncorrected misstatements related to prior periods on the relevant classes of transactions, account balances or disclosures, and the financial report as a whole.
     procedures: [FIN-01]
+  # 编译版第 13 页 A6 段的引语与三条列举之间印有一行 "Misstatements in Disclosures" (同页 A4 之前小标题的重复, 正文
+  # 字号与字体), 为逐字一致照录; 段末 "ASA 530" 后的脚注号 9 按逐字规则去掉
+  - id: ASA450-A6
+    paragraph: "A6"
+    topic: misstatement_types
+    text: |
+      To assist the auditor in evaluating the effect of misstatements accumulated during the audit and in communicating misstatements to management and those charged with governance, it may be useful to distinguish between factual misstatements, judgemental misstatements and projected misstatements.
+      Misstatements in Disclosures
+      • Factual misstatements are misstatements about which there is no doubt.
+      • Judgemental misstatements are differences arising from the judgements of management including those concerning recognition, measurement, presentation and disclosure in the financial report (including the selection or application of accounting policies) that the auditor considers unreasonable or inappropriate.
+      • Projected misstatements are the auditor’s best estimate of misstatements in populations, involving the projection of misstatements identified in audit samples to the entire populations from which the samples were drawn. Guidance on the determination of projected misstatements and evaluation of the results is set out in ASA 530.
+    procedures: [FIN-03]

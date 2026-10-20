@@ -102,6 +102,20 @@ MISSTATEMENT = Misstatement(
     amount_cents=14200000,
     direction=Direction.overstated,
 )
+# 生命周期之前错报的字段 (R19 加 status), 写死不取 report.MISSTATEMENT_FIELDS
+R19_MISSTATEMENT_KEYS = {
+    "id",
+    "version",
+    "judgment_id",
+    "exception_id",
+    "review_record_id",
+    "type",
+    "account",
+    "assertion",
+    "amount_cents",
+    "direction",
+    "status",
+}
 SCHEDULE = UncorrectedSchedule(
     id="SCHEDULE",
     items=[UncorrectedItem(misstatement_id=MISSTATEMENT.id, amount_cents=14200000, direction=Direction.overstated)],
@@ -234,6 +248,9 @@ async def test_request_and_trail() -> None:
     assert "Total uncorrected misstatements: 14200000 cents." in prompt
     assert "- ASA705-P21 (ASA 705 para 21): If there is a material misstatement" in prompt
     assert "## Revision" not in prompt
+    # 需求 R156 (第 1 轮审核 R156-01): 错报块只有生命周期之前的字段 (R19 加 status), 新字段不进提示词
+    block = prompt.split("Uncorrected misstatements:\n```json\n", 1)[1].split("\n```", 1)[0]
+    assert [set(m) for m in json.loads(block)] == [R19_MISSTATEMENT_KEYS]
 
 
 async def test_unqualified_uses_unqualified_template_and_no_misstatements() -> None:

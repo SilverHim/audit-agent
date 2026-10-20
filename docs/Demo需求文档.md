@@ -19,7 +19,7 @@ Xero 演示数据集（xero/20261017-q1）的种子载入（`python -m backend.p
 
 ## 2. 程序清单
 
-基线 18 条：下表未注功能名的 17 条，加贯穿程序 GEN-09 判断独立复核（A7，由 A6 每生成一条模型类判断即同步调用，不单独派发）。表中 GEN-10、GEN-11 两行是 A10 的对话与呈递，不单独派发，不建程序文件，不计入条数。注了功能名的程序只在该功能启用时进程序包（开发接口文档第 8.1 节功能开关）：GEN-05、GEN-02 属功能 journals，GEN-08、GEN-03、GEN-01 属功能 related_parties，这 5 条是 P2 固定集，不按审计目标装配；ACC-08 属功能 acceptance，承接阶段的闸门程序。
+基线 18 条：下表未注功能名的 17 条，加贯穿程序 GEN-09 判断独立复核（A7，由 A6 每生成一条模型类判断即同步调用，不单独派发）。表中 GEN-10、GEN-11 两行是 A10 的对话与呈递，不单独派发，不建程序文件，不计入条数。注了功能名的程序只在该功能启用时进程序包（开发接口文档第 8.1 节功能开关）：GEN-05、GEN-02 属功能 journals，GEN-08、GEN-03、GEN-01 属功能 related_parties，GEN-07 属功能 going_concern，这 6 条是 P2 固定集，不按审计目标装配；ACC-08 属功能 acceptance，承接阶段的闸门程序。
 
 | 阶段 | 程序 | 引擎 · 自主度 | Agent | 本版做法 |
 |---|---|---|---|---|
@@ -39,12 +39,14 @@ Xero 演示数据集（xero/20261017-q1）的种子载入（`python -m backend.p
 | P2 | CSH-02 函证差异评价 | 混合 · L3 | A6 | 规则算回函余额与账面余额的差额，列出期后流水中的候选调节项，并核对回函写明的应计利息是否已入账；LLM 解释差异并建议是否为错报；相符且应计利息已入账才自动关闭，有差异或应计利息未入账进复核队列 |
 | P2 | GEN-05 全量分录扫描 | 规则 · L3 | A6 | 功能 journals。对本期全部分录执行红旗规则，每笔凭证一条 Exception；看录入时间的规则在数据集声明录入时间不可靠时不执行，缺字段的规则记不可执行（第 4.2 节）；更正分录接入后另有增量实例，在 verify_correction 节点执行 |
 | P2 | GEN-02 分录例外归因 | 混合 · L2 | A6 | 功能 journals。规则取 GEN-05 的例外；LLM 结合该凭证的全部行、对应发票与银行流水解释每条例外，每条一个 Judgment，建议动作不受限制（可建议认定错报） |
+| P2 | GEN-07 期后监控 | 规则 · L4 | A5 | 功能 going_concern。在期后窗口（期末后 31 天，截到数据截止日）内扫描总账未记的大额流水（S01）、非常规分录（S02）与资本性支出（S03），剔除作废对，例外原样作期后事项候选，不作判断，不建复核任务；S04 本版不做（第 6 节） |
 | P2 | GEN-08 股权穿透 | 规则 · L4 | A5 | 功能 related_parties。按客户画像的股东与董事查 ASIC 公司摘录与人员检索，建股权与任职关系图，与管理层申报的关联方比对，未申报的关联主体出 Exception |
 | P2 | GEN-03 关联方图谱研判 | LLM · L2 | A6 | 功能 related_parties。对关系图中的关联主体，结合本期交易与相关文件判断关联关系与交易性质，每个主体一条 Judgment |
 | P2 | GEN-01 关联方完整性终审 | LLM · L1 | A6 | 功能 related_parties。汇总 GEN-08 与 GEN-03 的结论，对管理层申报的关联方是否完整给一条 Judgment，审计师逐条复核；结论在 FIN-01 闸门只读列出 |
 | 贯穿 | GEN-09 判断独立复核 | LLM · L4 | A7 | 程序运行时自主度 L3、L4 且建议接受或关闭、推理链含假设、或 5% 抽样的判断由复核模型两轮复核：第一轮只看证据独立得出结论与推理链，第二轮再比对 A6 结论；一致计入置信度，不一致建争议任务由审计师仲裁（采用 A6、采用 A7 或人给结论，可附错报）；L1、L2 跳过 |
 | 贯穿 | GEN-10 进度与来源解释 | LLM · L4 | A10 | 对话入口（开发接口文档第 6.1 节）：审计师提问时，模型按需调只读工具查进度、判断与证据来源后作答；只读，不提交决定。不单独派发，不建程序文件，只作对话留痕的程序编号 |
 | 贯穿 | GEN-11 判断呈递与决定收集 | 呈递（规格书为 LLM · L4） | A10 | 复核任务与闸门以结构化卡片呈递（推理链、证据指针、反方论证、独立复核结论），审计师在卡片的表单上提交决定，经 DecisionSubmit 写入；本版不调模型。不单独派发，不建程序文件 |
+| P3 | FIN-03 错报性质分类 | 混合 · L2 | A8 | 功能 misstatement。对每条未分类的已认定错报：审计目标与期间来源在代码中定，LLM 判类型（factual 或 judgmental，不做审计抽样故无 projected）与是否有舞弊迹象，每条错报一个 Judgment，确认后写进错报的分类（需求 R157 定模板，执行由 R158 加） |
 | P3 | FIN-04 错报累计 | 规则 · L3 | A9 | 累计高于明显微小门槛的未更正错报，出汇总表；与整体重要性比较得候选意见 |
 | P3 | FIN-01 未更正错报评价 | 闸门 · L1 | A9 | 呈递汇总表与候选意见；审计师确认意见类型并写理由 |
 | P4 | RPT-03 报告文本生成 | LLM · L2 | A10 | 固定段落套模板，LLM 只写意见段与形成意见的基础段，事实断言回指已确认的 Judgment；按批注修订，每轮版本 +1 |
@@ -60,7 +62,7 @@ GEN-02 ← GEN-05            GEN-03 ← DOC-04、GEN-08     GEN-01 ← GEN-03、
 ACC-08 ← ACC-01
 ```
 
-P2 程序包分三层：第 0 层 REV-08、REV-03、CSH-04、CSH-05；第 1 层 REV-02、DOC-06；第 2 层 CSH-02。启用功能时各层另加：第 0 层 GEN-05、GEN-08；第 1 层 GEN-02、GEN-03；第 2 层 GEN-01。GEN-05 的增量实例不在程序包分层内，在 verify_correction 节点执行。
+P2 程序包分三层：第 0 层 REV-08、REV-03、CSH-04、CSH-05；第 1 层 REV-02、DOC-06；第 2 层 CSH-02。启用功能时各层另加：第 0 层 GEN-05、GEN-07、GEN-08；第 1 层 GEN-02、GEN-03；第 2 层 GEN-01。GEN-05 的增量实例不在程序包分层内，在 verify_correction 节点执行。
 
 ## 3. 合成数据集
 
@@ -94,11 +96,17 @@ p0_inputs → p0_intel → gate_acc01 → p1_await_data → p1_ingest → p1_ana
 completion → gate_fin → report_draft → gate_rpt01 → { report_draft | archive }
 ```
 
+功能 planning 打开时（需求 R205），装配之后先起草总体审计计划，批准才进入执行阶段：
+
+```
+gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
+```
+
 - p0_inputs：新客户（项目没有数据集）先经 ABN Lookup 查是不是公司，是公司而没有上传 ASIC 摘录时把 ACC-04 置等资料（awaiting_data，A3 提出补交请求 REQ-registry_extract），在节点内 `interrupt()` 等审计师上传；上传后 A3 抽取，数据变动带动图回到 p0_inputs 再判一次，有摘录或请求标为客户无此类资料后进 p0_intel（需求 R290）。有数据集的项目、不是公司或查不到 ABN 的不等，直接进 p0_intel。
 - p1_await_data：建项目不载入财务数据，ACC-01 通过后在节点内 `interrupt()` 等审计师在数据管理页接入数据并确认已齐（数据集载入视同确认，不等）。
-- 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
+- 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01（功能 planning 另加 gate_p1_plan）。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
 - 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_inputs 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
-- assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。
+- assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。功能 planning 打开时 assemble_pack 只写 P2 程序，不改阶段；plan_draft 由 A4 执行 PLN-15 起草计划，停在 gate_p1_plan；批准时计划置 approved、PLN-15 完成、阶段进 P2_Executing（同一事务），之后才派发（未批准的计划不派发）；驳回回 plan_draft 起草下一修订。
 - schedule 按依赖图拓扑分层，同层按循环分组，用 `Send` 派发 fieldwork 实例，上限 4；fieldwork 按程序的 owner 调用对应 Agent。
 - fan_in 用按 ID 合并的 reducer 收各实例返回的 ProcedureRun、Exception、Judgment、ReviewTask，由 A1 重算程序状态：有待决任务为 awaiting_human，否则为 completed；rerun 决定时由 DecisionSubmit 先置 executing，不受待决任务影响。
 - P2 以外的程序（ACC-04、DOC-04、PLN-07、PLN-01、FIN-04、RPT-03）由所在节点直接执行。整次失败（Agent 抛异常或片段校验不过）时，节点写入 failed 的执行记录与 failed 任务；单个对象失败（如 DOC-04 一份合同抽取失败）时，执行记录仍为 succeeded，Agent 的片段照常写入，其中带该对象的 failed 任务。两种情况程序都置 awaiting_human，然后在节点内 `interrupt()`；审计师选 rerun 后在同一节点内重跑。
@@ -121,7 +129,7 @@ completion → gate_fin → report_draft → gate_rpt01 → { report_draft | arc
 |---|---|---|
 | confirm | normal | Judgment 置 confirmed |
 | override | normal、unattributed | 按人的结论另建人工 Judgment；normal 任务的旧 Judgment 置 overridden 并记 superseded_by |
-| misstatement | normal、unattributed | 按 misstatement_draft 建 Misstatement，本版一律按未更正处理 |
+| misstatement | normal、unattributed | 按 misstatement_draft 建 Misstatement；初始状态按功能 misstatement：打开为 identified（之后分类、沟通、等待更正与验证，接口文档第 2.5 节），关闭为未更正（uncorrected） |
 | rerun | failed | 程序回到 executing；P2 程序重新派发，P2 以外的程序在所在节点内重跑 |
 | manual_result | failed（只限产出 Judgment 的程序，且任务带 subject_id） | 人的结果成为 Judgment |
 
@@ -224,7 +232,7 @@ compose.yml                        B
 - ASIC 人员检索同名多人时的人工确认
 - 分录"类型"列：手工分录以数据给出的 is_adjustment 为准，JE-R07 不分凭证类型
 - 向量索引、文档分类与 OCR：数据集自带文档类型，只读 PDF 文本层
-- Xero 收款与发票对应表（payments.json 的分配记录），因而期后监控 GEN-07 S04 “期末应收到截止日仍未收回” 暂缓
+- Xero 收款与发票对应表（payments.json 的分配记录），因而期后监控 GEN-07 S04 “期末应收到截止日仍未收回” 本版不做（收款分录的 source_doc 不带发票号；待载入器提供收款对应表，Xero 演示数据集设计第 9.3 节第 14 项；GEN-07.yaml 注释写明）
 - 分录表加 reverses_entry_no 列：作废对仍由规则按数据集声明的冲回说明格式识别
 
 ## 7. 准则片段
@@ -249,9 +257,12 @@ compose.yml                        B
 | ASA240-P32 | 管理层凌驾于控制之上的风险属特别风险 | GEN-05、GEN-02、PLN-15 |
 | ASA240-P33 | 分录测试（只摘第 33(a) 段） | GEN-05、GEN-02、PLN-15 |
 | ASA240-A44 | 选取分录与其他调整时考虑的事项 | GEN-02 |
+| ASA240-P36 | 识别出错报时评价其是否有舞弊迹象 | FIN-03 |
+| ASA450-A6 | 事实错报、判断错报与推断错报的区分 | FIN-03 |
 | ASA550-P10 | 关联方的定义（只摘第 10(b) 项） | GEN-03 |
 | ASA550-P13 | 向管理层询问关联方及其交易 | GEN-01 |
 | ASA550-P15 | 检查记录与文件时留意未识别的关联方 | GEN-08 |
+| ASA560-P06、ASA560-P07 | 识别期后事项的程序及其覆盖期间 | GEN-07 |
 | ASA550-P21 | 发现可能有管理层未识别的关联关系或交易时，确定其是否存在 | GEN-03 |
 | ASA550-P22 | 新识别关联方的应对 | GEN-03、GEN-01 |
 | ASA550-P23 | 超出正常经营过程的关联方交易 | GEN-03 |

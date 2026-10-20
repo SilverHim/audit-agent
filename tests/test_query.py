@@ -9,6 +9,7 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     GateVerdict,
+    PlanStatus,
     ProcedureStatus,
     ProfileSource,
     ReviewTask,
@@ -17,9 +18,9 @@ from backend.contracts.models import (
     TaskStatus,
 )
 from backend.contracts.state import initial_state
-from backend.contracts.views import PlanningMaterial
+from backend.contracts.views import PlanMaterial, PlanningMaterial
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.gates import acc01_effects
+from backend.orchestration.gates import acc01_effects, spec_of
 from backend.orchestration.query import GraphStateQuery, current_gate
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import (
@@ -27,9 +28,15 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
+    FakeRegistry,
+    FakeTrail,
+    audit_plan,
+    engagement_terms,
+    make_deps,
     make_runner,
     wait_idle,
 )
@@ -330,3 +337,56 @@ async def test_gate_material_missing_is_an_error() -> None:
 
     with pytest.raises(LookupError, match="缺初步分析结果或重要性候选"):
         await query.gate(EID)
+
+
+# ── R205: PLN-15 闸门的材料 (功能 planning; 停在闸门的流程见 test_decisions 的 Xero 用例) ──
+
+
+def plan_gate_decision(n: int, gate: GateId, verdict: GateVerdict, target_id: str) -> GateDecision:
+    return GateDecision(
+        id=f"D-{n}",
+        gate=gate,
+        target_id=target_id,
+        target_version=1,
+        decision=verdict,
+        reason="test",
+        decided_by="U-1",
+        decided_at=NOW,
+    )
+
+
+async def test_plan_material_takes_current_terms_and_rejections() -> None:
+    """需求 R205 验收 3: PLN-15 的材料取当前计划 (PLAN-1 已取代, 为 PLAN-2), TERMS 的当前版本 (功能 acceptance 打开
+    时状态中有它), 状态中的重要性三项, 此前的 PLN-15 驳回决定 (信息不足的与别的闸门的驳回不列). 缺当前计划或重要性
+    时抛 LookupError (停在闸门而材料缺失, 状态与流程不符)."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=PLANNING_FEATURES)
+    reject = plan_gate_decision(1, GateId.PLN_15, GateVerdict.reject, "PLAN-1")
+    state = initial_state(ENGAGEMENT, [], 1)
+    state.update(  # type: ignore[typeddict-item]
+        audit_plans=[audit_plan(1, 2, PlanStatus.superseded), audit_plan(2)],
+        engagement_terms=engagement_terms(version=2),
+        materiality_cents=12_000_000,
+        performance_materiality_cents=9_000_000,
+        clearly_trivial_cents=600_000,
+        gate_decisions=[
+            plan_gate_decision(0, GateId.PLN_01_03, GateVerdict.reject, "MATERIALITY"),
+            reject,
+            plan_gate_decision(2, GateId.PLN_15, GateVerdict.insufficient_info, "PLAN-2"),
+        ],
+    )
+    view = spec_of(GateId.PLN_15).view
+
+    material, shown = await view(deps, EID, state)
+
+    assert material == audit_plan(2)
+    assert shown == PlanMaterial(
+        plan=audit_plan(2),
+        terms=engagement_terms(version=2),
+        materiality_cents=12_000_000,
+        performance_materiality_cents=9_000_000,
+        clearly_trivial_cents=600_000,
+        previous_decisions=[reject],
+    )
+    for missing in ({"audit_plans": [audit_plan(1, 2, PlanStatus.superseded)]}, {"clearly_trivial_cents": None}):
+        with pytest.raises(LookupError, match="停在 PLN-15 闸门"):
+            await view(deps, EID, {**state, **missing})  # type: ignore[typeddict-item]

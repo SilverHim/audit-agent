@@ -1,0 +1,176 @@
+id: GEN-07
+name: 期后监控
+# 规格书 6.1.1 (A5 含 GEN-07), 7.2 节 (L4 规则); ASA 560 第 6, 7 段. Xero 演示数据集设计第 5.4 节 (G3 草稿按第 5.1 节
+# 原则改写: 不依赖具体公司的参考号写法). 在期后窗口内扫描未入账的大额流水 (S01), 非常规分录 (S02) 与资本性支出
+# (S03), 例外原样返回作期后事项候选, 不作判断, 不建复核任务, 不调大模型 (需求 R177).
+#
+# 通用口径 (各规则的 SQL 都这样写):
+# - 期后窗口 (period_end, window_end]: window_end = LEAST(period_end + subsequent_days, COALESCE(data_as_of,
+#   period_end + subsequent_days)), 即期末后固定天数, 数据只到 data_as_of 时截到那天 (数据集声明, 为空不设上限). Xero
+#   演示为 2026-10-01 至 10-17. 各行带 window_end, 显示覆盖截止日.
+# - 作废对 (各规则剔除): 冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证, 原凭证为模板填入第一个
+#   捕获组; 两者都算作废对, 不看 is_adjustment; pattern 为空 (没有声明, 如 Numbat) 时没有作废对. WITH reversal,
+#   voided 两段写在 "作废对共用段" 起止标记之间, 与 GEN-05, CSH-02 逐字相同 (tests/test_knowledge.py 守住), 改口径时
+#   几处一起改. pattern 的写法要求见 CSH-02.yaml 的注释.
+# - 银行科目为银行账户表的 gl_account_code. "分类" 指科目表的 category (receivables, payables,
+#   property_plant_equipment), "类" 指科目的 type (收入类 revenue, 资产类 asset, 负债类 liability).
+# - 凭证级的规则 (S02) 每笔凭证一条例外: source_id 取所选行中绝对值 (借贷之和) 最大的行, 并列取 ID 最小的行 (按字节
+#   序); amount_cents 取这一行的绝对值 (设计稿第 5.3 节通用约定). 分录类例外按 (posting_date, entry_no 自然序,
+#   entry_no) 编号, 自然序同 GEN-05.
+# - 金额门槛为 "超过" (>).
+#
+# S04 期末应收到截止日仍未收回: 本版不做 (Demo需求文档第 6 节). 要收款与发票的对应关系, 现有表没有 (收款分录的
+# source_doc 只写客户名, 不带发票号); 待载入器提供收款对应表 (设计稿第 9.3 节第 14 项) 后再加.
+phase: P2_Executing
+cycle: Pervasive
+owner: A5
+feature: going_concern            # 功能开关 (services/features.py): 持续经营
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [exceptions]
+reads: [bank_accounts, bank_transactions, journal_entries, accounts]
+engine: rule
+autonomy_level: L4
+assertions: [Completeness]
+params:
+  period_end: {ref: period_end}
+  subsequent_days: 31             # 期末后监控的天数
+  data_as_of: {ref: dataset.data_as_of}   # 数据截止日, 窗口不越过它; 为空不设上限
+  materiality_cents: {ref: materiality_cents}   # S01, S03 的门槛: 整体重要性
+  clearly_trivial_cents: {ref: clearly_trivial_cents}   # S02 的门槛: 明显微小
+  match_days: 10                  # S01: 流水日前后几天内找总账的同额行
+  reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}
+  reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
+standards: [ASA560-P06, ASA560-P07]
+evidence_required: [bank, voucher]
+rules:
+  - id: S01
+    name: 期后未入账的大额流水
+    severity: medium
+    # 窗口内的对账单行, 金额绝对值超过整体重要性, 且该账户的银行科目在流水日前后 match_days 天内 (闭区间) 没有借减贷
+    # 等于流水金额 (同方向同额) 的非作废对分录行. 每行一条例外, 金额为流水金额 (带符号), 按 (txn_date, id) 排序
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), bounds AS (
+        SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                     COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                 AS window_end
+      )
+      SELECT 'bank_transaction' AS source_type, t.id AS source_id, t.amount_cents, t.bank_account_id, t.txn_date,
+             t.description, t.reference, w.window_end
+      FROM bank_transactions t
+      JOIN bank_accounts b ON b.engagement_id=t.engagement_id AND b.id=t.bank_account_id
+      CROSS JOIN bounds w
+      WHERE t.engagement_id=:eid
+        AND t.txn_date>CAST(:period_end AS date) AND t.txn_date<=w.window_end
+        AND abs(t.amount_cents)>CAST(:materiality_cents AS bigint)
+        AND NOT EXISTS (
+          SELECT 1 FROM journal_entries j
+          WHERE j.engagement_id=t.engagement_id AND j.account_code=b.gl_account_code
+            AND j.posting_date BETWEEN t.txn_date-CAST(:match_days AS int) AND t.txn_date+CAST(:match_days AS int)
+            AND j.debit_cents-j.credit_cents=t.amount_cents
+            AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no))
+      ORDER BY t.txn_date, t.id COLLATE "C"
+  - id: S02
+    name: 期后非常规分录
+    severity: high
+    # 窗口内的分录行按凭证归组, 剔除: 涉银行科目的凭证, 作废对, 常规赊销过账 (同一凭证借记 receivables 分类且贷记
+    # 收入类科目), 赊购过账 (贷记 payables 分类), 各科目净额 (借减贷之和) 都为 0 的凭证 (如存货期初的对冲行). 每笔取
+    # 资产或负债类科目的行中绝对值最大的一行, 金额取绝对值, 超过明显微小
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), bounds AS (
+        SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                     COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                 AS window_end
+      ), lines AS (
+        SELECT j.id, j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description,
+               j.source_doc, a.type AS account_type, a.category,
+               EXISTS (SELECT 1 FROM bank_accounts b
+                       WHERE b.engagement_id=j.engagement_id AND b.gl_account_code=j.account_code) AS is_bank
+        FROM journal_entries j
+        LEFT JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+        CROSS JOIN bounds w
+        WHERE j.engagement_id=:eid
+          AND j.posting_date>CAST(:period_end AS date) AND j.posting_date<=w.window_end
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ), vouchers AS (
+        SELECT entry_no FROM lines GROUP BY entry_no
+        HAVING NOT bool_or(is_bank)
+          AND NOT (bool_or(category='receivables' AND debit_cents>0)
+                   AND bool_or(account_type='revenue' AND credit_cents>0))
+          AND NOT bool_or(category='payables' AND credit_cents>0)
+      ), unbalanced AS (
+        SELECT entry_no FROM (
+          SELECT l.entry_no, l.account_code, sum(l.debit_cents-l.credit_cents) AS net_cents
+          FROM lines l JOIN vouchers USING (entry_no) GROUP BY l.entry_no, l.account_code) n
+        GROUP BY entry_no HAVING bool_or(net_cents<>0)
+      ), picked AS (
+        SELECT DISTINCT ON (l.entry_no) l.*, abs(l.debit_cents)+abs(l.credit_cents) AS line_cents
+        FROM lines l JOIN unbalanced USING (entry_no)
+        WHERE l.account_type IN ('asset', 'liability')
+        ORDER BY l.entry_no, abs(l.debit_cents)+abs(l.credit_cents) DESC, l.id COLLATE "C"
+      )
+      SELECT 'journal_entry' AS source_type, p.id AS source_id, p.line_cents AS amount_cents, p.entry_no,
+             p.posting_date, p.account_code, p.description, p.source_doc, w.window_end
+      FROM picked p CROSS JOIN bounds w
+      WHERE p.line_cents>CAST(:clearly_trivial_cents AS bigint)
+      ORDER BY p.posting_date,
+               regexp_replace(regexp_replace(p.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               p.entry_no COLLATE "C"
+  - id: S03
+    name: 期后资本性支出
+    severity: medium
+    # 窗口内借记 property_plant_equipment 分类科目的分录行, 单行借方超过整体重要性, 不在作废对中. 每行一条例外,
+    # 金额为借方
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), bounds AS (
+        SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                     COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                 AS window_end
+      )
+      SELECT 'journal_entry' AS source_type, j.id AS source_id, j.debit_cents AS amount_cents, j.entry_no,
+             j.posting_date, j.account_code, j.description, j.source_doc, w.window_end
+      FROM journal_entries j
+      JOIN accounts a ON a.engagement_id=j.engagement_id AND a.code=j.account_code
+      CROSS JOIN bounds w
+      WHERE j.engagement_id=:eid
+        AND j.posting_date>CAST(:period_end AS date) AND j.posting_date<=w.window_end
+        AND a.category='property_plant_equipment'
+        AND j.debit_cents>CAST(:materiality_cents AS bigint)
+        AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ORDER BY j.posting_date,
+               regexp_replace(regexp_replace(j.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               j.entry_no COLLATE "C", j.id COLLATE "C"

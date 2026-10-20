@@ -178,6 +178,14 @@ async def test_load_rules_and_project_isolation(storage):
         entity_suffixes=["pty ltd", "pty limited", "pty", "ltd", "limited"],
         entry_nos=None,
         audit_adjustment_start=None,
+        # GEN-03 (需求 R139): 名称与 ACN 由 A6 按关系图在执行时合并进参数, 这里不给对象, C01 取不到行
+        party_names=[],
+        party_acns=[],
+        equity_categories=["share_capital", "retained_earnings", "other_equity"],
+        # GEN-07 (需求 R177): 期后窗口的数据截止日 (Numbat 没有数据集声明, 不设上限), S01, S03 的整体重要性, S01 的天数
+        data_as_of=None,
+        materiality_cents=12000000,
+        match_days=10,
     )
     for path in (
         (library.root / "procedures").glob("*.yaml")

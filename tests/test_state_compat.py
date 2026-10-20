@@ -36,6 +36,7 @@ from backend.contracts.models import (
     Judgment,
     MaterialityChoice,
     Misstatement,
+    MisstatementStatus,
     ObjectRef,
     OpinionType,
     OwnershipGraph,
@@ -277,7 +278,9 @@ def test_every_node_and_route_is_wrapped() -> None:
         unwrapped = [name for name, spec in graph.nodes.items() if spec.runnable.afunc.__code__ not in node_code]
         assert unwrapped == [], features
         routes = [b.path.func for branches in graph.branches.values() for b in branches.values()]
-        assert len(routes) == 8 and all(r.__code__ is route_code for r in routes), features  # 含 R290 的 p0_inputs
+        # 含 R290 的 p0_inputs; 功能 planning 另有 gate_p1_plan 的出口 (需求 R205)
+        count = 9 if "planning" in features else 8
+        assert len(routes) == count and all(r.__code__ is route_code for r in routes), features
 
 
 # ── 验收 2: 模拟旧检查点 ──
@@ -593,6 +596,76 @@ def test_completion_list_fields_merge_by_id_and_version() -> None:
     assert [c.id for c in state["governance_communications"]] == ["GC-RPT-07-1", "GC-RPT-07-2"]
     with pytest.raises(VersionConflict):
         apply_patch(state, {"governance_communications": [governance_communication()]})
+
+
+def state_misstatement(mid: str = "M-D-CSH02-091", version: int = 1, **changes: Any) -> Misstatement:
+    """BA-091 应计利息未入账的错报 (R19 的 D-CSH02-091), changes 覆盖任意字段."""
+    base = Misstatement(
+        id=mid,
+        version=version,
+        judgment_id="J-CSH-02-1-BA-091",
+        exception_id=None,
+        review_record_id=mid.removeprefix("M-"),
+        type="factual",
+        account="Interest income (270)",
+        assertion="Completeness",
+        amount_cents=4853,
+        direction="understated",
+    )
+    return base.model_copy(update=changes)
+
+
+def test_misstatements_merge_by_id_and_version() -> None:
+    """R156 验收 6: misstatements 按 upsert_by_id 并入 (原为只追加, 新版本会被忽略): v2 原位替换 v1, 同版本再来一次
+    忽略 (内容不同也不替换), 新 ID 追加在后, 版本更低的抛 VersionConflict."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state = apply_patch(state, {"misstatements": [state_misstatement(), state_misstatement("M-D-REV02")]})
+    communicated = state_misstatement(version=2, status=MisstatementStatus.communicated, communicated_to="CFO")
+    state = apply_patch(state, {"misstatements": [communicated]})
+    state = apply_patch(state, {"misstatements": [communicated.model_copy(update={"communicated_to": "Director"})]})
+    state = apply_patch(state, {"misstatements": [state_misstatement("M-D-GEN02")]})
+    assert [(m.id, m.version, m.status, m.communicated_to) for m in state["misstatements"]] == [
+        ("M-D-CSH02-091", 2, MisstatementStatus.communicated, "CFO"),
+        ("M-D-REV02", 1, MisstatementStatus.identified, None),
+        ("M-D-GEN02", 1, MisstatementStatus.identified, None),
+    ]
+    with pytest.raises(VersionConflict):
+        apply_patch(state, {"misstatements": [state_misstatement()]})
+
+
+class LegacyMisstatement(BaseModel):
+    """改动之前写进检查点的错报: 只有 R19 的字段, 状态固定 uncorrected (按原类名序列化, 读回时取现在的类)."""
+
+    id: str
+    version: int
+    judgment_id: str | None
+    exception_id: str | None
+    review_record_id: str
+    type: str
+    account: str
+    assertion: str
+    amount_cents: int
+    direction: str
+    status: Literal["uncorrected"] = "uncorrected"
+
+
+LegacyMisstatement.__module__ = Misstatement.__module__
+LegacyMisstatement.__name__ = LegacyMisstatement.__qualname__ = "Misstatement"
+R19_MISSTATEMENT_FIELDS = set(LegacyMisstatement.model_fields) - {"status"}
+
+
+def test_old_checkpoint_misstatements_read_back_and_take_new_versions() -> None:
+    """R156 验收 6, 10: 改动前的检查点里的错报 (只有 R19 字段) 经检查点白名单 serde 读回为现在的 Misstatement,
+    状态 uncorrected, 新字段取缺省; 之后照 upsert_by_id 接受它的新版本."""
+    serde = checkpoint_serde()
+    old = LegacyMisstatement(**state_misstatement().model_dump(include=R19_MISSTATEMENT_FIELDS))
+    [back] = serde.loads_typed(serde.dumps_typed([old]))
+    assert isinstance(back, Misstatement)
+    assert back.status is MisstatementStatus.uncorrected  # 枚举成员, 不是退化的字符串 (第 1 轮审核 R156-08)
+    assert (back.account_code, back.adjustment_entry_nos, back.needs_recommunication) == (None, [], False)
+    state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": [back]}
+    newer = back.model_copy(update={"version": 2, "account_code": "270"})
+    assert apply_patch(state, {"misstatements": [newer]})["misstatements"] == [newer]
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:

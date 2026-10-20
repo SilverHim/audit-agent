@@ -20,6 +20,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     OpinionType,
     Phase,
+    PlanStatus,
     ProcedureStatus,
     ProfileSource,
     ReportStatus,
@@ -50,14 +51,17 @@ from tests.fakes import (
     NUMBAT_ASIC,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     FakeEngagementStore,
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
+    audit_plan,
     make_deps,
     make_graph_nodes,
     make_procedure,
+    make_runner,
 )
 
 NOW = datetime(2026, 9, 24, tzinfo=UTC)
@@ -69,8 +73,10 @@ TARGETS = {
     GateId.PLN_01_03: "MATERIALITY",
     GateId.FIN_01: "SCHEDULE",
     GateId.RPT_01: "REPORT-1",
+    GateId.PLN_15: "PLAN-1",
 }
 MATERIALS: dict[GateId, dict[str, Any]] = {
+    GateId.PLN_15: {"audit_plans": [audit_plan()]},
     GateId.FIN_01: {
         "uncorrected_schedule": UncorrectedSchedule(
             id="SCHEDULE",
@@ -422,7 +428,7 @@ def test_after_fan_in_raises_when_planned_cannot_be_dispatched() -> None:
 # ── R09 (BASE-07): 闸门材料缺失时不放行 ──
 
 
-@pytest.mark.parametrize("gate", [GateId.PLN_01_03, GateId.FIN_01, GateId.RPT_01])
+@pytest.mark.parametrize("gate", [GateId.PLN_01_03, GateId.FIN_01, GateId.RPT_01, GateId.PLN_15])
 def test_gate_route_represents_when_material_missing(gate: GateId) -> None:
     """有本闸门的通过决定, 但状态里没有材料 (与流程不符): 不按决定放行, 留在闸门重新呈报; 补上材料后按决定通过."""
     state = initial_state(ENGAGEMENT, [], 1)
@@ -455,6 +461,40 @@ def test_gate_route_rpt01_after_signing(status: ReportStatus, version: int, verd
     state["report_versions"] = [report.model_copy(update={"version": version, "status": status})]
 
     assert gate_route(GateId.RPT_01)(state) == route
+
+
+# ── R205: PLN-15 批准后放行 (同 RPT-01 签字) ──
+
+
+@pytest.mark.parametrize(
+    ("status", "version", "verdict", "route"),
+    [
+        (PlanStatus.approved, 2, GateVerdict.approve, "approve"),  # 验收 6: 批准出了 v2, 决定绑定 v1
+        (PlanStatus.draft, 1, GateVerdict.approve, "approve"),  # 决定绑定当前版 (效果写入之前)
+        (PlanStatus.draft, 2, GateVerdict.approve, "represent"),  # 未批准的新版本: 决定过期
+        (PlanStatus.approved, 3, GateVerdict.approve, "represent"),  # 不是决定那一版的下一版
+        (PlanStatus.draft, 1, GateVerdict.reject, "reject"),
+        (PlanStatus.draft, 1, GateVerdict.insufficient_info, "represent"),
+    ],
+)
+def test_gate_route_pln15_after_approval(status: PlanStatus, version: int, verdict: GateVerdict, route: str) -> None:
+    """PLN-15 通过使计划出 approved 新版本, 决定绑定的是批准前一版: 仍放行到 schedule; 其余版本不符仍重新呈报;
+    驳回走 reject 出口 (回 plan_draft), 信息不足重新呈报."""
+    state = initial_state(ENGAGEMENT, [], 1)
+    state["gate_decisions"] = [_decision(0, GateId.PLN_15, verdict)]
+    state["audit_plans"] = [audit_plan(1, version, status)]
+
+    assert gate_route(GateId.PLN_15)(state) == route
+
+
+# 功能 planning 打开时 (需求 R205 验收 1) 比基线多的边; 基线的 assemble_pack → schedule 改为 → plan_draft
+PLANNING_EDGES = [
+    ("assemble_pack", "plan_draft", False, None),
+    ("gate_p1_plan", "gate_p1_plan", True, "represent"),
+    ("gate_p1_plan", "plan_draft", True, "reject"),
+    ("gate_p1_plan", "schedule", True, "approve"),
+    ("plan_draft", "gate_p1_plan", False, None),
+]
 
 
 # 基线功能集下的主图 (R75 验收 8): 写死现状. 各功能组加节点与闸门时这张表不变, 新节点只在功能开启时出现
@@ -531,3 +571,35 @@ def test_baseline_graph_structure() -> None:
     edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
     assert edges == BASELINE_EDGES
     assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]
+
+
+def test_planning_graph_structure() -> None:
+    """需求 R205 验收 1: 功能 planning 打开时 gate_p1_risk 通过 → assemble_pack → plan_draft → gate_p1_plan;
+    gate_p1_plan 的出口 approve → schedule, reject → plan_draft, represent 回自身; 静态中断加 gate_p1_plan (按登记
+    顺序排在 gate_p1_risk 之后). 其余节点与边同基线 (基线下的主图见 test_baseline_graph_structure, 不变)."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=PLANNING_FEATURES)
+    app = compile_graph(make_graph_nodes(deps), InMemorySaver())
+    graph = app.get_graph()
+    assert set(graph.nodes) == BASELINE_NODES | {"plan_draft", "gate_p1_plan"}
+    edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
+    baseline = [e for e in BASELINE_EDGES if e[:2] != ("assemble_pack", "schedule")]
+    assert edges == sorted([*baseline, *PLANNING_EDGES])
+    assert list(app.interrupt_before_nodes) == ["gate_acc01", "gate_p1_risk", "gate_p1_plan", "gate_fin", "gate_rpt01"]
+
+
+def test_make_runner_compiles_by_features() -> None:
+    """审核意见 R205-03: make_runner 另给 interrupt_before 时, 主图与闸门照样按功能集取 (同 compile_graph): 打开
+    planning 时有 plan_draft 与 gate_p1_plan (静态中断), 另加的节点排在闸门之后; 基线下同现状."""
+    runner, _ = make_runner(features=PLANNING_FEATURES, interrupt_before=["fieldwork"])
+    assert {"plan_draft", "gate_p1_plan"} <= set(runner.app.get_graph().nodes)
+    assert list(runner.app.interrupt_before_nodes) == [
+        "gate_acc01",
+        "gate_p1_risk",
+        "gate_p1_plan",
+        "gate_fin",
+        "gate_rpt01",
+        "fieldwork",
+    ]
+    baseline, _ = make_runner(interrupt_before=["fieldwork"])
+    assert list(baseline.app.interrupt_before_nodes) == [*GATES, "fieldwork"]
+    assert "plan_draft" not in baseline.app.get_graph().nodes

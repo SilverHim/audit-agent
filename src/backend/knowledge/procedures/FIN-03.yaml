@@ -1,0 +1,37 @@
+id: FIN-03
+name: 错报性质分类
+# 规格书 6.1.1 (FIN-03 属 A8), 7.2 (L2 混合), 第 10 节 P3 (A8 对错报作性质分类含舞弊标记与期间来源); ASA 450 第 A6 段
+# (factual, judgemental, projected 三类), ASA 240 第 36 段 (错报是否有舞弊迹象). 需求 R157 定模板, A8 的执行由 R158 加.
+# 判断对象是未分类 (classification_judgment_id 为空) 的 identified 错报, 每条一个, 判断记该错报 (subject_id 为错报 ID);
+# mock 的 fixture_key 取错报来源判断的 subject_id (如凭证号 XJ-499, 银行账户 BA-091, 科目代码 826). 没有规则 SQL:
+# - 审计目标 (objective_id) 在代码中定: 审计目标的科目名作整词出现在错报科目里且认定相同的那条, 没有为空;
+# - 期间来源 (origin) 在代码中定: 一律 current_period (首次审计, 没有上期未更正错报);
+# 两项不取大模型. 大模型给类型与舞弊迹象 (MisstatementClassificationDraft.nature), 结论与推理链同判断草稿.
+# 规格书 6.1.2 的前置 "全部 P2 判断已复核" 不是程序依赖, 由主图保证: P2 的复核任务都决定后才进入完成阶段
+# (after_fan_in 到 completion), FIN-03 在完成阶段执行, 故 depends_on 为空.
+phase: P3_Completion
+cycle: Completion
+owner: A8
+feature: misstatement             # 功能开关 (services/features.py): 错报闭环
+outputs: [judgments, review_tasks, misstatements]
+# 读的数据 (需求 R274, 第 1 轮审核 R157-01): 提示词的上下文 (见 FIN-03.md.j2 头注释) 有来源判断对象的分录行, 来源判断
+# 所引的其余行与文件登记 (document 指针的可靠性取自登记). 所引的行取现有来源程序 (REV-02, CSH-02, GEN-02) 判断能引的
+# 行类型: 分录行, 试算表行, 银行流水, 销售发票, 发运或服务完成记录
+reads: [journal_entries, trial_balance, bank_transactions, sales_invoices, delivery_notes, documents]
+# 读哪几类文件的登记 (需求 R304): 来源判断所引的文件类型不定 (Xero 演示里有固定资产登记表, 回函与工资册), 同 GEN-02
+# 列全部可作证据的类型, 即 judgment_engine.DOCUMENT_EVIDENCE 的键
+document_reads: [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter,
+                 representation_letter, correspondence, governance_communication, agreement, internal_record]
+engine: hybrid
+autonomy_level: L2
+# 需求原文要求分类模型反复失败时允许审计师手工给结果 (manual_result_allowed 真). P2 以外的节点等人时失败任务现在只认
+# rerun (nodes.read_rerun), 程序库加载时拒绝 P2 以外的程序开这一项; 由 R158 (失败路径) 连同节点读回 manual_result
+# 一起打开 (需求 R157 方案取舍)
+manual_result_allowed: false
+depends_on: []
+standards: [ASA450-A6, ASA240-P36]
+evidence_required: [voucher]
+rules: []
+llm:
+  prompt: FIN-03.md.j2
+  output_model: MisstatementClassificationDraft

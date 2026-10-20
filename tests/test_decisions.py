@@ -9,13 +9,17 @@ from typing import Any, cast
 
 import pytest
 import pytest_asyncio
+from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import BaseModel
 
+from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AcceptanceScorecard,
     Annotation,
     AuditObjective,
+    AuditPlan,
     ClientProfile,
     Engagement,
     GateDecision,
@@ -27,23 +31,33 @@ from backend.contracts.models import (
     MaterialityChoice,
     OpinionType,
     Phase,
+    PlanStatus,
     Procedure,
+    ProcedureRun,
     ProcedureStatus,
     ProfileSource,
     ReportSection,
     ReviewRecord,
     RiskItem,
     RiskLevel,
+    RunStatus,
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.state import StatePatch
+from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse
+from backend.contracts.state import EngagementState, StatePatch, fill_defaults
+from backend.contracts.views import PlanMaterial
 from backend.core.config import get_settings
 from backend.orchestration import runner as runner_module
+from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.gates import acc01_effects, materiality_amounts, pln_effects
+from backend.orchestration.gates import acc01_effects, gate_nodes, materiality_amounts, pln_effects
+from backend.orchestration.graph import build_graph, gate_route, route_schedule
+from backend.orchestration.nodes import GraphNodes
+from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.procedure_library import ProcedureLibrary
+from tests.external import needs
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
@@ -51,10 +65,13 @@ from tests.fakes import (
     NUMBAT_PROFILE,
     NUMBAT_RISKS,
     PLAN_CONFIRMATION,
+    PLAN_REJECT_ID,
+    PLANNING_FEATURES,
     TYPO_PROFILE,
     EngagementWrite,
     FakeEngagementStore,
     FakeOutputStore,
+    FakeRuleEngine,
     FakeTrail,
     NoTaskAsyncio,
     ScriptA4,
@@ -68,6 +85,9 @@ from tests.fakes import (
     profile_update,
     wait_idle,
 )
+from tests.fixture_sets import XERO
+from tests.xero_fakes import XERO17_MATERIALITY, XERO_RULES, make_xero_deps, xero_financial_store
+from tests.xero_flow import approve_acceptance, to_acceptance_gate
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 ANNOTATION = Annotation(section=ReportSection.opinion, comment="x")
@@ -217,7 +237,7 @@ async def test_submit_insufficient_info_stays_at_gate() -> None:
         (acc01_decision(GateVerdict.approve, disposition=OpinionType.unqualified), "FIELD_NOT_ALLOWED"),
         # 需求 R203: PLN-15 的确认只由 PLN-15 的登记行 (R205) 允许, 其他闸门带它被拒
         (acc01_decision(GateVerdict.approve, plan_confirmation=PLAN_CONFIRMATION), "FIELD_NOT_ALLOWED"),
-        (acc01_decision(GateVerdict.approve, gate=GateId.PLN_15), "NOT_AT_GATE"),  # 还没登记的闸门
+        (acc01_decision(GateVerdict.approve, gate=GateId.PLN_15), "NOT_AT_GATE"),  # 不在这道闸门 (planning 也关着)
     ],
 )
 @shared_loop
@@ -1428,3 +1448,294 @@ async def test_pln_other_basis_approves_when_loss_making() -> None:
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
     assert snapshot.next == ("assemble_pack",)
     assert snapshot.values["materiality_cents"] == 12000000
+
+
+# ── R205: PLN-15 闸门与最小通过路径 (功能 planning, Xero 演示) ──
+
+# acceptance 不开: 没有 TERMS (ACC-08 的执行由 R200 做), 材料的 terms 为空; 带 TERMS 的材料见 test_query
+XERO_P2 = ["CSH-02", "CSH-04", "CSH-05", "DOC-06", "REV-02", "REV-03", "REV-08"]
+PLAN_APPROVE = GateDecision(
+    id="D-PLAN",
+    gate=GateId.PLN_15,
+    target_id="PLAN-1",
+    target_version=1,
+    decision=GateVerdict.approve,
+    plan_confirmation=PLAN_CONFIRMATION,
+    decided_by="U-1",
+    decided_at=NOW,
+)
+
+
+class SecondPlanAsFirst(MockLLMClient):
+    """PLN-15 第 2 修订起借用第 1 修订的固定输出 (llm_xero 只有 r1), 驳回出口的用例用."""
+
+    async def complete[T: BaseModel](self, req: LLMRequest, output_model: type[T]) -> LLMResponse[T]:
+        if req.procedure_id == "PLN-15" and req.fixture_key != "r1":
+            req = req.model_copy(update={"fixture_key": "r1"})
+        return await super().complete(req, output_model)
+
+
+async def at_plan_gate(llm: LLMClient | None = None) -> Started:
+    """Xero 演示项目 (数据已导入, 功能 critic, misstatement, planning) 跑到 PLN-15 闸门: ACC-01 approve → P1 (真实
+    Agent; 规则引擎为 XERO_RULES, 大模型缺省读 llm_xero) → PLN-01/03 approve (收入 1%, 50%, 5%) → assemble_pack →
+    plan_draft (A4 起草 PLAN-1) → 停在 gate_p1_plan. 闸门之外另停在 fieldwork 前, 看批准后派发什么 (越过闸门后的第一个
+    节点不会再静态中断, 去哪看检查点历史)."""
+    deps = make_xero_deps(
+        financial_store=xero_financial_store(),
+        rules=FakeRuleEngine(XERO_RULES),
+        llm=llm or MockLLMClient(XERO.fixtures),
+        features=PLANNING_FEATURES,
+    )
+    app = build_graph(GraphNodes(deps, 2), deps.features).compile(
+        checkpointer=InMemorySaver(serde=checkpoint_serde()),
+        interrupt_before=[*gate_nodes(deps.features), "fieldwork"],
+    )
+    runner = GraphRunner(app, deps)
+    await to_acceptance_gate(runner, EID)
+    await approve_acceptance(runner, EID, ENGAGEMENT.owner_id)
+    assert isinstance(deps.output_store, FakeOutputStore) and isinstance(deps.engagement_store, FakeEngagementStore)
+    s = Started(runner, deps.output_store, deps.engagement_store)
+    await s.submit.submit(EID, pln_decision(GateVerdict.approve, materiality=XERO17_MATERIALITY))
+    await wait_idle(runner, EID)
+    assert await s.next_nodes() == ("gate_p1_plan",), runner.run_error(EID)
+    return s
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def plan_gate() -> Started:
+    """停在 PLN-15 闸门的一次运行, 由不写入的用例共用 (被拒的决定每次核对存储与图都没动)."""
+    return await at_plan_gate()
+
+
+async def checkpoint_values(s: Started) -> EngagementState:
+    return fill_defaults((await s.runner.app.aget_state(GraphRunner.config(EID))).values)
+
+
+def stored_plans(s: Started) -> list[AuditPlan]:
+    """Store 中写出的每一版计划, 按写入顺序; 各版经 JSON 往返不变 (同 Postgres 的 payload 列)."""
+    plans = [r for r in s.output_store.rows if isinstance(r, AuditPlan)]
+    assert all(AuditPlan.model_validate_json(p.model_dump_json()) == p for p in plans)
+    return plans
+
+
+def trail_of(s: Started, kind: TrailKind) -> list[TrailEntry]:
+    assert isinstance(s.runner.deps.trail, FakeTrail)
+    return [e for e in s.runner.deps.trail.entries if e.kind is kind]
+
+
+@shared_loop
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_gate_stops_before_p2(plan_gate: Started) -> None:
+    """验收 2: assemble_pack 写入 7 条 P2 程序第 1 版, 阶段仍 P1_Planning (项目表与检查点), 没有阶段 transition;
+    plan_draft 执行 PLN-15 (RUN-PLN-15-1 succeeded, PLN-15 仍 planned), PLAN-1 v1 draft 在 Store 与检查点中相同;
+    停在 gate_p1_plan 时 schedule_table 为空, 没有任何 P2 执行记录."""
+    s = plan_gate
+    values = await checkpoint_values(s)
+    p2 = [p for p in await s.output_store.latest(EID, Procedure) if p.phase is Phase.P2_Executing]
+    assert sorted(p.id for p in p2) == XERO_P2
+    assert {(p.version, p.status) for p in p2} == {(1, ProcedureStatus.planned)}
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.phase is Phase.P1_Planning and values["phase"] is Phase.P1_Planning
+    assert not [
+        e
+        for e in trail_of(s, TrailKind.transition)
+        if e.payload["object"] == "engagement" and e.payload["to"] == Phase.P2_Executing
+    ]
+    assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+    runs = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun)}
+    assert runs["RUN-PLN-15-1"].status is RunStatus.succeeded
+    assert not [r for r in runs.values() if r.procedure_id in XERO_P2]
+    assert values["schedule_table"] == []
+    [plan] = stored_plans(s)
+    assert (plan.id, plan.version, plan.status, plan.run_id) == ("PLAN-1", 1, PlanStatus.draft, "RUN-PLN-15-1")
+    assert values["audit_plans"] == [plan]
+
+
+@shared_loop
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_gate_view_and_overview(plan_gate: Started) -> None:
+    """验收 3: gate() 为 GateView(PLN-15, PLAN-1, 1), 材料 kind PLN-15: plan 为 PLAN-1 v1, terms 为空 (acceptance 关),
+    重要性三项 32431, 16216, 1622, 此前的驳回决定为空 (首次); 总览的 current_gate 为 PLN-15."""
+    s = plan_gate
+    query = GraphStateQuery(s.runner.app, s.runner.deps, s.runner)
+    view = await query.gate(EID)
+    assert view is not None and (view.gate, view.target_id, view.target_version) == (GateId.PLN_15, "PLAN-1", 1)
+    material = view.material
+    assert isinstance(material, PlanMaterial)
+    assert material.plan == stored_plans(s)[0] and material.terms is None and material.previous_decisions == []
+    assert (material.materiality_cents, material.performance_materiality_cents, material.clearly_trivial_cents) == (
+        32431,
+        16216,
+        1622,
+    )
+    assert (await query.overview(EID)).current_gate is GateId.PLN_15
+
+
+@pytest.mark.parametrize(
+    ("changes", "code"),
+    [
+        ({"plan_confirmation": None}, "MISSING_FIELD"),  # 验收 5: 效果要用它, 属最小路径
+        ({"target_version": 2}, "VERSION_MISMATCH"),  # 绑定的不是当前计划的当前版本
+        ({"target_id": "PLAN-2"}, "VERSION_MISMATCH"),
+    ],
+)
+@shared_loop
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_approve_rejected_without_writing(plan_gate: Started, changes: dict[str, Any], code: str) -> None:
+    """验收 5: approve 不带 plan_confirmation 报 MISSING_FIELD; 绑定 PLAN-1 v2 (还没有) 或别的计划报 VERSION_MISMATCH;
+    都什么都不写."""
+    await assert_rejected(plan_gate, PLAN_APPROVE.model_copy(update=changes), code)
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_approve_enters_p2_in_one_commit() -> None:
+    """验收 4, 6: approve (D-PLAN, 不需要项目质量复核与审计师的专家): PLAN-1 v2 approved (批准人 U-1, 批准时间为决定
+    时刻, 三项确认写入, 其余同 v1, run_id 沿用), PLN-15 completed 新版本, 阶段 P2_Executing, 与决定同一次提交; 1 行
+    decision 留痕 (PLN-15); transition 留痕 PLN-15 planned → completed 与项目 P1_Planning → P2_Executing (PLN-15).
+    决定绑定 PLAN-1 v1 而状态中已是 v2, 路由仍为 approve, 下一节点 schedule (检查点历史); 第 0 层派发 REV-08, REV-03,
+    CSH-04, CSH-05. 写出的每一版计划在 Store 与检查点中相同."""
+    s = await at_plan_gate()
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, PLAN_APPROVE)
+    await wait_idle(s.runner, EID)
+
+    config = GraphRunner.config(EID)
+    assert s.runner.run_error(EID) is None and await s.next_nodes() == ("fieldwork", "fieldwork")
+    history = [snapshot.next async for snapshot in s.runner.app.aget_state_history(config)]  # 新的在前
+    assert history[:3] == [("fieldwork", "fieldwork"), ("schedule",), ("gate_p1_plan",)]
+    draft, approved = stored_plans(s)
+    confirmation = PLAN_CONFIRMATION.model_dump()
+    assert (approved.id, approved.version, approved.status, approved.run_id) == (
+        "PLAN-1",
+        2,
+        PlanStatus.approved,
+        draft.run_id,
+    )
+    assert (approved.approved_by, approved.approved_at) == ("U-1", NOW)
+    assert approved.model_dump(include=set(confirmation)) == confirmation
+    changed = {"version", "status", "approved_by", "approved_at", *confirmation}
+    assert approved.model_dump(exclude=changed) == draft.model_dump(exclude=changed)
+    values = await checkpoint_values(s)
+    assert values["audit_plans"] == [approved] and values["phase"] is Phase.P2_Executing
+    assert gate_route(GateId.PLN_15)(values) == "approve"  # 验收 6: 决定绑定 v1, 状态中已是 v2
+    [commit] = s.output_store.commits[before:]
+    pln15 = s.latest_procedure("PLN-15")
+    assert pln15.status is ProcedureStatus.completed
+    assert sorted((type(o).__name__, o.id) for o in commit if not isinstance(o, EngagementWrite)) == [
+        ("AuditPlan", "PLAN-1"),
+        ("GateDecision", "D-PLAN"),
+        ("Procedure", "PLN-15"),
+    ]
+    assert [w for w in commit if isinstance(w, EngagementWrite)] == [
+        EngagementWrite("update", EID, {"phase": Phase.P2_Executing})
+    ]
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None and engagement.phase is Phase.P2_Executing
+    [decided] = [e for e in trail_of(s, TrailKind.decision) if e.idempotency_key == "D-PLAN"]
+    assert decided.procedure_id == "PLN-15"
+    moves = [
+        (e.procedure_id, e.payload["id"], e.payload["from"], e.payload["to"]) for e in trail_of(s, TrailKind.transition)
+    ]
+    assert ("PLN-15", "PLN-15", "planned", "completed") in moves
+    assert ("PLN-15", EID, "P1_Planning", "P2_Executing") in moves
+    sends = route_schedule(GraphNodes(s.runner.deps, 2))(values)  # schedule 之后的派发
+    assert isinstance(sends, list)
+    assert sorted(p for send in sends for p in send.arg["procedure_ids"]) == ["CSH-04", "CSH-05", "REV-03", "REV-08"]
+
+
+def pln15_runs(s: Started) -> list[str]:
+    return sorted(r.id for r in s.output_store.rows if isinstance(r, ProcedureRun) and r.procedure_id == "PLN-15")
+
+
+def plan_versions(s: Started) -> list[tuple[str, int, PlanStatus]]:
+    return [(p.id, p.version, p.status) for p in stored_plans(s)]
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_gate_restart_info_reject_and_revise() -> None:
+    """审核意见 R205-02 (原探针): 停在 gate_p1_plan 时进程重启 (新 runner, 同一检查点), recover 不推进, 不重跑 PLN-15;
+    信息不足只记决定, 仍停闸门, 计划, PLN-15 与阶段都不变; 驳回回 plan_draft, 真实 A4 以 rerun 起草 PLAN-2 v1 并把
+    PLAN-1 置 superseded, 再停闸门, 阶段仍 P1_Planning; 之后批准 PLAN-2 进 P2."""
+    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
+    rows = len(s.output_store.rows)
+    restarted = GraphRunner(s.runner.app, s.runner.deps)
+    await restarted.recover()
+    await wait_idle(restarted, EID)
+    s = Started(restarted, s.output_store, s.engagement_store)
+    assert restarted.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
+    assert len(s.output_store.rows) == rows and pln15_runs(s) == ["RUN-PLN-15-1"]
+
+    async def decide(decision: GateDecision) -> EngagementState:
+        await s.submit.submit(EID, decision)
+        await wait_idle(restarted, EID)
+        assert restarted.run_error(EID) is None, restarted.run_error(EID)
+        return await checkpoint_values(s)
+
+    asked = PLAN_APPROVE.model_copy(
+        update={"id": "D-P15I", "decision": GateVerdict.insufficient_info, "plan_confirmation": None, "reason": "r"}
+    )
+    values = await decide(asked)
+    assert await s.next_nodes() == ("gate_p1_plan",) and plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)]
+    assert values["phase"] is Phase.P1_Planning and s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+
+    reject = asked.model_copy(update={"id": PLAN_REJECT_ID, "decision": GateVerdict.reject, "reason": "Add timing"})
+    values = await decide(reject)
+    assert await s.next_nodes() == ("gate_p1_plan",) and values["phase"] is Phase.P1_Planning
+    assert plan_versions(s) == [
+        ("PLAN-1", 1, PlanStatus.draft),
+        ("PLAN-2", 1, PlanStatus.draft),
+        ("PLAN-1", 2, PlanStatus.superseded),
+    ]
+    assert pln15_runs(s) == ["RUN-PLN-15-1", "RUN-PLN-15-2"]
+    [plan2] = [p for p in values["audit_plans"] if p.id == "PLAN-2"]
+    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, "Add timing")
+
+    values = await decide(PLAN_APPROVE.model_copy(update={"id": "D-PLAN2", "target_id": "PLAN-2"}))
+    assert await s.next_nodes() == ("fieldwork", "fieldwork") and values["phase"] is Phase.P2_Executing
+    assert ("PLAN-2", 2, PlanStatus.approved) in plan_versions(s)
+
+
+class LostCheckpoint:
+    """写完 Store 与留痕之后, 写检查点 (aupdate_state) 时进程中断."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.app, name)
+
+    async def aupdate_state(self, *args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("crash before checkpoint")
+
+
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_approve_caught_up_after_lost_checkpoint() -> None:
+    """审核意见 R205-02 (原探针): 批准写完 Store 后检查点没跟上: 新决定报 RESUME_REQUIRED; resume 补做 (登记行的
+    rebuild) 后检查点里是 Store 的批准版 PLAN-1 v2, 阶段 P2_Executing, PLN-15 completed, 越过闸门到 fieldwork 前;
+    decision 留痕与 P1 → P2 的阶段迁移各一行, 不重复."""
+    s = await at_plan_gate()
+    broken = GraphDecisionSubmit(LostCheckpoint(s.runner.app), s.runner.deps, s.runner)  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="crash before checkpoint"):
+        await broken.submit(EID, PLAN_APPROVE)
+    assert await s.next_nodes() == ("gate_p1_plan",)
+    with pytest.raises(DecisionRejected) as e:
+        await s.submit.submit(EID, PLAN_APPROVE.model_copy(update={"id": "D-PLAN-2"}))
+    assert e.value.code == "RESUME_REQUIRED"
+
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+
+    assert s.runner.run_error(EID) is None and await s.next_nodes() == ("fieldwork", "fieldwork")
+    values = await checkpoint_values(s)
+    approved = stored_plans(s)[-1]
+    assert (approved.id, approved.version, approved.status) == ("PLAN-1", 2, PlanStatus.approved)
+    assert values["audit_plans"] == [approved] and values["phase"] is Phase.P2_Executing
+    assert next(p for p in values["procedure_pack"] if p.id == "PLN-15").status is ProcedureStatus.completed
+    assert [e.idempotency_key for e in trail_of(s, TrailKind.decision)].count("D-PLAN") == 1
+    moves = [
+        (e.payload["from"], e.payload["to"])
+        for e in trail_of(s, TrailKind.transition)
+        if e.payload["object"] == "engagement"
+    ]
+    assert moves.count(("P1_Planning", "P2_Executing")) == 1

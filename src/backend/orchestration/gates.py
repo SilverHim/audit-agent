@@ -19,6 +19,7 @@ from backend.contracts.models import (
     AcceptanceScorecard,
     AuditException,
     AuditObjective,
+    AuditPlan,
     AuditReportVersion,
     ClientProfile,
     GateDecision,
@@ -29,6 +30,7 @@ from backend.contracts.models import (
     MaterialityChoice,
     OpinionType,
     Phase,
+    PlanStatus,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
@@ -46,15 +48,16 @@ from backend.contracts.views import (
     CompletionMaterial,
     GateMaterial,
     NotExecuted,
+    PlanMaterial,
     PlanningMaterial,
     ReportMaterial,
 )
 from backend.orchestration.nodes import uncovered_objectives, update_procedure
-from backend.services.features import FEATURES, LEGACY_FEATURES, parse_features
+from backend.services.features import FEATURES, LEGACY_FEATURES, PLANNING, parse_features
 from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
-# 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 由 PLN-15 的登记行 (R205) 允许; 那之前任何闸门
-# 的决定带它都报 FIELD_NOT_ALLOWED
+# 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 只有 PLN-15 的通过决定能填 (登记行, 需求 R205),
+# 其余闸门的决定带它报 FIELD_NOT_ALLOWED
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations", "plan_confirmation")
 REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
 FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
@@ -91,7 +94,8 @@ Rebuild = Callable[
 ]  # 恢复补做: 通过决定的专属状态
 View = Callable[[AgentDeps, str, EngagementState], Awaitable[tuple[Versioned, GateMaterial]]]  # (材料, 呈报视图)
 Before = Callable[[EngagementState], GateRoute | None]  # 先于决定判断的出口 (ACC-01 画像更新后重跑), 不命中为 None
-Passed = Callable[[EngagementState, GateDecision], bool]  # 决定的效果已使材料出新版本时仍放行 (RPT-01 签字)
+# 决定的效果已使材料出新版本时仍放行 (RPT-01 签字, PLN-15 批准)
+Passed = Callable[[EngagementState, GateDecision], bool]
 
 
 @dataclass(frozen=True)
@@ -392,8 +396,8 @@ def gate_route(spec: GateSpec) -> Callable[[EngagementState], GateRoute]:
     """一道闸门的路由: 闸门节点执行后 (或 aupdate_state 以闸门身份写入后) 按状态选出口.
 
     按顺序判断, 先命中先返回: 1. spec.before (ACC-01 画像更新后重跑); 2. 本闸门还没有决定 → represent;
-    3. 以最后一条决定为准, spec.passed 成立 (RPT-01 签字使报告出了新版本) → approve; 它绑定的材料不是当前版本,
-    或材料缺失 (状态与流程不符) → represent; 4. 按决定种类出闸门, 信息不足 → represent.
+    3. 以最后一条决定为准, spec.passed 成立 (RPT-01 签字使报告, PLN-15 批准使计划出了新版本) → approve; 它绑定的
+    材料不是当前版本, 或材料缺失 (状态与流程不符) → represent; 4. 按决定种类出闸门, 信息不足 → represent.
     """
 
     def route(state: EngagementState) -> GateRoute:
@@ -571,6 +575,93 @@ async def pln_view(deps: AgentDeps, eid: str, values: EngagementState) -> tuple[
     return candidates, material
 
 
+# ── PLN-15 (需求 R205, 功能 planning) ──
+
+
+def current_plan(plans: Sequence[AuditPlan]) -> AuditPlan | None:
+    """当前计划 (第 0 节): status 不是 superseded 的修订中 revision 最大的; 没有为 None. PLN-15 闸门的材料 (pick),
+    决定绑定它."""
+    live = [p for p in plans if p.status is not PlanStatus.superseded]
+    return max(live, key=lambda p: p.revision) if live else None
+
+
+def pln15_effects(pack: list[Procedure], decision: GateDecision, plan: AuditPlan) -> StatePatch:
+    """PLN-15 闸门决定的效果 (第 7 节), 纯函数 (恢复补做时可复用), 由 aupdate_state(as_node="gate_p1_plan") 写入状态.
+
+    plan 为决定绑定的当前计划. approve: 计划出新版本 (经 model_validate 构造, 第 2.3 节), 置 approved, 写入审计师确认的
+    三项 (plan_confirmation), 批准人与批准时间取决定的 decided_by 与 decided_at, run_id 沿用所依据的那一版; PLN-15 置
+    completed; 阶段进 P2_Executing (功能 planning 打开时进入 P2 由计划批准推进, 不在 assemble_pack, M-10).
+    reject 与 insufficient_info: 只记决定 (reject 由路由回 plan_draft 起草下一修订, insufficient_info 留在闸门重新呈报).
+    """
+    if decision.decision is not GateVerdict.approve:
+        return {"gate_decisions": [decision]}
+    confirmation = decision.plan_confirmation
+    assert confirmation is not None  # 通过时必填, 已由 check_fields 保证
+    approved = AuditPlan.model_validate(
+        {
+            **plan.model_dump(),
+            **confirmation.model_dump(),
+            "version": plan.version + 1,
+            "status": PlanStatus.approved,
+            "approved_by": decision.decided_by,
+            "approved_at": decision.decided_at,
+        }
+    )
+    return {
+        "gate_decisions": [decision],
+        "procedure_pack": update_procedure(pack, "PLN-15", status=ProcedureStatus.completed),
+        "audit_plans": [approved],
+        "phase": Phase.P2_Executing,
+    }
+
+
+def plan_approved_by(state: EngagementState, decision: GateDecision) -> bool:
+    """当前计划是这条 PLN-15 通过决定批准的: 已 approved, 正是决定绑定的那份计划的下一版 (同 RPT-01 的 signed_by)."""
+    if decision.decision is not GateVerdict.approve:
+        return False
+    plan = current_plan(state["audit_plans"])
+    return (
+        plan is not None
+        and plan.status is PlanStatus.approved
+        and (plan.id, plan.version) == (decision.target_id, decision.target_version + 1)
+    )
+
+
+async def pln15_apply(
+    deps: AgentDeps, eid: str, decision: GateDecision, target: Versioned, pack: list[Procedure], now: datetime
+) -> tuple[StatePatch, StatePatch]:
+    assert isinstance(target, AuditPlan)  # 材料即当前计划
+    return pln15_effects(pack, decision, target), {"procedure_pack": pack, "audit_plans": [target]}
+
+
+async def pln15_rebuild(deps: AgentDeps, eid: str, decision: GateDecision, values: EngagementState) -> StatePatch:
+    """批准版比决定绑定的高一版, 取 Store 中该计划的最新版."""
+    approved = await deps.output_store.get(eid, AuditPlan, decision.target_id)
+    assert approved is not None
+    return {"audit_plans": [approved]}
+
+
+async def pln15_view(deps: AgentDeps, eid: str, values: EngagementState) -> tuple[Versioned, GateMaterial]:
+    """当前计划, TERMS 的当前版本 (功能 acceptance 关闭或没有时为空), 重要性三项与此前的驳回决定 (含理由; 信息不足
+    的决定不在其中)."""
+    plan = current_plan(values["audit_plans"])
+    overall = values["materiality_cents"]
+    performance = values["performance_materiality_cents"]
+    trivial = values["clearly_trivial_cents"]
+    if plan is None or overall is None or performance is None or trivial is None:
+        raise LookupError(f"{eid} 停在 PLN-15 闸门, 但没有当前计划或重要性")
+    rejected = [d for d in values["gate_decisions"] if d.gate is GateId.PLN_15 and d.decision is GateVerdict.reject]
+    material = PlanMaterial(
+        plan=plan,
+        terms=values["engagement_terms"],
+        materiality_cents=overall,
+        performance_materiality_cents=performance,
+        clearly_trivial_cents=trivial,
+        previous_decisions=rejected,
+    )
+    return plan, material
+
+
 # ── FIN-01 ──
 
 
@@ -708,6 +799,25 @@ GATES: list[GateSpec] = [
         view=pln_view,
         check=pln_check,
         rebuild=pln_rebuild,
+    ),
+    GateSpec(
+        gate=GateId.PLN_15,
+        node="gate_p1_plan",
+        procedure_id="PLN-15",
+        material_field="audit_plans",
+        material_model=AuditPlan,
+        pick=current_plan,
+        exits={"approve": "schedule", "reject": "plan_draft"},
+        fields={
+            GateVerdict.approve: FieldRule(("plan_confirmation",)),
+            GateVerdict.reject: REASON,
+            GateVerdict.insufficient_info: REASON,
+        },
+        effects=pln15_apply,
+        view=pln15_view,
+        rebuild=pln15_rebuild,
+        passed=plan_approved_by,
+        feature=PLANNING,
     ),
     GateSpec(
         gate=GateId.FIN_01,

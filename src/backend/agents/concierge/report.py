@@ -162,6 +162,23 @@ def citable(ctx: RunContext) -> list[Judgment]:
     return list(found.values())
 
 
+# 提示词里错报的字段 (需求 R156 第 1 轮审核 R156-01): 同错报生命周期之前, 即 R19 的字段加 status, 功能 misstatement
+# 关闭时提示词逐字不变; 生命周期的新字段 (科目代码, 分类, 沟通, 更正) 不进提示词, 要带时由接入按状态累计的需求按功能加
+MISSTATEMENT_FIELDS = {
+    "id",
+    "version",
+    "judgment_id",
+    "exception_id",
+    "review_record_id",
+    "type",
+    "account",
+    "assertion",
+    "amount_cents",
+    "direction",
+    "status",
+}
+
+
 def misstatement_inputs(ctx: RunContext) -> dict[str, Any]:
     """保留意见的输入: 汇总表, 表中各错报 (按表中顺序) 与可引用的判断 (citable, 各带引用键 key).
 
@@ -178,7 +195,7 @@ def misstatement_inputs(ctx: RunContext) -> dict[str, Any]:
     include = {"id", "version", "procedure_id", "subject_id", "conclusion", "evidence"}
     return {
         "schedule": schedule.model_dump(mode="json"),
-        "misstatements": [m.model_dump(mode="json") for m in listed],
+        "misstatements": [m.model_dump(mode="json", include=MISSTATEMENT_FIELDS) for m in listed],
         "judgments": [
             {"key": key, **j.model_dump(mode="json", include=include)} for key, j in citation_keys(citable(ctx)).items()
         ],

@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from backend.agents.base import AgentDeps, RunContext, finish_run, gather_all
 from backend.contracts.models import (
     AuditException,
+    ClientProfile,
     ExceptionDisposition,
     Judgment,
     ReviewStatus,
@@ -30,9 +31,11 @@ from backend.services.review_queue import attribute_exceptions
 class Subject:
     """一个判断对象: 由各判断程序按自己的规则选出, 带该对象的数据与规则例外."""
 
-    subject_id: str  # 判断对象 ID: 合同, 发票或银行账户
+    subject_id: str  # 判断对象 ID: 合同, 发票, 银行账户或关系图的公司节点
     data: dict[str, Any]  # 该判断需要的数据行与抽取要素, 字段按程序提示词的头注释
     rule_findings: list[AuditException] = field(default_factory=list)  # 该对象的规则例外 (当前版本)
+    # 本项目采用版本的客户画像 (需求 R128): 给了时推理链可引用它 (client_profile 指针), 进 JudgmentContext; 缺省不给
+    client_profile: ClientProfile | None = None
 
 
 class Subjects(list[Subject]):
@@ -121,7 +124,7 @@ async def judge_all(
     """对给定的判断对象做判断: 先按 in_scope 筛选, 再并发逐个交判断引擎, 成功的依次经 A7 复核与降级.
 
     任务说明含参数快照与本程序覆盖的风险 (Procedure.objective_ids 下的 RiskItem), 均为 JSON 形式;
-    fixture_key 为对象 ID; 自主度取 Procedure 的运行时级别; performed_by 为项目负责人.
+    fixture_key 为对象 ID; 自主度取 Procedure 的运行时级别; 客户画像取对象的 client_profile; performed_by 为项目负责人.
     一个对象失败 (引擎返回 failure) 不影响其他对象; 引擎抛异常时等其余对象结束再上抛.
     """
     subjects = [s for s in subjects if in_scope(ctx, s.subject_id)]
@@ -138,6 +141,7 @@ async def judge_all(
             rule_findings=subject.rule_findings,
             fixture_key=subject.subject_id,
             autonomy_level=ctx.procedure.autonomy_level,
+            client_profile=subject.client_profile,
         )
         outcome = await deps.judgments.judge(ctx.engagement.id, ctx.template, ctx.run, jctx, ctx.engagement.owner_id)
         if outcome.judgment is not None:

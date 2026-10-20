@@ -15,12 +15,15 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
     CriticIndependent,
     CriticVerdictOut,
     DocumentClassification,
     JudgmentDraft,
+    MisstatementClassificationDraft,
+    MisstatementNature,
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
@@ -38,6 +41,7 @@ from backend.contracts.models import (
     EvidenceType,
     Judgment,
     MisstatementDraft,
+    MisstatementType,
     OpinionType,
     ProcedureRun,
     ProposedAction,
@@ -49,6 +53,8 @@ from backend.contracts.models import (
     StepStatus,
     TrailEntry,
     TrailKind,
+    drop_fields,
+    mask_person_node_ids,
 )
 from backend.contracts.ports import (
     AuditTrail,
@@ -100,6 +106,7 @@ DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
 # 不算行金额的金额列: 银行流水的交易后余额是累计数, 不是这一行的金额
 NOT_ROW_AMOUNTS = {"balance_after_cents"}
 MAX_ATTEMPTS = 3  # 首次调用加语法, 结构失败后最多 2 次重试
+PERSONAL_FIELDS = frozenset({"birth_date"})  # 渲染提示词前从变量里去掉的字段: 个人的出生日期 (需求 R310)
 # 系统提示词: 要求只输出符合输出模型 JSON schema 的一个对象
 SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON schema below. \
 Write nothing before or after the object.
@@ -215,6 +222,17 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     return errors
 
 
+def nature_semantics(nature: MisstatementNature) -> list[str]:
+    """错报性质 (FIN-03, 需求 R157) 的语义校验, 返回错误 (空为通过): 类型不能为 projected (本系统不做审计抽样, 没有
+    推断错报); 有舞弊迹象须写理由."""
+    errors = []
+    if nature.type is MisstatementType.projected:
+        errors.append("错报类型不能为 projected: 本系统不做审计抽样, 没有推断错报")
+    if nature.fraud_indicative and not (nature.fraud_reason or "").strip():
+        errors.append("有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)")
+    return errors
+
+
 def evidence_key(p: EvidencePointer) -> tuple[str, str, int | str | None]:
     """独立复核证据白名单的比对键: 文件按 (来源, 页), 第一轮只给了所引页的文字; 客户画像按 (来源, 字段), 第一轮只给了
     所引字段的 JSON; 其余按来源, 第三项为空."""
@@ -287,6 +305,49 @@ def citation_keys(judgments: Sequence[Judgment]) -> dict[str, Judgment]:
         detail = "; ".join(f"{key}: {', '.join(j.id for j in items)}" for key, items in clashes.items())
         raise ValueError(f"可引用的判断引用键重复: {detail}")
     return {key: items[0] for key, items in found.items()}
+
+
+PLAN_REQUIRED_SECTIONS = ("scope", "significant_risks", "materiality", "timing")  # 计划叙述必备的段 (需求 R204)
+
+
+def plan_checks(
+    draft: AuditPlanDraft, ctx: ValidationContext, standards: Sequence[str]
+) -> tuple[Level | None, list[str]]:
+    """计划叙述 (PLN-15) 的引用与语义两级. 返回 (未通过的级别, 错误). standards 为模板 standards.
+
+    引用: standards_cited 只能取模板 standards 中的片段.
+    语义: procedure_notes 的程序编号集合恰为 ctx.expected_procedure_ids (计划 items 的, 不缺不多, 不重复); 时间表各项
+    不早于 ctx.period_end; sections 含 scope, significant_risks, materiality, timing, 不含 overall_strategy (另有字段,
+    合成计划叙述时排在首段); 项目质量复核建议写了依据. ctx 缺 expected_procedure_ids 或 period_end 时抛 ValueError.
+    """
+    if ctx.expected_procedure_ids is None or ctx.period_end is None:
+        raise ValueError("计划叙述的校验须给出计划的程序与期末 (ValidationContext.expected_procedure_ids, period_end)")
+    outside = [f for f in draft.standards_cited if f not in standards]
+    if outside:
+        return "reference", [f"standards_cited 含模板 standards 以外的片段: {', '.join(outside)}"]
+    errors = []
+    noted = [n.procedure_id for n in draft.procedure_notes]
+    expected = set(ctx.expected_procedure_ids)
+    missing = sorted(expected - set(noted))
+    extra = sorted(set(noted) - expected)
+    repeated = sorted({p for p in noted if noted.count(p) > 1})
+    if missing:
+        errors.append(f"procedure_notes 缺计划的程序: {', '.join(missing)}")
+    if extra:
+        errors.append(f"procedure_notes 有计划以外的程序: {', '.join(extra)}")
+    if repeated:
+        errors.append(f"procedure_notes 的程序重复: {', '.join(repeated)}")
+    early = [f"{m.milestone} ({m.due})" for m in draft.timetable if m.due < ctx.period_end]
+    if early:
+        errors.append(f"时间表早于期末 {ctx.period_end}: {'; '.join(early)}")
+    absent = [name for name in PLAN_REQUIRED_SECTIONS if not draft.sections.get(name, "").strip()]
+    if absent:
+        errors.append(f"sections 缺必备的段: {', '.join(absent)}")
+    if "overall_strategy" in draft.sections:
+        errors.append("sections 不能含 overall_strategy (总体策略另有字段)")
+    if not draft.eqr_recommendation.basis.strip():
+        errors.append("eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)")
+    return ("semantic" if errors else None), errors
 
 
 def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | None, list[str]]:
@@ -524,6 +585,9 @@ class OutputValidator:
         ):
             errors.append(f"错报金额 {md.amount_cents} 不等于引用行的金额, 两条引用行之差或归因例外的金额")
             return draft, "reference", unsupported, errors
+        if md is not None and md.account_code is not None and not await self.financial.accounts(eid, [md.account_code]):
+            errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
+            return draft, "reference", unsupported, errors
         semantic = judgment_semantics(draft)
         return draft, "semantic" if semantic else None, unsupported, errors + semantic
 
@@ -633,6 +697,16 @@ async def check_judgment(
     return CheckResult(draft, level, unsupported, errors)
 
 
+async def check_classification(
+    validator: OutputValidator, eid: str, output: MisstatementClassificationDraft, ctx: ValidationContext
+) -> CheckResult:
+    """错报分类草稿 (FIN-03): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级另查错报
+    性质 (nature_semantics)."""
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    nature = nature_semantics(output.nature) if level != "reference" else []
+    return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
+
+
 async def check_extraction(
     validator: OutputValidator, eid: str, output: Extraction, ctx: ValidationContext
 ) -> CheckResult:
@@ -651,6 +725,17 @@ async def check_report(
 ) -> CheckResult:
     """报告草稿: 引用的判断须为当前已确认的版本, 两段标题与意见类型相符 (见 report_checks)."""
     level, errors = report_checks(output, ctx)
+    return CheckResult(output, level, errors=errors)
+
+
+async def check_plan(
+    validator: OutputValidator, eid: str, output: AuditPlanDraft, ctx: ValidationContext
+) -> CheckResult:
+    """计划叙述 (PLN-15, 需求 R204): 引用的片段须在模板 standards 内, 程序说明覆盖计划的程序, 时间表与必备段 (见
+    plan_checks). 模板取 ctx.standards_of (PLN-15); 为空时抛 ValueError."""
+    if ctx.standards_of is None:
+        raise ValueError("计划叙述的校验须给出模板 (ValidationContext.standards_of)")
+    level, errors = plan_checks(output, ctx, validator.library.load(ctx.standards_of).standards)
     return CheckResult(output, level, errors=errors)
 
 
@@ -678,11 +763,13 @@ async def structure_only(
 
 for _model, _check in (
     (JudgmentDraft, check_judgment),
+    (MisstatementClassificationDraft, check_classification),
     (ContractExtraction, check_extraction),
     (ConfirmationExtraction, check_extraction),
     (RegistryExtraction, check_extraction),
     (ReportDraft, check_report),
     (CriticIndependent, check_critic),
+    (AuditPlanDraft, check_plan),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
@@ -760,7 +847,8 @@ class JudgmentEngine:
     ) -> LLMCallResult[Any]:
         """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文与错误追加进对话重试, 最多共 MAX_ATTEMPTS 次.
 
-        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json")),
+        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
+        渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
@@ -769,7 +857,10 @@ class JudgmentEngine:
         assert template.llm is not None  # output_model 已确认
         client = llm if llm is not None else self.llm
         system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
-        messages = [LLMMessage(role="user", content=self.render(template, variables))]
+        # 先去掉个人信息再渲染 (接口文档第 0 节 "个人信息"): 出生日期字段 (需求 R310), 人员节点 ID 的出生日期一段
+        # (关系图的端点, 例外的 detail 都可能带它, 需求 R139)
+        outbound = mask_person_node_ids(drop_fields(dict(variables), PERSONAL_FIELDS))
+        messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
             request = LLMRequest(
@@ -898,7 +989,9 @@ class JudgmentEngine:
             created_at=datetime.now(UTC),
             trail_ref=result.trail_ids[-1],
         )
-        return JudgmentOutcome(judgment=judgment, failure=None, attempts=result.attempts, trail_ids=result.trail_ids)
+        return JudgmentOutcome(
+            judgment=judgment, failure=None, attempts=result.attempts, trail_ids=result.trail_ids, draft=draft
+        )
 
     def confidence_parts(
         self, template: ProcedureTemplate, draft: JudgmentDraft, steps: Sequence[ReasoningStep], has_findings: bool

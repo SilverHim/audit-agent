@@ -1,0 +1,186 @@
+{
+  "conclusion": "The misstatement comes from manual journal #499 (XJ-499, 16 August 2026), which recorded depreciation on office equipment although the fixed asset register shows no office equipment held, so it arose in the current period. It is factual: the journal lines and the register leave no doubt about it. There is no indication of fraud: the entry is openly described as manual depreciation and its effects offset, with no effect on profit or loss or net assets. Note: manual journal posted without independent review: control deficiency lead.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-499, posted on 16 August 2026 as 'Being depreciation on office equipment - Manual', debits 710 AUD 750.00 (XJ-499-1), credits 711 AUD 825.00 (XJ-499-2) and debits 820 AUD 75.00 (XJ-499-3).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-499-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-499-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-499-3",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "No approver is recorded for XJ-499; the ledger records no approver for any journal, so there is no evidence of independent review.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-499-1",
+          "locator": "approved_by",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The fixed asset register at 30 September 2026 shows Nil: no office equipment was held.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-4873d193e29f",
+          "locator": "Total cost at 30 September 2026: Nil",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "A factual misstatement is one about which there is no doubt; a judgemental misstatement arises from management judgements, such as accounting estimates, that the auditor considers unreasonable (ASA 450 para A6).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-A6",
+          "locator": "para A6",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "When the auditor identifies a misstatement, the auditor evaluates whether it is indicative of fraud (ASA 240 para 36).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P36",
+          "locator": "para 36",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The entry has no basis in any asset held, and the journal lines and the register establish the amounts beyond doubt, so the misstatement is factual and arose in the current period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "An openly described entry whose effects offset, with no effect on profit or loss or net assets, gives no indication of fraud; the lack of evidence of independent review is a control deficiency lead, not evidence of intent.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        4,
+        5
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-499-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-499-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-499-3",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-499-1",
+      "locator": "approved_by",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-4873d193e29f",
+      "locator": "Total cost at 30 September 2026: Nil",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-A6",
+      "locator": "para A6",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P36",
+      "locator": "para 36",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that the entry was made to conceal a misappropriation of assets, such as a related payment or a pattern of similar unreviewed entries, would make it indicative of fraud.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85,
+  "nature": {
+    "type": "factual",
+    "fraud_indicative": false,
+    "fraud_reason": null
+  }
+}

@@ -18,7 +18,12 @@ from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
 from backend.contracts.knowledge import LLMSpec
-from backend.contracts.llm_outputs import AuditPlanDraft, ContractExtraction, EngagementTermsExtraction
+from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
+    ContractExtraction,
+    EngagementTermsExtraction,
+    MisstatementClassificationDraft,
+)
 from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
@@ -103,12 +108,14 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131) 与 GEN-08 (功能
-    related_parties, 需求 R137), 基线下都不启用; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的
-    P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals
-    不在基线中) 的模板同样校验."""
+    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131), GEN-03, GEN-08
+    (功能 related_parties, 需求 R139, R137) 与 GEN-07 (功能 going_concern, 需求 R177), 基线下都不启用; 非 P2 模板写
+    fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
+    ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert [t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed] == ["GEN-02", "GEN-05", "GEN-08"]
+    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"} <= {
+        t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed
+    }  # 集合包含
     root = tmp_path / "knowledge"
     shutil.copytree(ROOT, root)
     base = "name: 自测\ncycle: Journals\nowner: A6\nengine: rule\nautonomy_level: L3\nfixed: true\n" + feature
@@ -170,7 +177,8 @@ APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pd
 SOURCES: dict[str, Source] = {
     "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
     "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", (12, 21)),)),  # 第 31 段至第 88 段
-    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
+    # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; 第 36 段即 ASA240-P36, 需求 R157, 也在第 17 页), 第 31-32 页
+    # (A44); 新版不用
     "ASA210": Source((("01_审计准则_ASA/ASA_210.pdf", (10, 12)),)),  # 第 6 段至第 10 段
     "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
     "ASA300": Source((("01_审计准则_ASA/ASA_300.pdf", (10, 12)),)),  # 第 7 段至第 13 段
@@ -245,8 +253,9 @@ CLOSING = ";,.:)"
 
 def normalise(text: str) -> str:
     """去掉 (Ref: Para. ...) 交叉引用 (与正文同字号的; 小字的由 page_layout 去掉), 行尾连字符直接接下一行
-    (bill-and-hold), 空白归一为单个空格, 标点 CLOSING 之前的空白去掉."""
-    text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text)
+    (bill-and-hold), 空白归一为单个空格, 标点 CLOSING 之前的空白去掉; Symbol 字体的项目符号 (私用区 U+F0B7, 如
+    ASA 450 第 A6 段) 写作 •, 同别的准则."""
+    text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text).replace("\uf0b7", "•")
     text = re.sub(r"-\n", "-", text)
     return re.sub(rf" (?=[{re.escape(CLOSING)}])", "", " ".join(text.split()))
 
@@ -429,7 +438,7 @@ def layout_text(lines: Sequence[Line]) -> Text:
     """
     extracted, lines = lines, settle_marks(lines)
     raw = "\n".join(f"\x00{k}\x01{line.text}" for k, line in enumerate(lines))
-    raw = re.sub(r"\s*(?:\x00\d+\x01)?\(Ref: ?Paras?\.[^)]*\)", "", raw)
+    raw = re.sub(r"\s*(?:\x00\d+\x01)?\(Ref: ?Paras?\.[^)]*\)", "", raw).replace("\uf0b7", "•")
     raw = re.sub(r"-\n", "-", raw)
     out: list[str] = []
     starts: list[int | None] = [None] * len(lines)
@@ -1763,6 +1772,7 @@ def test_normalise_joins_hyphen_and_drops_refs() -> None:
     assert normalise("bill-and-\nhold (Ref: Para. A3-A6)\n  next") == "bill-and-hold next"
     # 标点前的空白去掉: 脚注上标去掉后留下的空格 (ASA 570 第 23(a) 段 "ASA 7055; and"), 与原文的正常写法相同
     assert normalise("ASA 705 ; and (a , b ) x .") == normalise("ASA 705; and (a, b) x.") == "ASA 705; and (a, b) x."
+    assert normalise("\uf0b7 Factual") == "• Factual"
 
 
 @pytest.mark.parametrize(
@@ -2042,6 +2052,116 @@ def test_pln15_template() -> None:
         assert fragment is not None and "PLN-15" in fragment.procedures, fragment_id
 
 
+def test_fin03_template_loads_only_with_misstatement() -> None:
+    """R157 验收 1, 7: FIN-03 为完成阶段 A8 的混合程序, 挂功能 misstatement, 没有规则与前置 ("全部 P2 判断已复核" 由
+    主图保证), 写判断, 复核任务与错报; 两个准则片段都已登记且各自的 procedures 列了 FIN-03; 输出模型为分类草稿.
+    manual_result_allowed 本条为假 (P2 以外的节点等人时失败任务只认 rerun, 由 R158 打开; 方案取舍). 基线下不启用,
+    不进项目启动实例化的程序 (基线启用集恰为 BASE_18 见 test_all_procedures_load); 打开 misstatement 时进."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("FIN-03")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
+        "错报性质分类",
+        Phase.P3_Completion,
+        "Completion",
+        AgentId.A8,
+        Engine.hybrid,
+        AutonomyLevel.L2,
+        "misstatement",
+        None,
+    )
+    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, False)
+    assert (t.outputs, t.evidence_required) == (["judgments", "review_tasks", "misstatements"], [EvidenceType.voucher])
+    assert t.standards == ["ASA450-A6", "ASA240-P36"]
+    assert t.llm == LLMSpec(prompt="FIN-03.md.j2", output_model="MisstatementClassificationDraft")
+    assert output_model(t) is MisstatementClassificationDraft
+    for fragment_id in t.standards:
+        fragment = base.fragment(fragment_id)
+        assert fragment is not None and "FIN-03" in fragment.procedures, fragment_id
+    assert "FIN-03" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
+    on = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement"}))
+    assert on.enabled("FIN-03") and "FIN-03" in {p.id for p in fixed_procedures(on)}
+
+
+def fin03_variables() -> dict[str, Any]:
+    """FIN-03 提示词的变量, 按头注释逐项给齐 (data 的各列表都非空), 模拟 R158 交给 judge 的上下文."""
+    library = ProcedureLibrary(ROOT)
+    fragments = [library.fragment(f) for f in library.load("FIN-03").standards]
+    misstatement = {
+        "id": "M-D-1",
+        "version": 1,
+        "judgment_id": "J-GEN-02-1-XJ-499",
+        "type": "factual",
+        "account": "Office equipment (710)",
+        "account_code": "710",
+        "assertion": "Existence",
+        "amount_cents": 75000,
+        "direction": "overstated",
+        "status": "identified",
+    }
+    pointer = {"type": "voucher", "source_type": "journal_entry", "source_id": "XJ-499-1", "locator": "debit_cents"}
+    source = {
+        "id": "J-GEN-02-1-XJ-499",
+        "procedure_id": "GEN-02",
+        "subject_id": "XJ-499",
+        "conclusion": "The entry has no basis.",
+        "evidence": [pointer],
+    }
+    line = {
+        "source_type": "journal_entry",
+        "id": "XJ-499-1",
+        "entry_no": "XJ-499",
+        "posting_date": "2026-08-16",
+        "created_by": "xero",
+        "approved_by": None,
+        "account_code": "710",
+        "debit_cents": 75000,
+        "credit_cents": 0,
+        "description": "Office equipment depreciation",
+        "source_doc": "Being depreciation on office equipment - Manual",
+    }
+    data = {
+        "misstatement": misstatement,
+        "source_judgment": source,
+        "journal_lines": [line],
+        "cited_rows": [{"source_type": "trial_balance", "account_code": "710", "balance_cents": 75000}],
+        "documents": [
+            {
+                "id": "DOC-FAR",
+                "file_name": "fixed_asset_register.pdf",
+                "type": "internal_record",
+                "page_count": 1,
+                "reliability": "internal_original",
+            }
+        ],
+        "fraud_risks": [
+            {"id": "R-9", "assertion": "Occurrence", "level": "significant", "description": "Management override."}
+        ],
+    }
+    return {
+        "subject_id": "M-D-1",
+        "task": {"params": {}, "risks": []},
+        "data": data,
+        "rule_findings": [],
+        "standards": [f.model_dump(mode="json") for f in fragments if f is not None],
+    }
+
+
+def test_fin03_prompt_renders_with_its_header_variables() -> None:
+    """R157 (第 1 轮审核 R157-02): 头注释是 R158 的数据契约. 模板取用的顶层变量都在头注释里; 按头注释给齐变量 (各列表
+    非空) 渲染通过 (StrictUndefined), 舞弊风险行, 分录行, 所引的行, 文件登记与两个片段的正文都进了提示词."""
+    source = (ROOT / "prompts" / "FIN-03.md.j2").read_text(encoding="utf-8")
+    header = source.split("#}", 1)[0]
+    used = meta.find_undeclared_variables(Environment().parse(source))
+    assert used and all(re.search(rf"^ +{name}\b", header, re.MULTILINE) for name in used), used
+    variables = fin03_variables()
+    text = prompt_env(ROOT / "prompts").get_template("FIN-03.md.j2").render(variables)
+    assert "- R-9: Occurrence, significant. Management override." in text
+    assert '"id": "XJ-499-1"' in text and '"balance_cents": 75000' in text and '"id": "DOC-FAR"' in text
+    assert "judgment J-GEN-02-1-XJ-499 (GEN-02, subject XJ-499)" in text
+    for f in variables["standards"]:
+        assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
+
+
 PLN15_VARIABLES = [
     "entity",
     "period_start",
@@ -2291,16 +2411,23 @@ def voided_cte(sql: str) -> str | None:
 
 def test_voided_pair_cte_is_one_text_everywhere() -> None:
     """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
-    之间逐字相同 (CSH-02 D03, D04 与 GEN-05 的 R02, R09-R12). 防只改一处使两个程序认的作废对不同."""
+    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139) 与 GEN-07 的 S01-S03 (需求
+    R177)). 防只改一处使几个程序认的作废对不同."""
     marked = {
         (t.id, rule.id): voided_cte(rule.sql)
         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
         for rule in t.rules
         if "reversal AS (" in rule.sql
     }
-    assert {("CSH-02", "D03"), ("CSH-02", "D04"), *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12"))} <= set(
-        marked
-    )
+    expected = {
+        ("CSH-02", "D03"),
+        ("CSH-02", "D04"),
+        *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12")),
+        ("GEN-03", "C01"),
+        ("GEN-03", "C02"),
+        *(("GEN-07", r) for r in ("S01", "S02", "S03")),
+    }
+    assert expected <= set(marked)
     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
     assert text is not None and text.startswith("WITH reversal AS (") and "), voided AS (" in text
 
@@ -2421,6 +2548,16 @@ DATASET_REFS = {
         "reversal_entry_no_template": "reversal_entry_no_template",
         "audit_adjustment_entry_prefix": "audit_adjustment_entry_prefix",
         "counterparty_prefixes": "counterparty_prefixes",
+    },
+    "GEN-03": {  # 作废对与对方名称的前缀, 同 GEN-05 (需求 R139)
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
+        "counterparty_prefixes": "counterparty_prefixes",
+    },
+    "GEN-07": {  # 期后窗口截到数据截止日, 作废对 (需求 R177)
+        "data_as_of": "data_as_of",
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
     },
 }
 

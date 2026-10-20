@@ -3,7 +3,8 @@ name: 总体审计计划
 # 规格书 6.1.2 PLN-15, 12.2 AuditPlan; 设计稿 v2.1 第 6.6 节. PLN-01/03 通过并装配程序包后, A4 按程序包与状态
 # 确定性组装计划骨架 (期间, 适用框架, 重要性, 特别风险目标, 程序与参数), 由大模型写叙述 (AuditPlanDraft: 总体
 # 策略, 各段, 各程序的性质时间范围, 时间表, 项目质量复核建议, 专家评估), 合成 PLAN-{revision} (status draft);
-# PLN-15 闸门批准后置 approved, 驳回按理由出下一修订 (接口文档第 0 节). 执行 (A4) 由 R204 做, 节点与闸门由 R205 做.
+# PLN-15 闸门批准后置 approved, 驳回按理由出下一修订 (接口文档第 0 节). 执行 (A4) 见 agents/audit_plan (需求 R204);
+# 装配之后由 plan_draft 执行, 停在 gate_p1_plan, 批准即进 P2 (需求 R205).
 phase: P1_Planning
 cycle: Planning
 owner: A4

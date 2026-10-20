@@ -3,7 +3,6 @@
 闸门节点不做业务处理: 决定由 DecisionSubmit 写入, 并以 aupdate_state(as_node=闸门节点) 直接越过闸门.
 """
 
-import copy
 import logging
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
@@ -67,8 +66,8 @@ from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.data_quality import request_id
-from backend.services.features import COLLAB
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program
+from backend.services.features import COLLAB, PLANNING
+from backend.services.procedure_library import ProcedureLibrary, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
@@ -126,14 +125,12 @@ def build_run(
 ) -> ProcedureRun:
     """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
 
-    参数 = 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它为准).
-    解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目
-    采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录.
-    Procedure.params 深拷贝后叠加: 其中的列表与字典若与快照共用, 改一处会连带改到程序和历次执行的快照.
+    参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
+    为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
+    本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
+    记录.
     """
-    risk_level = highest_risk(state["audit_objectives"], procedure.objective_ids)
-    resolved = library.resolve_params(template, engagement, state, risk_level, traits=traits, profile=profile)
-    params = {**resolved, **copy.deepcopy(procedure.params)}
+    params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
     return next_run(procedure.id, state["procedure_runs"], params, started_at)
 
 
@@ -221,6 +218,7 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "p0_intel": ("ACC-04",),
     "p1_ingest": ("DOC-04",),
     "p1_analytics": ("PLN-07", "PLN-01"),
+    "plan_draft": ("PLN-15",),  # 功能 planning (需求 R205)
     "completion": ("FIN-04",),
     "report_draft": ("RPT-03",),
 }
@@ -981,11 +979,12 @@ class GraphNodes:
         只把尚不在程序包中的 P2 程序加入.
 
         每条审计目标至少要被一条程序的 trigger 匹配到, 否则抛 ValueError 阻断 (Demo需求文档第 4.1 节), 什么都不写.
-        新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节).
+        新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节). 功能 planning
+        打开时只写程序, 阶段仍为 P1_Planning, 由 PLN-15 闸门批准计划时进入 P2 (需求 R205, M-10).
         objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 与固定集程序为空. 覆盖校验只看 trigger,
         固定集程序不计入.
         没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
-        提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写).
+        提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写; 功能 planning 打开时不改阶段, 也不写).
         """
         library = self.deps.library
         objectives = state["audit_objectives"]
@@ -1008,11 +1007,22 @@ class GraphNodes:
         if not added:
             return {}
         eid = state["engagement_id"]
+        planning = PLANNING in self.deps.features
         async with self.deps.output_store.transaction(eid):
             stored = await self.deps.output_store.put(eid, added, actor=AgentId.A1)
-            await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+            if not planning:
+                await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+        pack = [*state["procedure_pack"], *stored]
+        if planning:
+            return {"procedure_pack": pack}
         await record_transitions(self.deps.trail, phase_transition(eid, state["phase"], Phase.P2_Executing))
-        return {"procedure_pack": [*state["procedure_pack"], *stored], "phase": Phase.P2_Executing}
+        return {"procedure_pack": pack, "phase": Phase.P2_Executing}
+
+    async def plan_draft(self, state: EngagementState) -> StatePatch:
+        """功能 planning (需求 R205): 装配之后 A4 执行 PLN-15, 起草总体审计计划的下一修订 (agents/audit_plan); PLN-15
+        驳回后回到这里, 以 rerun 再执行一次出下一修订. 成功后 PLN-15 仍为 planned (闸门程序, Q5), 由 PLN-15 闸门批准时
+        完成; 执行失败时在节点内等 rerun (见 execute)."""
+        return await self.run_node(state, "plan_draft")
 
     # ── P2 ──
     async def schedule(self, state: EngagementState) -> StatePatch:

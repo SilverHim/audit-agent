@@ -279,6 +279,7 @@ export const zh: Messages = {
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
       'FIN-01': (count, total, skipped) =>
         `程序执行已完成。共记录 ${count} 项错报，未更正合计 ${total}。${skipped ? `另有 ${skipped} 项程序因客户无此类资料未执行。` : ''}请确认审计意见类型。`,
+      'PLN-15': (revision) => `总体审计计划第 ${revision} 修订已起草。批准后开始外勤，也可以退回修订。`,
       'RPT-01': (revision) => `第 ${revision} 稿审计报告已生成。请签字，或附批注退回修订。`,
     },
     reviewIntro: (total, tier) => `有 ${total} 项需要你复核。这一项属于"${tier}"档。`,

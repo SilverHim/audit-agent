@@ -2,7 +2,7 @@
 # 自动比对); text 为该段原文, 去掉段号与 (Ref: Para. ...) 交叉引用, 列举项各占一行.
 # 本项目两个审计期间分别始于 2025-07-01 (Numbat) 与 2026-07-01 (Xero), 早于新版 ASA_240_（2026-12-15起生效）.pdf
 # Aus 0.3 段的 2026-12-15 (operative for periods beginning on or after), 适用现行版, 新版不用. 分录测试的段号以现行
-# 编译版第 33(a) 段为准 (新版另行编号); 错报段 (MD-2) 只往本文件追加 ASA240-P36.
+# 编译版第 33(a) 段为准 (新版另行编号); ASA240-P36 由需求 R157 追加.
 standard: ASA 240
 title: The Auditor's Responsibilities Relating to Fraud in an Audit of a Financial Report
 compiled: "2023-12-14"   # Compilation Number 8
@@ -36,3 +36,9 @@ fragments:
       The nature and complexity of the accounts – inappropriate journal entries or adjustments may be applied to accounts that (a) contain transactions that are complex or unusual in nature, (b) contain significant estimates and period-end adjustments, (c) have been prone to misstatements in the past, (d) have not been reconciled on a timely basis or contain unreconciled differences, (e) contain inter-company transactions, or (f) are otherwise associated with an identified risk of material misstatement due to fraud. In audits of entities that have several locations or components, consideration is given to the need to select journal entries from multiple locations.
       Journal entries or other adjustments processed outside the normal course of business – nonstandard journal entries may not be subject to the same nature and extent of controls as those journal entries used on a recurring basis to record transactions such as monthly sales, purchases and cash disbursements.
     procedures: [GEN-02]
+  - id: ASA240-P36
+    paragraph: "36"
+    topic: misstatement_indicative_of_fraud
+    text: |
+      If the auditor identifies a misstatement, the auditor shall evaluate whether such a misstatement is indicative of fraud. If there is such an indication, the auditor shall evaluate the implications of the misstatement in relation to other aspects of the audit, particularly the reliability of management representations, recognising that an instance of fraud is unlikely to be an isolated occurrence.
+    procedures: [FIN-03]

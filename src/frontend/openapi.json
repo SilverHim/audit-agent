@@ -4757,7 +4757,7 @@
           "A10"
         ],
         "title": "AgentId",
-        "description": "智能体编号. A8 本版不实现, 只占位."
+        "description": "智能体编号."
       },
       "AnalyticsResult": {
         "properties": {
@@ -4978,6 +4978,234 @@
         "title": "AuditObjective",
         "description": "审计目标: 某科目的某项认定, 风险等级取其下风险项的最高等级."
       },
+      "AuditPlan": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PlanStatus",
+            "default": "draft"
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "period_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Period Start"
+          },
+          "period_end": {
+            "type": "string",
+            "format": "date",
+            "title": "Period End"
+          },
+          "applicable_framework": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tier1_gpfs",
+                  "tier2_gpfs",
+                  "spfr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicable Framework"
+          },
+          "engagement_letter_document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Engagement Letter Document Id"
+          },
+          "materiality_choice": {
+            "$ref": "#/components/schemas/MaterialityChoice"
+          },
+          "materiality_cents": {
+            "type": "integer",
+            "title": "Materiality Cents"
+          },
+          "performance_materiality_cents": {
+            "type": "integer",
+            "title": "Performance Materiality Cents"
+          },
+          "clearly_trivial_cents": {
+            "type": "integer",
+            "title": "Clearly Trivial Cents"
+          },
+          "significant_risk_objective_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Significant Risk Objective Ids",
+            "default": []
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PlanItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "narrative": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSection"
+            },
+            "type": "array",
+            "title": "Narrative"
+          },
+          "procedure_notes": {
+            "items": {
+              "$ref": "#/components/schemas/ProcedureNote"
+            },
+            "type": "array",
+            "title": "Procedure Notes"
+          },
+          "timetable": {
+            "items": {
+              "$ref": "#/components/schemas/Milestone"
+            },
+            "type": "array",
+            "title": "Timetable"
+          },
+          "eqr_recommendation": {
+            "$ref": "#/components/schemas/EqrRecommendation"
+          },
+          "expert_assessment": {
+            "type": "string",
+            "title": "Expert Assessment"
+          },
+          "standards_cited": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Standards Cited"
+          },
+          "eqr_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eqr Required"
+          },
+          "eqr_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eqr Basis"
+          },
+          "auditor_expert_not_required": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auditor Expert Not Required"
+          },
+          "addresses_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addresses Decision Id"
+          },
+          "revision_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Reason"
+          },
+          "approved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved By"
+          },
+          "approved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "run_id",
+          "period_start",
+          "period_end",
+          "materiality_choice",
+          "materiality_cents",
+          "performance_materiality_cents",
+          "clearly_trivial_cents",
+          "items",
+          "narrative",
+          "procedure_notes",
+          "timetable",
+          "eqr_recommendation",
+          "expert_assessment",
+          "standards_cited"
+        ],
+        "title": "AuditPlan",
+        "description": "总体审计计划 (需求 R203; 规格书 12.2 AuditPlan). ID 为 PLAN-{revision}. A4 在 PLN-15 中起草 (第 1 修订与\nPLN-15 驳回后的重拟); A1 写闸门效果: PLN-15 批准出 approved 新版本 (R205), PLN-19 带 materiality 的通过直接建出\n下一修订 (approved, R210). 内容修订一律出下一修订 PLAN-{n+1}, 旧修订出新版本置 superseded; 同一修订内只有状态\n变化出新版本 (draft → approved → superseded). 当前计划为 status 不是 superseded 的修订中 revision 最大的.\n计划骨架 (期间, 重要性, 特别风险目标, items) 由 A4 在 PLN-15 中确定性组装, 叙述类各项取 AuditPlanDraft.\n出新版本或新修订须经校验构造, 如 AuditPlan.model_validate({**plan.model_dump(), **update}): model_copy 不跑\napproval_fields, 不合规的版本会在之后读回时才报错."
+      },
       "AuditReportVersion": {
         "properties": {
           "id": {
@@ -5075,6 +5303,138 @@
         ],
         "title": "AuditReportVersion",
         "description": "审计报告的一个修订版本, 签字后锁定."
+      },
+      "AuditorAppointment": {
+        "properties": {
+          "appointed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointed By"
+          },
+          "resolution_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution On"
+          },
+          "auditor_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auditor Name"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointed_by",
+          "resolution_on",
+          "auditor_name"
+        ],
+        "title": "AuditorAppointment",
+        "description": "依 s325(1) 委任审计师的决议."
+      },
+      "AuditorConsent": {
+        "properties": {
+          "given_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Given On"
+          },
+          "signed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed By"
+          },
+          "firm_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Firm Name"
+          },
+          "registered_auditor_no": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered Auditor No"
+          },
+          "firm_name_signed": {
+            "type": "boolean",
+            "title": "Firm Name Signed"
+          },
+          "own_name_signed": {
+            "type": "boolean",
+            "title": "Own Name Signed"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "given_on",
+          "signed_by",
+          "firm_name",
+          "registered_auditor_no",
+          "firm_name_signed",
+          "own_name_signed"
+        ],
+        "title": "AuditorConsent",
+        "description": "审计师依 s328A 给公司的书面同意."
       },
       "AutonomyLevel": {
         "type": "string",
@@ -8526,6 +8886,209 @@
         "title": "EngagementSummary",
         "description": "项目列表中的一行."
       },
+      "EngagementTerms": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "framework": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "tier1_gpfs",
+                  "tier2_gpfs",
+                  "spfr"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Framework"
+          },
+          "framework_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Framework Evidence",
+            "default": []
+          },
+          "elements": {
+            "items": {
+              "$ref": "#/components/schemas/TermsItem"
+            },
+            "type": "array",
+            "title": "Elements"
+          },
+          "acknowledgements": {
+            "items": {
+              "$ref": "#/components/schemas/TermsItem"
+            },
+            "type": "array",
+            "title": "Acknowledgements"
+          },
+          "letter_dated_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Letter Dated On"
+          },
+          "letter_signed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Letter Signed By"
+          },
+          "letter_signed_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Letter Signed On"
+          },
+          "letter_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Letter Evidence",
+            "default": []
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ShareholderDirection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "appointment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditorAppointment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditorConsent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "year_change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FinancialYearChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string",
+            "title": "Run Id"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/TermsCheck"
+            },
+            "type": "array",
+            "title": "Checks"
+          },
+          "exception_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exception Ids"
+          },
+          "judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Judgment Id"
+          },
+          "document_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Document Ids"
+          },
+          "addresses_decision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Addresses Decision Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "framework",
+          "elements",
+          "acknowledgements",
+          "letter_dated_on",
+          "letter_signed_by",
+          "letter_signed_on",
+          "direction",
+          "appointment",
+          "consent",
+          "year_change",
+          "run_id",
+          "checks",
+          "exception_ids",
+          "judgment_id",
+          "document_ids"
+        ],
+        "title": "EngagementTerms",
+        "description": "约定条款与委任核验 (ACC-08): 抽出的事实, T01-T07 的核对, 例外与 AI 建议判断, ACC-08 闸门的呈报材料. 项目里\n只有一份, ID 固定为 TERMS (TERMS_ID); 重读出新版本."
+      },
       "Engine": {
         "type": "string",
         "enum": [
@@ -8536,6 +9099,26 @@
         ],
         "title": "Engine",
         "description": "程序的执行方式."
+      },
+      "EqrRecommendation": {
+        "properties": {
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "required",
+          "basis"
+        ],
+        "title": "EqrRecommendation",
+        "description": "是否需要项目质量复核的建议 (ASQM 1 第 34(f) 段); 审计师在 PLN-15 批准时另行确认 (PlanConfirmation)."
       },
       "EvidencePointer": {
         "properties": {
@@ -9008,6 +9591,87 @@
         "title": "FinancialStatements",
         "description": "待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; A3 从上传的财务报表文件抽取, 存表\nfinancial_statements 与 financial_statement_lines, 审计师改抽取结果出新版本 (需求 R217). 规格书第 12.2 节."
       },
+      "FinancialYearChange": {
+        "properties": {
+          "resolved_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved On"
+          },
+          "previous_year_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Year End"
+          },
+          "new_year_end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Year End"
+          },
+          "prior_shortened_within_5_years": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prior Shortened Within 5 Years"
+          },
+          "good_faith_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Good Faith Reason"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "resolved_on",
+          "previous_year_end",
+          "new_year_end",
+          "prior_shortened_within_5_years",
+          "good_faith_reason"
+        ],
+        "title": "FinancialYearChange",
+        "description": "董事依 s323D(2A) 缩短财年的决议."
+      },
       "GateDecision": {
         "properties": {
           "id": {
@@ -9279,6 +9943,9 @@
                 "$ref": "#/components/schemas/PlanningMaterial"
               },
               {
+                "$ref": "#/components/schemas/PlanMaterial"
+              },
+              {
                 "$ref": "#/components/schemas/CompletionMaterial"
               },
               {
@@ -9292,6 +9959,7 @@
                 "ACC-01": "#/components/schemas/AcceptanceMaterial",
                 "FIN-01": "#/components/schemas/CompletionMaterial",
                 "PLN-01/03": "#/components/schemas/PlanningMaterial",
+                "PLN-15": "#/components/schemas/PlanMaterial",
                 "RPT-01": "#/components/schemas/ReportMaterial"
               }
             }
@@ -9744,6 +10412,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/MisstatementDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "misstatement_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementUpdate"
               },
               {
                 "type": "null"
@@ -10457,6 +11135,27 @@
         "title": "MaterialityChoice",
         "description": "审计师在 PLN-01/03 闸门选定的重要性基准与比例."
       },
+      "Milestone": {
+        "properties": {
+          "milestone": {
+            "type": "string",
+            "title": "Milestone"
+          },
+          "due": {
+            "type": "string",
+            "format": "date",
+            "title": "Due"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "milestone",
+          "due"
+        ],
+        "title": "Milestone",
+        "description": "计划时间表的一项, 如外勤完成, 报告签署, 送达股东."
+      },
       "Misstatement": {
         "properties": {
           "id": {
@@ -10511,11 +11210,191 @@
           "direction": {
             "$ref": "#/components/schemas/Direction"
           },
+          "account_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Code"
+          },
           "status": {
-            "type": "string",
-            "const": "uncorrected",
-            "title": "Status",
-            "default": "uncorrected"
+            "$ref": "#/components/schemas/MisstatementStatus",
+            "default": "identified"
+          },
+          "objective_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Id"
+          },
+          "fraud_indicative": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraud Indicative"
+          },
+          "fraud_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraud Reason"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "current_period",
+                  "prior_period_uncorrected"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "classification_judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classification Judgment Id"
+          },
+          "communicated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Communicated At"
+          },
+          "communicated_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Communicated To"
+          },
+          "responded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Responded At"
+          },
+          "management_response": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Management Response"
+          },
+          "needs_recommunication": {
+            "type": "boolean",
+            "title": "Needs Recommunication",
+            "default": false
+          },
+          "uncorrected_basis": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "refused",
+                  "stopped_waiting"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncorrected Basis"
+          },
+          "correction_notice_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction Notice Id"
+          },
+          "adjustment_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adjustment Entry Nos",
+            "default": []
+          },
+          "corrected_cents": {
+            "type": "integer",
+            "title": "Corrected Cents",
+            "default": 0
+          },
+          "residual_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Residual Cents"
+          },
+          "verified_by_judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified By Judgment Id"
           }
         },
         "additionalProperties": false,
@@ -10532,7 +11411,7 @@
           "direction"
         ],
         "title": "Misstatement",
-        "description": "已认定的错报, 来自某条判断或例外. 本版一律按未更正处理."
+        "description": "已认定的错报, 来自某条判断或例外; 规格书 12.2 Misstatement 与 12.3 的生命周期 (需求 R156, 迁移表见接口文档\n第 2.5 节). 人认定时建第 1 版, 功能 misstatement 打开为 identified, 关闭为 uncorrected (旧口径, 不经沟通, basis\n为空); 之后的分类, 沟通与验证各出新版本 (model_copy, version +1). 新字段都有缺省, Store 中的旧行照常读回."
       },
       "MisstatementDraft": {
         "properties": {
@@ -10552,6 +11431,17 @@
           },
           "direction": {
             "$ref": "#/components/schemas/Direction"
+          },
+          "account_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Code"
           }
         },
         "additionalProperties": false,
@@ -10618,6 +11508,21 @@
         "title": "MisstatementReport",
         "description": "错报列表, 未更正汇总, 以及总览里的重要性与意见."
       },
+      "MisstatementStatus": {
+        "type": "string",
+        "enum": [
+          "identified",
+          "communicated",
+          "verifying",
+          "corrected",
+          "partially_corrected",
+          "uncorrected",
+          "evaluated",
+          "closed"
+        ],
+        "title": "MisstatementStatus",
+        "description": "错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement\n关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写."
+      },
       "MisstatementType": {
         "type": "string",
         "enum": [
@@ -10627,6 +11532,150 @@
         ],
         "title": "MisstatementType",
         "description": "错报类型."
+      },
+      "MisstatementUpdate": {
+        "properties": {
+          "misstatement_id": {
+            "type": "string",
+            "title": "Misstatement Id"
+          },
+          "base_version": {
+            "type": "integer",
+            "title": "Base Version"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "classification",
+              "verification"
+            ],
+            "title": "Kind"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fraud_indicative": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraud Indicative"
+          },
+          "fraud_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fraud Reason"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "current_period",
+                  "prior_period_uncorrected"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "objective_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objective Id"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "adjustment_entry_nos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjustment Entry Nos"
+          },
+          "corrected_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corrected Cents"
+          },
+          "residual_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Residual Cents"
+          },
+          "needs_recommunication": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Needs Recommunication"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "misstatement_id",
+          "base_version",
+          "kind"
+        ],
+        "title": "MisstatementUpdate",
+        "description": "判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.\nbase_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification\n时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFICATION_STATUSES."
       },
       "MonthlyFigures": {
         "properties": {
@@ -10838,6 +11887,129 @@
         ],
         "title": "PlanConfirmation",
         "description": "审计师在 PLN-15 批准时的确认 (需求 R203), 写进所批准的计划: 是否需要项目质量复核及依据 (ASQM 1 第 34(f) 段),\n以及确认不需要审计师的专家 (ASA 620)."
+      },
+      "PlanItem": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "template_commit": {
+            "type": "string",
+            "title": "Template Commit"
+          },
+          "objective_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Objective Ids",
+            "default": []
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "name",
+          "template_commit"
+        ],
+        "title": "PlanItem",
+        "description": "总体审计计划中的一条程序: 该修订组装时程序包里的那一版 (旧修订不随之后的改动变)."
+      },
+      "PlanMaterial": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "PLN-15",
+            "title": "Kind",
+            "default": "PLN-15"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/AuditPlan"
+          },
+          "terms": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngagementTerms"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "materiality_cents": {
+            "type": "integer",
+            "title": "Materiality Cents"
+          },
+          "performance_materiality_cents": {
+            "type": "integer",
+            "title": "Performance Materiality Cents"
+          },
+          "clearly_trivial_cents": {
+            "type": "integer",
+            "title": "Clearly Trivial Cents"
+          },
+          "previous_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/GateDecision"
+            },
+            "type": "array",
+            "title": "Previous Decisions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "plan",
+          "terms",
+          "materiality_cents",
+          "performance_materiality_cents",
+          "clearly_trivial_cents",
+          "previous_decisions"
+        ],
+        "title": "PlanMaterial",
+        "description": "PLN-15 闸门的呈报材料 (需求 R205, 功能 planning)."
+      },
+      "PlanSection": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "section",
+          "text"
+        ],
+        "title": "PlanSection",
+        "description": "计划叙述的一段. 用列表保段序: 存进 JSONB 的字典不保留键序."
+      },
+      "PlanStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "approved",
+          "superseded"
+        ],
+        "title": "PlanStatus",
+        "description": "总体审计计划一个修订的状态 (需求 R203)."
       },
       "PlanningMaterial": {
         "properties": {
@@ -11333,6 +12505,26 @@
         ],
         "title": "ProcedureDetail",
         "description": "一条程序的执行记录, 例外与判断."
+      },
+      "ProcedureNote": {
+        "properties": {
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "nature_timing_extent": {
+            "type": "string",
+            "title": "Nature Timing Extent"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "procedure_id",
+          "nature_timing_extent"
+        ],
+        "title": "ProcedureNote",
+        "description": "一条程序计划的性质, 时间与范围 (ASA 300 第 9(c) 段: 认定层次的进一步审计程序)."
       },
       "ProcedureRun": {
         "properties": {
@@ -12094,6 +13286,16 @@
               }
             ]
           },
+          "misstatement_update": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MisstatementUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "rerun_params": {
             "anyOf": [
               {
@@ -12683,6 +13885,90 @@
         ],
         "title": "ServiceOrganisation",
         "description": "客户使用的服务机构 (ASA 402)."
+      },
+      "ShareholderDirection": {
+        "properties": {
+          "signed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed By"
+          },
+          "shares_held": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shares Held"
+          },
+          "total_shares": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Shares"
+          },
+          "votes_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Votes Pct"
+          },
+          "made_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Made On"
+          },
+          "requires_audit": {
+            "type": "boolean",
+            "title": "Requires Audit"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "signed_by",
+          "shares_held",
+          "total_shares",
+          "votes_pct",
+          "made_on",
+          "requires_audit"
+        ],
+        "title": "ShareholderDirection",
+        "description": "股东依 s293 给小型私人公司的指示 (委任文件中): 谁签, 持多少股, 何时, 是否要求审计."
       },
       "Shareholding": {
         "properties": {
@@ -13379,6 +14665,108 @@
         ],
         "title": "TermType",
         "description": "合同条款类型."
+      },
+      "TermsCheck": {
+        "properties": {
+          "check": {
+            "type": "string",
+            "enum": [
+              "T01",
+              "T02",
+              "T03",
+              "T04",
+              "T05",
+              "T06",
+              "T07"
+            ],
+            "title": "Check"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TermsCheckStatus"
+          },
+          "blocking": {
+            "type": "boolean",
+            "title": "Blocking"
+          },
+          "basis": {
+            "type": "string",
+            "title": "Basis"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "check",
+          "status",
+          "blocking",
+          "basis",
+          "detail"
+        ],
+        "title": "TermsCheck",
+        "description": "ACC-08 的一项核对 (T01-T07)."
+      },
+      "TermsCheckStatus": {
+        "type": "string",
+        "enum": [
+          "passed",
+          "failed",
+          "not_applicable"
+        ],
+        "title": "TermsCheckStatus",
+        "description": "ACC-08 一项核对的结果."
+      },
+      "TermsItem": {
+        "properties": {
+          "item": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "objective_scope",
+                  "auditor_responsibilities",
+                  "management_responsibilities",
+                  "framework",
+                  "report_form"
+                ]
+              },
+              {
+                "type": "string",
+                "enum": [
+                  "prepare_fr",
+                  "internal_control",
+                  "access_information",
+                  "additional_information",
+                  "unrestricted_access"
+                ]
+              }
+            ],
+            "title": "Item"
+          },
+          "present": {
+            "type": "boolean",
+            "title": "Present"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "item",
+          "present"
+        ],
+        "title": "TermsItem",
+        "description": "约定书中的一项要素 (TermsElement) 或管理层的一项确认 (TermsAcknowledgement): 有没有写明, 写在哪."
       },
       "Token": {
         "properties": {

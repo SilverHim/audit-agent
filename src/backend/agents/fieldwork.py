@@ -1,18 +1,20 @@
-"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02.
+"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02, GEN-03.
 
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
 
+import functools
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, ClassVar, cast
 
 from pydantic import TypeAdapter
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, finish_run
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, rule_patch, run_rules
 from backend.agents.evidence import current_confirmations, legacy_accounts
+from backend.agents.ingest import client_profile
 from backend.agents.judging import (
     DEFAULT_STEPS,
     Judged,
@@ -25,16 +27,22 @@ from backend.agents.judging import (
     judgments_patch,
     subjects_awaiting_review,
 )
+from backend.agents.ownership import declared
 from backend.agents.review import ReviewAgent
 from backend.contracts.models import (
     AgentId,
     AuditException,
+    ClientProfile,
     Confirmation,
     ConfirmationResult,
+    Contract,
     DocumentRef,
+    DocumentType,
     EvidencePointer,
     EvidenceType,
     ExceptionDisposition,
+    OwnershipGraph,
+    PartyNode,
     Reliability,
     ReviewStatus,
     RuleOutcome,
@@ -43,6 +51,7 @@ from backend.contracts.records import BankAccount, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import document_pointer
+from backend.services.party_names import party_name_key
 from backend.services.staleness import current_results
 
 
@@ -111,16 +120,17 @@ __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "i
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
-    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05) 与分录例外归因 (GEN-02), 产出例外与判断.
+    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02) 与关联方图谱研判 (GEN-03),
+    产出例外与判断.
 
-    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02) 共用判断公共流程 (agents/judging.py),
-    各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
+    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03) 共用判断公共流程
+    (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
-    # 负责的程序 (GEN-05, GEN-02 属功能 journals, 未启用时注册表不映射)
+    # 负责的程序 (GEN-05, GEN-02 属功能 journals, GEN-03 属 related_parties, 未启用时注册表不映射)
     procedures: ClassVar[frozenset[str]] = frozenset(
-        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02"}
+        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02", "GEN-03"}
     )
 
     def __init__(self, deps: AgentDeps) -> None:
@@ -131,14 +141,15 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             "REV-03": self.rev03_subjects,
             "REV-02": self.rev02_subjects,
             "GEN-02": self.gen02_subjects,
+            "GEN-03": self.gen03_subjects,
         }
 
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
         """程序编号对应的 (执行, 解读). 没有登记的程序抛 NotImplementedError."""
         handlers: dict[str, tuple[Execute, Interpret]] = {
-            "REV-08": (self.run_rules, self.rule_exceptions),
-            "CSH-05": (self.run_rules, self.rule_exceptions),
-            "GEN-05": (self.run_rules, self.rule_exceptions),
+            "REV-08": (functools.partial(run_rules, self.deps), rule_patch),  # 纯规则程序 (同 A5 的 GEN-07)
+            "CSH-05": (functools.partial(run_rules, self.deps), rule_patch),
+            "GEN-05": (functools.partial(run_rules, self.deps), rule_patch),
             "CSH-02": (self.assess_confirmations, self.cash_patch),
         }
         handlers |= {pid: (self.judge_subjects, self.judgments_patch) for pid in self.subject_sources}
@@ -153,17 +164,6 @@ class FieldworkAgent(ProcedureAgent[Findings]):
     async def interpret(self, ctx: RunContext, findings: Findings) -> StatePatch:
         _, interpret = self.handler(ctx.procedure.id)
         return interpret(ctx, findings)
-
-    async def run_rules(self, ctx: RunContext) -> RuleResult:
-        """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理."""
-        return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
-
-    def rule_exceptions(self, ctx: RunContext, findings: Findings) -> StatePatch:
-        """纯规则程序 (REV-08, CSH-05, GEN-05): 例外原样返回, 不作判断, 不建复核任务; 由之后的判断程序归因. 没有
-        执行的规则 (执行前检查命中, 需求 R130) 记进执行记录终态的 rule_outcomes."""
-        assert isinstance(findings, RuleResult)
-        run = finish_run(ctx.run, datetime.now(UTC), findings.outcomes)
-        return {"exceptions": list(findings.exceptions), "procedure_runs": [run]}
 
     async def judge_subjects(self, ctx: RunContext) -> JudgedRun:
         """判断程序的执行: 取判断对象 (rerun 时只留 rerun_subject_ids 中的, 已交人处理的不再重判), 并发逐个交判断引擎.
@@ -197,6 +197,17 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             subjects.append(Subject(contract.id, data))
         return Subjects(subjects)
 
+    async def related_documents(self, eid: str, related_id: str) -> list[dict[str, Any]]:
+        """关联对象含 related_id 的已登记文件 (FinancialDataStore.documents(related_id=...) 的顺序), 每项为 {document
+        (DocumentRef, JSON 形式), pages (EvidenceStore.pages, 下标 0 为第 1 页)}; GEN-02, GEN-03 共用. 登记摘录
+        (registry_extract) 不给 (需求 R310): 摘录页印有人员的出生日期, 人员检索的文件名带 yyyymmdd, 判断引擎的遮蔽
+        只认人员节点 ID 与 birth_date 字段, 管不到页面文字."""
+        return [
+            {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
+            for d in await self.deps.financial_store.documents(eid, related_id=related_id)
+            if d.type is not DocumentType.registry_extract
+        ]
+
     async def registered_documents(self, ctx: RunContext) -> dict[str, DocumentRef]:
         """文件登记, 以存储 (FinancialDataStore.documents) 的当前登记为准: 可靠性, 文件日期与关联对象是文件登记的属性,
         审计师补登记后 (需求 R90) 过期重跑用的就是新登记, 不用编排状态里的旧副本; 存储里没有而状态里有的才取状态.
@@ -217,7 +228,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         发票, 发票指向的分录行, 合同或合同文件查不到抛 LookupError.
         """
         eid = ctx.engagement.id
-        rules = await self.run_rules(ctx)
+        rules = await run_rules(self.deps, ctx)
         earlier = set(ctx.template.depends_on)
         open_findings = sorted(
             (
@@ -282,6 +293,124 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             found[invoice_id] = (invoice, record)
         return found
 
+    async def gen03_subjects(self, ctx: RunContext) -> Subjects:
+        """GEN-03 的判断对象: 关系图 (GEN-08) 中报告主体以外的公司节点, 按节点 ID 排序; 先按 in_scope 筛选, 再取数据.
+        状态中没有关系图抛 LookupError.
+
+        规则 C01, C02 的参数为参数快照加 party_names, party_acns (各对象节点的名称与 ACN, 一一对应), 不写回快照. data 见
+        gen03_data; 规则例外为前置程序在该节点上尚未归因的例外 (只看当前结果, 按 ID 排序); 对象带本项目采用的那版
+        客户画像 (需求 R128, 查不到抛 LookupError), 推理链可引用它.
+        """
+        graph = ctx.state["ownership_graph"]
+        if graph is None:
+            raise LookupError("GEN-03: 状态中没有关系图 (GEN-08 未执行)")
+        companies = sorted(
+            (
+                n
+                for n in graph.nodes
+                if n.kind == "company" and n.id != graph.reporting_entity_id and in_scope(ctx, n.id)
+            ),
+            key=lambda n: n.id,
+        )
+        if not companies:
+            return Subjects()
+        eid = ctx.engagement.id
+        parties = {"party_names": [n.name for n in companies], "party_acns": [n.acn for n in companies]}
+        rules = await self.deps.rules.run(eid, ctx.template, ctx.run, {**ctx.run.params_snapshot, **parties})
+        profile = await client_profile(self.deps, ctx.engagement, ctx.state["client_profile_version"])
+        contracts = sorted(await self.deps.financial_store.contracts(eid), key=lambda c: c.id)
+        documents = await self.registered_documents(ctx) if contracts else {}
+        earlier = set(ctx.template.depends_on)
+        open_findings = sorted(
+            (
+                x
+                for x in current_results(ctx.state).exceptions
+                if x.procedure_id in earlier and x.disposition is not ExceptionDisposition.attributed
+            ),
+            key=lambda x: x.id,
+        )
+        subjects = []
+        for node in companies:
+            data = await self.gen03_data(ctx, graph, node, rules, profile, contracts, documents)
+            findings = [x for x in open_findings if node.id in x.source_ids]
+            subjects.append(Subject(node.id, data, findings, client_profile=profile))
+        return Subjects(subjects, rules.outcomes)
+
+    async def gen03_data(
+        self,
+        ctx: RunContext,
+        graph: OwnershipGraph,
+        node: PartyNode,
+        rules: RuleResult,
+        profile: ClientProfile,
+        contracts: Sequence[Contract],
+        documents: Mapping[str, DocumentRef],
+    ) -> dict[str, Any]:
+        """一个公司节点的 data, 字段按 GEN-03.md.j2 头注释 (均为 JSON 形式). 名称键为节点名称经 party_name_key (去
+        entity_suffixes, 同规则 SQL), 规则 C01 中 party_key 等于它的行归本节点 (record 展开, 带 source_type).
+
+        - links: 一端为本节点的关系 (关系图的顺序); persons: 这些关系另一端的人员 (按 ID), 带该人与报告主体之间的关系
+          (links_with_entity, 写法同 links, 带报告主体摘录那一行的证据指针), 不带出生日期; 人员节点 ID 的出生日期在
+          渲染前由判断引擎遮蔽.
+        - declared: 画像申报清单中与本节点匹配的一项 (ownership.declared, 同 GEN-08 R01 的口径), 没有为 null.
+        - equity_entries: 本节点直接持有报告主体股份时为规则 C02 的行, 否则为 [].
+        - contracts: 对方 ABN (去非数字) 的末 9 位等于节点 ACN, 或对方名称的键等于名称键的合同 (按合同编号), 带合同
+          文件的登记 (见 registered_documents, 未登记抛 LookupError).
+        - documents: 关联对象含本节点的文件, 带各页文字 (related_documents, 不给登记摘录; 摘录的内容已在关系图里).
+        - reporting_entity, client_profile: 报告主体节点的 ID 与名称; 画像的 ID (client_profile 指针用) 与适用框架.
+        """
+        eid = ctx.engagement.id
+        suffixes = list(ctx.run.params_snapshot["entity_suffixes"])
+        key = party_name_key(node.name, (), suffixes)
+        entity = graph.reporting_entity_id
+        nodes = {n.id: n for n in graph.nodes}
+        links = [x for x in graph.links if node.id in (x.from_id, x.to_id)]
+        persons = [
+            {
+                "id": person,
+                "name": nodes[person].name,
+                "links_with_entity": [
+                    x.model_dump(mode="json") for x in graph.links if x.from_id == person and x.to_id == entity
+                ],
+            }
+            for person in sorted({x.from_id for x in links if nodes[x.from_id].kind == "person"})
+        ]
+        mine = [r for r in rules.rows.get("C01", []) if r["party_key"] == key]
+
+        def rows(source_type: str) -> list[dict[str, Any]]:
+            return [{"source_type": source_type, **r["record"]} for r in mine if r["source_type"] == source_type]
+
+        holds = any(x.from_id == node.id and x.to_id == entity and x.relation == "shareholder" for x in graph.links)
+        equity = JSON_ROWS.dump_python(rules.rows.get("C02", []), mode="json") if holds else []
+        own: list[dict[str, Any]] = []
+        for contract in contracts:
+            abn = "".join(c for c in contract.counterparty_abn or "" if c.isdigit())
+            same_name = key is not None and party_name_key(contract.counterparty, (), suffixes) == key
+            if not (node.acn is not None and abn[-9:] == node.acn) and not same_name:
+                continue
+            document = documents.get(contract.document_id)
+            if document is None:
+                raise LookupError(f"合同 {contract.id} 的文件 {contract.document_id} 未登记")
+            own.append({"contract": contract.model_dump(mode="json"), "document": document.model_dump(mode="json")})
+        related = await self.related_documents(eid, node.id)
+        found = declared(profile, node.name, node.acn, suffixes)
+        return {
+            "entity": {"name": node.name, "acn": node.acn},
+            "reporting_entity": {"id": entity, "name": nodes[entity].name},
+            "client_profile": {"id": profile.id, "applicable_framework": profile.applicable_framework},
+            "links": [x.model_dump(mode="json") for x in links],
+            "persons": persons,
+            "declared": found.model_dump(mode="json") if found is not None else None,
+            "transactions": {
+                "entries": rows("journal_entry"),
+                "bank_lines": rows("bank_transaction"),
+                "invoices": rows("sales_invoice"),
+            },
+            "equity_entries": equity,
+            "contracts": own,
+            "documents": related,
+        }
+
     async def invoice_journal_lines(
         self, eid: str, invoices: Sequence[SalesInvoice]
     ) -> dict[str, list[dict[str, Any]]]:
@@ -345,7 +474,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         (detail_invoices, 按 ID), 每张为 invoice_records 的 invoice 与 delivery_notes; contracts 为这些发票所挂的合同
         与其文件登记 (invoice_records 的 contract 与 document), 按文件 ID 去重, 按合同编号排序, 同一份合同只送一次,
         发票以 contract_id 引用; related_findings 为 detail 指向本凭证的其他 GEN-05 例外 (按 ID; 已归因的也算);
-        documents 为关联对象含本凭证号的文件登记与各页文字 (EvidenceStore.pages, 整份送出, 暂不设页数上限);
+        documents 为关联对象含本凭证号的文件登记与各页文字 (related_documents, 整份送出, 暂不设页数上限);
         fraud_risks 为风险清单中 fraud_related 为真的全部风险. 本凭证, 相关凭证或 detail 所指的分录行查不到抛
         LookupError, 发票与合同同 invoice_records. 没有规则 SQL, 不经规则引擎.
         """
@@ -409,10 +538,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
                 )
             touched = {line.account_code for line in own} & cash
             linked = [a for a in bank_accounts if a.gl_account_code in touched]
-            documents = [
-                {"document": d.model_dump(mode="json"), "pages": await self.deps.evidence_store.pages(eid, d.id)}
-                for d in await store.documents(eid, related_id=no)
-            ]
+            documents = await self.related_documents(eid, no)
             records = [invoices[i][1] for i in sorted({i for x in groups[no] for i in detail_invoices(x.detail)})]
             contracts: dict[str, dict[str, Any]] = {}  # 文件 ID -> {contract, document}, 同一份合同只送一次
             for record in records:
@@ -486,7 +612,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         判断对象为有 D01 或 D04 的账户 (按账户 ID, 每个账户一次), 候选调节项取规则 D02, D03 的行 (按账户切分).
         """
         eid = ctx.engagement.id
-        rules = await self.run_rules(ctx)
+        rules = await run_rules(self.deps, ctx)
         accounts = {a.id: a for a in await self.deps.financial_store.bank_accounts(eid)}
         books = {r.account_code: r.balance_cents for r in await self.deps.financial_store.trial_balance(eid, "current")}
         legacy = await legacy_accounts(self.deps, eid, accounts.values())

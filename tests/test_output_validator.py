@@ -19,6 +19,8 @@ from backend.contracts.llm_outputs import (
     DocumentClassification,
     ExtractedTerm,
     JudgmentDraft,
+    MisstatementClassificationDraft,
+    MisstatementNature,
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
@@ -30,10 +32,14 @@ from backend.contracts.models import (
     Decision,
     DocumentRef,
     DocumentType,
+    EqrRecommendation,
     EvidencePointer,
     EvidenceType,
     Judgment,
+    Milestone,
+    MisstatementType,
     OpinionType,
+    ProcedureNote,
     ProposedAction,
     ReasoningStep,
     ReceiptChannel,
@@ -47,15 +53,17 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.ports import LLMResponse
-from backend.contracts.records import JournalEntry, SalesInvoice
+from backend.contracts.records import Account, JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentContext, ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
+    PLAN_REQUIRED_SECTIONS,
     CheckResult,
     JudgmentEngine,
     OutputValidator,
+    check_plan,
     citation_keys,
     judgment_key,
     output_model,
@@ -78,7 +86,8 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
-from tests.xero_fakes import xero_profile
+from tests.fixture_sets import XERO
+from tests.xero_fakes import xero_financial_store, xero_profile
 
 EID = ENGAGEMENT.id
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
@@ -197,8 +206,8 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
 
 
 # 模板已引用而引用与语义校验还没实现的输出模型 → 实现它的需求. 这些模型的程序还没有 Agent 执行 (不在启用集与
-# 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着)
-PENDING_CHECKS: dict[type[BaseModel], str] = {AuditPlanDraft: "R204"}
+# 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着). AuditPlanDraft 已由需求 R204 登记
+PENDING_CHECKS: dict[type[BaseModel], str] = {}
 
 
 def test_every_referenced_output_model_is_registered() -> None:
@@ -220,11 +229,13 @@ def test_pending_checks_are_not_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 10 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
-    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290). AuditPlanDraft 在
-    待实现表中 (R204)."""
+    """现有 11 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
+    StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
+    check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157)."""
     assert set(OutputValidator.CHECKS) == {
+        AuditPlanDraft,
         JudgmentDraft,
+        MisstatementClassificationDraft,
         ContractExtraction,
         ConfirmationExtraction,
         RegistryExtraction,
@@ -238,6 +249,7 @@ def test_dispatch_table_covers_existing_models() -> None:
     assert OutputValidator.CHECKS[DocumentClassification] is structure_only
     assert OutputValidator.CHECKS[SheetRecognition] is structure_only
     assert OutputValidator.CHECKS[StatementsExtraction] is structure_only
+    assert OutputValidator.CHECKS[AuditPlanDraft] is check_plan
 
 
 class ProbeOut(BaseModel):
@@ -789,6 +801,24 @@ async def test_misstatement_amount_from_rows_or_their_difference(amount: int, pa
     assert (report.level_failed is None) is passes
 
 
+SALES = Account(code="200", name="Sales", type="revenue", category="revenue", category_basis="name")  # Xero 科目表一行
+
+
+@pytest.mark.parametrize(("code", "passes"), [("200", True), (None, True), ("9999", False)])
+async def test_misstatement_account_code_must_be_in_the_chart(code: str | None, passes: bool) -> None:
+    """R156 验收 9: REV-02 草稿带科目表有的 account_code 200 通过; 9999 → 引用级失败, 不重试; 不带代码不查 (现有
+    fixture 照旧). GEN-02 XJ-499 的 Xero fixture (710) 经真实科目表通过见 test_fieldwork_gen02."""
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=[SALES])
+    validator = OutputValidator(financial, LIBRARY, FakeTrail())
+    draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": code}))
+    report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
+    if passes:
+        assert report.level_failed is None and report.output.misstatement_draft.account_code == code
+    else:
+        error = f"错报草稿的科目代码 {code} 不在本项目科目表中"
+        assert (report.level_failed, report.retryable, report.errors) == ("reference", False, [error])
+
+
 # ── 独立复核第一轮的错报草稿 (R150, 只记不判失败) ──
 
 GEN09 = LIBRARY.load("GEN-09")
@@ -1244,6 +1274,123 @@ def test_citation_keys_must_be_unique() -> None:
     assert judgment_key(odd) == "REV-02:SI-2026-0612:J-CUSTOM"
 
 
+# ── 计划叙述 (PLN-15, 需求 R204) ─────────────────────────────────────────
+
+PLN15 = LIBRARY.load("PLN-15")  # 功能 planning, 程序库缺省不启用; load 照样取得
+PLAN_PROCEDURES = ["CSH-02", "CSH-04", "CSH-05", "DOC-06", "REV-02", "REV-03", "REV-08"]  # Xero 装配后的 P2 程序
+PLAN_END = date(2026, 9, 30)
+PLAN_SECTIONS = {name: f"The {name} of the audit." for name in PLAN_REQUIRED_SECTIONS}
+
+
+def plan_notes(*ids: str) -> list[ProcedureNote]:
+    return [ProcedureNote(procedure_id=p, nature_timing_extent=f"{p} at fieldwork.") for p in ids]
+
+
+def plan_draft(**changes: Any) -> AuditPlanDraft:
+    """合格的计划叙述: 四个必备段, 7 条程序各一条说明, 时间表最早一项恰为期末 (不早于期末即可)."""
+    draft = AuditPlanDraft(
+        overall_strategy="A substantive audit of the shortened financial year.",
+        sections=PLAN_SECTIONS,
+        procedure_notes=plan_notes(*PLAN_PROCEDURES),
+        timetable=[
+            Milestone(milestone="Period end", due=PLAN_END),
+            Milestone(milestone="Auditor's report dated", due=date(2026, 10, 23)),
+        ],
+        eqr_recommendation=EqrRecommendation(required=False, basis="Not listed and not required by law."),
+        expert_assessment="No auditor's expert is needed.",
+        standards_cited=["ASA300-P07", "ASQM1-P34f"],
+    )
+    return draft.model_copy(update=changes)
+
+
+async def check_plan_draft(draft: AuditPlanDraft, ctx: ValidationContext | None = None) -> Any:
+    validator, _ = make_validator()
+    context = ctx or ValidationContext(
+        standards_of="PLN-15", expected_procedure_ids=PLAN_PROCEDURES, period_end=PLAN_END
+    )
+    return await validator.validate(EID, PLN15, respond(draft), context)
+
+
+async def test_plan_draft_passes() -> None:
+    """合格的叙述通过 (时间表等于期末的一项不算早于期末). Xero 的固定输出正本经 A4 校验通过, 见
+    test_risk_assessor.test_pln15_xero_fixture_passes_once."""
+    report = await check_plan_draft(plan_draft())
+    assert (report.level_failed, report.errors, report.output) == (None, [], plan_draft())
+
+
+PLAN_MISSING = "procedure_notes 缺计划的程序: CSH-02"
+PLAN_OUTSIDE = "standards_cited 含模板 standards 以外的片段: ASA315-P12"
+PLAN_NO_BASIS = "eqr_recommendation.basis 为空, 须写依据 (ASQM 1 第 34(f) 段)"
+PLAN_EARLY = [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]
+
+
+@pytest.mark.parametrize(
+    ("changes", "level", "errors"),
+    [
+        ({"procedure_notes": plan_notes(*PLAN_PROCEDURES[1:])}, "semantic", [PLAN_MISSING]),
+        (
+            {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-05")},
+            "semantic",
+            ["procedure_notes 有计划以外的程序: REV-05"],
+        ),
+        (
+            {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-02")},
+            "semantic",
+            ["procedure_notes 的程序重复: REV-02"],
+        ),
+        ({"standards_cited": ["ASA300-P07", "ASA315-P12"]}, "reference", [PLAN_OUTSIDE]),
+        ({"timetable": PLAN_EARLY}, "semantic", ["时间表早于期末 2026-09-30: Planning meeting (2026-09-29)"]),
+        *[
+            (
+                {"sections": {k: v for k, v in PLAN_SECTIONS.items() if k != name}},
+                "semantic",
+                [f"sections 缺必备的段: {name}"],
+            )
+            for name in PLAN_REQUIRED_SECTIONS
+        ],
+        ({"sections": PLAN_SECTIONS | {"timing": "  "}}, "semantic", ["sections 缺必备的段: timing"]),
+        (
+            {"sections": PLAN_SECTIONS | {"overall_strategy": "again"}},
+            "semantic",
+            ["sections 不能含 overall_strategy (总体策略另有字段)"],
+        ),
+        ({"eqr_recommendation": EqrRecommendation(required=False, basis=" ")}, "semantic", [PLAN_NO_BASIS]),
+        # 语义级的问题一并列出; 引用失败即返回, 不再查语义
+        (
+            {
+                "procedure_notes": plan_notes(*PLAN_PROCEDURES[1:]),
+                "eqr_recommendation": EqrRecommendation(required=False, basis=""),
+            },
+            "semantic",
+            [PLAN_MISSING, PLAN_NO_BASIS],
+        ),
+        ({"standards_cited": ["ASA315-P12"], "timetable": PLAN_EARLY}, "reference", [PLAN_OUTSIDE]),
+    ],
+)
+async def test_plan_draft_failures(changes: dict[str, Any], level: str, errors: list[str]) -> None:
+    """验收 4: 程序说明与计划的程序不等 (缺, 多, 重复), 时间表早于期末, 缺必备段 (或只有空白), 段里重复总体策略,
+    项目质量复核建议没写依据 → semantic, 几项一并列出; 引用模板 standards 以外的片段 → reference, 不再查语义. 都不可
+    重试."""
+    report = await check_plan_draft(plan_draft(**changes))
+    assert (report.level_failed, report.errors, report.retryable) == (level, errors, False)
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        ValidationContext(standards_of="PLN-15"),
+        ValidationContext(standards_of="PLN-15", expected_procedure_ids=PLAN_PROCEDURES),
+        ValidationContext(standards_of="PLN-15", period_end=PLAN_END),
+        ValidationContext(standards_of=None, expected_procedure_ids=PLAN_PROCEDURES, period_end=PLAN_END),
+    ],
+)
+async def test_plan_check_requires_its_context(ctx: ValidationContext) -> None:
+    """验收 7: 计划叙述的校验须有模板 (standards_of), 计划的程序 (expected_procedure_ids) 与期末 (period_end), 缺一
+    即 ValueError, 不静默放过."""
+    with pytest.raises(ValueError):
+        await check_plan_draft(plan_draft(), ctx)
+
+
 # ── R216: 待审财报的行作证据. 端口与真实取行由 R217 实现, 这里用预置 XERO_FS_V1 各行的最小假存储 ──
 
 
@@ -1273,3 +1420,154 @@ async def test_financial_statement_line_pointer(code: str, reason: str | None) -
     else:
         assert report.unsupported_steps == [1] and len(report.errors) == 1 and reason in report.errors[0]
     assert ("financial_statement_line", code) in financial.record_calls
+
+
+# ── FIN-03 错报分类 (需求 R157) ──
+
+FIN03 = LIBRARY.load("FIN-03")
+REGISTER = "documents/evidence/fixed_asset_register.pdf"
+PAYROLL = "documents/evidence/payroll_register_terms.pdf"
+BA091_REPLY = "confirmations/12345679.pdf"
+STANDARDS_ANY = ValidationContext(standards_of=None)
+
+
+def classified(type_: MisstatementType, fraud: bool, reason: str | None) -> MisstatementClassificationDraft:
+    """REV-02 跨期草稿 (Numbat 的指针) 加错报性质, 只用来看性质的语义级."""
+    nature = MisstatementNature(type=type_, fraud_indicative=fraud, fraud_reason=reason)
+    return MisstatementClassificationDraft(**cutoff_draft().model_dump(), nature=nature)
+
+
+async def check_fin03(output: Any) -> Any:
+    """FIN-03 模板下校验 (Numbat 的假财务存储, 准则片段不按程序核对)."""
+    validator, _ = make_validator()
+    return await validator.validate(EID, FIN03, respond(output), STANDARDS_ANY)
+
+
+@pytest.mark.parametrize(
+    ("type_", "fraud", "reason", "error"),
+    [
+        (MisstatementType.factual, False, None, None),
+        (MisstatementType.judgmental, True, "Entry reverses a recorded sale.", None),
+        (MisstatementType.projected, False, None, "错报类型不能为 projected: 本系统不做审计抽样, 没有推断错报"),
+        (MisstatementType.factual, True, None, "有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)"),
+        (MisstatementType.factual, True, "  ", "有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)"),
+    ],
+)
+async def test_classification_nature_semantics(
+    type_: MisstatementType, fraud: bool, reason: str | None, error: str | None
+) -> None:
+    """R157 验收 3: 分类草稿同判断草稿各级之外, 语义级另查性质: 类型为 projected (不做审计抽样), 或有舞弊迹象而理由
+    为空 (含全空白), 判 semantic, 不重试; 其余通过, 输出仍是分类草稿."""
+    report = await check_fin03(classified(type_, fraud, reason))
+    if error is None:
+        assert report.level_failed is None and isinstance(report.output, MisstatementClassificationDraft)
+    else:
+        assert (report.level_failed, report.retryable, report.errors) == ("semantic", False, [error])
+
+
+async def test_classification_reference_failure_comes_before_nature() -> None:
+    """引用级不过 (没有能解析的指针) 时报引用级, 不再看性质."""
+    bad = EvidencePointer(type=EvidenceType.voucher, source_type="sales_invoice", source_id="SI-NONE", locator="x")
+    draft = classified(MisstatementType.projected, False, None)
+    steps = [step.model_copy(update={"evidence": [bad] if step.evidence else []}) for step in draft.reasoning_chain]
+    draft = draft.model_copy(update={"reasoning_chain": steps, "evidence": [bad]})
+    report = await check_fin03(draft)
+    assert report.level_failed == "reference" and not any("projected" in e for e in report.errors)
+
+
+def fin03_fixture(name: str) -> str:
+    return (XERO.fixtures / "FIN-03" / f"{name}.json").read_text(encoding="utf-8")
+
+
+def xero_validator() -> OutputValidator:
+    """Xero 演示导入之后的假财务存储 (行与 fieldwork 阶段上传的文件), 另登记 BA-091 的回函 (CSH-04 存档)."""
+    financial = xero_financial_store()
+    financial.document_refs.append(xero_document(BA091_REPLY))
+    return OutputValidator(financial, LIBRARY, FakeTrail())
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("name", "type_", "facts", "keyword"),
+    [
+        (
+            "XJ-499",
+            MisstatementType.factual,
+            {("journal_entry", f"XJ-499-{n}", None) for n in (1, 2, 3)} | {("document", REGISTER, 1)},
+            "manual journal posted without independent review: control deficiency lead",
+        ),
+        (
+            "BA-091",
+            MisstatementType.factual,
+            {("trial_balance", "091", None), ("document", BA091_REPLY, 1)},
+            "AUD 48.53",
+        ),
+        ("826", MisstatementType.factual, {("trial_balance", "477", None), ("document", PAYROLL, 1)}, "AUD 4,261.20"),
+        ("804", MisstatementType.factual, {("trial_balance", "477", None), ("document", PAYROLL, 1)}, "AUD 2,010.00"),
+        (
+            "805",
+            MisstatementType.judgmental,
+            {("trial_balance", "477", None), ("document", PAYROLL, 1)},
+            "AUD 2,687.36",
+        ),
+    ],
+)
+async def test_fin03_xero_fixtures_pass_four_levels(
+    name: str, type_: MisstatementType, facts: set[tuple[str, str, int | None]], keyword: str
+) -> None:
+    """R157 验收 5, 6: Xero 5 份 fixture (fixture_key 为来源判断的对象) 经四级校验 (假财务存储的 Xero 行与登记的文件,
+    准则片段按 FIN-03 的 standards) 一次通过: 都是 accept, 置信 0.85, 没有舞弊迹象, 类型与 fact 指针如表 (文件按补造路径
+    对应文件 ID), standard 指针为 ASA450-A6 与 ASA240-P36, 结论含该错报的要点."""
+    report = await xero_validator().validate(
+        EID, FIN03, respond(None, fin03_fixture(name)), ValidationContext(standards_of="FIN-03")
+    )
+    assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
+    draft = report.output
+    assert isinstance(draft, MisstatementClassificationDraft)
+    assert (draft.proposed_action, draft.self_confidence) == (ProposedAction.accept, 0.85)
+    assert draft.misstatement_draft is None
+    assert draft.nature == MisstatementNature(type=type_, fraud_indicative=False, fraud_reason=None)
+    ids = {xero_document(path).id: path for path in (REGISTER, PAYROLL, BA091_REPLY)}
+    cited = {
+        (p.source_type, ids.get(p.source_id, p.source_id), p.page)
+        for step in draft.reasoning_chain
+        if step.kind is StepKind.fact
+        for p in step.evidence
+    }
+    assert cited == facts
+    standards = {p.source_id for step in draft.reasoning_chain if step.kind is StepKind.standard for p in step.evidence}
+    assert standards == {"ASA450-A6", "ASA240-P36"}
+    assert keyword in draft.conclusion and "current period" in draft.conclusion
+
+
+@pytest.mark.external
+async def test_fin03_judge_returns_the_classification_draft() -> None:
+    """R157 验收 4, 6: judge 带回通过校验的草稿 (JudgmentOutcome.draft, 即分类草稿, 判断之外的性质由调用方取, 序列化
+    时也在); 提示词按 judge 给的顶层变量渲染 (data 的各列表为空; 按头注释给齐时的渲染见 test_knowledge). XJ-499 改为
+    有舞弊迹象而理由为空: 判 semantic, 只调 1 次, judgment 与 draft 都为空, 失败类型 unattributed (混合程序)."""
+    good = fin03_fixture("XJ-499")
+    fraud = json.loads(good)
+    fraud["nature"]["fraud_indicative"] = True
+    llm = ScriptedLLM({"XJ-499": [good, json.dumps(fraud)]})
+    trail = FakeTrail()
+    engine = JudgmentEngine(llm, xero_validator(), trail, LIBRARY)
+    misstatement = {"id": "M-D-XJ499", "version": 1, "judgment_id": "J-GEN-02-1-XJ-499", "type": "factual"}
+    source = {"id": "J-GEN-02-1-XJ-499", "procedure_id": "GEN-02", "subject_id": "XJ-499", "conclusion": "No basis."}
+    data = {
+        "misstatement": misstatement,
+        "source_judgment": source,
+        "journal_lines": [],
+        "cited_rows": [],
+        "documents": [],
+        "fraud_risks": [],
+    }
+    jctx = JudgmentContext(subject_id="M-D-XJ499", task={"params": {}, "risks": []}, data=data, fixture_key="XJ-499")
+    passed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
+    assert passed.judgment is not None and passed.judgment.id == "J-FIN-03-1-M-D-XJ499"
+    assert isinstance(passed.draft, MisstatementClassificationDraft)
+    assert passed.draft.nature.type is MisstatementType.factual
+    assert passed.model_dump(mode="json")["draft"]["nature"]["type"] == "factual"  # 序列化不丢性质 (审核 R157-05)
+    assert passed.draft.evidence == passed.judgment.evidence  # 指针已按来源改写, 同判断
+    failed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
+    assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (None, None, "unattributed", 1)
+    assert trail.entries[-1].payload["level_failed"] == "semantic"

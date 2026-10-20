@@ -293,6 +293,8 @@ export const en = {
         'Preliminary analysis is done. Choose materiality and confirm the risk register; the procedure pack is assembled from your decision.',
       'FIN-01': (count: number, total: string, skipped: number) =>
         `Fieldwork is complete. ${count} misstatement${count === 1 ? '' : 's'} recorded, ${total} uncorrected in total.${skipped ? ` ${skipped} procedure${skipped === 1 ? ' was' : 's were'} not performed because the client has no such data.` : ''} Confirm the opinion type.`,
+      'PLN-15': (revision: number) =>
+        `Revision ${revision} of the overall audit plan is ready. Approve it to start fieldwork, or send it back.`,
       'RPT-01': (revision: number) => `Report revision ${revision} is ready. Sign it, or return it with comments.`,
     },
     reviewIntro: (total: number, tier: string) =>

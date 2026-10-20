@@ -23,8 +23,9 @@ GEN-02 分录例外归因 → JudgmentDraft，每笔有 GEN-05 尚未归因例�
   data.contracts          这些发票所挂的合同，按文件 ID 去重（同一份合同只列一次），按合同编号排序，每项为
                           {contract, document}：contract 为 DOC-04 抽取的 Contract，document 为合同 PDF 的 DocumentRef
   data.related_findings   detail 指向本凭证的其他 GEN-05 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
-  data.documents          关联对象含本凭证号的已登记文件，每项为 {document, pages}：document 为 DocumentRef（id、type、
-                          file_name、page_count、reliability、document_date），pages 为各页文字（第 1 页在前；整份送出，暂不设页数上限）
+  data.documents          关联对象含本凭证号的已登记文件（登记摘录除外，需求 R310），每项为 {document, pages}：document
+                          为 DocumentRef（id、type、file_name、page_count、reliability、document_date），pages 为各页文字
+                          （第 1 页在前；整份送出，暂不设页数上限）
   data.fraud_risks        风险清单中 fraud_related 为真的全部 RiskItem：id、assertion、level、description
   rule_findings           本凭证上 GEN-05 尚未归因的 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
   standards               StandardFragment 列表：id、standard、paragraph、text

@@ -12,16 +12,20 @@ from backend.agents.registry import AGENT_CLASSES
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
+    Assertion,
     AuditException,
     AuditReportVersion,
     AutonomyLevel,
     CheckItem,
     CheckItemStatus,
     ComplianceCheck,
+    Direction,
     DocumentRef,
     DocumentType,
     ExceptionDisposition,
     Judgment,
+    Misstatement,
+    MisstatementType,
     OpinionType,
     Phase,
     PlanStatus,
@@ -34,6 +38,7 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TaskStatus,
+    UncorrectedSchedule,
 )
 from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
@@ -224,6 +229,7 @@ def test_agent_fields_match_section_6_table() -> None:
         "representation_letter",  # 需求 R215
     }
     assert AGENT_FIELDS[AgentId.A6] == {"exceptions", "judgments", "review_tasks", "confirmations"}
+    assert AGENT_FIELDS[AgentId.A8] == {"judgments", "review_tasks", "misstatements"}  # 需求 R156
     # 需求 R215: A9 加合规检查与其例外, 任务; A10 加治理层沟通与独立性声明
     assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}
     assert AGENT_FIELDS[AgentId.A10] == {
@@ -455,8 +461,13 @@ def test_completion_records_come_from_their_writer_and_this_run(
         check_patch(patch(stale), outputs=[field], **common)
 
 
+PENDING_AGENTS = {AgentId.A8}  # 只登记了写入归属, 还没有 Agent 类 (错报闭环首个程序落地时删去; 需求 R156)
+
+
 def test_every_registered_agent_has_field_table() -> None:
-    assert {cls.agent_id for cls in AGENT_CLASSES} == set(AGENT_FIELDS)
+    registered = {cls.agent_id for cls in AGENT_CLASSES}
+    assert registered <= AGENT_FIELDS.keys()
+    assert AGENT_FIELDS.keys() - registered == PENDING_AGENTS
 
 
 def test_field_type_follows_state_annotations() -> None:
@@ -933,11 +944,13 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 23 条模板 (含功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, acceptance 的 ACC-08 与
-    planning 的 PLN-15) 的 outputs 都在 owner 的写入范围内且登记了取回方式; 每个可由 Agent 写的字段都登记了取回方式,
-    登记的都是状态字段; 两条以上程序声明的共享字段都不是 singleton."""
+    """R85 验收 1-3: 全部模板 (含未启用的) 的 outputs 都在 owner 的写入范围内且登记了取回方式, 其中包含下列 25 条 (含
+    功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, GEN-03, acceptance 的 ACC-08, planning 的 PLN-15 与
+    misstatement 的 FIN-03); 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序声明的共享
+    字段都不是 singleton."""
     assert output_problems(LIBRARY) == []
-    assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)} == {
+    # 集合包含 (X-01): 之后新加的模板 (如 GEN-07, 需求 R177) 由各自的用例核对 outputs
+    assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)}.items() >= {
         "ACC-01": [],
         "ACC-04": ["acceptance_scorecard", "exceptions"],
         "ACC-08": ["engagement_terms", "judgments", "exceptions", "documents"],
@@ -947,8 +960,10 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "DOC-04": ["documents", "review_tasks"],
         "DOC-06": ["documents", "confirmations", "review_tasks"],
         "FIN-01": [],
+        "FIN-03": ["judgments", "review_tasks", "misstatements"],  # 需求 R157, 功能 misstatement
         "FIN-04": ["uncorrected_schedule"],
         "GEN-02": ["judgments", "exceptions", "review_tasks"],
+        "GEN-03": ["judgments", "exceptions", "review_tasks"],  # 需求 R139
         "GEN-05": ["exceptions"],
         "GEN-08": ["ownership_graph", "exceptions", "documents"],  # 需求 R137
         "GEN-09": [],
@@ -961,7 +976,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "REV-08": ["exceptions"],
         "RPT-01": [],
         "RPT-03": ["report_versions", "review_tasks"],
-    }
+    }.items()
     assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
         "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],
         "CSH-04": [DocumentType.confirmation],
@@ -1058,3 +1073,60 @@ async def test_a1_failure_patch_not_limited_by_outputs() -> None:
     assert writer is AgentId.A1
     [failed] = patch["review_tasks"]
     assert (failed.kind, failed.procedure_id) == (TaskKind.failed, "REV-08")
+
+
+# ── 需求 R156: A8 的写入归属 ──
+
+
+def a8_patch() -> tuple[StatePatch, ProcedureRun, EngagementState]:
+    """A8 执行 FIN-03 (错报分类) 的片段: 一条判断与它的复核任务, BA-091 错报的新版本 (已分类), 本次执行成功."""
+    run = make_run("FIN-03")
+    classified = judgment("J-FIN-03-1-M-D-CSH02-091", "FIN-03", run.id)
+    review = task(classified.id, run_id=run.id).model_copy(update={"procedure_id": "FIN-03"})
+    misstatement = Misstatement(
+        id="M-D-CSH02-091",
+        version=2,
+        judgment_id="J-CSH-02-1-BA-091",
+        exception_id=None,
+        review_record_id="D-CSH02-091",
+        type=MisstatementType.factual,
+        account="Interest income (270)",
+        assertion=Assertion.Completeness,
+        amount_cents=4853,
+        direction=Direction.understated,
+        origin="current_period",
+        classification_judgment_id=classified.id,
+    )
+    patch: StatePatch = {
+        "judgments": [classified],
+        "review_tasks": [review],
+        "misstatements": [misstatement],
+        "procedure_runs": [finished(run)],
+    }
+    return patch, run, make_state(procedure_pack=[*PACK, make_procedure("FIN-03", Phase.P3_Completion)])
+
+
+def test_a8_writes_judgments_tasks_and_misstatements_only() -> None:
+    """R156 验收 7: A8 片段写 judgments, review_tasks, misstatements 与本次执行记录通过; A8 再写 uncorrected_schedule
+    被拒; A6 写 misstatements 被拒 (人认定错报经决定, 不经 A6), 原因含 Agent 与字段."""
+    patch, run, state = a8_patch()
+    outputs = ["judgments", "review_tasks", "misstatements"]
+    check = {"procedure_id": "FIN-03", "run_id": run.id, "state": state}
+    check_patch(patch, writer=AgentId.A8, outputs=outputs, **check)  # type: ignore[arg-type]
+    schedule = UncorrectedSchedule(
+        id="SCHEDULE",
+        items=[],
+        excluded_trivial_ids=[],
+        total_cents=0,
+        materiality_cents=32431,
+        candidate_opinion=OpinionType.unqualified,
+    )
+    with pytest.raises(MergeRejected, match="merge_rejected: A8 不能写字段 uncorrected_schedule"):
+        check_patch(
+            {**patch, "uncorrected_schedule": schedule},
+            writer=AgentId.A8,
+            outputs=[*outputs, "uncorrected_schedule"],
+            **check,  # type: ignore[arg-type]
+        )
+    with pytest.raises(MergeRejected, match="merge_rejected: A6 不能写字段 misstatements"):
+        check_patch(patch, writer=AgentId.A6, outputs=outputs, **check)  # type: ignore[arg-type]

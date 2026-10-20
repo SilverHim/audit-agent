@@ -1,0 +1,129 @@
+{
+  "conclusion": "The misstatement is annual leave of AUD 2,687.36 earned by the three employees from 20 July to 30 September 2026 and not provided for; it arose in the current period. It is judgemental: the provision depends on estimates of the leave entitlement accrued and the rate at which it will be paid, rather than on an amount about which there is no doubt. There is no indication of fraud: no leave provision was recorded for a new payroll, an omission of a period-end estimate.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Wages and salaries (477) total AUD 33,500.00 for the period.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "477",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The payroll register shows three full-time employees who started on 20 July 2026, paid AUD 6,700.00 in total per 14-day pay period in five pay runs from 2 August to 27 September 2026 (AUD 33,500.00 in total); the last pay period ended on 27 September 2026 and the next pay day is 11 October 2026.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-c15fb3b8b78e",
+          "locator": "Pay runs",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "A factual misstatement is one about which there is no doubt; a judgemental misstatement arises from management judgements, such as accounting estimates, that the auditor considers unreasonable (ASA 450 para A6).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-A6",
+          "locator": "para A6",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "When the auditor identifies a misstatement, the auditor evaluates whether it is indicative of fraud (ASA 240 para 36).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P36",
+          "locator": "para 36",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The leave provision rests on estimates of the entitlement accrued and its rate of payment, so the misstatement is judgemental and arose in the current period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The omission of a first leave provision for a new payroll gives no indication of fraud.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        3,
+        4
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "477",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-c15fb3b8b78e",
+      "locator": "Pay runs",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-A6",
+      "locator": "para A6",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P36",
+      "locator": "para 36",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that leave was taken or paid out before the period end, or that the employees are not entitled to paid annual leave, would reduce or remove the provision.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85,
+  "nature": {
+    "type": "judgmental",
+    "fraud_indicative": false,
+    "fraud_reason": null
+  }
+}

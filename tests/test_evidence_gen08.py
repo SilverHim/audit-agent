@@ -157,7 +157,7 @@ def test_gen08_template_and_dispatch() -> None:
         "entity_suffixes": ["pty ltd", "pty limited", "pty", "ltd", "limited"],
     }
     assert (t.standards, t.rules) == (["ASA550-P15"], [])
-    assert EvidenceAgent.procedures == {"CSH-04", "GEN-08"}
+    assert {"CSH-04", "GEN-08"} <= EvidenceAgent.procedures  # 集合包含: A5 另有 GEN-07 (需求 R177)
     agents = build_agents(deps)
     assert isinstance(agents["GEN-08"], EvidenceAgent) and agents["GEN-08"] is agents["CSH-04"]
     assert "GEN-08" in {x.id for x in deps.library.fixed()}

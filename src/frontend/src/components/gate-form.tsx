@@ -367,6 +367,21 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
       </Panel>
     )
   }
+  if (material.kind === 'PLN-15') {
+    // 计划的叙述各段; 闸门页的完整呈现 (程序, 时间表, 确认项) 由需求 R212 做
+    return (
+      <Panel title={t.gates['PLN-15']}>
+        <div className="flex flex-col gap-3 text-[14px]" lang="en">
+          {material.plan.narrative.map((part) => (
+            <section key={part.section} className="flex flex-col gap-1">
+              <Code className="w-fit text-[12px]">{part.section}</Code>
+              <p className="m-0 whitespace-pre-wrap">{part.text}</p>
+            </section>
+          ))}
+        </div>
+      </Panel>
+    )
+  }
   return <ReportPreview report={material.report} decisions={material.previous_decisions} />
 }
 

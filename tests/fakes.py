@@ -191,14 +191,15 @@ from backend.core.security import create_access_token
 from backend.main import build_deps, create_app
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.decisions import GraphDecisionSubmit, rerun_group, rerun_procedure
-from backend.orchestration.graph import GATES, build_graph, compile_graph
+from backend.orchestration.gates import gate_nodes
+from backend.orchestration.graph import build_graph, compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
 from backend.services.abn import normalize_abn
 from backend.services.data_service import DataService
-from backend.services.features import BASELINE
+from backend.services.features import BASELINE, PLANNING
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import ProcedureLibrary
@@ -211,6 +212,8 @@ NOW = datetime(2026, 9, 30, tzinfo=UTC)
 # ── 样例数据: 合成数据集的 Numbat 公司 (合成数据集设计.md 2.1, 2.2 节) ──
 
 NUMBAT_FEATURES = BASELINE  # Numbat 回归测试的功能集: 新功能全关, 保留基线的 critic (services/features.py)
+# 打开计划 (需求 R204, R205) 的功能集: 基线加 planning 与它依赖的 misstatement; 各测试共用这一处
+PLANNING_FEATURES = NUMBAT_FEATURES | {"misstatement", "planning"}
 NUMBAT_ABN = AbnRecord(
     abn="68900042015",
     acn="900042015",
@@ -3081,6 +3084,24 @@ def numbat_p1_agents(deps: AgentDeps, presets: bool = True) -> dict[str, Procedu
     return {"DOC-04": ScriptA3(deps, doc04), "PLN-07": ScriptA4(deps, pln07), "PLN-01": ScriptA4(deps, pln01)}
 
 
+def numbat_plan_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
+    """PLN-15 的脚本 Agent (需求 R205, 功能 planning; 真实的 A4 见 agents/audit_plan): 起草下一修订 PLAN-{n} (合成计划
+    audit_plan, 记本次执行); 有上一修订时把它的最新版本置 superseded (经 model_validate 构造, 记本次执行)."""
+
+    def pln15(ctx: RunContext) -> StatePatch:
+        plans = ctx.state["audit_plans"]
+        revision = max((p.revision for p in plans), default=0) + 1
+        run = finished(ctx.run)
+        written = [audit_plan(revision, run_id=run.id)]
+        previous = max((p for p in plans if p.revision == revision - 1), key=lambda p: p.version, default=None)
+        if previous is not None and previous.status is not PlanStatus.superseded:
+            retired = {"version": previous.version + 1, "status": PlanStatus.superseded, "run_id": run.id}
+            written.append(AuditPlan.model_validate({**previous.model_dump(), **retired}))
+        return {"audit_plans": written, "procedure_runs": [run]}
+
+    return {"PLN-15": ScriptA4(deps, pln15)}
+
+
 def numbat_pln01_with(
     objective: AuditObjective, risk: RiskItem
 ) -> Callable[[AgentDeps], dict[str, ProcedureAgent[Any]]]:
@@ -3368,7 +3389,7 @@ def numbat_all_p2_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
 
 def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = True) -> GraphNodes:
     """主图节点: 已实装的 Agent 用真实的, P1 三条程序与 RPT-03 用 Numbat 脚本 Agent (见 numbat_p1_agents,
-    numbat_report_agents).
+    numbat_report_agents); 功能 planning 打开时 PLN-15 也用脚本 (numbat_plan_agents).
 
     数据集载入换成假实现时 (make_deps 的缺省), 按种子已载入 Numbat 处理, 先登记 3 份合同: P1 不再自动载入
     数据集 (需求 R10), 新项目的数据由审计师接入或种子脚本预先载入."""
@@ -3377,6 +3398,8 @@ def make_graph_nodes(deps: AgentDeps, parallel_cap: int = 2, presets: bool = Tru
     nodes = GraphNodes(deps, parallel_cap)
     nodes.agents.update(numbat_p1_agents(deps, presets))
     nodes.agents.update(numbat_report_agents(deps))
+    if PLANNING in deps.features:
+        nodes.agents.update(numbat_plan_agents(deps))
     return nodes
 
 
@@ -3491,7 +3514,7 @@ def make_runner(
 
     agents: 按依赖造出要替换的 Agent, 如 lambda deps: {"ACC-04": ScriptAgent(deps, script)};
     其余程序同 make_graph_nodes.
-    interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果.
+    interrupt_before: 闸门之外另要停下的节点, 如 ["fan_in"] 停在汇合前查看暂存结果; 主图与闸门同样按功能集取.
     library: 替换程序库 (如改过 trigger 的), 缺省为 knowledge 目录.
     financial_store, trail, confirmations: 财务数据存储, 留痕与函证平台, 缺省见 make_deps (留痕缺省为新的空留痕).
     review_llm: 复核模型 (A7), 缺省为 mock 模式的固定输出; 给了时如争议用的变体 (tests/fixtures/llm_variants).
@@ -3520,8 +3543,10 @@ def make_runner(
     if agents is not None:
         nodes.agents.update(agents(deps))
     saver = InMemorySaver(serde=checkpoint_serde())
-    if interrupt_before:
-        app = build_graph(nodes).compile(checkpointer=saver, interrupt_before=[*GATES, *interrupt_before])
+    if interrupt_before:  # 主图与闸门按 deps 的功能集取, 同 compile_graph (planning 打开时有 PLN-15 的节点)
+        app = build_graph(nodes, deps.features).compile(
+            checkpointer=saver, interrupt_before=[*gate_nodes(deps.features), *interrupt_before]
+        )
     else:
         app = compile_graph(nodes, saver)
     return GraphRunner(app, deps), output_store

@@ -26,6 +26,7 @@ from backend.contracts.models import (
     ManualResult,
     Misstatement,
     MisstatementDraft,
+    MisstatementStatus,
     MisstatementType,
     Procedure,
     ProcedureRun,
@@ -50,16 +51,19 @@ from backend.orchestration.decisions import (
 )
 from backend.orchestration.nodes import waiting_status
 from backend.orchestration.runner import GraphRunner
+from backend.services.features import BASELINE, MISSTATEMENT
 from backend.services.presentation import record_presentation
 from backend.services.review_queue import attribute_exceptions
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     FakeEngagementStore,
+    FakeFinancialStore,
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
@@ -611,13 +615,15 @@ def test_waiting_status_prefers_dispute_only_with_collab() -> None:
 CUTOFF = "X-REV-08-1-R01-1"  # REV-08 的跨期例外: SI-2026-0612 期末前入账, 期后签收
 
 
-async def waiting_on_cutoff(attributes: bool = True) -> Started:
+async def waiting_on_cutoff(attributes: bool = True, **runner_options: Any) -> Started:
     """收入线复核完 REV-03 (三个 confirm) 后 REV-02 执行, 停在 await_events 等 REV-02 的两个任务.
-    attributes 为假时 REV-02 没解释跨期例外, 其任务为以例外为目标的 unattributed 任务 (见 numbat_rev02_agents)."""
+    attributes 为假时 REV-02 没解释跨期例外, 其任务为以例外为目标的 unattributed 任务 (见 numbat_rev02_agents).
+    runner_options 原样转交 make_runner (如 features, financial_store)."""
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
     runner, store = make_runner(
         engagement_store=engagement_store,
         agents=lambda deps: {**p2_agents(deps), **numbat_p2_agents(deps), **numbat_rev02_agents(deps, attributes)},
+        **runner_options,
     )
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
@@ -653,6 +659,7 @@ async def test_misstatement_on_judgment() -> None:
         judgment_id="J-REV-02-1-SI-2026-0612",
         exception_id=None,
         review_record_id="D-M",
+        status=MisstatementStatus.uncorrected,  # 功能 misstatement 关闭 (需求 R156 起缺省为 identified)
         **NUMBAT_CUTOFF_DRAFT.model_dump(),
     )
     assert misstatement.status == "uncorrected"
@@ -668,6 +675,32 @@ async def test_misstatement_on_judgment() -> None:
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert snapshot.values["misstatements"] == [misstatement]
     assert snapshot.next == ("await_events",)
+
+
+CUTOFF_TASK = "T-J-REV-02-1-SI-2026-0612-v1"
+
+
+async def test_lifecycle_misstatement_checks_account_code_then_starts_identified() -> None:
+    """R156 验收 4 的提交路径 (功能 misstatement 打开): 草稿的 account_code 不在本项目科目表 (999) → INVALID_VALUE,
+    什么都不写; 改为科目表有的 4100 再交, 错报第 1 版为 identified 并带上它, 其余字段同 R19. 功能关闭时为
+    uncorrected 见 test_misstatement_on_judgment; Xero 演示的 D-CSH02-091 (科目 270) 见 test_p2_agents_xero."""
+    features = BASELINE | {MISSTATEMENT}
+    s = await waiting_on_cutoff(financial_store=FakeFinancialStore(accounts=NUMBAT_ACCOUNTS), features=features)
+    unknown = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": "999"})
+    decision = record(CUTOFF_TASK, Decision.misstatement, id="D-M", misstatement_draft=unknown)
+    await assert_rejected(s, decision, "INVALID_VALUE", "科目代码 999 不在本项目科目表中")
+
+    draft = unknown.model_copy(update={"account_code": "4100"})
+    await s.submit.submit(EID, decision.model_copy(update={"misstatement_draft": draft}))
+    await wait_idle(s.runner, EID)
+    assert await s.output_store.get(EID, Misstatement, "M-D-M") == Misstatement(
+        id="M-D-M",
+        judgment_id="J-REV-02-1-SI-2026-0612",
+        exception_id=None,
+        review_record_id="D-M",
+        status=MisstatementStatus.identified,
+        **draft.model_dump(),
+    )
 
 
 async def test_misstatement_takes_reviewer_draft() -> None:

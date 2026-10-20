@@ -1,6 +1,6 @@
-"""A4: PLN-07, PLN-01.
+"""A4: PLN-07, PLN-01, PLN-15 (功能 planning, 见 agents/audit_plan).
 
-返回字段: analytics, materiality_candidates, audit_objectives, risk_register, exceptions, procedure_runs.
+返回字段: analytics, materiality_candidates, audit_objectives, risk_register, exceptions, audit_plans, procedure_runs.
 """
 
 from collections.abc import Callable, Mapping, Sequence
@@ -8,10 +8,12 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, ClassVar
 
+from backend.agents.audit_plan import draft_plans, plan_patch
 from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import (
     AgentId,
     AnalyticsResult,
+    AuditPlan,
     MaterialityCandidate,
     MaterialityCandidates,
     MonthlyFigures,
@@ -99,18 +101,26 @@ def materiality_candidates(
     return candidates, (low, high), params["clearly_trivial_pct"]
 
 
-class RiskAssessorAgent(ProcedureAgent[RuleResult]):
-    """A4: 执行 PLN-07, PLN-01, 做初步分析并算重要性候选. 两条程序都经规则引擎取数."""
+Findings = RuleResult | list[AuditPlan]  # PLN-07, PLN-01 的规则结果; PLN-15 要写入的计划 (新修订在首)
+
+
+class RiskAssessorAgent(ProcedureAgent[Findings]):
+    """A4: 执行 PLN-07, PLN-01, 做初步分析并算重要性候选, 两条程序都经规则引擎取数; 功能 planning 打开时另执行
+    PLN-15 (起草总体审计计划, agents/audit_plan; 未启用时注册表不映射). 按程序编号分派."""
 
     agent_id: ClassVar[AgentId] = AgentId.A4  # 智能体编号
-    procedures: ClassVar[frozenset[str]] = frozenset({"PLN-07", "PLN-01"})  # 负责的程序
+    procedures: ClassVar[frozenset[str]] = frozenset({"PLN-07", "PLN-01", "PLN-15"})  # 负责的程序
 
-    async def execute(self, ctx: RunContext) -> RuleResult:
-        """执行程序 YAML 中的规则, 参数取本次执行的参数快照."""
+    async def execute(self, ctx: RunContext) -> Findings:
+        """PLN-15 交 audit_plan.draft_plans 起草计划; 其余执行程序 YAML 中的规则, 参数取本次执行的参数快照."""
+        if ctx.procedure.id == "PLN-15":
+            return await draft_plans(self.deps, ctx)
         return await self.deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
-    async def interpret(self, ctx: RunContext, findings: RuleResult) -> StatePatch:
-        """按程序组装片段, 执行记录置成功终态 (没有执行的规则记进 rule_outcomes, 需求 R130)."""
+    async def interpret(self, ctx: RunContext, findings: Findings) -> StatePatch:
+        """按程序组装片段, 执行记录置成功终态 (规则程序没有执行的规则记进 rule_outcomes, 需求 R130)."""
+        if not isinstance(findings, RuleResult):
+            return plan_patch(ctx, findings)
         interpreters: dict[str, Callable[[RunContext, RuleResult], StatePatch]] = {
             "PLN-07": self.analytics,
             "PLN-01": self.materiality,
