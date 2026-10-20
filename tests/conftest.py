@@ -15,6 +15,17 @@ os.environ["LLM_FIXTURES_ROOT"] = str(Path(__file__).parent / "fixtures" / "llm"
 
 
 import pytest
+import pytest_asyncio
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def demo_run():
+    """Numbat 回归 R55 的一次演示 (tests/test_e2e_mock.record_demo, 离线约半秒), 会话里只跑一次: test_e2e_mock 的用例读
+    它的存储, 留痕与图状态 (用例标 loop_scope session, 与它同一个事件循环); test_collab_flow 与 test_e2e_xero17 只取它的
+    留痕 (FakeTrail.entries, 普通列表) 比较状态迁移. 用例只读, 不改它."""
+    from tests.test_e2e_mock import record_demo
+
+    return await record_demo()
 
 
 @pytest.fixture(scope="session", autouse=True)

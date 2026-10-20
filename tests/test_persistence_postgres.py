@@ -162,6 +162,9 @@ async def test_load_rules_and_project_isolation(storage):
         rare_user_max=2,
         round_unit_cents=1000000,
         cash_categories=["cash"],
+        receivables_categories=["receivables"],  # 需求 R132: R10, R12 的贷项凭证与名称比较
+        counterparty_prefixes=["payment to", "payment from", "payment:"],
+        entity_suffixes=["pty ltd", "pty limited", "pty", "ltd", "limited"],
         entry_nos=None,
         audit_adjustment_start=None,
     )
@@ -1866,3 +1869,73 @@ async def test_payroll_register_written_as_a_new_data_version(storage, tmp_path)
     assert await financial.employees(other.id) == []
     assert await financial.query(other.id, "SELECT count(*) AS n FROM employees", {}) == [{"n": 0}]
     assert await financial.query(e.id, "SELECT count(*) AS n FROM employees", {}) == [{"n": 1}]
+
+
+async def test_collab_dispute_variant_real_storage(tmp_path):
+    """需求 R155 验收 5 (R56 的真实存储变体, 本组开关打开): Numbat 争议变体 (复核模型换成 llm_variants/dispute) 在真实
+    Postgres 存储与检查点上跑到归档. 停在等复核时 CSH-02 在检查点与 Store 中读回都是枚举 in_dispute; 收尾同
+    test_collab_flow 的争议变体 (呈递两条任务后提交, D-ARB 为 a6_upheld 带咨询). 呈递留痕 2 行从库读回 (GEN-11,
+    负责人, 任务), D-ARB 与 D-REV02-0612 读回的 dwell_seconds 95, 40 与 presentation_id 对得上那两行, D-ARB 的
+    consulted 与咨询记录读回不变; 结果同 R55."""
+    from typing import cast
+
+    from backend.adapters.llm import MockLLMClient, SwitchableLLMClient
+    from backend.contracts.models import (
+        DisputeResolution,
+        GateVerdict,
+        Procedure,
+        ProcedureStatus,
+        ReviewRecord,
+        TrailKind,
+    )
+    from backend.orchestration.runner import GraphRunner
+    from tests.fakes import wait_idle
+    from tests.test_collab_flow import COLLAB, CONSULTATION, PRESENTATION, REV02_TASK, SHOWN, TASK, presenting
+    from tests.test_decisions import acc01_decision, pln_decision
+    from tests.test_dispute import VARIANTS, resolve
+    from tests.test_e2e_mock import assert_results, real_storage
+    from tests.test_flow import FIN_APPROVE, REVIEWS, RPT_APPROVE, RPT_REJECT
+
+    async with real_storage(tmp_path, FEATURES=",".join(sorted(COLLAB))) as run:
+        s, deps, eid, owner = run.s, run.deps, run.eid, run.owner
+        cast(SwitchableLLMClient, deps.review_llm).reload(MockLLMClient(VARIANTS / "dispute"), "mock")
+        arbitration = resolve(DisputeResolution.a6_upheld, consulted=True, consultation_record=CONSULTATION)
+        reviews = [arbitration if r.task_id == TASK else r for r in REVIEWS]
+        present = presenting(SHOWN)
+        await s.runner.start(eid)
+        await wait_idle(s.runner, eid)
+        for decision in [acc01_decision(GateVerdict.approve, id="D-ACC"), pln_decision(GateVerdict.approve)]:
+            await s.submit.submit(eid, decision.model_copy(update={"decided_by": owner}))
+            await wait_idle(s.runner, eid)
+        values = (await s.runner.app.aget_state(GraphRunner.config(eid))).values
+        assert next(p for p in values["procedure_pack"] if p.id == "CSH-02").status is ProcedureStatus.in_dispute
+        assert (await deps.output_store.get(eid, Procedure, "CSH-02")).status is ProcedureStatus.in_dispute
+        for decision in [*reviews, FIN_APPROVE, RPT_REJECT, RPT_APPROVE]:
+            actor = "reviewed_by" if isinstance(decision, ReviewRecord) else "decided_by"
+            decision = decision.model_copy(update={actor: owner})
+            if isinstance(decision, ReviewRecord):
+                await present(s.runner, eid, decision)
+            await s.submit.submit(eid, decision)
+            await wait_idle(s.runner, eid)
+            assert s.runner.run_error(eid) is None, (decision.id, s.runner.run_error(eid))
+
+        await assert_results(s, eid, approver=owner)
+        entries = await deps.trail.list(eid, limit=10_000)
+        shown = [e for e in entries if e.kind is TrailKind.presentation]
+        # 库里按呈递时间排: CSH-02 那次在决定前 95 秒, 早于 REV-02 的 40 秒
+        assert [(e.procedure_id, e.actor, e.payload["task_id"]) for e in shown] == [
+            (PRESENTATION, owner, TASK),
+            (PRESENTATION, owner, REV02_TASK),
+        ]
+        ids = {e.payload["task_id"]: e.id for e in shown}
+        arbitrated = await deps.output_store.get(eid, ReviewRecord, "D-ARB")
+        cutoff = await deps.output_store.get(eid, ReviewRecord, "D-REV02-0612")
+        assert (arbitrated.dwell_seconds, arbitrated.presentation_id) == (95, ids[TASK])
+        assert (arbitrated.consulted, arbitrated.consultation_record) == (True, CONSULTATION)
+        assert (cutoff.dwell_seconds, cutoff.presentation_id) == (40, ids[REV02_TASK])
+        moved = [
+            (e.payload["from"], e.payload["to"])
+            for e in entries
+            if e.kind is TrailKind.transition and e.payload["id"] == "CSH-02"
+        ]
+        assert moved == [("planned", "in_dispute"), ("in_dispute", "completed")]

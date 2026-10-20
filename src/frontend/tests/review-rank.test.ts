@@ -1,8 +1,8 @@
-// 复核队列排序 (lib/review.rankTasks) 的测试, bun test 运行 (不在 tsconfig 的 src 里, 不经 tsc).
+// 复核队列排序 (lib/review.rankTasks) 与人工任务分组 (splitManual) 的测试, bun test 运行 (不在 tsconfig 的 src 里, 不经 tsc).
 // 数据是合成的: 判断只填排序用到的字段.
 import { describe, expect, test } from 'bun:test'
 import type { EngagementOverview, ReviewTaskView } from '../src/client/types.gen'
-import { rankTasks } from '../src/lib/review'
+import { rankTasks, splitManual } from '../src/lib/review'
 
 function view(
   id: string,
@@ -68,5 +68,20 @@ describe('rankTasks', () => {
     expect(on.slice(0, 2)).toEqual(['D-early', 'D-late'])
     const rest = order(['critic']).filter((id) => id !== 'D-early' && id !== 'D-late')
     expect(on.slice(2)).toEqual(rest)
+  })
+})
+
+describe('splitManual', () => {
+  test('人工程序的任务单列 (需求 R303), 两组各自保持原顺序, 不排序', () => {
+    const views = [
+      view('M-2', 'manual', '2026-01-01T00:00:03Z', 0.5, null),
+      ...VIEWS.slice(0, 2),
+      view('M-1', 'manual', '2026-01-01T00:00:01Z', 0.5, null),
+      ...VIEWS.slice(2),
+    ]
+    const [reviews, manual] = splitManual(views)
+    expect(reviews.map((item) => item.task.id)).toEqual(VIEWS.map((item) => item.task.id))
+    expect(manual.map((item) => item.task.id)).toEqual(['M-2', 'M-1'])
+    expect(splitManual([])).toEqual([[], []])
   })
 })

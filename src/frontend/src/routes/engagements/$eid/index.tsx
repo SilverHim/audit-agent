@@ -8,7 +8,13 @@ import {
   reviewsListExceptionsOptions,
   reviewsListReviewTasksOptions,
 } from '@/client/@tanstack/react-query.gen'
-import type { ConciergeCitation, EngagementOverview, GateView, XeroProfileCheck } from '@/client/types.gen'
+import type {
+  ConciergeCitation,
+  EngagementOverview,
+  GateView,
+  ReviewTaskView,
+  XeroProfileCheck,
+} from '@/client/types.gen'
 import { Code, StatusPill } from '@/components/chrome'
 import {
   ConciergeMessage,
@@ -31,7 +37,7 @@ import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
-import { type RankedTask, rankTasks } from '@/lib/review'
+import { procedureName, type RankedTask, rankTasks, splitManual } from '@/lib/review'
 import {
   buildTimeline,
   earlierCursor,
@@ -68,6 +74,8 @@ type Current =
     }
   | { kind: 'xero'; key: string; check: XeroProfileCheck; deferred: boolean }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
+  // 人工程序的任务: 不出决定卡, 只给去人工程序页执行的入口 (需求 R303)
+  | { kind: 'manual'; key: string; view: ReviewTaskView; deferred: boolean }
 
 type Turn = {
   id: string
@@ -109,10 +117,11 @@ function Workspace() {
   const currentRef = useRef<HTMLDivElement>(null)
 
   const deferredKeys = useMemo(() => new Set((deferrals.data ?? []).map(deferralKey)), [deferrals.data])
+  const [reviewViews, manualViews] = useMemo(() => splitManual(tasks.data ?? []), [tasks.data])
   const ranked = useMemo(() => {
     const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
-    return rankTasks(tasks.data ?? [], byId, overview)
-  }, [tasks.data, exceptions.data, overview])
+    return rankTasks(reviewViews, byId, overview)
+  }, [reviewViews, exceptions.data, overview])
 
   const candidates: Current[] = useMemo(() => {
     const list: Current[] = []
@@ -138,8 +147,13 @@ function Workspace() {
       const key = `task:${item.view.task.id}`
       list.push({ kind: 'task', key, ranked: item, deferred: deferredKeys.has(key) })
     }
+    // 人工程序的任务排在复核任务之后
+    for (const view of manualViews) {
+      const key = `task:${view.task.id}`
+      list.push({ kind: 'manual', key, view, deferred: deferredKeys.has(key) })
+    }
     return list
-  }, [overview, gate.data, ranked, deferredKeys, requests.data, summary.data])
+  }, [overview, gate.data, ranked, manualViews, deferredKeys, requests.data, summary.data])
 
   // 相关查询都返回之后才确定当前事项 (后端 R152: 免得先闪过一条复核任务, 给审计师并没打开的任务记一次呈递)
   const ready = workspaceReady(overview, { gate, tasks, exceptions, deferrals, requests, summary })
@@ -178,7 +192,12 @@ function Workspace() {
           ? item.requests.map((request) => ({ target_type: 'data_request' as const, target_id: request.id }))
           : item.kind === 'xero'
             ? [{ target_type: 'xero_profile' as const, target_id: item.check.key }]
-            : [{ target_type: 'review_task' as const, target_id: item.ranked.view.task.id }]
+            : [
+                {
+                  target_type: 'review_task' as const,
+                  target_id: item.kind === 'manual' ? item.view.task.id : item.ranked.view.task.id,
+                },
+              ]
     Promise.all(targets.map((target) => setDeferral.mutateAsync({ ...target, deferred: true }))).then(
       () => {
         toast.success(t.toasts.deferred)
@@ -254,14 +273,21 @@ function Workspace() {
               {t.workspace.pendingBadge(pendingLabel)}
             </StatusPill>
           ) : null}
-          <Link
-            to={current?.kind === 'task' ? '/engagements/$eid/reviews/$taskId' : formView}
-            params={current?.kind === 'task' ? { eid, taskId: current.ranked.view.task.id } : { eid }}
-            className={buttonVariants({ variant: 'outline' })}
-          >
-            <LayoutList className="size-4" aria-hidden="true" />
-            {t.workspace.formView}
-          </Link>
+          {current?.kind === 'task' || current?.kind === 'manual' ? (
+            <Link
+              to={current.kind === 'task' ? '/engagements/$eid/reviews/$taskId' : '/engagements/$eid/manual/$taskId'}
+              params={{ eid, taskId: current.kind === 'task' ? current.ranked.view.task.id : current.view.task.id }}
+              className={buttonVariants({ variant: 'outline' })}
+            >
+              <LayoutList className="size-4" aria-hidden="true" />
+              {t.workspace.formView}
+            </Link>
+          ) : (
+            <Link to={formView} params={{ eid }} className={buttonVariants({ variant: 'outline' })}>
+              <LayoutList className="size-4" aria-hidden="true" />
+              {t.workspace.formView}
+            </Link>
+          )}
         </div>
       </header>
 
@@ -625,6 +651,29 @@ function CurrentItem({
     )
   }
 
+  if (current.kind === 'manual') {
+    const view = current.view
+    return (
+      <div className="flex flex-col gap-4">
+        <ConciergeMessage>
+          <ConciergeText>
+            {t.workspace.manualIntro(
+              `${view.task.procedure_id} ${procedureName(t, view.task.procedure_id, view.procedure_name)}`,
+            )}
+            {deferredCount ? ` ${t.workspace.deferredIntro(deferredCount)}` : ''}
+          </ConciergeText>
+        </ConciergeMessage>
+        <ManualTaskEntry
+          eid={eid}
+          view={view}
+          deferred={current.deferred}
+          onDefer={() => onDefer(current)}
+          deferring={deferring}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <ConciergeMessage>
@@ -644,6 +693,57 @@ function CurrentItem({
         deferring={deferring}
       />
     </div>
+  )
+}
+
+// 人工程序任务的入口: 只列要做什么, 去人工程序页附证据并记录结果 (那里按任务的请求核对), 这里不收决定
+function ManualTaskEntry({
+  eid,
+  view,
+  deferred,
+  onDefer,
+  deferring,
+}: {
+  eid: string
+  view: ReviewTaskView
+  deferred: boolean
+  onDefer: () => void
+  deferring: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <section
+      aria-label={t.taskKinds.manual}
+      className="ml-[42px] overflow-hidden rounded-[14px] border-[1.5px] border-primary bg-card shadow-xs"
+    >
+      <div className="flex flex-col gap-1 border-line-soft border-b px-[18px] py-3.5">
+        <span className="font-semibold text-[12px] text-accent-foreground tracking-wide">{t.taskKinds.manual}</span>
+        <h2 className="m-0 font-semibold text-[17px]">
+          <Code>{view.task.procedure_id}</Code> {procedureName(t, view.task.procedure_id, view.procedure_name)}
+        </h2>
+      </div>
+      {view.task.manual_request?.instructions ? (
+        <p className="m-0 whitespace-pre-line px-[18px] py-3.5 text-[14px]" lang="en">
+          {view.task.manual_request.instructions}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#fafbfc] px-[18px] py-3">
+        <div className="flex flex-wrap gap-2">
+          {!deferred ? (
+            <Button type="button" variant="outline" disabled={deferring} onClick={onDefer}>
+              {t.card.decideLater}
+            </Button>
+          ) : null}
+        </div>
+        <Link
+          to="/engagements/$eid/manual/$taskId"
+          params={{ eid, taskId: view.task.id }}
+          className={buttonVariants({})}
+        >
+          {t.workspace.performManual}
+        </Link>
+      </div>
+    </section>
   )
 }
 

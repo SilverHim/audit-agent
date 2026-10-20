@@ -79,6 +79,12 @@ export function taskTier(
 
 export type RankedTask = { view: ReviewTaskView; amount: number | null; tier: ReviewTier; subject: string }
 
+// 人工程序的任务 (manual, 后端需求 R94) 由人在人工程序页执行并记录结果, 不按复核决定处理: 复核队列不列, 对话页与
+// 待决页单列为指向人工程序页的入口 (需求 R303). 分成 (复核任务, 人工任务), 各自保持原顺序
+export function splitManual(views: ReviewTaskView[]): [ReviewTaskView[], ReviewTaskView[]] {
+  return [views.filter((view) => view.task.kind !== 'manual'), views.filter((view) => view.task.kind === 'manual')]
+}
+
 // 先按档位, 同档按金额从大到小, 再按创建时间. 项目开了智能体协作 (功能 collab, 后端 R151) 时待决的争议任务单列
 // 在最前, 争议之间按创建时间, 不按置信度或金额; 其余顺序不变
 export function rankTasks(

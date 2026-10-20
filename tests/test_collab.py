@@ -1,9 +1,9 @@
-"""智能体协作 (功能 collab) 下的 Numbat 全流程 (真实 Agent 与 mock 输出): 主流程结果与基线相同, 只多记下 A7 命中的
-触发规则 (R149); 争议变体 (复核模型取 llm_variants/dispute) 中 CSH-02 为争议中, 争议任务在待办里单列在前 (R151);
-仲裁补全: 复核方的建议动作与错报草稿, 采纳方建议错报时须带草稿, 系统外咨询 (R150).
+"""智能体协作 (功能 collab) 下的 Numbat 全流程 (真实 Agent 与 mock 输出): 争议变体 (复核模型取 llm_variants/dispute)
+中 CSH-02 为争议中, 争议任务在待办里单列在前 (R151); 仲裁补全: 复核方的建议动作与错报草稿, 采纳方建议错报时须带
+草稿, 系统外咨询 (R150).
 
-全流程较慢, 同一次运行的结果供多条断言共用. 争议仲裁的基线行为见 test_dispute.py, 触发规则的单项见
-test_review_agent.py.
+全流程较慢, 同一次运行的结果供多条断言共用. 主流程 (结果同基线, A7 记下命中的触发规则, R149 验收 4) 与跑到归档的
+争议变体见 test_collab_flow.py (R155); 争议仲裁的基线行为见 test_dispute.py, 触发规则的单项见 test_review_agent.py.
 """
 
 import json
@@ -48,42 +48,12 @@ from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT, LayeredMockLLM, api_client, wait_idle
 from tests.test_decisions import Started
 from tests.test_dispute import JID, TASK, VARIANTS, resolve
-from tests.test_e2e_mock import assert_results, finish_demo, start_demo, trail_of
+from tests.test_e2e_mock import start_demo, trail_of
 from tests.test_flow import REVIEWS
 from tests.test_review_decisions import record
 
 EID = ENGAGEMENT.id
 COLLAB = BASELINE | {"collab"}
-
-
-async def test_main_flow_keeps_results_and_records_triggers() -> None:
-    """R149 验收 4: collab 打开时 Numbat 全流程的最终结果与基线相同 (assert_results); J-CSH-02-1-BA-01 (CSH-02 L3,
-    建议关闭) 置信度 0.65, critic_trigger 为 main; REV-03, REV-02 的 5 条判断 (L2) skipped, critic_trigger 为空;
-    GEN-09 留痕 2 行 (BA-01-r1, BA-01-r2). collab 关闭的一遍即 test_e2e_mock 的全流程 (critic_trigger 为空的断言在
-    test_results_match_dataset), 不另跑."""
-    s = await start_demo(features=COLLAB)
-    await finish_demo(s)
-    await assert_results(s)
-    judgments = {j.id: j for j in await s.output_store.latest(EID, Judgment)}
-    ba01 = judgments.pop("J-CSH-02-1-BA-01")
-    assert (ba01.critic_verdict, ba01.critic_trigger, ba01.confidence) == (
-        CriticVerdict.consistent,
-        CriticTrigger.main,
-        0.65,
-    )
-    assert sorted(judgments) == [
-        "J-REV-02-1-SI-2026-0612",
-        "J-REV-02-1-SI-2026-0618",
-        "J-REV-03-1-CON-001",
-        "J-REV-03-1-CON-002",
-        "J-REV-03-1-CON-003",
-    ]
-    assert {(j.critic_verdict, j.critic_trigger) for j in judgments.values()} == {(CriticVerdict.skipped, None)}
-    calls = [e for e in trail_of(s).entries if e.kind is TrailKind.llm_call and e.procedure_id == "GEN-09"]
-    assert [e.payload["fixture_key"] for e in calls] == ["BA-01-r1", "BA-01-r2"]
-    # R151 验收 2: 主流程 (BA-01 判一致) 没有争议, 不出现争议中
-    assert all(p.status is not ProcedureStatus.in_dispute for p in s.output_store.rows if isinstance(p, Procedure))
-    assert not [e for e in trail_of(s).entries if e.kind is TrailKind.transition and e.payload["to"] == "in_dispute"]
 
 
 # ── 争议变体: R151 争议中与争议单列, R150 仲裁补全 (复核方的建议与草稿, 草稿随采纳的一方, 系统外咨询) ──

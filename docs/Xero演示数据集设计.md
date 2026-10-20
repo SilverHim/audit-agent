@@ -695,7 +695,7 @@ OR (i.invoice_no ~ '^[A-Za-z]+[0-9]+$'
 
 | 规则 | 口径 | 本期命中 |
 |---|---|---|
-| R12 疑似重复开票 | sales_invoices 中同一客户, 同一开票日, 同一含税金额的本期发票不少于 2 张, 且其中有发票没有发运或服务完成记录; 例外指向没有记录的那张发票的 journal_entry_id. detail 带 `paired_invoices` (同组其余发票的 SI- ID 与 journal_entry_id) 与 `full_credits` (该客户在开票日至期末之间, 未作废, 贷记应收类且金额等于该发票全额的凭证号; 客户按 C01 的名称规范化与分录行 description 匹配), 供 GEN-02 上下文取行 | X-GEN-05-1-R12-1: XJ-405-2, 55000 (ORC1003 与 ORC1008 同为 Hamilton Smith 07-17 的 550, ORC1003 无服务记录). detail: paired_invoices [SI-ORC1008 / XJ-408-2], full_credits [XJ-430]. Numbat 同日同额组有 56 组, 但 624 张发票都有发运单, 命中 0 |
+| R12 疑似重复开票 | sales_invoices 中同一客户, 同一开票日, 同一含税金额的本期发票不少于 2 张, 且其中有发票没有发运或服务完成记录; 例外指向没有记录的那张发票的 journal_entry_id. detail 带 `paired_invoices` (同组其余发票的 SI- ID 与 journal_entry_id) 与 `full_credits` (该客户在开票日至期末之间, 未作废, 贷记应收类且金额等于该发票全额的凭证号; 客户按 C01 的名称规范化与分录行 description 匹配), 供 GEN-02 上下文取行 | X-GEN-05-1-R12-1: XJ-405-2, 55000 (ORC1003 与 ORC1008 同为 Hamilton Smith 07-17 的 550, ORC1003 无服务记录). detail: paired_invoices [SI-ORC1008 / XJ-408-2], full_credits [XJ-430]. Numbat 同一客户, 同一开票日, 同一金额的组有 55 组 (按这三项实测), 但 624 张发票都有发运单, 命中 0 |
 
 GEN-05 合计 7 条. Numbat 现有数据上 R09 至 R12 都是 0.
 

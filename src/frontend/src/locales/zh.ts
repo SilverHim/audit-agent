@@ -266,6 +266,8 @@ export const zh: Messages = {
     },
     reviewIntro: (total, tier) => `有 ${total} 项需要你复核。这一项属于"${tier}"档。`,
     deferredIntro: (n) => `另有 ${n} 项稍后处理。`,
+    manualIntro: (procedure) => `这条程序要你人工执行：${procedure}。请在人工程序页附上证据并记录结果。`,
+    performManual: '去执行',
     afterDefer: '已移至待决定队列。',
     quick: {
       where: '现在到哪一步了？',
@@ -461,10 +463,12 @@ export const zh: Messages = {
     deferred: '稍后处理',
     stage: '阶段决定',
     review: '复核决定',
+    manual: '人工程序',
     noStage: '当前没有待作出的阶段决定。',
     none: '当前筛选条件下没有事项。',
     cols: { item: '事项', procedure: '程序', amount: '金额', proposed: '建议处理', tier: '复核档位', status: '状态' },
     open: '处理',
+    perform: '去执行',
   },
   queuePage: {
     title: '复核队列',
