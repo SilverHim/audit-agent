@@ -28,6 +28,7 @@ from _pytest.outcomes import Skipped
 from dotenv import dotenv_values
 
 from backend.core.config import Settings
+from backend.services.procedure_library import git_env
 
 REPO = Path(__file__).resolve().parents[1]
 LLM_KEYS = ("LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL")  # 真实大模型取的配置; LLM_BASE_URL 可选
@@ -41,9 +42,10 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 def git_lines(repo: Path, *args: str) -> list[str] | None:
-    """在 repo 下跑 git, 返回输出的各行; git 不可用或 repo 不在 git 仓库里时为 None."""
+    """在 repo 下跑 git, 返回输出的各行; git 不可用或 repo 不在 git 仓库里时为 None. 环境去掉 GIT_* 变量 (git_env):
+    在 git 钩子里跑测试时它们指向外层仓库, 继承下来会让 repo 不是仓库时也列出外层仓库的文件 (Issue #52)."""
     try:
-        out = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True).stdout
+        out = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=True, env=git_env()).stdout
     except (OSError, subprocess.CalledProcessError):
         return None
     return out.splitlines()

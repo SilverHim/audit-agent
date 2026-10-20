@@ -141,6 +141,22 @@ def test_external_dir_falls_back_to_main_checkout(tmp_path: Path, monkeypatch: p
     assert external_dir("cuad", wt) is None
 
 
+def test_git_hook_environment_does_not_leak_into_other_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """在 git 钩子里跑测试时 (Issue #52): GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE 指向本仓库, 临时空目录仍判为不在
+    仓库里: 没有跟踪的文件, 也没有主工作副本."""
+    git_dir = subprocess.run(
+        ["git", "rev-parse", "--absolute-git-dir"], cwd=ext.REPO, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    monkeypatch.setenv("GIT_DIR", git_dir)
+    monkeypatch.setenv("GIT_WORK_TREE", str(ext.REPO))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(Path(git_dir) / "index"))
+    assert ext.tracked("data", tmp_path) == []
+    assert main_checkout(tmp_path) is None
+    assert ext.tracked("CLAUDE.md") == ["CLAUDE.md"]  # 本仓库照常
+
+
 def test_no_main_checkout_outside_own_repository_or_for_bare(tmp_path: Path) -> None:
     """不往项目外找 (第 1 轮审核 R114-02): 代码目录本身不是 git 仓库, 只是放在别的仓库里时没有主工作副本, 不取外层
     仓库的 data/external 与 .env; bare 仓库加 worktree 的布局也没有 (不取仓库目录的上级); 普通 worktree 取主检出."""
