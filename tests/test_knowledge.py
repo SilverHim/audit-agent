@@ -18,7 +18,12 @@ from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
 from backend.contracts.knowledge import LLMSpec
-from backend.contracts.llm_outputs import AuditPlanDraft, ContractExtraction, EngagementTermsExtraction
+from backend.contracts.llm_outputs import (
+    AuditPlanDraft,
+    ContractExtraction,
+    EngagementTermsExtraction,
+    MisstatementClassificationDraft,
+)
 from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
@@ -247,8 +252,9 @@ CLOSING = ";,.:)"
 
 def normalise(text: str) -> str:
     """去掉 (Ref: Para. ...) 交叉引用 (与正文同字号的; 小字的由 page_layout 去掉), 行尾连字符直接接下一行
-    (bill-and-hold), 空白归一为单个空格, 标点 CLOSING 之前的空白去掉."""
-    text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text)
+    (bill-and-hold), 空白归一为单个空格, 标点 CLOSING 之前的空白去掉; Symbol 字体的项目符号 (私用区 U+F0B7, 如
+    ASA 450 第 A6 段) 写作 •, 同别的准则."""
+    text = re.sub(r"\s*\(Ref: ?Paras?\.[^)]*\)", "", text).replace("\uf0b7", "•")
     text = re.sub(r"-\n", "-", text)
     return re.sub(rf" (?=[{re.escape(CLOSING)}])", "", " ".join(text.split()))
 
@@ -431,7 +437,7 @@ def layout_text(lines: Sequence[Line]) -> Text:
     """
     extracted, lines = lines, settle_marks(lines)
     raw = "\n".join(f"\x00{k}\x01{line.text}" for k, line in enumerate(lines))
-    raw = re.sub(r"\s*(?:\x00\d+\x01)?\(Ref: ?Paras?\.[^)]*\)", "", raw)
+    raw = re.sub(r"\s*(?:\x00\d+\x01)?\(Ref: ?Paras?\.[^)]*\)", "", raw).replace("\uf0b7", "•")
     raw = re.sub(r"-\n", "-", raw)
     out: list[str] = []
     starts: list[int | None] = [None] * len(lines)
@@ -1765,6 +1771,7 @@ def test_normalise_joins_hyphen_and_drops_refs() -> None:
     assert normalise("bill-and-\nhold (Ref: Para. A3-A6)\n  next") == "bill-and-hold next"
     # 标点前的空白去掉: 脚注上标去掉后留下的空格 (ASA 570 第 23(a) 段 "ASA 7055; and"), 与原文的正常写法相同
     assert normalise("ASA 705 ; and (a , b ) x .") == normalise("ASA 705; and (a, b) x.") == "ASA 705; and (a, b) x."
+    assert normalise("\uf0b7 Factual") == "• Factual"
 
 
 @pytest.mark.parametrize(
@@ -2042,6 +2049,36 @@ def test_pln15_template() -> None:
     for fragment_id in t.standards:
         fragment = lib.fragment(fragment_id)
         assert fragment is not None and "PLN-15" in fragment.procedures, fragment_id
+
+
+def test_fin03_template_loads_only_with_misstatement() -> None:
+    """R157 验收 1, 7: FIN-03 为完成阶段 A8 的混合程序, 挂功能 misstatement, 没有规则与前置 ("全部 P2 判断已复核" 由
+    主图保证), 写判断, 复核任务与错报; 两个准则片段都已登记且各自的 procedures 列了 FIN-03; 输出模型为分类草稿.
+    manual_result_allowed 本条为假 (P2 以外的节点等人时失败任务只认 rerun, 由 R158 打开; 方案取舍). 基线下不启用,
+    不进项目启动实例化的程序 (基线启用集恰为 BASE_18 见 test_all_procedures_load); 打开 misstatement 时进."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("FIN-03")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
+        "错报性质分类",
+        Phase.P3_Completion,
+        "Completion",
+        AgentId.A8,
+        Engine.hybrid,
+        AutonomyLevel.L2,
+        "misstatement",
+        None,
+    )
+    assert (t.depends_on, t.rules, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], [], False, False)
+    assert (t.outputs, t.evidence_required) == (["judgments", "review_tasks", "misstatements"], [EvidenceType.voucher])
+    assert t.standards == ["ASA450-A6", "ASA240-P36"]
+    assert t.llm == LLMSpec(prompt="FIN-03.md.j2", output_model="MisstatementClassificationDraft")
+    assert output_model(t) is MisstatementClassificationDraft
+    for fragment_id in t.standards:
+        fragment = base.fragment(fragment_id)
+        assert fragment is not None and "FIN-03" in fragment.procedures, fragment_id
+    assert "FIN-03" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
+    on = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement"}))
+    assert on.enabled("FIN-03") and "FIN-03" in {p.id for p in fixed_procedures(on)}
 
 
 PLN15_VARIABLES = [

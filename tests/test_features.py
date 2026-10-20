@@ -161,8 +161,11 @@ async def test_library_filters_fixed_set_and_pack(tmp_path: Path) -> None:
     assert len(added) == 10 and [p.id for p in added if p.id not in P2] == ["GEN-05", "GEN-02", "X-P2"]
     assert next(p for p in added if p.id == "X-P2").objective_ids == ["OBJ-REV-CUT"]
 
+    # 开 misstatement 时固定集比现有程序库同功能集的多 X-NEW (现有库此时另有 FIN-03, 需求 R157)
     fixed = fixed_procedures(ProcedureLibrary(root, {"critic", "misstatement"}))
-    assert len(fixed) == 11 and next(p for p in fixed if p.id == "X-NEW").phase is Phase.P3_Completion
+    real = fixed_procedures(ProcedureLibrary(KNOWLEDGE, {"critic", "misstatement"}))
+    assert [p.id for p in fixed if p.id != "X-NEW"] == [p.id for p in real] and len(fixed) == len(real) + 1
+    assert next(p for p in fixed if p.id == "X-NEW").phase is Phase.P3_Completion
 
 
 def test_dependencies_on_disabled_templates_are_dropped(tmp_path: Path) -> None:

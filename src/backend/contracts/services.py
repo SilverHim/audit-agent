@@ -3,6 +3,7 @@
 from datetime import date
 from typing import Any, Generic, Literal, TypeVar
 
+from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
@@ -48,6 +49,9 @@ class JudgmentOutcome(Model):
     failure: Literal["failed", "unattributed"] | None  # 失败类型, 成功时为空
     attempts: int  # 调用大模型的次数, 含重试
     trail_ids: list[str]  # 每次大模型调用的留痕 ID
+    # 通过校验的草稿 (指针已按来源改写), 失败时为空 (需求 R157). 输出模型为 JudgmentDraft 的子类时原样带回 (如 FIN-03
+    # 的 MisstatementClassificationDraft), 调用方从中取判断之外的项 (错报的性质)
+    draft: JudgmentDraft | None = None
 
 
 class ValidationContext(Model):

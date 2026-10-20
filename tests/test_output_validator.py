@@ -19,6 +19,8 @@ from backend.contracts.llm_outputs import (
     DocumentClassification,
     ExtractedTerm,
     JudgmentDraft,
+    MisstatementClassificationDraft,
+    MisstatementNature,
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
@@ -35,6 +37,7 @@ from backend.contracts.models import (
     EvidenceType,
     Judgment,
     Milestone,
+    MisstatementType,
     OpinionType,
     ProcedureNote,
     ProposedAction,
@@ -83,7 +86,8 @@ from tests.fakes import (
     make_run,
     xero_document,
 )
-from tests.xero_fakes import xero_profile
+from tests.fixture_sets import XERO
+from tests.xero_fakes import xero_financial_store, xero_profile
 
 EID = ENGAGEMENT.id
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
@@ -227,10 +231,11 @@ def test_pending_checks_are_not_registered() -> None:
 def test_dispatch_table_covers_existing_models() -> None:
     """现有 11 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification, SheetRecognition 与
     StatementsExtraction 只做语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
-    check_plan 校验, 需求 R204)."""
+    check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157)."""
     assert set(OutputValidator.CHECKS) == {
         AuditPlanDraft,
         JudgmentDraft,
+        MisstatementClassificationDraft,
         ContractExtraction,
         ConfirmationExtraction,
         RegistryExtraction,
@@ -1415,3 +1420,153 @@ async def test_financial_statement_line_pointer(code: str, reason: str | None) -
     else:
         assert report.unsupported_steps == [1] and len(report.errors) == 1 and reason in report.errors[0]
     assert ("financial_statement_line", code) in financial.record_calls
+
+
+# ── FIN-03 错报分类 (需求 R157) ──
+
+FIN03 = LIBRARY.load("FIN-03")
+REGISTER = "documents/evidence/fixed_asset_register.pdf"
+PAYROLL = "documents/evidence/payroll_register_terms.pdf"
+BA091_REPLY = "confirmations/12345679.pdf"
+STANDARDS_ANY = ValidationContext(standards_of=None)
+
+
+def classified(type_: MisstatementType, fraud: bool, reason: str | None) -> MisstatementClassificationDraft:
+    """REV-02 跨期草稿 (Numbat 的指针) 加错报性质, 只用来看性质的语义级."""
+    nature = MisstatementNature(type=type_, fraud_indicative=fraud, fraud_reason=reason)
+    return MisstatementClassificationDraft(**cutoff_draft().model_dump(), nature=nature)
+
+
+async def check_fin03(output: Any) -> Any:
+    """FIN-03 模板下校验 (Numbat 的假财务存储, 准则片段不按程序核对)."""
+    validator, _ = make_validator()
+    return await validator.validate(EID, FIN03, respond(output), STANDARDS_ANY)
+
+
+@pytest.mark.parametrize(
+    ("type_", "fraud", "reason", "error"),
+    [
+        (MisstatementType.factual, False, None, None),
+        (MisstatementType.judgmental, True, "Entry reverses a recorded sale.", None),
+        (MisstatementType.projected, False, None, "错报类型不能为 projected: 本系统不做审计抽样, 没有推断错报"),
+        (MisstatementType.factual, True, None, "有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)"),
+        (MisstatementType.factual, True, "  ", "有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)"),
+    ],
+)
+async def test_classification_nature_semantics(
+    type_: MisstatementType, fraud: bool, reason: str | None, error: str | None
+) -> None:
+    """R157 验收 3: 分类草稿同判断草稿各级之外, 语义级另查性质: 类型为 projected (不做审计抽样), 或有舞弊迹象而理由
+    为空 (含全空白), 判 semantic, 不重试; 其余通过, 输出仍是分类草稿."""
+    report = await check_fin03(classified(type_, fraud, reason))
+    if error is None:
+        assert report.level_failed is None and isinstance(report.output, MisstatementClassificationDraft)
+    else:
+        assert (report.level_failed, report.retryable, report.errors) == ("semantic", False, [error])
+
+
+async def test_classification_reference_failure_comes_before_nature() -> None:
+    """引用级不过 (没有能解析的指针) 时报引用级, 不再看性质."""
+    bad = EvidencePointer(type=EvidenceType.voucher, source_type="sales_invoice", source_id="SI-NONE", locator="x")
+    draft = classified(MisstatementType.projected, False, None)
+    steps = [step.model_copy(update={"evidence": [bad] if step.evidence else []}) for step in draft.reasoning_chain]
+    draft = draft.model_copy(update={"reasoning_chain": steps, "evidence": [bad]})
+    report = await check_fin03(draft)
+    assert report.level_failed == "reference" and not any("projected" in e for e in report.errors)
+
+
+def fin03_fixture(name: str) -> str:
+    return (XERO.fixtures / "FIN-03" / f"{name}.json").read_text(encoding="utf-8")
+
+
+def xero_validator() -> OutputValidator:
+    """Xero 演示导入之后的假财务存储 (行与 fieldwork 阶段上传的文件), 另登记 BA-091 的回函 (CSH-04 存档)."""
+    financial = xero_financial_store()
+    financial.document_refs.append(xero_document(BA091_REPLY))
+    return OutputValidator(financial, LIBRARY, FakeTrail())
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("name", "type_", "facts", "keyword"),
+    [
+        (
+            "XJ-499",
+            MisstatementType.factual,
+            {("journal_entry", f"XJ-499-{n}", None) for n in (1, 2, 3)} | {("document", REGISTER, 1)},
+            "manual journal posted without independent review: control deficiency lead",
+        ),
+        (
+            "BA-091",
+            MisstatementType.factual,
+            {("trial_balance", "091", None), ("document", BA091_REPLY, 1)},
+            "AUD 48.53",
+        ),
+        ("826", MisstatementType.factual, {("trial_balance", "477", None), ("document", PAYROLL, 1)}, "AUD 4,261.20"),
+        ("804", MisstatementType.factual, {("trial_balance", "477", None), ("document", PAYROLL, 1)}, "AUD 2,010.00"),
+        (
+            "805",
+            MisstatementType.judgmental,
+            {("trial_balance", "477", None), ("document", PAYROLL, 1)},
+            "AUD 2,687.36",
+        ),
+    ],
+)
+async def test_fin03_xero_fixtures_pass_four_levels(
+    name: str, type_: MisstatementType, facts: set[tuple[str, str, int | None]], keyword: str
+) -> None:
+    """R157 验收 5, 6: Xero 5 份 fixture (fixture_key 为来源判断的对象) 经四级校验 (假财务存储的 Xero 行与登记的文件,
+    准则片段按 FIN-03 的 standards) 一次通过: 都是 accept, 置信 0.85, 没有舞弊迹象, 类型与 fact 指针如表 (文件按补造路径
+    对应文件 ID), standard 指针为 ASA450-A6 与 ASA240-P36, 结论含该错报的要点."""
+    report = await xero_validator().validate(
+        EID, FIN03, respond(None, fin03_fixture(name)), ValidationContext(standards_of="FIN-03")
+    )
+    assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
+    draft = report.output
+    assert isinstance(draft, MisstatementClassificationDraft)
+    assert (draft.proposed_action, draft.self_confidence) == (ProposedAction.accept, 0.85)
+    assert draft.misstatement_draft is None
+    assert draft.nature == MisstatementNature(type=type_, fraud_indicative=False, fraud_reason=None)
+    ids = {xero_document(path).id: path for path in (REGISTER, PAYROLL, BA091_REPLY)}
+    cited = {
+        (p.source_type, ids.get(p.source_id, p.source_id), p.page)
+        for step in draft.reasoning_chain
+        if step.kind is StepKind.fact
+        for p in step.evidence
+    }
+    assert cited == facts
+    standards = {p.source_id for step in draft.reasoning_chain if step.kind is StepKind.standard for p in step.evidence}
+    assert standards == {"ASA450-A6", "ASA240-P36"}
+    assert keyword in draft.conclusion and "current period" in draft.conclusion
+
+
+@pytest.mark.external
+async def test_fin03_judge_returns_the_classification_draft() -> None:
+    """R157 验收 4, 6: judge 带回通过校验的草稿 (JudgmentOutcome.draft, 即分类草稿, 判断之外的性质由调用方取); 提示词按
+    头注释的变量渲染 (StrictUndefined, 缺一项即报错). XJ-499 改为有舞弊迹象而理由为空: 判 semantic, 只调 1 次,
+    judgment 与 draft 都为空, 失败类型 unattributed (混合程序)."""
+    good = fin03_fixture("XJ-499")
+    fraud = json.loads(good)
+    fraud["nature"]["fraud_indicative"] = True
+    llm = ScriptedLLM({"XJ-499": [good, json.dumps(fraud)]})
+    trail = FakeTrail()
+    engine = JudgmentEngine(llm, xero_validator(), trail, LIBRARY)
+    misstatement = {"id": "M-D-XJ499", "version": 1, "judgment_id": "J-GEN-02-1-XJ-499", "type": "factual"}
+    source = {"id": "J-GEN-02-1-XJ-499", "procedure_id": "GEN-02", "subject_id": "XJ-499", "conclusion": "No basis."}
+    data = {
+        "misstatement": misstatement,
+        "source_judgment": source,
+        "journal_lines": [],
+        "cited_rows": [],
+        "documents": [],
+        "fraud_risks": [],
+    }
+    jctx = JudgmentContext(subject_id="M-D-XJ499", task={"params": {}, "risks": []}, data=data, fixture_key="XJ-499")
+    passed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
+    assert passed.judgment is not None and passed.judgment.id == "J-FIN-03-1-M-D-XJ499"
+    assert isinstance(passed.draft, MisstatementClassificationDraft)
+    assert passed.draft.nature.type is MisstatementType.factual
+    assert passed.draft.evidence == passed.judgment.evidence  # 指针已按来源改写, 同判断
+    failed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
+    assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (None, None, "unattributed", 1)
+    assert trail.entries[-1].payload["level_failed"] == "semantic"

@@ -1,0 +1,122 @@
+{#
+FIN-03 错报性质分类 → MisstatementClassificationDraft，每条未分类的 identified 错报调用一次（需求 R157 定提示词，A8 的执行由 R158 加）。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
+变量：
+  subject_id                    错报 ID（M-{决定 ID}）
+  task.params                   本程序没有参数，为空
+  task.risks                    本程序不按审计目标装配，为空
+  data.misstatement             Misstatement：id、version、judgment_id、type（认定时草稿给的，可被本次分类改）、account、
+                                account_code、assertion、amount_cents、direction、status
+  data.source_judgment          错报的来源判断：id、procedure_id、subject_id、conclusion、evidence
+  data.journal_lines            分录行：来源判断的对象为凭证号时该凭证的全部行，加以该对象为原始单据（source_doc）的行，
+                                按 id 去重：source_type、id、entry_no、posting_date、created_by、approved_by、account_code、
+                                debit_cents、credit_cents、description、source_doc；没有时为空
+  data.cited_rows               来源判断其余证据指针所指的行（经 FinancialDataStore.record 解析，如试算表行），带 source_type
+  data.documents                来源判断证据中引用的文件的登记：id、file_name、type、page_count、reliability
+  data.fraud_risks              风险清单中 fraud_related 为真的风险：id、assertion、level、description
+  rule_findings                 本程序没有规则，为空
+  standards                     StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set m = data.misstatement %}
+{% set source = data.source_judgment %}
+You assist a registered company auditor with the completion stage of an Australian financial report audit.
+
+## Task
+
+Misstatement {{ subject_id }} was identified during the audit and recognised by the auditor from judgment {{ source.id }} ({{ source.procedure_id }}, subject {{ source.subject_id }}). Classify its nature:
+
+1. Type (ASA450-A6): `factual` or `judgmental`. This audit does not use audit sampling, so do not classify a misstatement as `projected`.
+2. Whether it is indicative of fraud (ASA240-P36).
+
+Do not change the amount, account, assertion or direction of the misstatement; they were set when it was recognised.
+
+## Inputs
+
+Misstatement:
+```json
+{{ m | tojson(indent=2) }}
+```
+
+Source judgment:
+```json
+{{ source | tojson(indent=2) }}
+```
+
+Journal lines:
+{% if data.journal_lines %}
+```json
+{{ data.journal_lines | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Other rows cited by the source judgment:
+{% if data.cited_rows %}
+```json
+{{ data.cited_rows | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Documents cited by the source judgment:
+{% if data.documents %}
+```json
+{{ data.documents | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Fraud risks in the risk register:
+{% for r in data.fraud_risks %}
+- {{ r.id }}: {{ r.assertion }}, {{ r.level }}. {{ r.description }}
+{% else %}
+- None.
+{% endfor %}
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. `factual`: there is no doubt about the misstatement; the amount follows from recorded transactions, documents, confirmations or rates set by law or contract.
+2. `judgmental`: the misstatement arises from management's judgements, including accounting estimates, recognition, measurement, presentation or the selection and application of accounting policies, that the auditor considers unreasonable or inappropriate. A provision whose amount rests on estimates is judgmental even when the method is simple.
+3. Indicative of fraud: the inputs show signs that the misstatement was intentional, such as an entry that conceals a transaction, lacks a business rationale, offsets another misstatement, or is linked to a fraud risk in the risk register. An omission of a routine adjustment, a calculation error or an entry that is openly described is not indicative of fraud on its own.
+4. When the inputs show a control weakness behind the misstatement, such as a manual journal posted without independent review, note it in `conclusion` as a control deficiency lead. A control weakness alone is not an indication of fraud.
+5. State in `conclusion` that the misstatement arose in the current period unless the inputs show it was carried forward from a prior period.
+
+## proposed_action
+
+- `accept`: the inputs support the classification.
+- `more_evidence`: the inputs are not enough to classify the misstatement or to decide whether it is indicative of fraud.
+- `misstatement`: only when the inputs show a further misstatement that has not been recognised; fill `misstatement_draft` for it.
+
+## Output (MisstatementClassificationDraft)
+
+- `conclusion`: two to four sentences: what the misstatement is and how it arose, its type and why, and whether it is indicative of fraud and why.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states whether the misstatement is indicative of fraud.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would change the classification.
+- `proposed_action`: as above.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `self_confidence`: 0 to 1, your confidence in the classification given the inputs.
+- `nature`: `type` (`factual` or `judgmental`), `fraud_indicative` (true or false), `fraud_reason` (why the misstatement is indicative of fraud; required when `fraud_indicative` is true, null otherwise).
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+| Journal line | voucher | journal_entry | row `id` | column name, e.g. debit_cents | null | internal_original |
+| Trial balance row | voucher | trial_balance | `account_code` | balance_cents | null | internal_original |
+| Other cited row | as in the source judgment's pointer | the row's `source_type` | row `id` | column name | null | as in the source judgment's pointer |
+| Document page | as in the source judgment's pointer | document | document `id` | what the page shows | a page the source judgment cites, 1 to `page_count` | the document's `reliability` |
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |

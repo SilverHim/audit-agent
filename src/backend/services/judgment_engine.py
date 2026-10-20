@@ -22,6 +22,8 @@ from backend.contracts.llm_outputs import (
     CriticVerdictOut,
     DocumentClassification,
     JudgmentDraft,
+    MisstatementClassificationDraft,
+    MisstatementNature,
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
@@ -39,6 +41,7 @@ from backend.contracts.models import (
     EvidenceType,
     Judgment,
     MisstatementDraft,
+    MisstatementType,
     OpinionType,
     ProcedureRun,
     ProposedAction,
@@ -216,6 +219,17 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     errors = chain_semantics(draft.reasoning_chain)
     if draft.proposed_action is ProposedAction.misstatement and draft.misstatement_draft is None:
         errors.append("建议认定错报, 但没有错报草稿")
+    return errors
+
+
+def nature_semantics(nature: MisstatementNature) -> list[str]:
+    """错报性质 (FIN-03, 需求 R157) 的语义校验, 返回错误 (空为通过): 类型不能为 projected (本系统不做审计抽样, 没有
+    推断错报); 有舞弊迹象须写理由."""
+    errors = []
+    if nature.type is MisstatementType.projected:
+        errors.append("错报类型不能为 projected: 本系统不做审计抽样, 没有推断错报")
+    if nature.fraud_indicative and not (nature.fraud_reason or "").strip():
+        errors.append("有舞弊迹象 (fraud_indicative 为真) 却没有理由 (fraud_reason)")
     return errors
 
 
@@ -683,6 +697,16 @@ async def check_judgment(
     return CheckResult(draft, level, unsupported, errors)
 
 
+async def check_classification(
+    validator: OutputValidator, eid: str, output: MisstatementClassificationDraft, ctx: ValidationContext
+) -> CheckResult:
+    """错报分类草稿 (FIN-03): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级另查错报
+    性质 (nature_semantics)."""
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    nature = nature_semantics(output.nature) if level != "reference" else []
+    return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
+
+
 async def check_extraction(
     validator: OutputValidator, eid: str, output: Extraction, ctx: ValidationContext
 ) -> CheckResult:
@@ -739,6 +763,7 @@ async def structure_only(
 
 for _model, _check in (
     (JudgmentDraft, check_judgment),
+    (MisstatementClassificationDraft, check_classification),
     (ContractExtraction, check_extraction),
     (ConfirmationExtraction, check_extraction),
     (RegistryExtraction, check_extraction),
@@ -964,7 +989,9 @@ class JudgmentEngine:
             created_at=datetime.now(UTC),
             trail_ref=result.trail_ids[-1],
         )
-        return JudgmentOutcome(judgment=judgment, failure=None, attempts=result.attempts, trail_ids=result.trail_ids)
+        return JudgmentOutcome(
+            judgment=judgment, failure=None, attempts=result.attempts, trail_ids=result.trail_ids, draft=draft
+        )
 
     def confidence_parts(
         self, template: ProcedureTemplate, draft: JudgmentDraft, steps: Sequence[ReasoningStep], has_findings: bool

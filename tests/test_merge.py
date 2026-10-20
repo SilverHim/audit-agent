@@ -944,10 +944,10 @@ def library_with(tmp_path: Path, **extra: str) -> ProcedureLibrary:
 
 
 def test_outputs_match_agent_fields_and_replay_registry() -> None:
-    """R85 验收 1-3: 全部模板 (含未启用的) 的 outputs 都在 owner 的写入范围内且登记了取回方式, 其中包含下列 24 条 (含
-    功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, GEN-03, acceptance 的 ACC-08 与 planning 的
-    PLN-15); 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序声明的共享字段都不是
-    singleton."""
+    """R85 验收 1-3: 全部模板 (含未启用的) 的 outputs 都在 owner 的写入范围内且登记了取回方式, 其中包含下列 25 条 (含
+    功能 journals 的 GEN-05, GEN-02, related_parties 的 GEN-08, GEN-03, acceptance 的 ACC-08, planning 的 PLN-15 与
+    misstatement 的 FIN-03); 每个可由 Agent 写的字段都登记了取回方式, 登记的都是状态字段; 两条以上程序声明的共享
+    字段都不是 singleton."""
     assert output_problems(LIBRARY) == []
     # 集合包含 (X-01): 之后新加的模板 (如 GEN-07, 需求 R177) 由各自的用例核对 outputs
     assert {t.id: t.outputs for t in LIBRARY.all(include_disabled=True)}.items() >= {
@@ -960,6 +960,7 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
         "DOC-04": ["documents", "review_tasks"],
         "DOC-06": ["documents", "confirmations", "review_tasks"],
         "FIN-01": [],
+        "FIN-03": ["judgments", "review_tasks", "misstatements"],  # 需求 R157, 功能 misstatement
         "FIN-04": ["uncorrected_schedule"],
         "GEN-02": ["judgments", "exceptions", "review_tasks"],
         "GEN-03": ["judgments", "exceptions", "review_tasks"],  # 需求 R139

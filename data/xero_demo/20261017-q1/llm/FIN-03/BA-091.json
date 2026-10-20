@@ -1,0 +1,129 @@
+{
+  "conclusion": "The misstatement is the interest of AUD 48.53 accrued to 30 September 2026 that the bank confirms for the Business Savings Account and the books have not recorded; it arose in the current period. It is factual: the bank's confirmation states the amount, so there is no doubt about it. There is no indication of fraud: an unrecorded period-end accrual of interest in the company's favour is an omission of a routine adjustment.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "GL account 091 shows AUD 11,581.23 at 30 September 2026, the balance the bank confirms; no interest was credited to the account in the period.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "091",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The bank's reply states accrued interest of AUD 48.53 at 30 September 2026, in the customer's favour and not yet credited to the account.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-66b0be79cdd4",
+          "locator": "accrued_interest_cents",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "A factual misstatement is one about which there is no doubt; a judgemental misstatement arises from management judgements, such as accounting estimates, that the auditor considers unreasonable (ASA 450 para A6).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-A6",
+          "locator": "para A6",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "When the auditor identifies a misstatement, the auditor evaluates whether it is indicative of fraud (ASA 240 para 36).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P36",
+          "locator": "para 36",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The interest earned to the period end is confirmed by the bank and not recorded in the books, so the misstatement is factual and arose in the current period.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Omitting a small accrual in the company's own favour gives no indication of fraud.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        3,
+        4
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "091",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-66b0be79cdd4",
+      "locator": "accrued_interest_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-A6",
+      "locator": "para A6",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P36",
+      "locator": "para 36",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A reply showing that the interest had already been credited, or a period-end accrual recorded elsewhere, would remove the misstatement.",
+  "proposed_action": "accept",
+  "misstatement_draft": null,
+  "self_confidence": 0.85,
+  "nature": {
+    "type": "factual",
+    "fraud_indicative": false,
+    "fraud_reason": null
+  }
+}
