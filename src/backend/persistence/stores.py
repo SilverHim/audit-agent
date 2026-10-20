@@ -1003,9 +1003,25 @@ class RoutingDatasetLoader:
         return sorted(name for loader in (self.default, *self.by_prefix.values()) for name in loader.datasets())
 
 
-async def record_changes(conn: AsyncConnection, eid: str, version: int, inputs: Iterable[DataInput]) -> None:
-    """在当前事务里记下数据版本 version 变了哪些数据 (表 data_changes); 已记的跳过."""
-    rows = [{"engagement_id": eid, "data_version": version, "input": i.value} for i in dict.fromkeys(inputs)]
+async def record_changes(
+    conn: AsyncConnection,
+    eid: str,
+    version: int,
+    inputs: Iterable[DataInput],
+    document_types: Iterable[DocumentType] | None = None,
+) -> None:
+    """在当前事务里记下数据版本 version 变了哪些数据 (表 data_changes); 已记的跳过. document_types 为登记变了的文件的
+    类型 (需求 R304), 记在 documents 那一行 (按 DocumentType 顺序去重); 不给为空, 即不知道是哪类文件."""
+    types = None if document_types is None else [t.value for t in DocumentType if t in set(document_types)]
+    rows = [
+        {
+            "engagement_id": eid,
+            "data_version": version,
+            "input": i.value,
+            "document_types": types if i is DataInput.documents else None,
+        }
+        for i in dict.fromkeys(inputs)
+    ]
     if rows:
         await conn.execute(insert(m.data_changes).values(rows).on_conflict_do_nothing())
 

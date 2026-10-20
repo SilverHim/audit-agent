@@ -19,6 +19,7 @@ feature: acceptance                # 功能开关 (services/features.py): 承接
 outputs: [engagement_terms, judgments, exceptions, documents]
 document_types: [engagement_letter, minutes]   # 读过的约定书与委任文件置 extracted 后交回
 reads: [documents]                 # 判断引用约定文件的页, 证据可靠性取自文件登记 (需求 R90); 承接阶段的执行不判过期
+document_reads: [engagement_letter, minutes]   # 读这两类文件的登记 (需求 R304); 执行由 R200 实现, 读的类型有变时同改
 engine: hybrid
 autonomy_level: L1
 gate: ACC-08

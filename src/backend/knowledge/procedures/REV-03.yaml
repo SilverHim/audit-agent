@@ -5,6 +5,7 @@ cycle: Revenue
 owner: A6
 outputs: [judgments, exceptions, review_tasks]
 reads: [contracts, documents]  # documents: 判断引用合同页, 证据可靠性取自文件登记 (需求 R90)
+document_reads: [contract]  # 只有合同的登记变了才过期 (需求 R304)
 engine: llm
 autonomy_level: L2
 manual_result_allowed: true

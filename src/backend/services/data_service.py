@@ -1709,8 +1709,8 @@ class DataService:
 
         一个事务内: 各文件改登记 (EvidenceStore.update_details), 抽取版本表记一版 (target_type document, data 为
         details_data, field 为改了的字段按 DETAIL_FIELDS 顺序以逗号连接; 该文件第一次补登记先补记修改前的一版, 记 A3,
-        field 为空), 数据版本 +1 (一批一次, 记数据变动 documents: 读文件登记的程序随之过期). 提交后每份写一条 data
-        留痕 (edit_entry; 没写成的下次取锁时补写). 关联对象不校验是否存在."""
+        field 为空), 数据版本 +1 (一批一次, 记数据变动 documents 并带这一批各文件的类型: 读该类文件登记的程序随之
+        过期, 需求 R304). 提交后每份写一条 data 留痕 (edit_entry; 没写成的下次取锁时补写). 关联对象不校验是否存在."""
         async with self.locked(eid):
             await self.backfill_trails(eid)
             return await self.save_details(eid, edits, actor)
@@ -1779,7 +1779,9 @@ class DataService:
                     )
                     results[document.id] = updated
                     written.append(record)
-                await self.deps.data.bump_version(eid, DataInput.documents)
+                # 记下补登记了哪几类文件: 只让读这几类文件登记的程序过期 (需求 R304)
+                kinds = [document.type for document, *_ in planned]
+                await self.deps.data.bump_version(eid, DataInput.documents, document_types=kinds)
             await record_transitions(self.deps.trail, [edit_entry(eid, r) for r in written])
         return [results[document_id] for document_id in edits]
 

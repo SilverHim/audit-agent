@@ -1080,6 +1080,14 @@ async def test_data_changes_record_what_each_version_changed(storage, tmp_path: 
     ]
     assert (await store.readiness(first.id)).data_version == 6
     assert await store.changes(other.id) == []
+    # 补登记记 documents 带文件类型 (需求 R304): 按 DocumentType 顺序去重; 其余种类与数据集载入的 documents 不带
+    kinds = [DocumentType.confirmation, DocumentType.contract, DocumentType.confirmation]
+    assert await store.bump_version(first.id, DataInput.documents, document_types=kinds) == 7
+    changes = await store.changes(first.id)
+    assert changes[-1] == DataChange(
+        data_version=7, input=DataInput.documents, document_types=[DocumentType.contract, DocumentType.confirmation]
+    )
+    assert {c.document_types for c in changes[:-1]} == {None}
 
 
 async def test_migration_0008_backfills_data_changes_under_force_rls(storage) -> None:  # type: ignore[no-untyped-def]
@@ -1385,7 +1393,9 @@ async def test_document_details_round_trip(storage, tmp_path: Path) -> None:  # 
         "related_ids": ["XJ-499", "XJ-626", "XJ-676"],
     }
     changes = await service.deps.data.changes(first.id)
-    assert changes[-1] == DataChange(data_version=changes[-1].data_version, input=DataInput.documents)
+    assert changes[-1] == DataChange(  # 带补登记的文件类型 (需求 R304)
+        data_version=changes[-1].data_version, input=DataInput.documents, document_types=[DocumentType.internal_record]
+    )
     key = f"{first.id}:data:edit:document:{saved.id}:v2"
     assert await service.deps.trail.find_success(first.id, key) is not None
     assert await financial.documents(second.id) == []
@@ -1393,6 +1403,60 @@ async def test_document_details_round_trip(storage, tmp_path: Path) -> None:  # 
     assert await service.deps.data.extraction_versions(second.id, "document") == []
     with pytest.raises(LookupError):  # 别的项目的文件当作不存在
         await service.set_document_details(second.id, {saved.id: edit}, "U-1")
+
+
+async def test_migration_0020_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R304: 以属主角色在一个事务里走 0020 降级再升级 (两次), 最后回滚. 降级后 data_changes 没有 document_types;
+    降级时已有的 documents 变动升级后读回为空 (不知道是哪类文件, 过期照旧按 reads 判). 需另设
+    TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, _second), _, _ = storage
+    module = migration("0020_data_change_document_types")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def columns() -> set[str]:
+                    found = await conn.execute(
+                        text("SELECT column_name FROM information_schema.columns WHERE table_name = 'data_changes'")
+                    )
+                    return {row[0] for row in found}
+
+                assert "document_types" in await columns()  # 0001 按当前模型建库, 新库已有
+                await conn.run_sync(run("downgrade"))
+                assert "document_types" not in await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                await conn.execute(
+                    text("INSERT INTO data_changes (engagement_id, data_version, input) VALUES (:e, 99, 'documents')"),
+                    {"e": first.id},
+                )
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                assert "document_types" in await columns()
+                await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": first.id})
+                found = await conn.execute(text("SELECT document_types FROM data_changes WHERE data_version = 99"))
+                assert found.one() == (None,)
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
 
 
 async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-untyped-def]

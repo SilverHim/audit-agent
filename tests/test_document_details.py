@@ -149,7 +149,10 @@ async def test_details_write_versions_trail_and_one_data_version() -> None:
         "related_ids": ["ACN-1", "XJ-9"],
     }
     assert data.data_version == before + 1
-    assert data.data_changes[-1] == DataChange(data_version=before + 1, input=DataInput.documents)
+    # 记下补登记的文件类型 (需求 R304): 过期只看读该类文件登记的程序
+    assert data.data_changes[-1] == DataChange(
+        data_version=before + 1, input=DataInput.documents, document_types=[DocumentType.agreement]
+    )
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
     [entry] = [e for e in trail.entries if e.payload.get("action") == "edit"]
@@ -195,7 +198,7 @@ async def test_failed_write_rolls_back_registration_and_trail_is_backfilled(monk
     runner, service, financial, _, data = service_with(LEASE)
     bump = data.bump_version
 
-    async def broken_bump(eid: str, input: DataInput) -> int:
+    async def broken_bump(eid: str, input: DataInput, **_: Any) -> int:
         raise RuntimeError("数据版本写失败")
 
     monkeypatch.setattr(data, "bump_version", broken_bump)
@@ -447,8 +450,9 @@ def p_id(path: str) -> str:
 
 
 async def test_details_make_only_document_reading_programs_stale() -> None:
-    """Numbat 停在 FIN-01 时补登记一份合同的可靠性: 数据版本 +1 (记 documents), 只有判断引用文件页的 REV-03, REV-02,
-    CSH-02 过期; 补登记的留痕不进体检与补交请求 (体检记录与请求都不变)."""
+    """Numbat 停在 FIN-01 时补登记一份合同的可靠性: 数据版本 +1 (记 documents, 带文件类型 contract), 只有判断引用
+    合同页的 REV-03, REV-02 过期 (需求 R304: 读回函登记的 CSH-02 不过期, 抽合同的 DOC-04 不读登记); 补登记的留痕
+    不进体检与补交请求 (体检记录与请求都不变)."""
     s = await demo_at_fin_gate()
     service = DataService(s.runner.deps, s.runner)
     data = s.runner.deps.data
@@ -460,9 +464,41 @@ async def test_details_make_only_document_reading_programs_stale() -> None:
     await service.set_document_details(EID, {contract.id: edit(reliability="external_original")}, "U-1")
 
     assert data.data_version == version + 1
-    assert sorted((await overview(s)).stale_procedure_ids) == ["CSH-02", "REV-02", "REV-03"]
+    assert sorted((await overview(s)).stale_procedure_ids) == ["REV-02", "REV-03"]
     assert (await data.check_run(EID), await data.requests(EID)) == (checks, requests)
     assert data_trail(s.runner)[-1]["action"] == "edit"
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (DocumentType.financial_statements, []),  # 外勤之后新登记待审财报: 读合同, 回函登记的程序都不过期
+        (DocumentType.confirmation, ["CSH-02"]),
+    ],
+)
+async def test_details_of_other_document_types_stale_only_their_readers(
+    kind: DocumentType, expected: list[str]
+) -> None:
+    """需求 R304 验收 1: Numbat 停在 FIN-01 时登记并补登记一份文件, 数据变动记下它的类型; 新登记的待审财报不让
+    REV-03, REV-02, CSH-02 过期 (R287 实测的情形), 回函的登记变了只有 CSH-02 过期."""
+    s = await demo_at_fin_gate()
+    service = DataService(s.runner.deps, s.runner)
+    data = s.runner.deps.data
+    assert isinstance(data, FakeDataStore)
+    if kind is DocumentType.confirmation:
+        document = next(d for d in await s.runner.deps.financial_store.documents(EID) if d.type is kind)
+    else:
+        document = await s.runner.deps.evidence_store.save(
+            EID, "fs_v1.pdf", b"%PDF fs", type=kind, reliability=Reliability.internal_copy, uploaded_by="U-1"
+        )
+    version = data.data_version
+
+    await service.set_document_details(EID, {document.id: edit(document_date="2026-10-22")}, "U-1")
+
+    assert data.data_changes[-1] == DataChange(
+        data_version=version + 1, input=DataInput.documents, document_types=[kind]
+    )
+    assert sorted((await overview(s)).stale_procedure_ids) == expected
 
 
 # ── 改类型时的可靠性 (裁定 2: 补登记过的保留) ───────────────

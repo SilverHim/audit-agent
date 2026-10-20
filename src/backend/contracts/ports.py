@@ -415,15 +415,18 @@ class DataStore(Protocol):
         """抽取结果的各版 (可按类型与对象筛), 按类型, 对象, 版本升序."""
         ...
 
-    async def bump_version(self, eid: str, input: DataInput) -> int:
+    async def bump_version(
+        self, eid: str, input: DataInput, *, document_types: Sequence[DocumentType] | None = None
+    ) -> int:
         """数据版本 +1 (修改合同, 回函抽取结果等不经 write_tables 的数据变动), 同一事务内记一条数据变动 (input),
-        返回新版本."""
+        返回新版本. input 为 documents 时 document_types 为登记变了的文件的类型 (需求 R304, 补登记给), 不给为空."""
         ...
 
     async def changes(self, eid: str) -> list[DataChange]:
         """全部数据变动, 按数据版本升序 (同版本按 DataInput 顺序). 每次数据版本 +1 都记下变了哪类数据: 写入账表记
         各表, 改科目分类记 accounts, 改合同与回函记 contracts, confirmations, 数据集载入与更正分录载入记所载入的;
-        0008 迁移之前的版本中查不到种类的, 记为全部各类都变了. 过期判断只读这里 (services.staleness)."""
+        0008 迁移之前的版本中查不到种类的, 记为全部各类都变了. 补登记记 documents 并带文件类型 (需求 R304; 迁移 0020
+        之前记的与数据集载入的不带). 过期判断只读这里 (services.staleness)."""
         ...
 
     async def save_extraction(

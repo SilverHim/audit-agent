@@ -29,6 +29,7 @@ from backend.contracts.models import (
     AuditReportVersion,
     Confirmation,
     Decision,
+    DocumentType,
     ExceptionDisposition,
     GateVerdict,
     Judgment,
@@ -58,7 +59,7 @@ from backend.core.config import get_settings
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.trail import phase_transition
 from backend.services.data_service import DataService
-from backend.services.procedure_library import ProcedureLibrary
+from backend.services.procedure_library import ProcedureLibrary, document_read_problems
 from backend.services.staleness import current_results, rerunnable, stale_procedures
 from tests.fakes import (
     ENGAGEMENT,
@@ -157,6 +158,63 @@ def test_stale_by_what_each_program_reads(data_input: DataInput, expected: set[s
     stale = stale_procedures(PACK, RUNS, changed(data_input), LIBRARY)
     assert set(stale) == expected
     assert stale == [p.id for p in PACK if p.id in expected]
+
+
+# 带文件类型的文件登记变动 (需求 R304): 只有读该类文件登记的程序 (模板 document_reads) 过期; 依赖它们的随之
+TYPED_DOCUMENT_CHANGES = [
+    pytest.param([DocumentType.financial_statements], set(), id="financial_statements"),  # 待审财报: 没有程序读
+    pytest.param([DocumentType.contract], {"REV-03", "REV-02"}, id="contract"),  # DOC-04 抽合同, 不读登记
+    pytest.param([DocumentType.confirmation], {"CSH-02"}, id="confirmation"),  # DOC-06 抽回函, 不读登记
+    pytest.param([DocumentType.contract, DocumentType.confirmation], {"REV-03", "REV-02", "CSH-02"}, id="both"),
+    pytest.param([DocumentType.agreement, DocumentType.minutes], set(), id="others"),
+]
+
+
+@pytest.mark.parametrize(("types", "expected"), TYPED_DOCUMENT_CHANGES)
+def test_document_changes_with_types_stale_only_their_readers(types: list[DocumentType], expected: set[str]) -> None:
+    """需求 R304 验收 1: 文件登记的变动带了文件类型时, 只有 document_reads 含其中某类的程序与依赖它们的程序过期. 没带
+    类型的旧变动 (上面 DataInput.documents 一行) 照旧让 reads 含 documents 的 REV-03, REV-02, CSH-02 都过期 (验收 3)."""
+    change = DataChange(data_version=2, input=DataInput.documents, document_types=types)
+    assert set(stale_procedures(PACK, RUNS, [*SEEDED, change], LIBRARY)) == expected
+
+
+def test_programs_reading_registrations_declare_the_document_types() -> None:
+    """需求 R304 验收 2 (取 "必须声明"): reads 含 documents 的程序都写了 document_reads, 两者须同时写, 否则程序库加载
+    即报错; 读登记的类型与产出侧 document_types 各管各的 (DOC-04 交回合同文件而不读登记)."""
+    readers = {t.id: t.document_reads for t in LIBRARY.all(include_disabled=True) if t.document_reads}
+    assert readers == {
+        "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],  # 承接阶段, 不判过期
+        "REV-03": [DocumentType.contract],
+        "REV-02": [DocumentType.contract],
+        "CSH-02": [DocumentType.confirmation],
+    }
+    assert {t.id: t.document_types for t in LIBRARY.all(include_disabled=True) if t.document_types} == {
+        "ACC-08": [DocumentType.engagement_letter, DocumentType.minutes],
+        "GEN-08": [DocumentType.registry_extract],
+        "DOC-04": [DocumentType.contract],
+        "DOC-06": [DocumentType.confirmation],
+        "CSH-04": [DocumentType.confirmation],
+    }
+    rev03 = LIBRARY.load("REV-03")
+    undeclared = rev03.model_copy(update={"document_reads": []})
+    stray = LIBRARY.load("DOC-04").model_copy(update={"document_reads": [DocumentType.contract]})
+    assert document_read_problems([rev03, undeclared, stray]) == [
+        "REV-03: reads 含 documents 而没写 document_reads",
+        "DOC-04: 写了 document_reads 而 reads 没有 documents",
+    ]
+
+
+def test_library_rejects_undeclared_document_reads(tmp_path: Path) -> None:
+    """程序库加载时拒绝 reads 含 documents 而没写 document_reads 的模板 (知识目录的副本里去掉 REV-03 的那一行)."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
+    path = root / "procedures" / "REV-03.yaml"
+    path.write_text(
+        "".join(line for line in path.read_text(encoding="utf-8").splitlines(True) if "document_reads" not in line),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="REV-03: reads 含 documents 而没写 document_reads"):
+        ProcedureLibrary(root)
 
 
 def test_nothing_stale_without_later_changes() -> None:
