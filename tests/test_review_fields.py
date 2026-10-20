@@ -5,7 +5,14 @@ from typing import Any
 import pytest
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import Decision, DisputeResolution, NeitherAction, ReviewRecord, TaskKind
+from backend.contracts.models import (
+    Decision,
+    DisputeResolution,
+    MisstatementUpdate,
+    NeitherAction,
+    ReviewRecord,
+    TaskKind,
+)
 from backend.orchestration.decisions import REVIEW_FIELDS, ReviewFields, check_review_fields, review_fields
 from backend.services.review_queue import ALLOWED
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT
@@ -40,6 +47,10 @@ FILLED: dict[str, Any] = {
     "manual_result": {"conclusion": "人工执行的结果"},
     "dispute_resolution": DisputeResolution.neither,
     "neither_action": NeitherAction.human_conclusion,
+    # 需求 R156: 现有决定都不能带 (第 1 轮审核 R156-03)
+    "misstatement_update": MisstatementUpdate(
+        misstatement_id="M-D-1", base_version=1, kind="classification", origin="current_period"
+    ),
 }
 
 

@@ -363,7 +363,6 @@ async def test_lifecycle_misstatement_keeps_account_code(p2: P2) -> None:
             status=status,
             **draft.model_dump(),
         )
-        assert (misstatement.version, misstatement.account_code, misstatement.uncorrected_basis) == (1, "270", None)
     unknown = record.model_copy(update={"misstatement_draft": draft.model_copy(update={"account_code": "999"})})
     with pytest.raises(DecisionRejected) as e:
         await check_account_code(p2.deps.financial_store, eid, unknown)

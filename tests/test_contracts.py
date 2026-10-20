@@ -979,29 +979,65 @@ def test_misstatement_lifecycle_fields_default_and_old_rows_read_back() -> None:
     assert {k: back[k] for k in LIFECYCLE_DEFAULTS} == LIFECYCLE_DEFAULTS | {"status": MisstatementStatus.uncorrected}
 
 
+VERIFIED = {"verified_by_judgment_id": "J-V"}  # 作验证的判断
+COMMUNICATED = {"communicated_at": AT, "management_response": "We will not adjust."}  # 沟通时间与管理层回复
+
+
 @pytest.mark.parametrize(
     ("fields", "message"),
     [
-        ({"status": "corrected", "residual_cents": 1, "verified_by_judgment_id": "J-V"}, "corrected 须剩余额为 0"),
-        ({"status": "corrected", "residual_cents": None, "verified_by_judgment_id": "J-V"}, "corrected 须剩余额为 0"),
-        ({"status": "corrected", "residual_cents": 0}, "corrected 须剩余额为 0 且有验证判断"),
-        ({"status": "partially_corrected", "residual_cents": 0}, "剩余额 0 须在 \\(0, 10000\\) 内"),
-        ({"status": "partially_corrected", "residual_cents": 10000}, "剩余额 10000 须在"),
-        ({"status": "partially_corrected"}, "剩余额 None 须在"),
+        # 验收 2 的五条
+        ({"status": "corrected", "residual_cents": 1, "corrected_cents": 9999, **VERIFIED}, "corrected 须剩余额为 0"),
+        (
+            {"status": "corrected", "residual_cents": None, "corrected_cents": 10000, **VERIFIED},
+            "corrected 须剩余额为 0",
+        ),
+        ({"status": "corrected", "residual_cents": 0, "corrected_cents": 10000}, "corrected 须有验证判断"),
+        ({"status": "partially_corrected", "residual_cents": 0, **VERIFIED}, "剩余额 0 须在 \\(0, 10000\\) 内"),
+        ({"status": "partially_corrected", "residual_cents": 10000, **VERIFIED}, "剩余额 10000 须在"),
+        ({"status": "partially_corrected", **VERIFIED}, "剩余额 None 须在"),
         (
             {"status": "uncorrected", "uncorrected_basis": "refused", "management_response": "We will not adjust."},
             "须有沟通时间",
         ),
         ({"status": "uncorrected", "uncorrected_basis": "refused", "communicated_at": AT}, "管理层回复"),
         ({"status": "uncorrected", "uncorrected_basis": "stopped_waiting"}, "停止等待更正须有更正通知"),
-        ({"status": "verifying", "uncorrected_basis": "stopped_waiting"}, "停止等待更正须有更正通知"),
         ({"status": "identified", "needs_recommunication": True}, "needs_recommunication 只在 communicated"),
-        ({"status": "verifying", "needs_recommunication": True}, "needs_recommunication 只在 communicated"),
+        (
+            {"status": "verifying", "correction_notice_id": "CN-1", "needs_recommunication": True},
+            "needs_recommunication 只在 communicated",
+        ),
+        # 第 1 轮审核 R156-06 收紧的: 依据只随 uncorrected; 沟通与验证的状态须有对应字段; 更正的金额须对得上
+        (
+            {"status": "identified", "uncorrected_basis": "refused", **COMMUNICATED},
+            "依据 \\(uncorrected_basis\\) 只随 uncorrected, 现为 identified",
+        ),
+        (
+            {"status": "verifying", "uncorrected_basis": "stopped_waiting", "correction_notice_id": "CN-1"},
+            "只随 uncorrected, 现为 verifying",
+        ),
+        (
+            {"status": "corrected", "residual_cents": 0, "corrected_cents": 10000, "uncorrected_basis": "refused"}
+            | VERIFIED
+            | COMMUNICATED,
+            "只随 uncorrected, 现为 corrected",
+        ),
+        ({"status": "communicated"}, "communicated 须有沟通时间"),
+        ({"status": "verifying"}, "verifying 须有更正通知"),
+        (
+            {"status": "corrected", "residual_cents": 0, "corrected_cents": 0, **VERIFIED},
+            "已更正额加剩余额须等于错报金额: 0 \\+ 0, 金额 10000",
+        ),
+        (
+            {"status": "partially_corrected", "residual_cents": 100, "corrected_cents": 0, **VERIFIED},
+            "已更正额加剩余额须等于错报金额: 0 \\+ 100",
+        ),
+        ({"status": "partially_corrected", "residual_cents": 100, "corrected_cents": 9900}, "须有验证判断"),
     ],
 )
 def test_misstatement_state_and_fields_must_agree(fields: dict[str, Any], message: str) -> None:
-    """验收 2: 状态与字段不一致时模型校验抛 ValidationError, 消息写明哪一条 (剩余额的边界 0 与金额本身都不算部分
-    更正)."""
+    """验收 2 与第 1 轮审核 R156-06: 状态与字段不一致时模型校验抛 ValidationError, 消息写明哪一条 (剩余额的边界 0 与
+    金额本身都不算部分更正)."""
     with pytest.raises(ValidationError, match=message):
         lifecycle_misstatement(**fields)
 
@@ -1010,17 +1046,14 @@ def test_misstatement_state_and_fields_must_agree(fields: dict[str, Any], messag
     "fields",
     [
         {"status": "uncorrected"},  # 功能关闭时的旧口径: 未经沟通, basis 为空
-        {"status": "corrected", "residual_cents": 0, "verified_by_judgment_id": "J-V", "corrected_cents": 10000},
-        {"status": "partially_corrected", "residual_cents": 1, "corrected_cents": 9999},
-        {"status": "partially_corrected", "residual_cents": 9999, "corrected_cents": 1},
-        {
-            "status": "uncorrected",
-            "uncorrected_basis": "refused",
-            "communicated_at": AT,
-            "management_response": "We will not adjust.",
-        },
+        {"status": "communicated", "communicated_at": AT},
+        {"status": "communicated", "communicated_at": AT, "needs_recommunication": True},
+        {"status": "verifying", "correction_notice_id": "CN-1"},
+        {"status": "corrected", "residual_cents": 0, "corrected_cents": 10000, **VERIFIED},
+        {"status": "partially_corrected", "residual_cents": 1, "corrected_cents": 9999, **VERIFIED},
+        {"status": "partially_corrected", "residual_cents": 9999, "corrected_cents": 1, **VERIFIED},
+        {"status": "uncorrected", "uncorrected_basis": "refused", **COMMUNICATED},
         {"status": "uncorrected", "uncorrected_basis": "stopped_waiting", "correction_notice_id": "CN-1"},
-        {"status": "communicated", "needs_recommunication": True},
     ],
 )
 def test_consistent_misstatement_states_validate(fields: dict[str, Any]) -> None:
@@ -1031,12 +1064,15 @@ def test_consistent_misstatement_states_validate(fields: dict[str, Any]) -> None
 
 def test_verified_adjustment_entries_take_only_verified_corrections() -> None:
     """验收 1: 已验证更正分录为 corrected 或 partially_corrected 且有验证判断的错报的凭证号并集 (去重, 按凭证号);
-    未验证, 未更正与重新沟通的不算."""
+    verifying 与重新沟通的 communicated 不算, 即使带着上一轮的验证判断与凭证号 (只能按状态排除, 第 1 轮审核
+    R156-05). 部分更正而没有验证判断的已过不了模型校验, 检查点读回校验失败时会退回 model_construct (第 2.5 节),
+    用它造这一行, 函数仍按定义排除."""
     rows = [
         lifecycle_misstatement(
             id="M-1",
             status="corrected",
             residual_cents=0,
+            corrected_cents=10000,
             verified_by_judgment_id="J-V1",
             adjustment_entry_nos=["AJE-X05", "AJE-X01"],
         ),
@@ -1044,38 +1080,70 @@ def test_verified_adjustment_entries_take_only_verified_corrections() -> None:
             id="M-2",
             status="partially_corrected",
             residual_cents=100,
+            corrected_cents=9900,
             verified_by_judgment_id="J-V2",
             adjustment_entry_nos=["AJE-X01", "AJE-X02"],
         ),
-        lifecycle_misstatement(
-            id="M-3", status="partially_corrected", residual_cents=100, adjustment_entry_nos=["AJE-X03"]
+        Misstatement.model_construct(
+            **lifecycle_misstatement(id="M-3").model_dump()
+            | {"status": MisstatementStatus.partially_corrected, "residual_cents": 100, "corrected_cents": 9900}
+            | {"adjustment_entry_nos": ["AJE-X03"]}
         ),
-        lifecycle_misstatement(id="M-4", status="verifying", adjustment_entry_nos=["AJE-X04"]),
         lifecycle_misstatement(
-            id="M-5", status="communicated", needs_recommunication=True, adjustment_entry_nos=["AJE-X06"]
+            id="M-4",
+            status="verifying",
+            correction_notice_id="CN-2",
+            verified_by_judgment_id="J-V0",
+            adjustment_entry_nos=["AJE-X04"],
+        ),
+        lifecycle_misstatement(
+            id="M-5",
+            status="communicated",
+            communicated_at=AT,
+            needs_recommunication=True,
+            verified_by_judgment_id="J-V0",
+            adjustment_entry_nos=["AJE-X06"],
         ),
     ]
     assert verified_adjustment_entries(rows) == ["AJE-X01", "AJE-X02", "AJE-X05"]
 
 
+# 验收 8 字面: 两类更新各自能带的字段与一个非空值 (写死, 不从 CLASSIFICATION_FIELDS, VERIFICATION_FIELDS 生成)
+CLASSIFICATION_VALUES: dict[str, Any] = {
+    "type": "judgmental",
+    "fraud_indicative": False,
+    "fraud_reason": "No indication of intent.",
+    "origin": "current_period",
+    "objective_id": "OBJ-REV-OCC",
+}
+VERIFICATION_VALUES: dict[str, Any] = {
+    "status": "corrected",
+    "adjustment_entry_nos": ["AJE-X01"],
+    "corrected_cents": 100,
+    "residual_cents": 0,
+    "needs_recommunication": True,
+}
+
+
 @pytest.mark.parametrize(
-    ("fields", "message"),
+    ("kind", "field", "value"),
     [
-        ({"kind": "classification", "status": "corrected"}, "classification 的错报更新不能带 status"),
-        ({"kind": "classification", "corrected_cents": 100}, "不能带 corrected_cents"),
-        ({"kind": "classification", "needs_recommunication": True}, "不能带 needs_recommunication"),
-        ({"kind": "verification", "type": "judgmental"}, "verification 的错报更新不能带 type"),
-        ({"kind": "verification", "fraud_indicative": False}, "不能带 fraud_indicative"),
-        ({"kind": "verification", "objective_id": "OBJ-REV-OCC"}, "不能带 objective_id"),
-        ({"kind": "verification", "status": "verifying"}, "不能为 verifying"),
-        ({"kind": "verification", "status": "uncorrected"}, "不能为 uncorrected"),
+        *(("verification", name, value) for name, value in CLASSIFICATION_VALUES.items()),
+        *(("classification", name, value) for name, value in VERIFICATION_VALUES.items()),
     ],
 )
-def test_misstatement_update_carries_only_its_kind(fields: dict[str, Any], message: str) -> None:
-    """验收 8: 分类只带类型, 舞弊迹象与理由, 来源, 审计目标; 验证只带状态 (只许 corrected, partially_corrected,
-    communicated), 凭证号, 已更正与剩余金额, 重新沟通标记; 带了别类的字段或别的状态抛 ValidationError."""
-    with pytest.raises(ValidationError, match=message):
-        MisstatementUpdate.model_validate({"misstatement_id": "M-D-1", "base_version": 2} | fields)
+def test_misstatement_update_carries_only_its_kind(kind: str, field: str, value: Any) -> None:
+    """验收 8: 分类只带类型, 舞弊迹象与理由, 来源, 审计目标; 验证只带状态, 凭证号, 已更正与剩余金额, 重新沟通标记;
+    带了别类的任一字段抛 ValidationError, 消息写明该字段 (第 1 轮审核 R156-05: 逐项核对)."""
+    with pytest.raises(ValidationError, match=f"{kind} 的错报更新不能带 {field}"):
+        MisstatementUpdate.model_validate({"misstatement_id": "M-D-1", "base_version": 2, "kind": kind, field: value})
+
+
+@pytest.mark.parametrize("status", ["identified", "verifying", "uncorrected", "evaluated", "closed"])
+def test_verification_status_is_limited(status: str) -> None:
+    """验收 8: 验证只许把错报改为 corrected, partially_corrected 或 communicated."""
+    with pytest.raises(ValidationError, match=f"不能为 {status}"):
+        MisstatementUpdate(misstatement_id="M-D-1", base_version=2, kind="verification", status=status)
 
 
 def test_misstatement_update_and_management_response_shapes() -> None:
@@ -1121,9 +1189,10 @@ def test_misstatement_update_and_management_response_shapes() -> None:
         ManagementResponse.model_validate(response | {"responded_at": datetime(2026, 10, 19, 3, tzinfo=UTC)})
 
 
-def test_drafts_and_records_carry_the_new_optional_fields() -> None:
-    """范围: MisstatementDraft.account_code, Judgment 与 ReviewRecord 的 misstatement_update 都可空且缺省为空, 旧 JSON
-    照常读回."""
-    assert MisstatementDraft.model_fields["account_code"].default is None
-    assert Judgment.model_fields["misstatement_update"].default is None
-    assert ReviewRecord.model_fields["misstatement_update"].default is None
+@pytest.mark.parametrize(("code", "kept"), [("", None), ("  ", None), (None, None), ("710", "710")])
+def test_blank_account_code_is_none(code: str | None, kept: str | None) -> None:
+    """第 1 轮审核 R156-12: 错报草稿的空白科目代码归一为 None (不填, 不查科目表), 其余原样."""
+    draft = MisstatementDraft(
+        type="factual", account="Office equipment", assertion="Existence", amount_cents=1, direction="overstated"
+    )
+    assert MisstatementDraft.model_validate(draft.model_dump() | {"account_code": code}).account_code == kept

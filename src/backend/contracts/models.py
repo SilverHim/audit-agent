@@ -7,7 +7,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Model(BaseModel):
@@ -555,12 +555,21 @@ class MisstatementDraft(Model):
     # 科目代码 (需求 R156): AI 草稿能从上下文得到时填, 审计师提交认定时可填或改; 非空时须在本项目科目表中
     account_code: str | None = None
 
+    @field_validator("account_code")
+    @classmethod
+    def blank_code_is_none(cls, value: str | None) -> str | None:
+        """空串与全空白归一为 None (不填, 不查科目表), 其余原样 (第 1 轮审核 R156-12)."""
+        if value is None or not value.strip():
+            return None
+        return value
+
 
 # 错报更新载荷两类各自能带的字段 (需求 R156): 分类 (FIN-03) 定类型, 舞弊迹象, 来源与审计目标; 验证 (FIN-09) 定更正结果
 CLASSIFICATION_FIELDS = ("type", "fraud_indicative", "fraud_reason", "origin", "objective_id")
 VERIFICATION_FIELDS = ("status", "adjustment_entry_nos", "corrected_cents", "residual_cents", "needs_recommunication")
-# 验证能把错报改成的状态: 全部更正, 部分更正, 或分录对不上而回到 communicated 重新沟通
-VERIFIED_STATUSES = (
+# 验证能把错报改成的状态: 全部更正, 部分更正, 或分录对不上而回到 communicated 重新沟通 (与已验证更正分录取的
+# corrected, partially_corrected 是两个口径, 见 verified_adjustment_entries)
+VERIFICATION_STATUSES = (
     MisstatementStatus.corrected,
     MisstatementStatus.partially_corrected,
     MisstatementStatus.communicated,
@@ -570,7 +579,7 @@ VERIFIED_STATUSES = (
 class MisstatementUpdate(Model):
     """判断携带的对一条已有错报的更新 (需求 R156): FIN-03 的分类或 FIN-09 的验证; 判断确认后由 A8 按它出错报新版本.
     base_version 为判断所依据的错报版本 (写入时须仍是当前版本). 没写的可选字段表示不改. kind 为 classification
-    时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFIED_STATUSES."""
+    时只能带 CLASSIFICATION_FIELDS, 为 verification 时只能带 VERIFICATION_FIELDS, status 只许 VERIFICATION_STATUSES."""
 
     misstatement_id: str  # 更新哪条错报
     base_version: int  # 依据的错报版本
@@ -588,14 +597,14 @@ class MisstatementUpdate(Model):
 
     @model_validator(mode="after")
     def fields_of_kind(self) -> Self:
-        """每类只带自己的字段; 验证的状态只许 VERIFIED_STATUSES."""
+        """每类只带自己的字段; 验证的状态只许 VERIFICATION_STATUSES."""
         allowed = CLASSIFICATION_FIELDS if self.kind == "classification" else VERIFICATION_FIELDS
         other = VERIFICATION_FIELDS if self.kind == "classification" else CLASSIFICATION_FIELDS
         stray = [name for name in other if getattr(self, name) is not None]
         if stray:
             raise ValueError(f"{self.kind} 的错报更新不能带 {', '.join(stray)} (只能带 {', '.join(allowed)})")
-        if self.status is not None and self.status not in VERIFIED_STATUSES:
-            raise ValueError(f"验证只能把错报改为 {', '.join(VERIFIED_STATUSES)}, 不能为 {self.status}")
+        if self.status is not None and self.status not in VERIFICATION_STATUSES:
+            raise ValueError(f"验证只能把错报改为 {', '.join(VERIFICATION_STATUSES)}, 不能为 {self.status}")
         return self
 
 
@@ -1470,18 +1479,32 @@ class Misstatement(Versioned):
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
-        """状态与字段一致 (接口文档第 2.5 节): corrected 剩余额为 0 且有验证判断; partially_corrected 剩余额在
-        (0, amount_cents) 内; 因拒绝而 uncorrected 须有沟通时间与管理层回复; 停止等待须有更正通知; 重新沟通的标记
-        只在 communicated 时为真. uncorrected 而 basis 为空合法 (功能关闭时的旧口径)."""
+        """状态与字段一致 (接口文档第 2.5 节): communicated 须有沟通时间; verifying 须有更正通知; corrected 与
+        partially_corrected 须有验证判断, 且已更正额加剩余额等于错报金额, corrected 剩余额为 0, partially_corrected
+        剩余额在 (0, amount_cents) 内; 未更正的依据只随 uncorrected, 因拒绝而 uncorrected 须有沟通时间与管理层回复,
+        停止等待须有更正通知; 重新沟通的标记只在 communicated 时为真. uncorrected 而 basis 为空合法 (功能关闭时的旧
+        口径). 依据随 evaluated, closed 的放开留给它们落地的需求."""
         problems = []
         status, residual = self.status, self.residual_cents
-        if status is MisstatementStatus.corrected and (residual != 0 or self.verified_by_judgment_id is None):
-            problems.append("corrected 须剩余额为 0 且有验证判断 (verified_by_judgment_id)")
+        if status is MisstatementStatus.communicated and self.communicated_at is None:
+            problems.append("communicated 须有沟通时间 (communicated_at)")
+        if status is MisstatementStatus.verifying and self.correction_notice_id is None:
+            problems.append("verifying 须有更正通知 (correction_notice_id)")
+        if status in (MisstatementStatus.corrected, MisstatementStatus.partially_corrected):
+            if self.verified_by_judgment_id is None:
+                problems.append(f"{status} 须有验证判断 (verified_by_judgment_id)")
+            if residual is None or self.corrected_cents + residual != self.amount_cents:
+                amounts = f"{self.corrected_cents} + {residual}, 金额 {self.amount_cents}"
+                problems.append(f"{status} 的已更正额加剩余额须等于错报金额: {amounts}")
+        if status is MisstatementStatus.corrected and residual != 0:
+            problems.append(f"corrected 须剩余额为 0, 现为 {residual}")
         if status is MisstatementStatus.partially_corrected and not (
             residual is not None and 0 < residual < self.amount_cents
         ):
             problems.append(f"partially_corrected 的剩余额 {residual} 须在 (0, {self.amount_cents}) 内")
         basis = self.uncorrected_basis
+        if basis is not None and status is not MisstatementStatus.uncorrected:
+            problems.append(f"未更正的依据 (uncorrected_basis) 只随 uncorrected, 现为 {status}")
         if (
             status is MisstatementStatus.uncorrected
             and basis == "refused"

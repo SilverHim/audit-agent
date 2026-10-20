@@ -33,7 +33,7 @@ from backend.contracts.models import (
 from backend.orchestration.decisions import review_effects
 from backend.services.judgment_engine import critic_chain_ok
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT, api_client, wait_idle
-from tests.test_decisions import Started
+from tests.test_decisions import Started, assert_rejected
 from tests.test_e2e_mock import start_demo
 from tests.test_review_decisions import record
 
@@ -141,6 +141,15 @@ def test_attached_misstatement_status_follows_the_feature(lifecycle: bool, statu
         status=status,
         **NUMBAT_CUTOFF_DRAFT.model_dump(),
     )
+
+
+async def test_attached_draft_account_code_outside_the_chart_is_rejected() -> None:
+    """R156 (第 1 轮审核 R156-04): 附错报草稿的仲裁同样查科目代码: 草稿的 account_code 不在本项目科目表 (start_demo
+    的科目表为空) → INVALID_VALUE, 什么都不写."""
+    s = await disputed()
+    draft = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": "999"})
+    decision = resolve(DisputeResolution.a7_upheld, misstatement_draft=draft)
+    await assert_rejected(s, decision, "INVALID_VALUE", "科目代码 999 不在本项目科目表中")
 
 
 async def test_neither_needs_human_conclusion() -> None:

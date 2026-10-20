@@ -52,7 +52,7 @@ class StagedResult(TypedDict):
 
 
 V = TypeVar("V", bound=Versioned)
-R = TypeVar("R", DocumentRef, ReviewRecord, GateDecision, Misstatement)
+R = TypeVar("R", DocumentRef, ReviewRecord, GateDecision)
 
 
 def upsert_by_id(left: list[V], right: list[V] | None) -> list[V]:

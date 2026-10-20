@@ -649,27 +649,21 @@ class LegacyMisstatement(BaseModel):
 
 LegacyMisstatement.__module__ = Misstatement.__module__
 LegacyMisstatement.__name__ = LegacyMisstatement.__qualname__ = "Misstatement"
+R19_MISSTATEMENT_FIELDS = set(LegacyMisstatement.model_fields) - {"status"}
 
 
 def test_old_checkpoint_misstatements_read_back_and_take_new_versions() -> None:
     """R156 验收 6, 10: 改动前的检查点里的错报 (只有 R19 字段) 经检查点白名单 serde 读回为现在的 Misstatement,
     状态 uncorrected, 新字段取缺省; 之后照 upsert_by_id 接受它的新版本."""
     serde = checkpoint_serde()
-    old = LegacyMisstatement(**state_misstatement().model_dump(include=R19_MISSTATEMENT_FIELDS), status="uncorrected")
+    old = LegacyMisstatement(**state_misstatement().model_dump(include=R19_MISSTATEMENT_FIELDS))
     [back] = serde.loads_typed(serde.dumps_typed([old]))
     assert isinstance(back, Misstatement)
-    assert (back.status, back.account_code, back.adjustment_entry_nos, back.needs_recommunication) == (
-        MisstatementStatus.uncorrected,
-        None,
-        [],
-        False,
-    )
+    assert back.status is MisstatementStatus.uncorrected  # 枚举成员, 不是退化的字符串 (第 1 轮审核 R156-08)
+    assert (back.account_code, back.adjustment_entry_nos, back.needs_recommunication) == (None, [], False)
     state = initial_state(ENGAGEMENT, [], 1) | {"misstatements": [back]}
     newer = back.model_copy(update={"version": 2, "account_code": "270"})
     assert apply_patch(state, {"misstatements": [newer]})["misstatements"] == [newer]
-
-
-R19_MISSTATEMENT_FIELDS = set(LegacyMisstatement.model_fields) - {"status"}
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:
