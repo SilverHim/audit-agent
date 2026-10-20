@@ -661,40 +661,98 @@ async def test_ba01_fixture_passes_real_engine() -> None:
     assert [t.id for t in patch["review_tasks"]] == ["T-J-CSH-02-1-BA-01-v1"]
 
 
-@pytest.mark.parametrize(
-    ("second", "expected"),
-    [
-        (passed(autonomy_level=AutonomyLevel.L3), ExceptionDisposition.attributed),
-        (failed("unattributed"), ExceptionDisposition.unattributed),
-    ],
-    ids=["closed", "failed_again"],
-)
-async def test_partial_rerun_reuses_earlier_d01(second: Any, expected: ExceptionDisposition) -> None:
-    """需求 R347 (第 1 轮审核 R347-02): 部分重跑是重判. 第 1 次执行 BA-01 判断失败, 本次的 X-CSH-02-1-D01-1 v1 置
-    unattributed; 对其任务 rerun (rerun_subject_ids [BA-01]) 的第 2 次执行沿用它作规则例外, 不新建 X-CSH-02-2-D01-1,
-    只比对 BA-01 (函证照样出新版本). 第 2 次自动关闭 (模板去掉 always_review, L3) 时它出 v2 attributed; 再失败时出 v2
-    unattributed, 任务以 v2 为目标."""
-    agent, ctx, engine = setup(outcomes={"BA-01": failed("unattributed")}, exceptions=[])
+# ── 沿用此前未归因的 D01, D04 (需求 R347, 审核 R347-02, R347-11, R347-12) ──
+
+D01 = "X-CSH-02-1-D01-1"  # BA-01 回函与账面不符
+
+
+async def first_failed(
+    confirmations: list[Confirmation] | None = None,
+) -> tuple[FieldworkAgent, RunContext, Any, Any, dict[str, Any]]:
+    """BA-01 第 1 次判断失败 (没有 CSH-05 的例外, 模板去掉 always_review 以便自动关闭): 本次新建的规则例外为 v1, 第一条
+    (D01) 置 unattributed. 返回 (A6, 第 1 次的上下文, 判断引擎, 模板, 第 1 次的片段)."""
+    agent, ctx, engine = setup(confirmations, outcomes={"BA-01": failed("unattributed")}, exceptions=[])
     template = ctx.template.model_copy(update={"always_review": False})
     first = await agent.run(RunContext(ctx.engagement, ctx.procedure, template, ctx.run, ctx.state))
+    return agent, ctx, engine, template, first
+
+
+async def run_again(
+    agent: FieldworkAgent,
+    ctx: RunContext,
+    template: Any,
+    first: dict[str, Any],
+    exceptions: list[AuditException],
+    run_no: int,
+    rerun_subject_ids: list[str],
+) -> dict[str, Any]:
+    """BA-01 再执行一次 (第 run_no 次; rerun_subject_ids 为空即整条重跑), 状态的例外为 exceptions, 函证取第 1 次的."""
+    procedure = ctx.procedure.model_copy(update={"rerun_subject_ids": rerun_subject_ids})
+    run = ctx.run.model_copy(update={"id": f"RUN-CSH-02-{run_no}", "run_no": run_no})
+    state = ctx.state | {"exceptions": exceptions, "confirmations": first["confirmations"]}
+    return await agent.run(RunContext(ctx.engagement, procedure, template, run, state))
+
+
+@pytest.mark.parametrize(
+    ("second", "run_no", "rerun_subject_ids", "expected"),
+    [
+        (passed(autonomy_level=AutonomyLevel.L3), 2, ["BA-01"], ExceptionDisposition.attributed),
+        (failed("unattributed"), 2, ["BA-01"], ExceptionDisposition.unattributed),
+        # 部分重跑那次 (第 2 次) 整次失败, 接着整条重跑: 同样沿用 (第 2 轮审核 R347-11)
+        (passed(autonomy_level=AutonomyLevel.L3), 3, [], ExceptionDisposition.attributed),
+    ],
+    ids=["closed", "failed_again", "whole_rerun_after_crash"],
+)
+async def test_rerun_reuses_earlier_d01(
+    second: Any, run_no: int, rerun_subject_ids: list[str], expected: ExceptionDisposition
+) -> None:
+    """需求 R347: 当前结果里 BA-01 已有本程序未归因的 D01 (第 1 次判断失败时置的 v1 unattributed) 时, 再执行沿用它作
+    规则例外, 不新建 X-CSH-02-{run_no}-D01-1, 函证照样出新版本 (只比对在范围内的账户). 自动关闭 (L3) 时它出 v2
+    attributed; 再失败时出 v2 unattributed, 任务以 v2 为目标. 部分重跑与整条重跑同一规则."""
+    agent, ctx, engine, template, first = await first_failed()
     [d01] = first["exceptions"]
-    assert (d01.id, d01.version, d01.disposition) == ("X-CSH-02-1-D01-1", 1, ExceptionDisposition.unattributed)
+    assert (d01.id, d01.version, d01.disposition) == (D01, 1, ExceptionDisposition.unattributed)
 
     engine.outcomes["BA-01"] = second
-    procedure = ctx.procedure.model_copy(update={"rerun_subject_ids": ["BA-01"]})
-    run = ctx.run.model_copy(update={"id": "RUN-CSH-02-2", "run_no": 2})
-    state = ctx.state | {
-        "exceptions": [d01],
-        "procedure_runs": first["procedure_runs"],
-        "confirmations": first["confirmations"],
-    }
-    patch = await agent.run(RunContext(ctx.engagement, procedure, template, run, state))
+    patch = await run_again(agent, ctx, template, first, [d01], run_no, rerun_subject_ids)
 
     assert engine.calls[-1][1].rule_findings == [d01]
-    assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [("X-CSH-02-1-D01-1", 2, expected)]
+    assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [(D01, 2, expected)]
     [before] = [c for c in first["confirmations"] if c.bank_account_id == "BA-01"]
-    assert [(c.bank_account_id, c.version) for c in patch["confirmations"]] == [("BA-01", before.version + 1)]
+    assert {c.bank_account_id: c.version for c in patch["confirmations"]}["BA-01"] == before.version + 1
     unattributed = [(t.id, t.subject_id) for t in patch["review_tasks"] if t.kind is TaskKind.unattributed]
-    assert unattributed == (
-        [("T-X-CSH-02-1-D01-1-v2", "BA-01")] if expected is ExceptionDisposition.unattributed else []
+    assert unattributed == ([(f"T-{D01}-v2", "BA-01")] if expected is ExceptionDisposition.unattributed else [])
+
+
+async def test_attributed_earlier_d01_not_reused() -> None:
+    """审核 R347-12 (探针 test_probe_partial_rerun_skips_attributed_earlier_d01): 同一账户有已归因的旧 D01 (第 1 次的,
+    v2 attributed) 与未归因的新 D01 (第 3 次的, v1 unattributed) 时只沿用未归因的那条; 再失败时它出 v2 unattributed,
+    旧的不被改回 unattributed."""
+    agent, ctx, engine, template, first = await first_failed()
+    [d01] = first["exceptions"]
+    old = d01.model_copy(
+        update={"version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": "J-CSH-02-1-BA-01"}
     )
+    new = d01.model_copy(update={"id": "X-CSH-02-3-D01-1", "run_id": "RUN-CSH-02-3"})
+    patch = await run_again(agent, ctx, template, first, [old, new], 4, ["BA-01"])
+    assert engine.calls[-1][1].rule_findings == [new]
+    assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [
+        (new.id, 2, ExceptionDisposition.unattributed)
+    ]
+
+
+async def test_failure_again_marks_only_the_first_of_d01_and_d04() -> None:
+    """审核 R347-12: BA-01 同时有 D01 与 D04 (回函写明的应计利息 800000 未入账), 第 1 次判断失败时 D01 v1 unattributed,
+    D04 v1 照旧 open; 再失败时沿用两条 (D01 在前), D01 出 v2 unattributed, D04 不动 (片段里没有它的新版本)."""
+    confirmations = [extracted("BA-01", 120840000, 0, 800000), extracted("BA-02", 40000000, 1)]
+    agent, ctx, engine, template, first = await first_failed(confirmations)
+    d01, d04 = first["exceptions"]
+    assert [(x.id, x.version, x.disposition) for x in (d01, d04)] == [
+        (D01, 1, ExceptionDisposition.unattributed),
+        ("X-CSH-02-1-D04-1", 1, ExceptionDisposition.open),
+    ]
+    patch = await run_again(agent, ctx, template, first, [d01, d04], 2, ["BA-01"])
+    assert engine.calls[-1][1].rule_findings == [d01, d04]
+    assert [(x.id, x.version, x.disposition) for x in patch["exceptions"]] == [
+        (D01, 2, ExceptionDisposition.unattributed)
+    ]

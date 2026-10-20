@@ -797,13 +797,13 @@ async def test_unattributed_tasks_rerun_with_their_round(
     online = await at_tst(tmp_path / "online", plan)
     for subject, run_no, decide, decision_id in steps:
         task = await online.task(subject, run_no)
-        assert Decision.rerun in online.runner.deps.queue.allowed(task)
+        assert Decision.rerun in online.runner.deps.queue.allowed(task), f"在线: {task.id}"
         await submit(online, decide(task, decision_id))
-    assert (await online.runner.app.aget_state(CONFIG)).next == ("gate_fin",)
-    assert online.seen == [(1, []), *enumerate(rejudged, 2)]
-    assert online.latest(Procedure, TST).status is ProcedureStatus.completed
+    assert (await online.runner.app.aget_state(CONFIG)).next == ("gate_fin",), "在线: 没走到 FIN-01"
+    assert online.seen == [(1, []), *enumerate(rejudged, 2)], "在线: 各轮重判的对象"
+    assert online.latest(Procedure, TST).status is ProcedureStatus.completed, "在线: 程序状态"
     tasks = await online.output_store.latest(EID, ReviewTask, procedure_id=TST)
-    assert {t.kind for t in tasks} <= {U, F} and all(t.status is TaskStatus.decided for t in tasks)
+    assert {t.kind for t in tasks} <= {U, F} and all(t.status is TaskStatus.decided for t in tasks), "在线: 任务"
 
     case = await at_tst(tmp_path / "lost", plan)
     for subject, run_no, decide, decision_id in steps:
@@ -812,17 +812,18 @@ async def test_unattributed_tasks_rerun_with_their_round(
             await submit(case, record)
         else:  # rerun 的留痕也没写成, 由 recover 补写
             await submit_unread(case, record, monkeypatch, decide is rerun)
-    assert await case.waits() == [tst_payload([r for _, n, _, r in steps if n < last], run_no=last)]
+    assert await case.waits() == [tst_payload([r for _, n, _, r in steps if n < last], run_no=last)], "恢复前的等待"
     order = delivered(case, monkeypatch)
     await case.runner.recover()
     await wait_idle(case.runner, EID)
 
-    assert case.runner.run_error(EID) is None
-    assert order == [decision_id for _, run_no, _, decision_id in steps if run_no == last]
-    assert case.seen == online.seen
-    assert store_state(case.output_store) == store_state(online.output_store)
-    assert await graph_state(case) == await graph_state(online)
-    assert case.decision_payload("D-r") == online.decision_payload("D-r")  # 补写的同组任务与提交时相同
+    assert case.runner.run_error(EID) is None, "恢复: 后台出错"
+    assert order == [decision_id for _, run_no, _, decision_id in steps if run_no == last], "恢复: 交回顺序"
+    assert case.seen == online.seen, "恢复: 各轮重判的对象与在线不同"
+    assert store_state(case.output_store) == store_state(online.output_store), "恢复: Store 与在线不同"
+    assert await graph_state(case) == await graph_state(online), "恢复: 检查点与在线不同"
+    # 补写的同组任务与提交时相同
+    assert case.decision_payload("D-r") == online.decision_payload("D-r"), "恢复: 补写的 rerun 留痕"
 
 
 async def test_rerun_on_normal_task_delivered_to_node_is_a_node_error(tmp_path: Path) -> None:

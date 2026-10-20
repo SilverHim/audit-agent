@@ -222,5 +222,5 @@ async def test_eval_reruns_an_unattributed_object_once(xero_case: Any, tmp_path:
     assert data["reruns"] == {"CSH-02": ["BA-091"]} and data["live_calls"]["CSH-02 BA-091"] == MAX_ATTEMPTS + 1
     assert data["observed"]["CSH-02 BA-091"]["judgment_id"] == "J-CSH-02-2-BA-091"
     assert (data["missing"], data["failed_runs"], data["open_tasks"]) == ([], [], [])
-    assert data["hard"] == ["CSH-02 BA-091 judgment_id: 'J-CSH-02-2-BA-091', 预期 'J-CSH-02-1-BA-091'"]
+    assert [line.split(":")[0] for line in data["hard"]] == ["CSH-02 BA-091 judgment_id"]  # 只差判断 ID
     assert data["soft"] == []

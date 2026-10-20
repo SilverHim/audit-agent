@@ -31,6 +31,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.orchestration.runner import GraphRunner
+from backend.services import review_queue
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import MAX_ATTEMPTS, REPORT_HEADINGS, PointerResolver
 from tests.fakes import evidence_pointers, wait_idle
@@ -122,7 +123,7 @@ def subject_of(view: dict[str, Any]) -> str:
 REVISED_BY = {"PLN-15": "PLN-15", "RPT-03": "RPT-01"}
 
 
-RERUNNABLE = ("failed", "unattributed")  # 可重跑的任务类型 (review_queue.RERUNNABLE)
+RERUNNABLE = frozenset(kind.value for kind in review_queue.RERUNNABLE)  # 可重跑的任务类型 (failed, unattributed)
 
 
 def rerun_key(view: dict[str, Any], walk: LiveWalk) -> tuple[str, str]:
@@ -138,7 +139,8 @@ def review_body(
     view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk, pending: Sequence[dict[str, Any]] = ()
 ) -> dict[str, Any]:
     """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明). pending 为当时全部
-    待决任务 (复核队列各项): 下 rerun 时同程序其余可重跑的任务随之重跑 (一轮失败算一组), 一并计数."""
+    待决任务 (复核队列各项): 下 rerun 时同程序同一次执行其余可重跑的任务随之重跑 (一轮失败算一组, 同
+    decisions.rerun_group), 一并计数."""
     task = view["task"]
     kind = task["kind"]
     pid, subject = rerun_key(view, walk)
@@ -156,6 +158,7 @@ def review_body(
             other
             for other in pending
             if other["task"]["procedure_id"] == pid
+            and other["task"]["run_id"] == task["run_id"]
             and other["task"]["kind"] in RERUNNABLE
             and other["task"]["id"] != task["id"]
         ]

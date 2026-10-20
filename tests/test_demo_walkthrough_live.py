@@ -177,22 +177,25 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
 ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed)
 
 
+D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 只有第 1 次执行为 BA-091 新建的 D04
+
+
 @pytest.mark.parametrize(
-    ("failing", "kind"),
+    ("failing", "kind", "csh02"),
     [
-        ([("REV-02", ORC1021)], "failed"),
+        ([("REV-02", ORC1021)], "failed", D04),
         # 带 REV-08 的 R03-1, 判断失败转 unattributed 任务, 驱动同 failed 先重跑一次 (需求 R347 验收 3)
-        ([("REV-02", ORC1026)], "unattributed"),
+        ([("REV-02", ORC1026)], "unattributed", D04),
         # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
-        ([("CSH-02", "BA-091")], "unattributed"),
+        ([("CSH-02", "BA-091")], "unattributed", D04),
         # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
-        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed"),
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed", D04),
     ],
     ids=["rev02", "rev02_findings", "csh02", "revisions"],
 )
 @pytest.mark.external
 async def test_live_driver_reruns_a_failed_object_once(
-    tmp_path: Path, failing: list[tuple[str, str]], kind: str
+    tmp_path: Path, failing: list[tuple[str, str]], kind: str, csh02: list[str]
 ) -> None:
     """自测重跑一路: 各对象 (REV-02 的 ORC1021 与带规则例外的 ORC1026, CSH-02 的 BA-091, 计划或报告的每个修订) 前
     MAX_ATTEMPTS 次调用输出不是 JSON, 成为 kind 类任务 (failed; 带规则例外的为 unattributed); 驱动对每个各重跑一次,
@@ -210,13 +213,19 @@ async def test_live_driver_reruns_a_failed_object_once(
     for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (与固定输出的建议动作相同)
         assert rows[key]["same"], rows[key]
     assert stranded(exceptions) == []
-    if failing == [("CSH-02", "BA-091")]:  # 重跑沿用第 1 次执行的 D04, 没有另建第 2 次的
-        assert [x.id for x in exceptions if x.procedure_id == "CSH-02"] == ["X-CSH-02-1-D04-1"]
+    assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == csh02  # 重跑不另建 D04
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
     """合成的复核队列一项 (只填驱动用到的字段)."""
-    task = {"id": f"T-{subject}", "kind": kind, "procedure_id": "GEN-02", "target_version": 1, "subject_id": None}
+    task = {
+        "id": f"T-{subject}",
+        "kind": kind,
+        "procedure_id": "GEN-02",
+        "run_id": "RUN-GEN-02-1",
+        "target_version": 1,
+        "subject_id": None,
+    }
     target: dict[str, Any] = {"subject_id": subject} if kind != "unattributed" else {"detail": {"entry_no": subject}}
     return {"task": task, "target": target, "allowed_resolutions": [], "draft_rules": {}} | extra
 
@@ -258,9 +267,10 @@ def test_review_bodies_follow_the_decision_table() -> None:
 
 
 def test_rerun_counts_the_whole_group() -> None:
-    """一轮失败算一组 (第 1 轮审核 R347-03): 对一条可重跑任务下 rerun 时, 同程序其余待决的可重跑任务随之重跑
-    (DecisionSubmit 一并关闭), 驱动一并计数. 同轮 XJ-430 failed 与 XJ-601 unattributed, 对 XJ-430 rerun 后两者各记
-    一次; 同程序的 normal 任务与别的程序的失败任务不计. XJ-601 第 2 轮仍是 unattributed 时已重跑过, 按决定表推翻."""
+    """一轮失败算一组 (第 1 轮审核 R347-03): 对一条可重跑任务下 rerun 时, 同程序同一次执行其余待决的可重跑任务随之
+    重跑 (DecisionSubmit 一并关闭), 驱动一并计数. 同轮 XJ-430 failed 与 XJ-601 unattributed, 对 XJ-430 rerun 后两者
+    各记一次; 同程序的 normal 任务, 别的执行的与别的程序的失败任务不计 (第 2 轮审核 R347-14). XJ-601 第 2 轮仍是
+    unattributed 时已重跑过, 按决定表推翻."""
     table, walk = decision_table("USR-1"), LiveWalk()
     failed, unattributed, normal = (
         view_of("failed", "XJ-430"),
@@ -270,8 +280,11 @@ def test_rerun_counts_the_whole_group() -> None:
     failed["task"]["subject_id"] = "XJ-430"
     elsewhere = view_of("failed", "BA-091")
     elsewhere["task"] |= {"procedure_id": "CSH-02", "subject_id": "BA-091"}
+    earlier = view_of("failed", "XJ-575")
+    earlier["task"] |= {"subject_id": "XJ-575", "run_id": "RUN-GEN-02-0"}
 
-    assert review_body(failed, table, walk, [failed, unattributed, normal, elsewhere])["decision"] == "rerun"
+    pending = [failed, unattributed, normal, elsewhere, earlier]
+    assert review_body(failed, table, walk, pending)["decision"] == "rerun"
     assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}
     assert review_body(unattributed, table, walk, [unattributed])["decision"] == "override"
     assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}
