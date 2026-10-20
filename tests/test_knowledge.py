@@ -157,7 +157,7 @@ APES110_PDF = "06_职业道德_APES/APES_110_Code_of_Ethics_Compiled_July2025.pd
 # knowledge/standards 下每个 YAML 一行; 其余 ASA, AASB 由各组首建该文件时加行
 SOURCES: dict[str, Source] = {
     "AASB110": Source((("03_会计准则_AASB/AASB_110.pdf", (5, 8)),)),  # 第 3 段至第 10 段
-    "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", None),)),
+    "AASB15": Source((("03_会计准则_AASB/AASB_15.pdf", (12, 21)),)),  # 第 31 段至第 88 段
     # 现行版只读两段页: 第 16-17 页 (第 32, 33 段; MD-2 将加的第 36 段也在第 17 页), 第 31-32 页 (A44); 新版不用
     "ASA240": Source((("01_审计准则_ASA/ASA_240.pdf", (16, 17)), ("01_审计准则_ASA/ASA_240.pdf", (31, 32)))),
     "ASA320": Source((("01_审计准则_ASA/ASA_320.pdf", None),)),
@@ -810,22 +810,72 @@ def boundary_problems(source: Text, fragment: dict[str, Any]) -> list[str]:
 PARTIAL_EXCERPTS: dict[str, tuple[str, str]] = {
     "ASA570-A3": ("A3 分 Financial, Operating, Other 三组列举, 只摘引语与 Financial 一组", "Operating •"),
 }
+NOT_WHOLE = "正文之后还有本段的内容 (不是整段)"
+
+
+def partial_excerpt_problems(source: Text, fragment: dict[str, Any], after: str) -> list[str]:
+    """部分摘录 (PARTIAL_EXCERPTS) 的核对: 逐字与段首同 boundary_problems, 只是不到段尾; 片段之后紧接的原文须以 after
+    起首. 不符时报出片段之后实际接着的前 40 个字."""
+    problems = boundary_problems(source, fragment)
+    if not problems:
+        return ["是整段, 不是部分摘录"]
+    if problems != [NOT_WHOLE]:
+        return [p for p in problems if p != NOT_WHOLE]
+    [piece] = fragment_pieces(fragment)
+    following = source[source.index(piece) + len(piece) :].lstrip()
+    if not following.startswith(after):
+        return [f"片段之后接的是 {following[:40]!r}, 不是登记的 {after!r}"]
+    return []
 
 
 @pytest.mark.parametrize("fragment_id", [f["id"] for _, f in standard_fragments() if (f.get("text") or "").strip()])
 def test_fragment_text_is_verbatim_from_pdf(fragment_id: str) -> None:
     """knowledge/standards 下全部有正文的片段: 正文 (各部分) 逐字出现在 SOURCES 登记的原文中, 且为整段或所列子项完整;
-    PARTIAL_EXCERPTS 登记的部分摘录段首照常, 段尾为所记的下文."""
+    PARTIAL_EXCERPTS 登记的部分摘录段首照常, 段尾为所记的下文 (见 partial_excerpt_problems)."""
     stem, fragment = next((s, f) for s, f in standard_fragments() if f["id"] == fragment_id)
     source = standard_text(stem)
-    problems = boundary_problems(source, fragment)
-    if fragment_id not in PARTIAL_EXCERPTS:
-        assert problems == []
-        return
-    _, after = PARTIAL_EXCERPTS[fragment_id]
+    if fragment_id in PARTIAL_EXCERPTS:
+        assert partial_excerpt_problems(source, fragment, PARTIAL_EXCERPTS[fragment_id][1]) == []
+    else:
+        assert boundary_problems(source, fragment) == []
+
+
+def a3_variant(change: str) -> dict[str, Any]:
+    """ASA570-A3 的改写副本: drop_last 删去 Financial 组最后一条; with_operating 多摘 Operating 小标题与其第一条
+    (取自原文, 逐字仍对)."""
+    stem, fragment = next((s, f) for s, f in standard_fragments() if f["id"] == "ASA570-A3")
+    lines = fragment["text"].rstrip("\n").split("\n")
+    if change == "drop_last":
+        return {**fragment, "text": "\n".join(lines[:-1])}
+    source = standard_text(stem)
     [piece] = fragment_pieces(fragment)
-    assert problems == ["正文之后还有本段的内容 (不是整段)"]  # 段首紧接段号, 只是不到段尾
-    assert source[source.index(piece) + len(piece) :].lstrip().startswith(after)
+    following = source[source.index(piece) + len(piece) :].lstrip()
+    heading, rest = following.split(" ", 1)  # "Operating", "• 第一条 • 第二条 ..."
+    return {**fragment, "text": "\n".join([*lines, heading, rest[: rest.index(" •")]])}
+
+
+@pytest.mark.parametrize(
+    ("change", "reported"),
+    [("drop_last", "• Inability to obtain financing"), ("with_operating", "• Loss of key management")],
+)
+def test_partial_excerpt_must_end_at_its_group(change: str, reported: str) -> None:
+    """部分摘录少摘 (删去 Financial 组最后一条) 或多摘 (多带 Operating 小标题与其第一条) 都报出, 消息带上片段之后
+    实际接着的原文."""
+    fragment = a3_variant(change)
+    problems = partial_excerpt_problems(standard_text("ASA570"), fragment, PARTIAL_EXCERPTS["ASA570-A3"][1])
+    assert len(problems) == 1, problems
+    assert problems[0].startswith(f"片段之后接的是 '{reported}"), problems
+
+
+def test_fragment_text_has_no_space_before_closing() -> None:
+    """片段正文写原文的正常写法: CLOSING 标点 (; , . : )) 之前不留空白. 版面留下的空格 (如脚注上标去掉之后) 只在原文
+    一侧由 normalise 吸收, 不写进片段."""
+    found = [
+        f"{f['id']}: {m.group(0)!r}"
+        for _, f in standard_fragments()
+        for m in re.finditer(rf"\S{{0,12}}\s+[{re.escape(CLOSING)}]", f.get("text") or "")
+    ]
+    assert found == []
 
 
 def test_partial_excerpts_name_existing_fragments() -> None:
