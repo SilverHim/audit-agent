@@ -138,6 +138,7 @@ export const en = {
     'CSH-05': 'Bank statement to ledger',
     'CSH-02': 'Confirmation differences',
     'FIN-03': 'Misstatement classification',
+    'FIN-08': 'Misstatement communication and management responses',
     'FIN-09': 'Correction verification',
     'FIN-04': 'Misstatement accumulation',
     'FIN-01': 'Uncorrected misstatements',
