@@ -11,10 +11,11 @@ FIN-09 更正验证 → CorrectionVerificationDraft，每条 verifying 错报调
   data.matched_line_ids         规则部分匹配的更正分录行 ID（来源对象与科目，没有科目时按金额），没有时为空
   data.entry_lines              匹配行所在凭证的全部行（V01 的列）：source_type、id、entry_no、posting_date、account_code、
                                 account_name、account_type、account_category、debit_cents、credit_cents、description、
-                                source_doc，按行 ID；没有匹配行时为空。其科目即校验上下文的 entry_account_codes
+                                source_doc，按行 ID；没有匹配行时为空。其科目中错报科目以外的（错报没有 account_code
+                                时为全部）即校验上下文的 entry_account_codes
   data.corrected_cents          规则算出的已更正额（分）
-  data.residual_cents           规则算出的剩余额（分）：错报金额减已更正额
-  rule_findings                 规则部分对不上时的例外（R165），否则为空
+  data.residual_cents           规则算出的剩余额（分）：错报金额减已更正额；方向相反时大于错报金额，超额更正时为负
+  rule_findings                 规则部分对不上时的例外（V02：没有匹配行、方向相反或超额，R165），否则为空
   standards                     StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set m = data.misstatement %}
@@ -71,16 +72,19 @@ Standards (cite only these IDs):
 
 ## Criteria
 
-1. `fully_corrected` is true only when the residual amount is 0: the matched lines post the full amount of the misstatement to its account, in the direction that removes it. A residual amount above 0 means a misstatement remains; set `fully_corrected` to false and state the remaining amount in `conclusion`.
-2. `other_accounts` lists the account codes, other than the misstatement's own account, that the lines of the adjustment entries post to; it is empty when there are none. Take the codes only from the lines above.
+1. `fully_corrected` is true only when the residual amount is 0: the matched lines post the full amount of the misstatement to its account, in the direction that removes it. When the residual amount is not 0, set `fully_corrected` to false and explain the residual in `conclusion`:
+   - above 0 and below the misstatement amount: the misstatement is partly corrected, and the residual remains an uncorrected misstatement;
+   - equal to or above the misstatement amount: nothing has been corrected, or the matched lines were posted in the direction that increases the misstatement;
+   - below 0: the matched lines correct more than the misstatement, so its account is now misstated the other way.
+2. `other_accounts` lists the account codes, other than the misstatement's own account, that the lines of the adjustment entries post to, each code once; it is empty when there are none. Take the codes only from the lines above.
 3. An effect on another account is appropriate when it follows from the correction itself, such as reversing the other lines of the entry that caused the misstatement, the tax on the corrected amount, or the other side of an accrual. Say in `conclusion` why each other account is affected.
 4. State in `conclusion` the adjustment entries, the amount posted to the misstatement's account and whether any misstatement remains.
 
 ## proposed_action
 
-- `accept`: the adjustments correct the misstatement as described, and the effects on other accounts are appropriate.
-- `more_evidence`: the lines are not enough to tell whether the correction is complete or appropriate.
-- `misstatement`: only when the adjustments themselves misstate another account; fill `misstatement_draft` for it.
+- `accept`: the adjustments correct the misstatement in full, or in part with the residual stated in `conclusion`, and their effects on other accounts are appropriate.
+- `more_evidence`: the adjustments do not match the misstatement (see Rule findings: no matched line, a correction in the wrong direction, or a correction beyond the misstatement amount) and the inputs do not establish a new misstatement; or the lines are not enough to tell whether the correction is complete or appropriate.
+- `misstatement`: the inputs establish that the adjustments themselves misstate an account: another account, or the misstatement's own account when they correct beyond the misstatement amount. Fill `misstatement_draft` for the new misstatement.
 
 ## Output (CorrectionVerificationDraft)
 

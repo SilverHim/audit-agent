@@ -64,7 +64,7 @@ class CorrectionVerificationDraft(JudgmentDraft):
     载荷由 A8 写进判断 (需求 R165)."""
 
     fully_corrected: bool  # 更正分录是否完整更正了该错报; 须与规则算出的剩余额为 0 一致
-    other_accounts: list[str]  # 更正分录涉及的错报科目以外的科目代码, 没有为空; 须在匹配凭证的科目内
+    other_accounts: list[str]  # 更正分录涉及的错报科目以外的科目代码, 不重复, 没有为空; 须在匹配凭证的科目内
 
 
 class ExtractedTerm(Model):

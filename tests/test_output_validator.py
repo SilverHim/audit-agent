@@ -1758,13 +1758,18 @@ async def test_going_concern_syntax_and_structure_are_retryable(bad_outcome: boo
 # ── FIN-09 更正验证 (需求 R164) ──
 
 FIN09 = LIBRARY.load("FIN-09")
-# fixture_key (错报来源判断的对象) → 更正凭证, 更正分录影响的其他科目, 结论的要点 (设计稿第 2.8, 6.5 节)
-CORRECTIONS: dict[str, tuple[str, list[str], list[str]]] = {
-    "XJ-499": ("AJE-X01", ["711", "820"], ["credits 710 Office Equipment AUD 750.00", "AUD 825.00", "AUD 75.00"]),
-    "BA-091": ("AJE-X05", ["620"], ["credits 270 Interest Income AUD 48.53"]),
-    "826": ("AJE-X02", ["478"], ["credits 826 Superannuation Payable AUD 4,261.20"]),
-    "804": ("AJE-X03", ["477"], ["credits 804 Wages Payable - Payroll AUD 2,010.00"]),
-    "805": ("AJE-X04", ["477"], ["credits 805 Accrued Liabilities AUD 2,687.36"]),
+# fixture_key (错报来源判断的对象) → 更正凭证, 错报科目, 更正分录影响的其他科目, 结论的要点 (设计稿第 2.8, 6.5 节)
+CORRECTIONS: dict[str, tuple[str, str, list[str], list[str]]] = {
+    "XJ-499": (
+        "AJE-X01",
+        "710",
+        ["711", "820"],
+        ["credits 710 Office Equipment AUD 750.00", "AUD 825.00", "AUD 75.00"],
+    ),
+    "BA-091": ("AJE-X05", "270", ["620"], ["credits 270 Interest Income AUD 48.53"]),
+    "826": ("AJE-X02", "826", ["478"], ["credits 826 Superannuation Payable AUD 4,261.20"]),
+    "804": ("AJE-X03", "804", ["477"], ["credits 804 Wages Payable - Payroll AUD 2,010.00"]),
+    "805": ("AJE-X04", "805", ["477"], ["credits 805 Accrued Liabilities AUD 2,687.36"]),
 }
 
 
@@ -1772,9 +1777,12 @@ def fin09_fixture(name: str) -> str:
     return (XERO.fixtures / "FIN-09" / f"{name}.json").read_text(encoding="utf-8")
 
 
-def entry_accounts(entry_no: str) -> list[str]:
-    """一笔更正凭证各行的科目代码 (校验上下文的 entry_account_codes)."""
-    return sorted({line.account_code for line in xero_adjustments([entry_no])})
+def entry_accounts(entry_no: str, own: str) -> list[str]:
+    """一笔更正凭证各行的科目中错报科目 own 以外的 (校验上下文的 entry_account_codes)."""
+    return sorted({line.account_code for line in xero_adjustments([entry_no])} - {own})
+
+
+XJ499_CODES = entry_accounts("AJE-X01", "710")  # M-1 (710) 的更正凭证 AJE-X01 的其他科目
 
 
 def adjusted_validator() -> OutputValidator:
@@ -1795,8 +1803,8 @@ async def test_fin09_xero_fixtures_pass_four_levels(name: str) -> None:
     """R164 验收 6, 7: 5 份 fixture 在剩余额 0, 匹配凭证为对应更正凭证时一次通过四级校验 (准则片段按 FIN-09 的
     standards): accept, 置信 0.9, 完整更正, 其他科目如表; fact 指针恰为该更正凭证的各行, standard 指针为 ASA450-P07,
     结论写明更正的科目与金额且没有剩余错报."""
-    entry_no, other_accounts, keywords = CORRECTIONS[name]
-    report = await check_fin09(fin09_fixture(name), 0, entry_accounts(entry_no))
+    entry_no, own, other_accounts, keywords = CORRECTIONS[name]
+    report = await check_fin09(fin09_fixture(name), 0, entry_accounts(entry_no, own))
     assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
     draft = report.output
     assert isinstance(draft, CorrectionVerificationDraft)
@@ -1812,6 +1820,9 @@ async def test_fin09_xero_fixtures_pass_four_levels(name: str) -> None:
     assert all(k in draft.conclusion for k in [*keywords, "no misstatement remains"]), draft.conclusion
 
 
+OTHER_ONLY = "other_accounts 只能列匹配凭证中错报科目以外的科目, 多了"
+
+
 @pytest.mark.external
 @pytest.mark.parametrize(
     ("residual", "changes", "error"),
@@ -1819,33 +1830,54 @@ async def test_fin09_xero_fixtures_pass_four_levels(name: str) -> None:
         (25000, {}, "fully_corrected 为 True, 与规则算出的剩余额 25000 不符"),
         (0, {"fully_corrected": False}, "fully_corrected 为 False, 与规则算出的剩余额 0 不符"),
         (25000, {"fully_corrected": False}, None),  # 部分更正: 模型也判没有完整更正
-        (0, {"other_accounts": ["711", "820", "720"]}, "other_accounts 含匹配凭证以外的科目: 720"),
+        (0, {"other_accounts": ["711", "820", "720"]}, f"{OTHER_ONLY}: 720"),  # 匹配凭证以外的科目
+        (0, {"other_accounts": ["710", "711", "820"]}, f"{OTHER_ONLY}: 710"),  # 错报科目本身 (审核 R164-03)
+        (0, {"other_accounts": ["711", "820", "711"]}, "other_accounts 的科目重复: 711"),
     ],
 )
 async def test_fin09_verification_semantics(residual: int, changes: dict[str, Any], error: str | None) -> None:
-    """R164 验收 5, 7 (XJ-499, 匹配凭证 AJE-X01): fully_corrected 与 "规则算出的剩余额为 0" 不一致, 或 other_accounts
-    含匹配凭证以外的科目 (720) 时判 semantic, 不重试; 两者一致时通过."""
+    """R164 验收 5, 7 (XJ-499, 匹配凭证 AJE-X01, 错报科目 710): fully_corrected 与 "规则算出的剩余额为 0" 不一致,
+    other_accounts 含匹配凭证以外的科目 (720) 或错报科目本身 (710), 或有重复时判 semantic, 不重试; 一致时通过."""
     raw = json.dumps({**json.loads(fin09_fixture("XJ-499")), **changes})
-    report = await check_fin09(raw, residual, entry_accounts("AJE-X01"))
+    report = await check_fin09(raw, residual, XJ499_CODES)
     if error is None:
         assert (report.level_failed, report.errors) == (None, [])
     else:
         assert (report.level_failed, report.retryable, report.errors) == ("semantic", False, [error])
 
 
-@pytest.mark.parametrize(
-    "ctx",
-    [
-        ValidationContext(standards_of=None, entry_account_codes=[]),
-        ValidationContext(standards_of=None, expected_residual_cents=0),
-    ],
-)
-async def test_fin09_check_requires_its_context(ctx: ValidationContext) -> None:
-    """更正验证的校验须给出规则算出的剩余额与匹配凭证的科目, 缺一抛 ValueError (调用方的错, 不算大模型失败)."""
-    draft = CorrectionVerificationDraft(**cutoff_draft().model_dump(), fully_corrected=True, other_accounts=[])
-    validator, _ = make_validator()
-    with pytest.raises(ValueError, match="expected_residual_cents, entry_account_codes"):
-        await validator.validate(EID, FIN09, respond(draft), ctx)
+@pytest.mark.external
+async def test_fin09_reference_failure_comes_before_verification() -> None:
+    """审核 R164-01 (同 FIN-03 的 test_classification_reference_failure_comes_before_nature): 指针全部解析不了时报
+    reference, 不再查更正验证 (fully_corrected 与剩余额 0 不符的问题不报)."""
+    bad = EvidencePointer(type=EvidenceType.voucher, source_type="journal_entry", source_id="AJE-NONE-1", locator="x")
+    draft = CorrectionVerificationDraft.model_validate_json(fin09_fixture("XJ-499"))
+    steps = [step.model_copy(update={"evidence": [bad] if step.evidence else []}) for step in draft.reasoning_chain]
+    draft = draft.model_copy(update={"reasoning_chain": steps, "evidence": [bad], "fully_corrected": False})
+    report = await check_fin09(draft.model_dump_json(), 0, XJ499_CODES)
+    assert report.level_failed == "reference" and not any("fully_corrected" in e for e in report.errors)
+
+
+def fin09_judge_context(residual: int | None, codes: list[str] | None) -> JudgmentContext:
+    """A8 交给 judge 的 XJ-499 上下文 (按提示词头注释给齐 data), 规则结果为 residual 与 codes."""
+    lines = [{"source_type": "journal_entry", **line.model_dump(mode="json")} for line in xero_adjustments(["AJE-X01"])]
+    source = {"id": "J-GEN-02-1-XJ-499", "procedure_id": "GEN-02", "subject_id": "XJ-499", "conclusion": "No basis."}
+    data = {
+        "misstatement": {"id": "M-D-XJ499", "amount_cents": 75000},
+        "source_judgment": source,
+        "matched_line_ids": ["AJE-X01-2"],
+        "entry_lines": lines,
+        "corrected_cents": 75000 - (residual or 0),
+        "residual_cents": residual,
+    }
+    return JudgmentContext(
+        subject_id="M-D-XJ499",
+        task={"params": {"adjustment_prefix": "AJE-"}, "risks": []},
+        data=data,
+        fixture_key="XJ-499",
+        expected_residual_cents=residual,
+        entry_account_codes=codes,
+    )
 
 
 @pytest.mark.external
@@ -1854,31 +1886,22 @@ async def test_fin09_judge_forwards_rule_results_to_validation() -> None:
     (JudgmentOutcome.draft); 剩余额 25000 时判 semantic, 只调 1 次, 失败类型 unattributed (混合程序)."""
     raw = fin09_fixture("XJ-499")
     engine = JudgmentEngine(ScriptedLLM({"XJ-499": [raw, raw]}), adjusted_validator(), FakeTrail(), LIBRARY)
-
-    lines = [{"source_type": "journal_entry", **line.model_dump(mode="json")} for line in xero_adjustments(["AJE-X01"])]
-    source = {"id": "J-GEN-02-1-XJ-499", "procedure_id": "GEN-02", "subject_id": "XJ-499", "conclusion": "No basis."}
-
-    async def judge(residual: int) -> Any:
-        data = {
-            "misstatement": {"id": "M-D-XJ499", "amount_cents": 75000},
-            "source_judgment": source,
-            "matched_line_ids": ["AJE-X01-2"],
-            "entry_lines": lines,
-            "corrected_cents": 75000 - residual,
-            "residual_cents": residual,
-        }
-        jctx = JudgmentContext(
-            subject_id="M-D-XJ499",
-            task={"params": {"adjustment_prefix": "AJE-"}, "risks": []},
-            data=data,
-            fixture_key="XJ-499",
-            expected_residual_cents=residual,
-            entry_account_codes=entry_accounts("AJE-X01"),
-        )
-        return await engine.judge(EID, FIN09, make_run("FIN-09"), jctx, "U-1")
-
-    passed = await judge(0)
+    passed = await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(0, XJ499_CODES), "U-1")
     assert passed.judgment is not None and passed.judgment.id == "J-FIN-09-1-M-D-XJ499"
     assert isinstance(passed.draft, CorrectionVerificationDraft) and passed.draft.other_accounts == ["711", "820"]
-    failed = await judge(25000)
+    failed = await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(25000, XJ499_CODES), "U-1")
     assert (failed.judgment, failed.failure, failed.attempts) == (None, "unattributed", 1)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(("residual", "codes"), [(None, ["711", "820"]), (0, None)])
+async def test_fin09_missing_context_fails_before_calling_the_model(
+    residual: int | None, codes: list[str] | None
+) -> None:
+    """审核 R164-05: 调用方漏传剩余额或匹配凭证的科目时, judge 在调用大模型之前抛 ValueError (调用方的错, 不当成
+    大模型失败, 不花调用)."""
+    llm = ScriptedLLM({"XJ-499": [fin09_fixture("XJ-499")]})
+    engine = JudgmentEngine(llm, adjusted_validator(), FakeTrail(), LIBRARY)
+    with pytest.raises(ValueError, match="expected_residual_cents, entry_account_codes"):
+        await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(residual, codes), "U-1")
+    assert llm.requests == []

@@ -42,7 +42,8 @@ class JudgmentContext(Model):
     # 本项目采用版本的客户画像 (需求 R128): 给了时推理链可引用它 (client_profile 指针), 校验时原样交给 OutputValidator.
     # judge 不把它放进提示词 (提示词只看 data 等变量), 调用方须同时把画像 (ID 与所需字段) 放进 data, 模型才引用得到
     client_profile: ClientProfile | None = None
-    # FIN-09 (需求 R164): 规则算出的剩余额与匹配凭证各行的科目代码, judge 原样放进 ValidationContext; 其余程序为空
+    # FIN-09 (需求 R164): 规则算出的剩余额与匹配凭证各行的科目中错报科目以外的 (见 ValidationContext), judge 原样放进
+    # ValidationContext; 其余程序为空
     expected_residual_cents: int | None = None
     entry_account_codes: list[str] | None = None
 
@@ -83,7 +84,8 @@ class ValidationContext(Model):
     expected_procedure_ids: list[str] | None = None
     period_end: date | None = None
     # FIN-09 的更正验证草稿 (CorrectionVerificationDraft, 需求 R164): fully_corrected 须与 "规则算出的剩余额为 0" 一致,
-    # other_accounts 须在匹配凭证各行的科目代码内. 其余输出不用, 为空
+    # other_accounts 须在 entry_account_codes 内且不重复. entry_account_codes 为匹配凭证各行的科目中错报科目以外的
+    # (错报没有科目代码时为全部). 其余输出不用, 为空; FIN-09 缺任一项时 call_llm 在调用大模型之前抛 ValueError
     expected_residual_cents: int | None = None
     entry_account_codes: list[str] | None = None
     # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针

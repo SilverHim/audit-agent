@@ -282,17 +282,32 @@ def going_concern_semantics(advice: GoingConcernAdvice) -> list[str]:
     return errors
 
 
+def verification_context(ctx: ValidationContext) -> tuple[int, list[str]]:
+    """更正验证 (FIN-09) 的校验上下文: (规则算出的剩余额, 匹配凭证中错报科目以外的科目). 调用方漏传任一项时抛
+    ValueError; call_llm 在调用大模型之前先查, 不把调用方的错当成大模型失败."""
+    residual, codes = ctx.expected_residual_cents, ctx.entry_account_codes
+    if residual is None or codes is None:
+        raise ValueError(
+            "更正验证的校验须给出规则算出的剩余额与匹配凭证的科目 (ValidationContext.expected_residual_cents, "
+            "entry_account_codes)"
+        )
+    return residual, codes
+
+
 def verification_semantics(
     draft: CorrectionVerificationDraft, residual_cents: int, entry_account_codes: Sequence[str]
 ) -> list[str]:
     """更正验证 (FIN-09, 需求 R164) 的语义校验, 返回错误 (空为通过): fully_corrected 须与规则算出的剩余额为 0 一致;
-    other_accounts 只能取匹配凭证各行的科目代码."""
+    other_accounts 只能取 entry_account_codes (匹配凭证各行的科目中错报科目以外的), 不重复."""
     errors = []
     if draft.fully_corrected != (residual_cents == 0):
         errors.append(f"fully_corrected 为 {draft.fully_corrected}, 与规则算出的剩余额 {residual_cents} 不符")
     outside = [code for code in draft.other_accounts if code not in entry_account_codes]
     if outside:
-        errors.append(f"other_accounts 含匹配凭证以外的科目: {', '.join(outside)}")
+        errors.append(f"other_accounts 只能列匹配凭证中错报科目以外的科目, 多了: {', '.join(outside)}")
+    repeated = sorted({code for code in draft.other_accounts if draft.other_accounts.count(code) > 1})
+    if repeated:
+        errors.append(f"other_accounts 的科目重复: {', '.join(repeated)}")
     return errors
 
 
@@ -792,13 +807,8 @@ async def check_verification(
 ) -> CheckResult:
     """更正验证草稿 (FIN-09, 需求 R164): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级
     另查是否完整更正与其他科目 (verification_semantics). ctx 缺 expected_residual_cents 或 entry_account_codes 时抛
-    ValueError."""
-    residual, codes = ctx.expected_residual_cents, ctx.entry_account_codes
-    if residual is None or codes is None:
-        raise ValueError(
-            "更正验证的校验须给出规则算出的剩余额与匹配凭证的科目 (ValidationContext.expected_residual_cents, "
-            "entry_account_codes)"
-        )
+    ValueError (verification_context)."""
+    residual, codes = verification_context(ctx)
     draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
     extra = verification_semantics(output, residual, codes) if level != "reference" else []
     return CheckResult(draft, "semantic" if extra else level, unsupported, errors + extra)
@@ -973,6 +983,8 @@ class JudgmentEngine:
         """
         model = output_model(template)
         assert template.llm is not None  # output_model 已确认
+        if model is CorrectionVerificationDraft:
+            verification_context(ctx)  # 漏传上下文在调用大模型之前报错 (同准则片段未注册的 LookupError)
         client = llm if llm is not None else self.llm
         system = system.format(schema=json.dumps(model.model_json_schema(), indent=2))
         # 先去掉个人信息再渲染 (接口文档第 0 节 "个人信息"): 出生日期字段 (需求 R310), 人员节点 ID 的出生日期一段

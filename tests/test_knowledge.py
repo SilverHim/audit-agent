@@ -2249,7 +2249,9 @@ def fin09_variables() -> dict[str, Any]:
 
 def test_fin09_prompt_renders_with_its_header_variables() -> None:
     """R164: 头注释是 R165 的数据契约. 模板取用的顶层变量都在头注释里; 按头注释给齐变量渲染通过 (StrictUndefined),
-    前缀, 匹配行, 已更正额与剩余额, 凭证各行, 规则例外与片段正文都进了提示词."""
+    前缀, 匹配行, 已更正额与剩余额, 凭证各行, 规则例外与片段正文都进了提示词. 审核 R164-02 (口径同 R165 验收 5, 6):
+    准则写明剩余额不为 0 的三种情形 (部分更正, 方向相反或没更正, 超额) 与 other_accounts 每个科目一次; 建议动作写明
+    部分更正可 accept 并写剩余额, 规则对不上时 more_evidence, 更正分录本身造成新错报 (含超额) 时 misstatement."""
     source = (ROOT / "prompts" / "FIN-09.md.j2").read_text(encoding="utf-8")
     header = source.split("#}", 1)[0]
     used = meta.find_undeclared_variables(Environment().parse(source))
@@ -2260,6 +2262,20 @@ def test_fin09_prompt_renders_with_its_header_variables() -> None:
     assert "Matched adjustment lines: AJE-X01-2." in text
     assert "Corrected amount (cents): 75000. Residual amount (cents): 0." in text
     assert '"id": "AJE-X01-2"' in text and '"id": "X-FIN-09-1-V02-1"' in text
+    criteria = text.split("## Criteria", 1)[1].split("## proposed_action", 1)[0]
+    for phrase in (
+        "When the residual amount is not 0",
+        "partly corrected",
+        "posted in the direction that increases the misstatement",
+        "below 0: the matched lines correct more than the misstatement",
+        "each code once",
+    ):
+        assert phrase in criteria, phrase
+    actions = text.split("## proposed_action", 1)[1].split("## Output", 1)[0]
+    accept, more, misstatement = (line for line in actions.splitlines() if line.startswith("- `"))
+    assert "in part with the residual stated" in accept
+    assert "do not match the misstatement" in more and "Rule findings" in more
+    assert "another account" in misstatement and "correct beyond the misstatement amount" in misstatement
     for f in variables["standards"]:
         assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
 

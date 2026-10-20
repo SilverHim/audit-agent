@@ -15,8 +15,25 @@ from tests.xero_fakes import SNAPSHOT_NAME
 pytestmark = [pytest.mark.slow, pytest.mark.external]
 
 
-async def v01(project: XeroProject, **overrides: object) -> list[tuple[Any, ...]]:
-    """以参数快照 (叠加 overrides) 跑 FIN-09 的规则, V01 各行的 (行 ID, 科目, 科目类型, 科目分类)."""
+# V01 的列, 即提示词头注释 data.entry_lines 的列 (R165 按 source_doc 取来源对象的候选行)
+V01_COLUMNS = [
+    "source_type",
+    "id",
+    "entry_no",
+    "posting_date",
+    "account_code",
+    "account_name",
+    "account_type",
+    "account_category",
+    "debit_cents",
+    "credit_cents",
+    "description",
+    "source_doc",
+]
+
+
+async def v01(project: XeroProject, **overrides: object) -> list[dict[str, Any]]:
+    """以参数快照 (叠加 overrides) 跑 FIN-09 的规则, 返回 V01 的行."""
     deps = project.deps
     template = deps.library.load("FIN-09")
     run = build_run(
@@ -32,13 +49,19 @@ async def v01(project: XeroProject, **overrides: object) -> list[tuple[Any, ...]
     assert run.params_snapshot == {"adjustment_prefix": "AJE-"}  # 取 Xero 数据集的声明
     result = await deps.rules.run(project.engagement.id, template, run, run.params_snapshot | overrides)
     assert (result.exceptions, list(result.rows)) == ([], ["V01"])
-    return [(r["id"], r["account_code"], r["account_type"], r["account_category"]) for r in result.rows["V01"]]
+    return result.rows["V01"]
+
+
+def accounts(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
+    """各行的 (行 ID, 科目, 科目类型, 科目分类)."""
+    return [(r["id"], r["account_code"], r["account_type"], r["account_category"]) for r in rows]
 
 
 async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pytest.TempPathFactory) -> None:
     """验收 3: 未载入更正分录时 V01 没有行 (XJ-397, XJ-499 等 is_adjustment 为真的手工分录不取); 载入第 1 轮 (AJE-X01,
-    AJE-X05) 后为这两笔的 5 行, 科目类型与分类取科目表 (DA 的映射); 再载第 2 轮后共 11 行. 前缀按原文比较: 改为
-    "AJE_" 或 "%" 时没有行 (用 LIKE 会把 _ 与 % 当通配符而取到全部更正行)."""
+    AJE-X05) 后为这两笔的 5 行, 列同提示词头注释 (审核 R164-04), 科目类型与分类取科目表 (DA 的映射), source_doc 为来源
+    对象; 再载第 2 轮后共 11 行. 前缀按原文比较: 改为 "AJE_" 或 "%" 时没有行 (用 LIKE 会把 _ 与 % 当通配符而取到全部
+    更正行)."""
     url = database_url()
     project = await build_xero_project(
         url, snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME), tmp_path_factory.mktemp("xero")
@@ -48,7 +71,10 @@ async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pyte
     assert await v01(project) == []
 
     await project.datasets.load_adjustments(eid, dataset, ["AJE-X01", "AJE-X05"])
-    assert await v01(project) == [
+    first = await v01(project)
+    assert list(first[0]) == V01_COLUMNS
+    assert [r["source_doc"] for r in first] == ["XJ-499"] * 3 + ["BA-091"] * 2
+    assert accounts(first) == [
         ("AJE-X01-1", "711", "asset", "property_plant_equipment"),
         ("AJE-X01-2", "710", "asset", "property_plant_equipment"),
         ("AJE-X01-3", "820", "liability", "tax_payable"),
@@ -57,7 +83,7 @@ async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pyte
     ]
 
     await project.datasets.load_adjustments(eid, dataset, ["AJE-X02", "AJE-X03", "AJE-X04"])
-    rows = await v01(project)
+    rows = accounts(await v01(project))
     assert len(rows) == 11 and [r[0] for r in rows] == sorted(r[0] for r in rows)
     assert {r[0].rsplit("-", 1)[0] for r in rows} == {f"AJE-X0{n}" for n in range(1, 6)}
     assert await v01(project, adjustment_prefix="AJE_") == await v01(project, adjustment_prefix="%") == []
