@@ -352,6 +352,8 @@ async def test_catch_up_refuses_unrecoverable_notices() -> None:
         await catch_up_correction(s.runner.deps, engagement, await s.runner.app.aget_state(CONFIG))
     s = await awaiting()
     await put_notices(s, notice(), stop())
+    engagement = await s.engagement_store.get(EID)
+    assert engagement is not None
     with pytest.raises(RuntimeError, match="D-CN1, D-STOP 未进检查点"):
         await catch_up_correction(s.runner.deps, engagement, await s.runner.app.aget_state(CONFIG))
 
