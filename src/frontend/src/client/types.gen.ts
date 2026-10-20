@@ -2914,6 +2914,39 @@ export type ManualResult = {
 };
 
 /**
+ * ManualTaskView
+ *
+ * 人工队列中的一项 (需求 R94): manual 任务, 程序名与模板 owner, 交给人的请求, 结果模型的 JSON schema (没有结果
+ * 模型时为空), 本项目可作证据的已登记文件 (选证据用, 每项相同) 与各文件作证据时的指针类型 (按文件 ID, 判断引擎的
+ * 文件指针映射, 前端据此填 EvidencePointer.type, 不另抄一份映射).
+ */
+export type ManualTaskView = {
+    task: ReviewTask;
+    /**
+     * Procedure Name
+     */
+    procedure_name: string;
+    owner: AgentId;
+    request: ManualRequest;
+    /**
+     * Result Schema
+     */
+    result_schema: {
+        [key: string]: unknown;
+    } | null;
+    /**
+     * Documents
+     */
+    documents: Array<DocumentRef>;
+    /**
+     * Evidence Types
+     */
+    evidence_types: {
+        [key: string]: EvidenceType;
+    };
+};
+
+/**
  * MaterialityCandidate
  *
  * 按一个基准 (收入, 总资产或税前利润) 算出的重要性候选区间.
@@ -5404,6 +5437,10 @@ export type ReviewsListReviewTasksData = {
          * Status
          */
         status?: TaskStatus | null;
+        /**
+         * Kind
+         */
+        kind?: TaskKind | null;
     };
     url: '/api/v1/engagements/{eid}/review-tasks';
 };
@@ -5631,6 +5668,38 @@ export type ReviewsListExceptionsResponses = {
 };
 
 export type ReviewsListExceptionsResponse = ReviewsListExceptionsResponses[keyof ReviewsListExceptionsResponses];
+
+export type ManualListManualTasksData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/manual-tasks';
+};
+
+export type ManualListManualTasksErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ManualListManualTasksError = ManualListManualTasksErrors[keyof ManualListManualTasksErrors];
+
+export type ManualListManualTasksResponses = {
+    /**
+     * Response Manual-List Manual Tasks
+     *
+     * Successful Response
+     */
+    200: Array<ManualTaskView>;
+};
+
+export type ManualListManualTasksResponse = ManualListManualTasksResponses[keyof ManualListManualTasksResponses];
 
 export type DeferralsListDeferralsData = {
     body?: never;

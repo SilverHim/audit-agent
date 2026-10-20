@@ -1,0 +1,157 @@
+{
+  "task": {
+    "id": "T-RUN-TST-M01-1-v1",
+    "version": 1,
+    "kind": "manual",
+    "procedure_id": "TST-M01",
+    "target_type": "ProcedureRun",
+    "target_id": "RUN-TST-M01-1",
+    "target_version": 1,
+    "run_id": "RUN-TST-M01-1",
+    "subject_id": "RESULT",
+    "status": "pending",
+    "created_at": "2026-10-20T04:17:45Z",
+    "manual_request": {
+      "instructions": "Obtain the signed management representation letter",
+      "result_model": "TstLetter",
+      "min_evidence": 2,
+      "material": {
+        "period_end": "2026-06-30"
+      }
+    }
+  },
+  "procedure_name": "自测人工程序",
+  "owner": "A10",
+  "request": {
+    "instructions": "Obtain the signed management representation letter",
+    "result_model": "TstLetter",
+    "min_evidence": 2,
+    "material": {
+      "period_end": "2026-06-30"
+    }
+  },
+  "result_schema": {
+    "additionalProperties": false,
+    "description": "测试登记的结果模型: 声明书的签署日与签署人.",
+    "properties": {
+      "signed_on": {
+        "format": "date",
+        "title": "Signed On",
+        "type": "string"
+      },
+      "signatory": {
+        "title": "Signatory",
+        "type": "string"
+      }
+    },
+    "required": ["signed_on", "signatory"],
+    "title": "TstLetter",
+    "type": "object"
+  },
+  "documents": [
+    {
+      "id": "DOC-3e7fb18af92a",
+      "type": "contract",
+      "file_name": "CON-001.pdf",
+      "sha256": "3e7fb18af92a71c666c2587dcb2117c4d85f8fe8576ae69a766a6352d14722b9",
+      "page_count": 3,
+      "reliability": "external_copy",
+      "status": "extracted",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    },
+    {
+      "id": "DOC-4b32a1a8dbbe",
+      "type": "contract",
+      "file_name": "CON-002.pdf",
+      "sha256": "4b32a1a8dbbea1e84510921c5dd1430a4d5ce4f27da94f660bf69d38e61da57c",
+      "page_count": 3,
+      "reliability": "external_copy",
+      "status": "extracted",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    },
+    {
+      "id": "DOC-245af45c3dc0",
+      "type": "contract",
+      "file_name": "CON-003.pdf",
+      "sha256": "245af45c3dc0f31a06972ea3eafb52f3999085751fbde96a36ee1e5192ac7344",
+      "page_count": 4,
+      "reliability": "external_copy",
+      "status": "extracted",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    },
+    {
+      "id": "DOC-ca18bcc6fa2d",
+      "type": "confirmation",
+      "file_name": "12345601.pdf",
+      "sha256": "ca18bcc6fa2db22d3b1092fc73cd7bae64b4901dba4471abb5930f32c1722220",
+      "page_count": 2,
+      "reliability": "external_original",
+      "status": "extracted",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    },
+    {
+      "id": "DOC-0019ab721f75",
+      "type": "confirmation",
+      "file_name": "23456702.pdf",
+      "sha256": "0019ab721f7584ab4810797988c85841e0a97b416b3b822f7322e64ce6be58b2",
+      "page_count": 2,
+      "reliability": "external_original",
+      "status": "extracted",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    },
+    {
+      "id": "DOC-0a1b2c3d4e5f",
+      "type": "representation_letter",
+      "file_name": "representation_letter.pdf",
+      "sha256": "0a1b2c3d4e5f0000000000000000000000000000000000000000000000000000",
+      "page_count": 2,
+      "reliability": "internal_original",
+      "status": "classified",
+      "uploaded_at": "2026-09-30T00:00:00Z",
+      "media_type": "application/pdf",
+      "channel": "auditor_upload",
+      "uploaded_by": null,
+      "failed_step": null,
+      "document_date": null,
+      "related_ids": []
+    }
+  ],
+  "evidence_types": {
+    "DOC-3e7fb18af92a": "contract",
+    "DOC-4b32a1a8dbbe": "contract",
+    "DOC-245af45c3dc0": "contract",
+    "DOC-ca18bcc6fa2d": "external",
+    "DOC-0019ab721f75": "external",
+    "DOC-0a1b2c3d4e5f": "voucher"
+  }
+}
