@@ -7,8 +7,9 @@ name: 全量分录扫描
 # 通用口径 (各规则的 SQL 都这样写):
 # - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行.
 # - 每条规则每笔凭证 (entry_no) 至多一条例外: source_id 取该凭证命中行中金额 (借贷两侧绝对值之和) 最大的行, 并列取
-#   ID 最小的行 (按字节序); amount_cents 取这一行的金额. 例外按 (posting_date, entry_no 自然序) 编号: 自然序把凭证号
-#   中的每段数字补足到 10 位再按字节序比较 (XJ-9 在 XJ-10 之前).
+#   ID 最小的行 (按字节序); amount_cents 取这一行的金额. 例外按 (posting_date, entry_no 自然序, entry_no) 编号: 自然序
+#   把凭证号中的每段数字补足到 10 位再按字节序比较 (XJ-9 在 XJ-10 之前), 数字段以 10 位为限 (更长的段不保证按数值排);
+#   自然序相等而凭证号不同 (XJ-09 与 XJ-9) 时按凭证号原文的字节序, 编号总是确定的.
 # - 输出列: source_type journal_entry, source_id, amount_cents, entry_no, posting_date, 其后为各规则特有的列 (进例外的
 #   detail).
 # - 摘要与单据号的匹配用 ILIKE; 录入时间 created_at 按 timezone 换成当地时间后再取星期, 时刻与日期; created_at 为空的
@@ -79,7 +80,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R02
     name: 整数金额的调整分录
     severity: medium
@@ -111,7 +113,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R03
     name: 恰低于审批限额的付款
     severity: high
@@ -143,7 +146,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R04
     name: 审批缺失或自审自批
     severity: high
@@ -170,7 +174,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R05
     name: 期末前三日冲销
     severity: high
@@ -192,7 +197,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R06
     name: 审计调整期间的其他分录
     severity: high
@@ -221,7 +227,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R07
     name: 非常规录入人
     severity: medium
@@ -256,7 +263,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R08
     name: 非工作时间录入
     severity: medium
@@ -282,7 +290,8 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"
   - id: R13
     name: 期末后补记
     severity: medium
@@ -308,4 +317,5 @@ rules:
       FROM picked
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
-                 COLLATE "C"
+                 COLLATE "C",
+               entry_no COLLATE "C"

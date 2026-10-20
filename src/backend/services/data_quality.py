@@ -141,7 +141,8 @@ DOCUMENT_TITLES = {
 }  # other 以外的文件类型都有标题 (模板 inputs 可写任一种, 见 test_procedure_inputs)
 # 体检请求 (就绪必需的表, 审批日志, 报表草稿) 的用途 (程序库与设计规格说明书第 10 节): 审批日志供全量分录扫描
 # (GEN-05) 判断录入与审批, 报表草稿供财报与会计记录勾稽 (FIN-12). 程序要的资料的用途取模板 inputs (program_requests);
-# inputs 不能写就绪必需的表, 两类请求的资料不重叠. GEN-05, FIN-12 实现时改为在其 YAML 写 inputs, 再删这里的对应项
+# inputs 不能写就绪必需的表, 两类请求的资料不重叠. FIN-12 实现时改为在其 YAML 写 inputs, 再删这里的对应项; GEN-05 不写
+# inputs (缺审批人时 R04 记 not_executable, 不等数据, 需求 R131), 这里它的两项保留
 USED_FOR: dict[TableKind | DocumentType, list[str]] = {
     TableKind.accounts: ["PLN-07", "PLN-01"],
     TableKind.trial_balance: ["PLN-07", "PLN-01", "CSH-05", "CSH-02"],
