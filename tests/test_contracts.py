@@ -1,5 +1,4 @@
 import json
-from collections import Counter
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -35,8 +34,6 @@ from backend.contracts.models import (
     EngagementTerms,
     EvidencePointer,
     EvidenceType,
-    FinancialStatementLine,
-    FinancialStatements,
     GateDecision,
     GateId,
     GateVerdict,
@@ -82,7 +79,6 @@ from backend.orchestration.checkpoint import checkpoint_serde
 from tests.fakes import (
     PLAN_CONFIRMATION,
     PLAN_EQR_BASIS,
-    XERO_FS_V1,
     audit_plan,
     compliance_check,
     engagement_terms,
@@ -554,55 +550,6 @@ def test_full_name_split_and_company_node_id() -> None:
             organisation_node_id(name)
 
 
-# ── R216: 待审财报 ──
-
-
-def lines_of(statement: str) -> dict[str, FinancialStatementLine]:
-    return {line.code: line for line in XERO_FS_V1.lines if line.statement == statement}
-
-
-def test_financial_statements_contract() -> None:
-    """验收 1: FS 固定 ID, 版本, 编制日, 董事声明日与比较数重述凭证号; 35 行分属四张报表 (财务状况表 12, 损益表 6,
-    权益变动表 5, 现金流量表 12); 行代码重复, sign 不是 ±1, 报表种类不认识或多给字段都被拒; JSON 往返不变."""
-    fs = XERO_FS_V1
-    assert (fs.id, fs.version, fs.prepared_at, fs.directors_declaration_date, fs.document_id) == (
-        "FS",
-        1,
-        date(2026, 10, 22),
-        date(2026, 10, 23),
-        None,
-    )
-    assert fs.comparative_restatement_entry_nos == ["XJ-397"]
-    assert Counter(line.statement for line in fs.lines) == {
-        "financial_position": 12,
-        "profit_or_loss": 6,
-        "changes_in_equity": 5,
-        "cash_flows": 12,
-    }
-    with pytest.raises(ValidationError, match="财报行代码重复: SOFP-CASH"):
-        FinancialStatements.model_validate(
-            {**fs.model_dump(), "lines": [*fs.model_dump()["lines"], fs.lines[0].model_dump()]}
-        )
-    line = fs.lines[0].model_dump()
-    for change in ({"sign": 0}, {"statement": "notes"}, {"extra": 1}):
-        with pytest.raises(ValidationError):
-            FinancialStatementLine.model_validate({**line, **change})
-    assert FinancialStatements.model_validate_json(fs.model_dump_json()) == fs
-
-
-def test_xero_fs_v1_figures_and_mapping() -> None:
-    """验收 2: 设计稿第 4.7 节的三个数 (资产 21,829.26 = 负债 51,878.25 + 权益 (30,048.99)); 比较数的 GST 应收 791.20
-    在 SOFP-TAX 中以 -79120 列示; 财务状况表非小计行的科目互不重叠 (820 只映射一次), 共 33 个科目 (09-30 试算表 27 行
-    加 804, 805, 826, 478, 620, 270). 表内其余勾稽由 data/check_xero_demo.py 对 fs_v1.json 做 (test_xero_demo_data),
-    fs_v1.json 与本表相同由 test_xero_demo_data 守."""
-    pos = lines_of("financial_position")
-    assets, liabilities, equity = (pos[c].amount_cents for c in ("SOFP-TA", "SOFP-TL", "SOFP-EQ"))
-    assert (assets, liabilities, equity) == (2182926, 5187825, -3004899) and assets == liabilities + equity
-    assert pos["SOFP-TAX"].prior_amount_cents == -79120
-    mapped = [code for line in pos.values() if not line.subtotal for code in line.account_codes]
-    assert len(mapped) == len(set(mapped)) == 33
-
-
 # ── R215: 签字前提的四类审计产出 ──
 
 
@@ -640,7 +587,7 @@ def test_representation_letter_contract() -> None:
 
 def test_compliance_check_contract_and_failed_codes() -> None:
     """验收 2: CHECK-{procedure_id} 的字段; failed_codes 只读, 列出 failed 项的代号 (按首次出现的顺序, 逐行核对的
-    同一代号只列一次; 数据里 K03 先于 K01 不通过, 不同于字典序), 不进 JSON; 缺省 exception_ids 为空, must_disclaim
+    同一代号只列一次; 数据里 W03 先于 W01 不通过, 不同于字典序), 不进 JSON; 缺省 exception_ids 为空, must_disclaim
     与 requires_disposition 为假; 多给字段被拒; JSON 往返不变."""
     check = compliance_check(exception_ids=["X-FIN-10-1-E02-1"])
     assert (check.id, check.procedure_id, check.run_id, check.basis) == (
@@ -652,28 +599,28 @@ def test_compliance_check_contract_and_failed_codes() -> None:
     assert check.failed_codes == ["E02"] and "failed_codes" not in check.model_dump()
     assert (check.must_disclaim, check.subject_ref, compliance_check().exception_ids) == (False, None, [])
     assert [item.requires_disposition for item in check.items] == [False, True, False]  # 样例只给 E02 显式置真
-    line = {"description": "Line agrees to adjusted trial balance", "standard_ref": "ASA 330.20(a)"}
-    fs12 = ComplianceCheck(
-        id="CHECK-FIN-12",
-        procedure_id="FIN-12",
-        run_id="RUN-FIN-12-1",
+    line = {"description": "Representation is present in the letter", "standard_ref": "ASA 580.10"}
+    check18 = ComplianceCheck(
+        id="CHECK-FIN-18",
+        procedure_id="FIN-18",
+        run_id="RUN-FIN-18-1",
         items=[
-            CheckItem(code="K01", status=CheckItemStatus.passed, **line),
-            CheckItem(code="K03", status=CheckItemStatus.failed, **line),
-            CheckItem(code="K01", status=CheckItemStatus.failed, **line),
-            CheckItem(code="K03", status=CheckItemStatus.failed, **line),
-            CheckItem(code="K05", status=CheckItemStatus.attention, **line),
+            CheckItem(code="W01", status=CheckItemStatus.passed, **line),
+            CheckItem(code="W03", status=CheckItemStatus.failed, **line),
+            CheckItem(code="W01", status=CheckItemStatus.failed, **line),
+            CheckItem(code="W03", status=CheckItemStatus.failed, **line),
+            CheckItem(code="W05", status=CheckItemStatus.attention, **line),
         ],
-        subject_ref=ObjectRef(kind="FinancialStatements", id="FS", version=1),
-        basis={"fs_version": 1, "adjustment_entry_nos": ["AJE-X01", "AJE-X05"]},
+        subject_ref=ObjectRef(kind="WrittenRepresentationLetter", id="REPLETTER", version=1),
+        basis={"letter_version": 1},
     )
-    assert fs12.failed_codes == ["K03", "K01"]
+    assert check18.failed_codes == ["W03", "W01"]
     with pytest.raises(ValidationError, match="frozen"):
-        fs12.failed_codes = []  # type: ignore[misc]
+        check18.failed_codes = []  # type: ignore[misc]
     for change in ({"extra": 1}, {"items": [{**check.items[0].model_dump(), "status": "skipped"}]}):
         with pytest.raises(ValidationError):
             ComplianceCheck.model_validate({**check.model_dump(), **change})
-    assert ComplianceCheck.model_validate_json(fs12.model_dump_json()) == fs12
+    assert ComplianceCheck.model_validate_json(check18.model_dump_json()) == check18
 
 
 def test_governance_communication_contract() -> None:

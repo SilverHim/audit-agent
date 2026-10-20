@@ -113,7 +113,7 @@ class GateSpec:
     view: View  # GraphStateQuery.gate 的呈报材料
     material_id: str | None = None  # 材料的固定 ID; 为空时由 pick 从列表中取当前的一份
     pick: Callable[[Sequence[Any]], Any] | None = None  # 列表字段的材料 (报告) 取当前的一份
-    check: Check | None = None  # 专项校验 (重要性, edits, 覆盖缺口, 意见类型), 在字段校验之后
+    check: Check | None = None  # 专项校验 (重要性, edits, 覆盖缺口, 意见类型, 计划确认的依据), 在字段校验之后
     rebuild: Rebuild | None = None  # 恢复补做时通过决定写入的专属状态 (重要性三项, 意见类型, 签字版)
     before: Before | None = None
     passed: Passed | None = None
@@ -585,6 +585,16 @@ def current_plan(plans: Sequence[AuditPlan]) -> AuditPlan | None:
     return max(live, key=lambda p: p.revision) if live else None
 
 
+async def pln15_check(deps: AgentDeps, eid: str, decision: GateDecision, target: Versioned) -> None:
+    """通过时项目质量复核的依据去空白后非空 (需求 R206; 有无确认已由字段校验查过). 不需要审计师的专家为假时照样通过,
+    只作记录: 本版没有审计师专家程序, 也不在签字闸门强制检查项目质量复核."""
+    confirmation = decision.plan_confirmation
+    if confirmation is not None and not confirmation.eqr_basis.strip():
+        raise DecisionRejected(
+            "INVALID_VALUE", "plan_confirmation.eqr_basis 不能为空: 须写明是否需要项目质量复核的依据"
+        )
+
+
 def pln15_effects(pack: list[Procedure], decision: GateDecision, plan: AuditPlan) -> StatePatch:
     """PLN-15 闸门决定的效果 (第 7 节), 纯函数 (恢复补做时可复用), 由 aupdate_state(as_node="gate_p1_plan") 写入状态.
 
@@ -815,6 +825,7 @@ GATES: list[GateSpec] = [
         },
         effects=pln15_apply,
         view=pln15_view,
+        check=pln15_check,
         rebuild=pln15_rebuild,
         passed=plan_approved_by,
         feature=PLANNING,

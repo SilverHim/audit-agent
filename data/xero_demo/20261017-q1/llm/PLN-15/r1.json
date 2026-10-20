@@ -28,6 +28,14 @@
       "nature_timing_extent": "As the replies arrive during fieldwork, extract the confirmed balances, accrued interest and facility details from each bank reply for the confirmation evaluation."
     },
     {
+      "procedure_id": "GEN-02",
+      "nature_timing_extent": "At fieldwork, after the journal scan, judge each journal entry it reports, including the 16 July 2026 conversion entry, against the related invoices, contracts, bank statements and supporting documents, and attribute it to a business reason or propose a misstatement; entries that cannot be explained are referred for more evidence (ASA 240 para 33(a))."
+    },
+    {
+      "procedure_id": "GEN-05",
+      "nature_timing_extent": "At fieldwork, scan every journal entry posted from 1 July to 30 September 2026 with the journal rules (non-standard entries, full revenue reversals, voided entries re-posted to a different party, possible duplicate invoices, round amounts, payments just below the approval limit and reversals near the period end), reporting entries above the clearly trivial threshold of $16.22; the rules that rely on entry times are skipped because the entry timestamps in the Xero demonstration data are not reliable."
+    },
+    {
       "procedure_id": "REV-02",
       "nature_timing_extent": "At fieldwork, judge the cut-off of each sales invoice dated in the 20 days to 30 September 2026 with a net amount at or above performance materiality of $162.16, against service completion records and contracts."
     },

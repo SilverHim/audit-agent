@@ -65,9 +65,10 @@ from backend.orchestration.merge import (
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
+from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
-from backend.services.features import COLLAB, PLANNING
-from backend.services.procedure_library import ProcedureLibrary, manual_program, run_params
+from backend.services.features import AUTONOMY, COLLAB, PLANNING
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
@@ -384,6 +385,28 @@ def uncovered_objectives(library: ProcedureLibrary, objectives: list[AuditObject
     装配时有这样的目标即阻断 (Demo需求文档第 4.1 节); PLN-01/03 闸门呈报缺口, 有缺口时不能通过.
     """
     return [o.id for o in objectives if not library.match(o)]
+
+
+def assembled_procedure(
+    deps: AgentDeps, template: ProcedureTemplate, objectives: Sequence[AuditObjective]
+) -> Procedure:
+    """assemble_pack 加入的一条 P2 程序第 1 版 (planned): objective_ids 为模板 trigger 直接匹配的审计目标 (只经依赖
+    加入的与固定集为空). 功能 autonomy 打开时级别与理由取装配级降级 (autonomy_policy.assembly_level, 风险取这些目标
+    的最高等级, 只算一次; 没有关联目标不降级), 关闭时取模板级别, 理由为空 (需求 R170).
+    例: Xero 目标下 REV-02 (模板 L2, 关联收入截止 significant) → L1 [significant_risk]; DOC-06 → L3 []."""
+    library = deps.library
+    objective_ids = [o.id for o in objectives if template in library.match(o)]
+    decision = AutonomyDecision(template.autonomy_level, [])
+    if AUTONOMY in deps.features:
+        decision = assembly_level(deps.autonomy, template, highest_risk(objectives, objective_ids))
+    return Procedure(
+        id=template.id,
+        phase=template.phase,
+        template_commit=library.commit,
+        objective_ids=objective_ids,
+        autonomy_level=decision.level,
+        downgrade_reasons=decision.reasons,
+    )
 
 
 def update_procedure(pack: list[Procedure], procedure_id: str, **changes: Any) -> list[Procedure]:
@@ -999,7 +1022,7 @@ class GraphNodes:
         新加入的程序第 1 版写入 Store, 阶段 P2_Executing 写入 engagements 表, 两者同一事务 (第 3 节). 功能 planning
         打开时只写程序, 阶段仍为 P1_Planning, 由 PLN-15 闸门批准计划时进入 P2 (需求 R205, M-10).
         objective_ids 为该程序直接匹配的审计目标; 只经依赖加入的 (如 DOC-06) 与固定集程序为空. 覆盖校验只看 trigger,
-        固定集程序不计入.
+        固定集程序不计入. 级别与降级理由见 assembled_procedure (功能 autonomy 打开时为装配级降级的结果).
         没有新程序时不写也不改阶段. 节点重放时 Store 已有这些第 1 版, put 跳过, 阶段同值再写一次.
         提交后写阶段的 transition 留痕 (新程序是第 1 版, 不写; 功能 planning 打开时不改阶段, 也不写).
         """
@@ -1011,13 +1034,7 @@ class GraphNodes:
         matched = {t.id for o in objectives for t in library.match(o)} | {t.id for t in library.fixed()}
         existing = {p.id for p in state["procedure_pack"]}
         added = [
-            Procedure(
-                id=t.id,
-                phase=t.phase,
-                template_commit=library.commit,
-                objective_ids=[o.id for o in objectives if t in library.match(o)],
-                autonomy_level=t.autonomy_level,
-            )
+            assembled_procedure(self.deps, t, objectives)
             for t in library.closure(sorted(matched))
             if t.phase is Phase.P2_Executing and t.id not in existing
         ]

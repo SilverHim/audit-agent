@@ -24,6 +24,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     CriticVerdict,
     Decision,
+    DowngradeCondition,
     Judgment,
     Misstatement,
     MisstatementStatus,
@@ -42,6 +43,7 @@ from backend.contracts.models import (
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import build_run
+from backend.services.features import BASELINE
 from backend.services.presentation import failure_of
 from tests.fakes import NOW, FakeTrail, ScriptedLLM, finished, make_ctx, make_run, xero_document
 from tests.fixture_sets import XERO
@@ -441,6 +443,38 @@ async def test_fraud_indicative_sample_is_flagged() -> None:
 
     update = patch["judgments"][0].misstatement_update
     assert update is not None and (update.fraud_indicative, update.fraud_reason) == (True, FRAUD_REASON)
+
+
+def ba091_fraud_llm() -> ScriptedLLM:
+    """合成: 模型给 BA-091 (金额 4853, 未超过执行重要性) 有舞弊迹象与理由, XJ-499 照 fixture 正本."""
+    fraud = json.loads(fixture_raw("BA-091"))
+    fraud["nature"] = {"type": "factual", "fraud_indicative": True, "fraud_reason": FRAUD_REASON}
+    return ScriptedLLM({"XJ-499": [fixture_raw("XJ-499")], "BA-091": [json.dumps(fraud)]})
+
+
+L1, L2 = AutonomyLevel.L1, AutonomyLevel.L2
+OVER_PM, FRAUD = DowngradeCondition.amount_over_pm, DowngradeCondition.fraud_flag
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("llm", "expected"),
+    [
+        (None, {"M-D-XJ499": (L1, [OVER_PM]), "M-D-CSH02-091": (L2, [])}),  # R168 推导表
+        (ba091_fraud_llm, {"M-D-XJ499": (L1, [OVER_PM]), "M-D-CSH02-091": (L1, [FRAUD])}),
+    ],
+    ids=["fixtures", "ba091-fraud"],
+)
+async def test_fin03_judgments_downgraded_with_autonomy(llm: Any, expected: dict[str, Any]) -> None:
+    """需求 R170 (R158 验收 4 "降级打开后的级别见 MD-13 推导表"): 功能 misstatement 与 autonomy 打开时, FIN-03 (模板
+    L2) 的判断经判断级降级, 分类载荷在降级之前已写上: XJ-499 的错报 75000 超过执行重要性 16216 → L1
+    [amount_over_pm]; BA-091 的 4853 未超过 → L2 []; 模型给 BA-091 舞弊迹象时 → L1 [fraud_flag]. 任务仍为 normal."""
+    deps = fin03_deps(FakeTrail(), llm() if llm else None, features=BASELINE | {"misstatement", "autonomy"})
+    patch, _ = await run_fin03(deps, fin03_state())
+    levels = {j.subject_id: (j.autonomy_level, j.downgrade_reasons) for j in patch["judgments"]}
+    assert levels == expected
+    assert all(j.misstatement_update is not None for j in patch["judgments"])
+    assert [t.kind for t in patch["review_tasks"]] == [TaskKind.normal, TaskKind.normal]
 
 
 @pytest.mark.external

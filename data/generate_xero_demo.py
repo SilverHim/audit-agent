@@ -339,7 +339,7 @@ FS_PDF = "financial_statements/fs_v1.pdf"
 
 
 def write_financial_statements(out: Path, fs: dict[str, Any]) -> None:
-    """待审财报 fs_v1.json (第 9.5 节, 字段同需求清单 R216 的 FinancialStatements): 规格的报表加 document_id,
+    """待审财报 fs_v1.json (第 9.5 节, 字段同需求清单 R216 的待审财报; Issue #46 起只作样例): 规格的报表加 document_id,
     即同目录 fs_v1.pdf 的文件 ID (DOC- 加 sha256 前 12 位, 同 manifest), 所以须在 PDF 写出之后调用."""
     head = {k: fs[k] for k in ("id", "version", "prepared_at", "directors_declaration_date")}
     rest = {k: fs[k] for k in ("comparative_restatement_entry_nos", "lines")}

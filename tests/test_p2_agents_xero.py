@@ -25,10 +25,12 @@ from backend.agents.registry import build_agents
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AuditException,
+    AutonomyLevel,
     ConfirmationResult,
     CriticVerdict,
     Decision,
     DocumentType,
+    DowngradeCondition,
     ExceptionDisposition,
     Judgment,
     Misstatement,
@@ -57,13 +59,14 @@ from backend.orchestration.decisions import (
     confirm_effects,
     misstatement_effects,
 )
-from backend.orchestration.nodes import apply_patch, build_run
+from backend.orchestration.nodes import apply_patch, assembled_procedure, build_run
 from tests.fakes import NOW, FakeConfirmationChannel, FakeEvidenceStore, FakeRuleEngine, FakeTrail
 from tests.fixture_sets import XERO
 from tests.test_p2_agents_demo import LAYERS, OBJECTIVES, confirm_judgments
 from tests.test_xero_fixtures import ORC, REV03_CONTRACTS, xero_state
 from tests.xero_fakes import (
     ORC1026,
+    XERO17_FEATURES,
     XERO_RULES,
     make_xero_deps,
     manifest_documents,
@@ -112,28 +115,24 @@ def run_context(deps: AgentDeps, state: EngagementState, procedure_id: str) -> R
     return RunContext(engagement, procedure, template, run, state)
 
 
-async def run_p2() -> P2:
+async def run_p2(features: frozenset[str] = XERO17_FEATURES) -> P2:
     """按层执行 7 条 P2 程序 (同层以本层开始时的状态执行, 再一起并入, 同 fan_in); 进入第 1 层前 REV-03 的 3 条判断
     置 confirmed v2. 状态为进入 P2 时的 (xero_state: 预置目标与风险, 外勤阶段上传的文件, 重要性 32431 / 16216 /
-    1622); 规则引擎为 FakeRuleEngine(XERO_RULES), 主模型与复核模型都读正本."""
+    1622); 程序第 1 版同 assemble_pack (nodes.assembled_procedure: 关联目标同 OBJECTIVES, 功能 autonomy 打开时为
+    装配级降级后的级别); 规则引擎为 FakeRuleEngine(XERO_RULES), 主模型与复核模型都读正本."""
     trail = FakeTrail()
     client = MockLLMClient(XERO.fixtures)
     channel = xero_confirmations()
     rules = FakeRuleEngine(XERO_RULES)
-    deps = make_xero_deps(trail=trail, llm=client, review_llm=client, rules=rules, confirmations=channel)
+    deps = make_xero_deps(
+        trail=trail, llm=client, review_llm=client, rules=rules, confirmations=channel, features=features
+    )
     agents = build_agents(deps)
-    pack = [
-        Procedure(
-            id=pid,
-            phase=Phase.P2_Executing,
-            template_commit=deps.library.commit,
-            objective_ids=OBJECTIVES[pid],
-            autonomy_level=deps.library.load(pid).autonomy_level,
-        )
-        for layer in LAYERS
-        for pid in layer
-    ]
-    state: EngagementState = xero_state() | {"procedure_pack": pack, "phase": Phase.P2_Executing}  # type: ignore[assignment]
+    state: EngagementState = xero_state() | {"phase": Phase.P2_Executing}  # type: ignore[assignment]
+    objectives = state["audit_objectives"]
+    pack = [assembled_procedure(deps, deps.library.load(pid), objectives) for layer in LAYERS for pid in layer]
+    assert {p.id: p.objective_ids for p in pack} == OBJECTIVES
+    state = state | {"procedure_pack": pack}  # type: ignore[assignment]
     patches: dict[str, StatePatch] = {}
     for n, layer in enumerate(LAYERS):
         if n == 1:
@@ -148,6 +147,12 @@ async def run_p2() -> P2:
 @pytest.fixture(scope="module")
 def p2() -> P2:
     return asyncio.run(run_p2())
+
+
+@pytest.fixture(scope="module")
+def p2_autonomy() -> P2:
+    """功能 autonomy 打开时的同一段 P2 (需求 R170)."""
+    return asyncio.run(run_p2(XERO17_FEATURES | {"autonomy"}))
 
 
 @pytest.mark.external
@@ -367,3 +372,33 @@ async def test_lifecycle_misstatement_keeps_account_code(p2: P2) -> None:
     with pytest.raises(DecisionRejected) as e:
         await check_account_code(p2.deps.financial_store, eid, unknown)
     assert (e.value.code, e.value.message) == ("INVALID_VALUE", "错报草稿的科目代码 999 不在本项目科目表中")
+
+
+@pytest.mark.external
+def test_judgment_levels_with_autonomy(p2_autonomy: P2) -> None:
+    """需求 R170 验收 5, 8 (功能 autonomy 打开, 真实判断引擎与 Xero 正本 fixture): 装配后 REV-03, REV-02 为 L1
+    [significant_risk], CSH-02 为 L2 [high_risk] (模板 L3). 判断起点为程序的运行时级别, 理由接着装配时的: REV-02 六条
+    金额 (发票行金额, ORC1026 取例外 R03-1) 都超过执行重要性 16216, ORC1026 置信度低于 0.7 另记 low_confidence;
+    REV-03 三条只有装配时的理由; J-CSH-02-1-BA-091 金额 4853 未超过, 仍为 L2 [high_risk], A7 按 L2 跳过. 任务仍为
+    10 条 normal."""
+    level, sig, high = AutonomyLevel, DowngradeCondition.significant_risk, DowngradeCondition.high_risk
+    over_pm, low = DowngradeCondition.amount_over_pm, DowngradeCondition.low_confidence
+    pack = {p.id: (p.autonomy_level, p.downgrade_reasons) for p in p2_autonomy.state["procedure_pack"]}
+    assert (pack["REV-03"], pack["REV-02"], pack["CSH-02"]) == (
+        (level.L1, [sig]),
+        (level.L1, [sig]),
+        (level.L2, [high]),
+    )
+    judgments = {j.id: j for j in p2_autonomy.state["judgments"]}
+    assert {jid: (j.autonomy_level, j.downgrade_reasons) for jid, j in judgments.items()} == {
+        **{f"J-REV-03-1-{c}": (level.L1, [sig]) for c in REV03_CONTRACTS},
+        **{
+            f"J-REV-02-1-{i}": (level.L1, [sig, over_pm, low] if i == ORC1026 else [sig, over_pm]) for i in ORC.values()
+        },
+        "J-CSH-02-1-BA-091": (level.L2, [high]),
+    }
+    cash = judgments["J-CSH-02-1-BA-091"]
+    assert cash.critic_verdict is CriticVerdict.skipped and (cash.critic_reason or "").startswith("L2")
+    tasks = p2_autonomy.state["review_tasks"]
+    assert {(t.kind, t.status) for t in tasks} == {(TaskKind.normal, TaskStatus.pending)}
+    assert sorted(t.target_id for t in tasks) == sorted(JUDGMENT_IDS)

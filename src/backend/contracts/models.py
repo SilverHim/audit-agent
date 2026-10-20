@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Iterable
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
@@ -386,7 +386,7 @@ class DocumentType(StrEnum):
     confirmation = "confirmation"  # 询证函回函
     bank_statement = "bank_statement"  # 银行对账单
     minutes = "minutes"  # 会议纪要与决议 (董事会, 股东会), 如委任审计师
-    financial_statements = "financial_statements"  # 财务报表 (含报表草稿); 不作证据, 判断引报表行
+    financial_statements = "financial_statements"  # 财务报表; 只分类, 不作证据, 不参与程序 (以账套为准, Issue #46)
     registry_extract = "registry_extract"  # 登记机构摘录, 如 ASIC 公司摘录与人员检索
     engagement_letter = "engagement_letter"  # 审计业务约定书
     representation_letter = "representation_letter"  # 管理层声明书
@@ -446,7 +446,7 @@ class ClauseStatus(StrEnum):
 
 
 class CheckItemStatus(StrEnum):
-    """合规检查一项的结果 (FIN-10, FIN-12, FIN-18)."""
+    """合规检查一项的结果 (FIN-10, FIN-18)."""
 
     passed = "passed"  # 通过
     failed = "failed"  # 不通过
@@ -509,7 +509,6 @@ PointerSource = Literal[
     "standard",
     "trail",
     "client_profile",
-    "financial_statement_line",  # 待审财报的一行 (需求 R216), source_id 为行代码
 ]
 # 财务数据的行类型, PointerSource 的子集
 SourceType = Literal[
@@ -520,7 +519,6 @@ SourceType = Literal[
     "bank_transaction",
     "bank_account",
     "trial_balance",
-    "financial_statement_line",  # 待审财报的一行 (需求 R216): 客户数据, 取当前版本中该行 (需求 R217)
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
@@ -991,7 +989,9 @@ class PlanItem(Model):
 class ProcedureNote(Model):
     """一条程序计划的性质, 时间与范围 (ASA 300 第 9(c) 段: 认定层次的进一步审计程序)."""
 
-    procedure_id: str  # 程序编号, 须在计划的 items 中
+    # 程序编号. 草稿 (AuditPlanDraft) 的说明可多于计划的程序 (校验只查缺与重复); 合成后的计划 (AuditPlan) 只含 items
+    # 中程序的说明, 由 A4 过滤 (需求 R316)
+    procedure_id: str
     nature_timing_extent: str  # 性质, 时间与范围的说明
 
 
@@ -1295,15 +1295,15 @@ class UncorrectedSchedule(Versioned):
 class ObjectRef(Model):
     """对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查."""
 
-    kind: str  # 对象的类名, 如 UncorrectedSchedule, ComplianceCheck, FinancialStatements
-    id: str  # 对象 ID, 如 SCHEDULE, CHECK-FIN-10, FS
+    kind: str  # 对象的类名, 如 UncorrectedSchedule, ComplianceCheck, WrittenRepresentationLetter
+    id: str  # 对象 ID, 如 SCHEDULE, CHECK-FIN-10, REPLETTER
     version: int = Field(ge=1)  # 引用时的版本
 
 
 class CheckItem(Model):
     """合规检查的一项."""
 
-    code: str  # 检查项代号, 如 K01, E03; 逐行核对的检查 (如 FIN-12 的 K01) 每行一项, 同一代号有多项
+    code: str  # 检查项代号, 如 W01, E03; 逐行核对的检查每行一项, 同一代号有多项
     description: str  # 检查什么
     status: CheckItemStatus  # 结果
     standard_ref: str  # 依据的准则或法条, 如 ASA 580.14, s307C(3)
@@ -1313,7 +1313,7 @@ class CheckItem(Model):
 
 
 class ComplianceCheck(Versioned):
-    """签字前提的合规检查: FIN-10 职业道德与独立性, FIN-12 财报与会计记录勾稽, FIN-18 声明书校验共用 (A9 写,
+    """签字前提的合规检查: FIN-10 职业道德与独立性, FIN-18 声明书校验共用 (A9 写,
     需求 R215). 每条程序一份, ID 为 CHECK-{procedure_id}; 再执行出新版本."""
 
     procedure_id: str  # 做检查的程序
@@ -1321,10 +1321,10 @@ class ComplianceCheck(Versioned):
     items: list[CheckItem]  # 各项结果
     exception_ids: list[str] = []  # 不通过的项生成的例外
     must_disclaim: bool = False  # 检查结果要求出具无法表示意见, 如管理层不提供第 10, 11 段的声明 (ASA 580 第 20 段)
-    subject_ref: ObjectRef | None = None  # 被检查的对象, 如财报 FS 或声明书 REPLETTER 的版本; 没有单一对象时为空
-    # 所依据的输入及其版本, 如 {fs_version: 1, adjustment_entry_nos: [...]}, {client_profile_version: 3}; 节点再入时
-    # 与当前输入比对, 判断检查是否过期. 只放 JSON 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组
-    # 等经 Store 读回会变成字符串与列表, 与检查点读回的不相等
+    subject_ref: ObjectRef | None = None  # 被检查的对象, 如声明书 REPLETTER 的版本; 没有单一对象时为空
+    # 所依据的输入及其版本, 如 {client_profile_version: 3}; 节点再入时与当前输入比对, 判断检查是否过期. 只放 JSON
+    # 原生值 (整数, 字符串, 布尔, 由它们组成的列表与字典): 日期, 元组等经 Store 读回会变成字符串与列表, 与检查点读回的
+    # 不相等
     basis: dict[str, Any] = {}
 
     @property
@@ -1759,57 +1759,6 @@ def split_full_name(full_name: str) -> tuple[str, str]:
         return " ".join(family.split()), " ".join(given.split())
     words = full_name.split()
     return (words[-1], " ".join(words[:-1])) if words else ("", "")
-
-
-# 待审财报的报表: 财务状况表, 损益表, 权益变动表, 现金流量表 (后两种需求 R293 加)
-StatementKind = Literal["financial_position", "profit_or_loss", "changes_in_equity", "cash_flows"]
-
-
-class FinancialStatementLine(Model):
-    """待审财报的一行 (需求 R216). 财务状况表与损益表的行满足 金额 = sign × Σ 映射科目的余额; 权益变动表与现金流量表
-    的行 account_codes 只写出取自哪些科目."""
-
-    code: str  # 行代码, 如 SOFP-CASH; 一份财报内不重复, 证据指针的 source_id
-    statement: StatementKind  # 属于哪张报表
-    name: str  # 列示的名称
-    amount_cents: int  # 本期金额, 单位分, 按列示的符号
-    prior_amount_cents: int | None = None  # 比较数, 单位分; 没有比较期为空
-    # 符号. 财务状况表与损益表的行: 金额 = sign × Σ 映射科目的余额 (借正贷负), 资产与费用行为 1, 负债, 权益与收入行为 -1
-    # (合计行同, 如 SOFP-TL, PL-NP). 权益变动表的行一律 -1 (同权益, 贷方为正), 金额是期初, 本期变动或期末, 不是期末余额;
-    # 现金流量表的行一律 1, 金额以现金流入为正 (如 CF-NP 为本期亏损 -2213699, CF-REC 为应收增加 -1019950). 后两张表的行
-    # 不按上式勾稽
-    sign: Literal[1, -1]
-    account_codes: list[str]  # 映射的科目代码; 权益变动表与现金流量表的行只写出取自哪些科目
-    # 是否为小计或合计行. 财务状况表与损益表: 金额同样 = sign × Σ 所列科目的余额, 所列科目与本表的明细行重叠, 勾稽时
-    # 不重复计入; 权益变动表与现金流量表: 按需求表标出 (CE-TCI, CE-CLOSE, CF-OP, CF-NET), 不参与小计勾稽
-    subtotal: bool = False
-
-
-def repeated_line_codes(lines: Sequence[FinancialStatementLine]) -> list[str]:
-    """重复出现的行代码, 按代码排序; 待审财报与它的抽取结果 (llm_outputs.StatementsExtraction) 共用."""
-    codes = [line.code for line in lines]
-    return sorted({code for code in codes if codes.count(code) > 1})
-
-
-class FinancialStatements(Model):
-    """待审财报 (需求 R216): 客户编制的财务报表, 属客户数据, 不进审计产出表; A3 从上传的财务报表文件抽取, 存表
-    financial_statements 与 financial_statement_lines, 审计师改抽取结果出新版本 (需求 R217). 规格书第 12.2 节."""
-
-    id: str = "FS"  # 每个项目固定 FS
-    version: int = Field(default=1, ge=1)  # 版本, 审计师改抽取结果出新版本
-    prepared_at: date  # 编制日
-    directors_declaration_date: date | None = None  # 董事声明的日期 (公司法 s295(1)(c)); 还没签为空
-    document_id: str | None = None  # 报表 PDF 的文件 ID (financial_statements 类文件), 只供查看
-    comparative_restatement_entry_nos: list[str] = []  # 比较数重述所依据的凭证号
-    lines: list[FinancialStatementLine]  # 各行, 按列示顺序
-
-    @model_validator(mode="after")
-    def unique_codes(self) -> Self:
-        """行代码在一份财报内不重复 (证据指针按它取行)."""
-        repeated = repeated_line_codes(self.lines)
-        if repeated:
-            raise ValueError(f"财报行代码重复: {', '.join(repeated)}")
-        return self
 
 
 class DocumentRef(Model):

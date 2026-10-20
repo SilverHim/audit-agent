@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
@@ -14,6 +14,7 @@ from backend.contracts.models import (
     DisputeResolution,
     DraftRule,
     EvidencePointer,
+    EvidenceType,
     ExceptionDisposition,
     Judgment,
     ManualRequest,
@@ -25,10 +26,13 @@ from backend.contracts.models import (
     ReviewStatus,
     ReviewTask,
     ReviewTier,
+    SourceType,
+    StepStatus,
     TargetType,
     TaskKind,
     Versioned,
 )
+from backend.contracts.ports import FinancialDataStore
 from backend.contracts.services import JudgmentOutcome
 from backend.services.judgment_engine import critic_chain_ok
 from backend.services.procedure_library import ProcedureLibrary
@@ -137,6 +141,25 @@ def row_amount(source_type: str, row: Mapping[str, Any]) -> int | None:
         return int(row.get("debit_cents", 0)) - int(row.get("credit_cents", 0))
     amount = row.get("amount_cents")
     return int(amount) if amount is not None else None
+
+
+async def subject_amount(financial: FinancialDataStore, eid: str, judgment: Judgment) -> int | None:
+    """判断对象本身是交易行时该行的金额 (按 subject_row 找行, row_amount 取金额), 否则或查不到该行为 None.
+    复核任务的金额 (api/routes/reviews.py) 与判断级降级 (agents/judging.downgrade) 都经它交给 judgment_amount."""
+    pointer = subject_row(judgment)
+    if pointer is None:
+        return None
+    row = await financial.record(eid, cast(SourceType, pointer.source_type), pointer.source_id)
+    return row_amount(pointer.source_type, row) if row is not None else None
+
+
+def missing_evidence(template: ProcedureTemplate, judgment: Judgment) -> list[EvidenceType]:
+    """模板 evidence_required 中, 判断推理链的受支持步骤里一个指针都没有的证据种类, 顺序同 evidence_required.
+    unsupported 步骤的指针不算 (同置信度的证据覆盖率). 非空即关键证据缺失 (规格书第 7.4, 8.4 节): 功能 autonomy
+    打开时由 classify 交人复核, 不经置信度加权抵消. 纯函数.
+    例: CSH-02 要 [external, bank], 只有回函 (external) 的指针 → [bank]."""
+    found = {p.type for step in judgment.reasoning_chain if step.status is StepStatus.supported for p in step.evidence}
+    return [t for t in template.evidence_required if t not in found]
 
 
 def explained_exceptions(judgment: Judgment, exceptions: Mapping[str, AuditException]) -> list[AuditException]:
@@ -259,9 +282,16 @@ class ReviewQueue:
         return decisions
 
     def classify(
-        self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Sequence[AuditException]
+        self,
+        template: ProcedureTemplate,
+        outcome: JudgmentOutcome,
+        rule_findings: Sequence[AuditException],
+        *,
+        key_evidence: bool = False,
     ) -> TaskKind | None:
-        """某个判断对象的结果需要哪类任务; None 表示自动关闭. 整次执行失败由 A1 另行处理."""
+        """某个判断对象的结果需要哪类任务; None 表示自动关闭. 整次执行失败由 A1 另行处理. 级别读判断的有效级别
+        (功能 autonomy 打开时为判断级降级之后的); key_evidence 为真时关键证据缺失 (missing_evidence 非空) 的判断
+        也交人 (需求 R170; 判断公共流程按 judging_steps 传, 功能 autonomy 打开时为真)."""
         if outcome.failure == "unattributed":
             return TaskKind.unattributed if rule_findings else TaskKind.failed
         if outcome.failure == "failed" or outcome.judgment is None:
@@ -275,6 +305,7 @@ class ReviewQueue:
             j.autonomy_level in (AutonomyLevel.L1, AutonomyLevel.L2)
             or j.proposed_action in (ProposedAction.misstatement, ProposedAction.more_evidence)
             or template.always_review
+            or (key_evidence and missing_evidence(template, j))
         ):
             return TaskKind.normal
         return None

@@ -3,8 +3,7 @@
 预置的是演示数据导入 (R269) 之后的状态; 数据一律经载入器 (XeroDatasetLoader.tables), adapters.xero_supplements 与
 演示导入清单读出, 这里不重写映射. 两组函数:
 - 只需补造目录: xero_profile, xero_presets, xero_traits, xero_uploads, xero_documents, xero_pages, xero_adjustments,
-  xero_employees, xero_registry, xero_confirmations, xero_contracts, xero_financial_statements. 有快照时连快照一起核对
-  (Supplements.verify),
+  xero_employees, xero_registry, xero_confirmations, xero_contracts. 有快照时连快照一起核对 (Supplements.verify),
   没有快照时只核对补造文件 (verify_files).
 - 需要快照: xero_tables, xero_financial_store, xero_engagement, XeroFakeDatasetLoader, XeroFakeDataStore,
   make_xero_deps. 快照按 tests.external.snapshot_dir 定位 (仓库跟踪了却找不到时失败, 没有时跳过).
@@ -48,7 +47,6 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
-    FinancialStatements,
     GateDecision,
     GateId,
     GateVerdict,
@@ -70,7 +68,7 @@ from backend.contracts.services import RuleResult
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
-from backend.services.features import BASELINE
+from backend.services.features import BASELINE, parse_features
 from backend.services.judgment_engine import document_pointer
 from tests.external import external_dir, require_xero_snapshot, snapshot_dir, supplements_dir
 from tests.fakes import (
@@ -97,6 +95,14 @@ from tests.fixture_sets import XERO
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
 SNAPSHOT_NAME = "20261017-q1"  # 快照目录名, data/external/xero/api/20261017-q1
+# 演示配置的功能集: 取 .env.example 的 FEATURES (演示走通, 真实模型变体与 PLN-15 固定输出的守卫共用这一处)
+DEMO_FEATURES = parse_features(
+    next(
+        line
+        for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+        if line.startswith("FEATURES=")
+    ).split("=", 1)[1]
+)
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"  # 通用计划模板 (载入器的构造参数)
 DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_contracts 的来源
 # 查快照用的仓库根 (require_xero_snapshot 的 repo); 测试把它指向空目录来模拟没有快照
@@ -261,13 +267,6 @@ def xero_confirmations(loader: XeroDatasetLoader | None = None) -> FakeConfirmat
     return FakeConfirmationChannel(
         ReceiptChannel(channels.pop()), bodies={p.stem: (root / p).read_bytes() for p in sorted(replies)}
     )
-
-
-def xero_financial_statements(loader: XeroDatasetLoader | None = None) -> FinancialStatements:
-    """待审财报第 1 版: 补造的 financial_statements/fs_v1.json (document_id 为 fs_v1.pdf), 同上传 fs_v1.pdf 后 A3 的
-    抽取 (需求 R217)."""
-    path = supplement(loader).root / "financial_statements" / "fs_v1.json"
-    return FinancialStatements.model_validate_json(path.read_bytes())
 
 
 def xero_contracts(loader: XeroDatasetLoader | None = None) -> list[Contract]:

@@ -29,7 +29,6 @@ from backend.contracts.llm_outputs import (
     RegistryExtraction,
     ReportDraft,
     SheetRecognition,
-    StatementsExtraction,
 )
 from backend.contracts.models import (
     AgentId,
@@ -89,10 +88,9 @@ ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
     "bank_transaction": (EvidenceType.bank, Reliability.external_copy),
     "bank_account": (EvidenceType.bank, Reliability.external_copy),
     "trial_balance": (EvidenceType.voucher, Reliability.internal_original),
-    "financial_statement_line": (EvidenceType.voucher, Reliability.internal_original),  # 待审财报的行 (需求 R216)
 }
 # 文件指针的证据种类按文件类型 (第 5 节文件指针映射表): 回函与登记摘录属外部来源, 约定书与协议按合同, 对账单按银行,
-# 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 待审财报 (判断引报表行) 与 other 不作证据, 不在表中
+# 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 财务报表 (以账套为准, Issue #46) 与 other 不作证据, 不在表中
 DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
     DocumentType.contract: EvidenceType.contract,
     DocumentType.invoice: EvidenceType.invoice,
@@ -401,7 +399,8 @@ def plan_checks(
     """计划叙述 (PLN-15) 的引用与语义两级. 返回 (未通过的级别, 错误). standards 为模板 standards.
 
     引用: standards_cited 只能取模板 standards 中的片段.
-    语义: procedure_notes 的程序编号集合恰为 ctx.expected_procedure_ids (计划 items 的, 不缺不多, 不重复); 时间表各项
+    语义: procedure_notes 覆盖 ctx.expected_procedure_ids (计划 items 的, 不缺, 不重复; 多出计划以外的程序不算失败,
+    A4 合成计划时只收计划内的, 需求 R316: 一份固定输出适用于各功能集); 时间表各项
     不早于 ctx.period_end; sections 含 scope, significant_risks, materiality, timing, 不含 overall_strategy (另有字段,
     合成计划叙述时排在首段); 项目质量复核建议写了依据. ctx 缺 expected_procedure_ids 或 period_end 时抛 ValueError.
     """
@@ -414,12 +413,9 @@ def plan_checks(
     noted = [n.procedure_id for n in draft.procedure_notes]
     expected = set(ctx.expected_procedure_ids)
     missing = sorted(expected - set(noted))
-    extra = sorted(set(noted) - expected)
     repeated = sorted({p for p in noted if noted.count(p) > 1})
     if missing:
         errors.append(f"procedure_notes 缺计划的程序: {', '.join(missing)}")
-    if extra:
-        errors.append(f"procedure_notes 有计划以外的程序: {', '.join(extra)}")
     if repeated:
         errors.append(f"procedure_notes 的程序重复: {', '.join(repeated)}")
     early = [f"{m.milestone} ({m.due})" for m in draft.timetable if m.due < ctx.period_end]
@@ -885,8 +881,7 @@ async def structure_only(
     validator: OutputValidator, eid: str, output: BaseModel, ctx: ValidationContext
 ) -> CheckResult:
     """只做语法与结构两级: 独立复核第二轮 CriticVerdictOut; 上传文件分类 DocumentClassification; 上传账表识别
-    SheetRecognition; 待审财报抽取 StatementsExtraction (需求 R217: 报表不作证据, 没有指针; 行代码不重复在结构级查,
-    各行与科目余额勾不勾得上由 FIN-12 核对, 不算大模型输出失败).
+    SheetRecognition.
 
     文件分类的类型取值已由结构校验限定, 没有证据指针. 账表识别的方案在结构校验里自洽 (TablePlan 的模型校验); 与工作表
     对不对得上在套用时查 (table_plan.check_plan), 不算大模型输出失败.
@@ -908,7 +903,6 @@ for _model, _check in (
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
-    (StatementsExtraction, structure_only),
 ):
     OutputValidator.register(_model, _check)
 

@@ -36,6 +36,7 @@ from backend.contracts.ports import (
 )
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, StatePatch
+from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
 from backend.services.procedure_library import ProcedureLibrary
@@ -64,6 +65,9 @@ class AgentDeps:
     # ABR ABN Lookup 的在线核对 (需求 R289), 给新建客户与改画像的表单用, 带短时缓存; Agent 不用 (ACC-04 经 registry
     # 查, 每次实查)
     abn_lookup: AbnLookup
+    # 自主度降级的知识 (rules.json 的默认表与阈值, 标了 fraud_flag 的规则): 组装根按 library 建一次; 只在功能 autonomy
+    # 打开时用 (装配级与判断级降级, 需求 R170)
+    autonomy: AutonomyPolicy
     # 复核模型的客户端, 给独立复核智能体 (A7) 用, 与 llm 是两套配置; 组装根总会注入, 只有测试为空 (A7 记 skipped)
     review_llm: LLMClient | None = None
     # 启用的功能 (services/features.py), 与 library 构造时的功能集相同; 组装根取配置项 FEATURES

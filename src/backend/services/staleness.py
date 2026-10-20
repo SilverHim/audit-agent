@@ -35,7 +35,7 @@ from backend.services.procedure_library import ProcedureLibrary
 
 def reads_change(template: ProcedureTemplate, change: DataChange) -> bool:
     """程序是否读这次变动的数据: 按模板 reads; 文件登记 (documents) 的变动带了文件类型时 (需求 R304), 只有读其中某类
-    文件登记的程序 (document_reads) 算读到, 如新登记一份待审财报不让读合同与回函登记的程序过期. 没带文件类型的
+    文件登记的程序 (document_reads) 算读到, 如新登记一份财务报表不让读合同与回函登记的程序过期. 没带文件类型的
     (迁移 0020 之前记的, 数据集载入) 不知道是哪类文件, 照旧按 reads 含 documents 判."""
     if change.input is DataInput.documents and change.document_types is not None:
         return bool(set(change.document_types) & set(template.document_reads))

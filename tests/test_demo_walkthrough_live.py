@@ -49,11 +49,12 @@ from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, api_client, w
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
 from tests.test_demo_default import CreatingEngagementStore
-from tests.test_demo_walkthrough import API, DEMO_FEATURES, xero_link
+from tests.test_demo_walkthrough import API, xero_link
 from tests.test_e2e_mock import evidence_pointers, real_storage
 from tests.test_e2e_xero17 import XERO_PERIOD
 from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, summary, write_summary
 from tests.xero_fakes import (
+    DEMO_FEATURES,
     ORC1026,
     XERO17_ANNOTATION,
     XERO17_BA091_DRAFT,

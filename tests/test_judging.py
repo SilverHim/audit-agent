@@ -1,4 +1,5 @@
-"""判断公共流程 (agents/judging.py): 插入点顺序, 缺省步骤, 判断的自主度取程序运行时级别 (开发接口文档第 6 节)."""
+"""判断公共流程 (agents/judging.py): 插入点顺序, 缺省步骤, 判断的自主度取程序运行时级别 (开发接口文档第 6 节),
+功能 autonomy 打开时 A7 之后的判断级降级 (需求 R170)."""
 
 import json
 from collections.abc import Callable, Sequence
@@ -10,21 +11,38 @@ import pytest
 
 from backend.agents.base import RunContext
 from backend.agents.fieldwork import FieldworkAgent, Subject
-from backend.agents.judging import DEFAULT_STEPS, JudgingSteps, unchanged
-from backend.contracts.knowledge import ProcedureTemplate
+from backend.agents.judging import (
+    DEFAULT_STEPS,
+    Judged,
+    JudgingSteps,
+    downgrade,
+    judge_all,
+    judgments_patch,
+    unchanged,
+)
+from backend.contracts.knowledge import DowngradeRule, ProcedureTemplate
 from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
+    CriticTrigger,
     CriticVerdict,
+    DowngradeCondition,
+    EvidenceType,
     Judgment,
+    Misstatement,
+    MisstatementUpdate,
     Phase,
     ProcedureRun,
+    ReasoningStep,
     ReviewStatus,
     ReviewTask,
+    StepKind,
+    StepStatus,
     TaskKind,
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
+from backend.services.features import BASELINE
 from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
     NUMBAT_CONTRACTS,
@@ -43,7 +61,8 @@ from tests.fakes import (
     numbat_csh05_exception,
     numbat_rev08_exception,
 )
-from tests.test_fieldwork_judging import failed, passed, setup
+from tests.test_fieldwork_csh02 import setup as csh02_setup
+from tests.test_fieldwork_judging import X1, failed, passed, setup
 from tests.test_fieldwork_rev03 import EXTRACTED
 from tests.test_review_agent import step, verdict
 
@@ -65,22 +84,23 @@ class RecordingEngine(FakeJudgmentEngine):
 
 
 class RecordingCritic:
-    """A7 的替身: 记下调用, 写上 consistent."""
+    """A7 的替身: 记下调用, 写上给定的结论 (缺省 consistent)."""
 
-    def __init__(self, calls: list[Call]) -> None:
+    def __init__(self, calls: list[Call], verdict: CriticVerdict = CriticVerdict.consistent) -> None:
         self.calls = calls
+        self.verdict = verdict
         self.findings: list[tuple[str, list[str]]] = []  # (判断对象, 收到的例外 ID)
 
     async def review(self, ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException] = ()) -> Judgment:
         self.calls.append(("critic", judgment.subject_id))
         self.findings.append((judgment.subject_id, [x.id for x in findings]))
-        return judgment.model_copy(update={"critic_verdict": CriticVerdict.consistent, "critic_reason": "same"})
+        return judgment.model_copy(update={"critic_verdict": self.verdict, "critic_reason": "same"})
 
 
 def recording_step(name: str, calls: list[Call]) -> Any:
     """记下调用与收到的判断的 critic 结论, 原样返回."""
 
-    async def run(ctx: RunContext, judgment: Judgment) -> Judgment:
+    async def run(ctx: RunContext, judgment: Judgment, findings: Sequence[AuditException]) -> Judgment:
         calls.append((name, judgment.subject_id, judgment.critic_verdict.value))
         return judgment
 
@@ -94,10 +114,14 @@ class RecordingQueue(ReviewQueue):
         super().__init__(queue.library)
         self.calls = calls
 
-    def classify(self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Any) -> TaskKind | None:
+    def classify(
+        self, template: ProcedureTemplate, outcome: JudgmentOutcome, rule_findings: Any, *, key_evidence: bool = False
+    ) -> TaskKind | None:
         subject = outcome.judgment.subject_id if outcome.judgment is not None else "-"
         self.calls.append(("classify", subject))
-        return TaskKind.normal if outcome.judgment is not None else super().classify(template, outcome, rule_findings)
+        if outcome.judgment is not None:
+            return TaskKind.normal
+        return super().classify(template, outcome, rule_findings, key_evidence=key_evidence)
 
     def make_task(
         self,
@@ -198,7 +222,7 @@ async def test_default_steps_return_judgment_unchanged() -> None:
     _, ctx, _ = setup("REV-03", [], {})
     judgment = passed()(JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A"), ctx.run).judgment
     assert JudgingSteps(downgrade=unchanged) == DEFAULT_STEPS
-    assert await DEFAULT_STEPS.downgrade(ctx, judgment) is judgment
+    assert await DEFAULT_STEPS.downgrade(ctx, judgment, []) is judgment
     agent, _, _ = setup("REV-03", [], {})
     assert agent.steps is DEFAULT_STEPS
 
@@ -283,3 +307,149 @@ async def test_context_carries_runtime_level() -> None:
     await agent.run(RunContext(ctx.engagement, procedure, ctx.template, ctx.run, ctx.state))
     [(_, jctx, _)] = engine.calls
     assert jctx.autonomy_level is AutonomyLevel.L4
+
+
+# ── 需求 R170: 功能 autonomy 打开时的判断级降级 ──
+
+AUTONOMY = BASELINE | {"autonomy"}
+L1, L2, L3 = AutonomyLevel.L1, AutonomyLevel.L2, AutonomyLevel.L3
+HIGH, OVER_PM = DowngradeCondition.high_risk, DowngradeCondition.amount_over_pm
+LOW, UNSUPPORTED = DowngradeCondition.low_confidence, DowngradeCondition.unsupported_steps
+FRAUD = DowngradeCondition.fraud_flag
+
+
+@pytest.mark.parametrize(
+    ("level", "assembled", "critic", "confidence", "expected"),
+    [
+        # 运行时 L3: A7 按程序级别照常复核 (主规则), 判一致后置信度计入复核分项再降级
+        (L3, [], (CriticVerdict.consistent, CriticTrigger.main), 0.65, (L1, [OVER_PM, LOW])),
+        # 运行时 L2 (装配时 high_risk −1): A7 跳过, 置信度只有 A6 的分项; 理由接着装配时的
+        (L2, [HIGH], (CriticVerdict.skipped, None), 0.5625, (L1, [HIGH, OVER_PM, LOW])),
+    ],
+)
+async def test_downgrade_takes_the_reviewed_judgment(
+    level: AutonomyLevel,
+    assembled: list[DowngradeCondition],
+    critic: tuple[CriticVerdict, CriticTrigger | None],
+    confidence: float,
+    expected: tuple[AutonomyLevel, list[DowngradeCondition]],
+) -> None:
+    """验收 4: Numbat 的 J-CSH-02-1-BA-01 (真实判断引擎与 A7, mock; 功能 collab 记触发规则), 两条例外都是 -50,000 澳元,
+    执行重要性设为 40,000 澳元. 判断级降级在 A7 之后: 收到的置信度是复核后的 (L3 时 0.65, 不是 0.5625), 金额超过
+    执行重要性降到 L1, 置信度低于 0.7 另记 low_confidence; 降级不影响 A7 读的程序级别. CSH-02 always_review, 任务
+    为 normal."""
+    agent, ctx, _ = csh02_setup(real_engine=True, features=AUTONOMY | {"collab"})
+    procedure = ctx.procedure.model_copy(update={"autonomy_level": level, "downgrade_reasons": assembled})
+    state = ctx.state | {"performance_materiality_cents": 4_000_000}
+    patch = await agent.run(RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state))  # type: ignore[arg-type]
+    [j] = patch["judgments"]
+    assert j.id == "J-CSH-02-1-BA-01" and (j.critic_verdict, j.critic_trigger) == critic
+    assert (j.confidence, j.autonomy_level, j.downgrade_reasons) == (confidence, *expected)
+    assert [(t.target_id, t.kind) for t in patch["review_tasks"]] == [(j.id, TaskKind.normal)]
+
+
+async def test_dispute_wins_over_downgrade() -> None:
+    """验收 6: 争议优先. 合成 L3 程序 (REV-03 的模板改为 L3, unsupported_steps 覆盖为 −2) 的判断置信度 0.6, 推理链有
+    unsupported 步骤: L3 −1 −2 越过下限, 截在 L1, 理由按规则表顺序 [low_confidence, unsupported_steps]; A7 判
+    inconsistent, classify 先看争议, 任务为 dispute (降级不改任务类型)."""
+    chain = [ReasoningStep(kind=StepKind.fact, text="x", status=StepStatus.unsupported)]
+    outcomes = {"A": passed(confidence=0.6, reasoning_chain=chain)}
+    agent, ctx, _ = setup("REV-03", [Subject("A", {})], outcomes, features=AUTONOMY)
+    agent.reviewer = RecordingCritic([], CriticVerdict.inconsistent)
+    rule = DowngradeRule(condition=UNSUPPORTED, at="judgment", delta=-2)
+    template = ctx.template.model_copy(update={"autonomy_level": L3, "downgrade_rules": [rule]})
+    procedure = ctx.procedure.model_copy(update={"autonomy_level": L3})
+    patch = await agent.run(RunContext(ctx.engagement, procedure, template, ctx.run, ctx.state))
+    [j] = patch["judgments"]
+    assert (j.critic_verdict, j.autonomy_level, j.downgrade_reasons) == (
+        CriticVerdict.inconsistent,
+        L1,
+        [LOW, UNSUPPORTED],
+    )
+    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [("T-J-REV-03-1-A-v1", TaskKind.dispute)]
+
+
+NEW = X1.model_copy(update={"id": "X-CSH-02-1-D04-1", "amount_cents": 50_000})  # 本次执行刚建的例外, 不在状态中
+UPDATE = MisstatementUpdate(misstatement_id="M-1", base_version=1, kind="classification")
+MISSTATEMENT = Misstatement.model_construct(id="M-1", version=1, amount_cents=-50_000)
+
+
+FLAGGED = X1.model_copy(update={"amount_cents": None})  # 出自 REV-08 R01, 不带金额
+FRAUD_RULES = frozenset({("REV-08", "R01")})  # 给策略标上 fraud_flag 的规则
+
+
+@pytest.mark.parametrize(
+    ("findings", "update", "pm", "fraud_rules", "expected"),
+    [
+        ([NEW], None, 16216, frozenset(), (L1, [OVER_PM])),  # 金额取该对象的规则例外 (本次执行刚建的也算)
+        ([], UPDATE, 16216, frozenset(), (L1, [OVER_PM])),  # 错报更新所指的错报取状态中的当前版本, 按绝对值比
+        ([NEW], None, None, frozenset(), (L3, [])),  # 执行重要性未定 (PLN-01/03 之前): amount_over_pm 不适用
+        ([], None, 16216, frozenset(), (L3, [])),  # 没有涉及金额
+        ([FLAGGED], None, None, FRAUD_RULES, (L1, [FRAUD])),  # 规则例外出自标了 fraud_flag 的规则: 命中 fraud_flag
+    ],
+)
+async def test_downgrade_amount_sources(
+    findings: list[AuditException],
+    update: MisstatementUpdate | None,
+    pm: int | None,
+    fraud_rules: frozenset[tuple[str, str]],
+    expected: tuple[AutonomyLevel, list[DowngradeCondition]],
+) -> None:
+    """downgrade 的判断金额与复核档位同一口径 (judgment_amount): 例外取收到的规则例外, 所指错报取状态, 执行重要性取
+    状态; 收到的规则例外也交给 judgment_level 判舞弊规则. 运行时 L3, 置信度 0.9."""
+    agent, ctx, _ = setup("REV-03", [], {}, features=AUTONOMY)
+    agent.deps = replace(agent.deps, autonomy=replace(agent.deps.autonomy, fraud_rules=fraud_rules))
+    jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=findings)
+    judgment = passed(misstatement_update=update)(jctx, ctx.run).judgment
+    procedure = ctx.procedure.model_copy(update={"autonomy_level": L3})
+    state = ctx.state | {"performance_materiality_cents": pm, "misstatements": [MISSTATEMENT]}
+    run_ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state)  # type: ignore[arg-type]
+    result = await downgrade(agent.deps, run_ctx, judgment, findings)
+    assert (result.id, result.version, result.autonomy_level, result.downgrade_reasons) == (judgment.id, 1, *expected)
+
+
+@pytest.mark.parametrize(("features", "kind"), [(AUTONOMY, TaskKind.normal), (BASELINE, None)])
+def test_judgments_patch_routes_missing_key_evidence(features: frozenset[str], kind: TaskKind | None) -> None:
+    """judgments_patch 的 classify 按 judging_steps 传 key_evidence: 模板要 bank 证据 (REV-03 改出, 不复核), 判断 L3
+    accept 置信度 0.9 而推理链没有指针. 功能 autonomy 打开时关键证据缺失交人 (normal 任务, 判断待复核), 关闭时
+    自动关闭 (判断 confirmed, 不建任务)."""
+    agent, ctx, _ = setup("REV-03", [], {}, features=features)
+    template = ctx.template.model_copy(update={"evidence_required": [EvidenceType.bank], "always_review": False})
+    ctx = RunContext(ctx.engagement, ctx.procedure, template, ctx.run, ctx.state)
+    jctx = JudgmentContext(subject_id="A", task={}, data={}, fixture_key="A", rule_findings=[])
+    outcome = passed(autonomy_level=L3, reasoning_chain=[])(jctx, ctx.run)
+    patch = judgments_patch(agent.deps, ctx, [Judged(jctx, outcome)])
+    assert [t.kind for t in patch["review_tasks"]] == ([kind] if kind else [])
+    expected = ReviewStatus.pending if kind else ReviewStatus.confirmed
+    assert [j.review_status for j in patch["judgments"]] == [expected]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ({"conclusion": "annotated"}, None),  # 补程序自己的字段
+        ({"id": "J-OTHER"}, "id"),
+        ({"autonomy_level": AutonomyLevel.L1}, "autonomy_level"),
+        ({"critic_verdict": CriticVerdict.consistent}, "critic_verdict"),
+    ],
+)
+async def test_annotate_only_fills_successful_judgments(change: dict[str, Any], error: str | None) -> None:
+    """judge_all 的 annotate (需求 R170, FIN-03 写分类载荷用): 判断引擎之后, A7 之前调用, 只对成功的判断 (失败的对象
+    不调); 补的字段之后的复核, 降级与分类都看得到. 改了 ID, 版本, 级别或 critic 字段时断言失败."""
+    subjects = [Subject("A", {}), Subject("F", {})]
+    agent, ctx, calls = recorded("REV-03", subjects, {"A": passed(autonomy_level=L3), "F": failed("failed")})
+
+    def annotate(outcome: JudgmentOutcome) -> Judgment:
+        assert outcome.judgment is not None
+        calls.append(("annotate", outcome.judgment.subject_id))
+        return outcome.judgment.model_copy(update=change)
+
+    if error is not None:
+        with pytest.raises(AssertionError, match=error):
+            await judge_all(agent.deps, ctx, subjects, agent.reviewer, agent.steps, annotate=annotate)
+        return
+    judged = await judge_all(agent.deps, ctx, subjects, agent.reviewer, agent.steps, annotate=annotate)
+    assert [c[0] for c in calls if c[1:2] == ("A",)] == ["judge", "annotate", "critic", "downgrade"]
+    assert [c[0] for c in calls if c[1:2] == ("F",)] == ["judge"]
+    [annotated] = [item.outcome.judgment for item in judged if item.outcome.judgment is not None]
+    assert annotated.conclusion == "annotated"

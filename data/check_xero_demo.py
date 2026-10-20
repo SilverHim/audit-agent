@@ -832,8 +832,8 @@ def check_keywords(directory: Path) -> list[str]:
     return problems
 
 
-class FinancialStatementLine(BaseModel):
-    """fs_v1.json 的一行 (字段同需求清单 R216 的 FinancialStatementLine; 模型进 contracts 前在此校验)."""
+class StatementLine(BaseModel):
+    """fs_v1.json 的一行 (字段同需求清单 R216 的报表行). Issue #46 起报表只作补造样例, 系统不读, 只在此校验."""
 
     model_config = ConfigDict(extra="forbid")
     code: str
@@ -846,8 +846,8 @@ class FinancialStatementLine(BaseModel):
     prior_amount_cents: int | None
 
 
-class FinancialStatements(BaseModel):
-    """fs_v1.json (第 9.5 节; 字段同需求清单 R216 的 FinancialStatements)."""
+class StatementsFile(BaseModel):
+    """fs_v1.json (第 9.5 节; 字段同需求清单 R216 的待审财报)."""
 
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -856,13 +856,13 @@ class FinancialStatements(BaseModel):
     directors_declaration_date: date | None
     document_id: str | None
     comparative_restatement_entry_nos: list[str]
-    lines: list[FinancialStatementLine]
+    lines: list[StatementLine]
 
 
 FS_TOTALS = ("SOFP-TA", "SOFP-TL", "SOFP-EQ", "PL-NP")  # 资产合计, 负债合计, 累计亏损, 本期损益的行代码 (第 4.7 节)
 # 四张表在 fs_v1.pdf 的页码 (R68 验收 2, R293)
 FS_PAGES = {"financial_position": 1, "profit_or_loss": 2, "changes_in_equity": 3, "cash_flows": 4}
-TB_STATEMENTS = ("financial_position", "profit_or_loss")  # 各行 = sign × Σ 试算表映射科目的两张表 (FIN-12 只勾稽这些行)
+TB_STATEMENTS = ("financial_position", "profit_or_loss")  # 各行 = sign × Σ 试算表映射科目的两张表
 # 权益变动表: 期初, 本期损益, 其他综合收益, 综合收益总额 (AASB 1060 第 61(a) 段), 期末
 EQUITY_LINES = ("CE-OPEN", "CE-NP", "CE-OCI", "CE-TCI", "CE-CLOSE")
 # 现金流量表 (间接法): 本期损益, 经营类资产负债的变动, 经营小计, 投资, 筹资, 净变动, 期初与期末现金及现金等价物
@@ -870,18 +870,18 @@ CASH_FLOW_LINES = ("CF-NP", "CF-OP", "CF-INV", "CF-FIN", "CF-NET", "CF-OPEN", "C
 CASH_EQUIVALENTS = ("SOFP-CASH", "SOFP-OD")  # 现金及现金等价物 = 现金减透支 (透支随时可要求偿还, 第 2.4 节)
 
 
-def read_financial_statements(directory: Path) -> FinancialStatements | None:
+def read_financial_statements(directory: Path) -> StatementsFile | None:
     """读 fs_v1.json; 文件不存在时为 None, 不合模型时抛 CheckError."""
     path = directory / gen.FS_JSON
     if not path.is_file():
         return None
     try:
-        return FinancialStatements.model_validate_json(path.read_bytes(), strict=True)
+        return StatementsFile.model_validate_json(path.read_bytes(), strict=True)
     except ValidationError as error:
-        raise CheckError(f"{rel(path)}: 不符合 FinancialStatements ({error.error_count()} 处)") from None
+        raise CheckError(f"{rel(path)}: 不符合 StatementsFile ({error.error_count()} 处)") from None
 
 
-def shown(line: FinancialStatementLine, cents: int | None) -> str:
+def shown(line: StatementLine, cents: int | None) -> str:
     """报表 PDF 中的金额写法: 0 或缺写 "-", 负数加括号; 损益表的费用行 (sign 为 1 的非小计行) 作减项列示."""
     if not cents:
         return "-"
@@ -976,7 +976,7 @@ def amount_text(cents: int | None) -> str:
     return f"({text})" if cents < 0 else text
 
 
-def cash_effect(line: FinancialStatementLine, field: str, opening: int = 0) -> int:
+def cash_effect(line: StatementLine, field: str, opening: int = 0) -> int:
     """财务状况表某行的变动对现金的影响 (间接法): 资产增加为流出, 负债增加为流入; field 为 amount_cents 时比
     本期与上期末, 为 prior_amount_cents 时比上期末与 opening (过渡日余额, 由快照核对)."""
     end = getattr(line, field) or 0
@@ -984,7 +984,7 @@ def cash_effect(line: FinancialStatementLine, field: str, opening: int = 0) -> i
     return -line.sign * (end - start)
 
 
-def equity_and_cash_flow_problems(items: list[FinancialStatementLine]) -> list[str]:
+def equity_and_cash_flow_problems(items: list[StatementLine]) -> list[str]:
     """权益变动表 (EQUITY_LINES) 与现金流量表 (间接法) 与财务状况表, 损益表一致 (本期与比较数):
     - 权益变动表: 综合收益总额等于本期损益加其他综合收益, 其他综合收益为 0 (损益表没有其他综合收益的行); 期初加
       综合收益总额等于期末; 本期损益等于 PL-NP; 期末等于 SOFP-EQ; 本期的期初等于上期的期末.

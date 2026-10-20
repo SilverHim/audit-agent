@@ -34,7 +34,7 @@ from backend.agents.base import AgentDeps, RunContext
 from backend.agents.concierge.report import report_date_text
 from backend.agents.evidence import EvidenceAgent
 from backend.agents.fieldwork import FieldworkAgent
-from backend.agents.ingest import CLASSIFY, STATEMENTS, IngestAgent
+from backend.agents.ingest import CLASSIFY, IngestAgent
 from backend.agents.review import GEN09, VERDICT_SPEC
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
@@ -100,7 +100,7 @@ LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 EVIDENCE_TYPES = {t.value for t in DOCUMENT_EVIDENCE}  # 能作证据的文件类型, 判断引擎的文件指针映射为准
 # 上传处理 (agents/ingest) 的模板: 不在程序库里而在 llm_xero 有 fixture, fixture_key 为上传的文件名主干. 与生成脚本的
 # UPLOAD_PROGRAMS (从上传固定输出复制进运行副本的程序) 不是一回事
-INTAKE_TEMPLATES = {CLASSIFY.id: CLASSIFY, STATEMENTS.id: STATEMENTS}  # 上传分类与待审财报抽取 (需求 R217)
+INTAKE_TEMPLATES = {CLASSIFY.id: CLASSIFY}  # 上传分类 (财务报表以账套为准, 上传的报表只分类不抽取, Issue #46)
 # 邮箱地址 (fixture 会进留痕与页面, 不放任何人的邮箱): 对 JSON 解码后的字符串匹配 (\u0040 转义的也查得出); 顶级域名
 # 须以字母开头, "10@650.00" 这类数字不算; 不带点的域名 (如 x@localhost) 不查
 EMAIL = re.compile(r"[\w.%+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z][\w-]*")
@@ -165,10 +165,10 @@ def fixture_problems(
 ) -> list[str]:
     """不合格的 fixture (只写文件, 程序与指针 ID, 不写内容):
     (b) document 指针的 source_id 须在 manifest.documents 中, 1 ≤ page ≤ page_count, 所指文件类型能作证据
-    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如 financial_statements 不作证据, 判断引报表行); 登记了对应的程序,
+    (在 judgment_engine.DOCUMENT_EVIDENCE 中; 如财务报表不作证据); 登记了对应的程序,
     指针还须指向 expected 给出的文件之一 (补造目录下的路径, 文件 ID 由文件内容算; 每个指错的指针各报一条; 对象没有
     对应文件, 即抛 LookupError 的, 不应有 document 指针); 没登记的程序只做以上核对;
-    (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序或上传处理的模板 (DOC-CLASSIFY, DOC-STATEMENTS), 文件须能按该
+    (c) 目录名须是程序库中 (含未启用的) 带 llm 段的程序或上传处理的模板 (DOC-CLASSIFY), 文件须能按该
     程序的输出模型解析;
     上传处理的文件名主干 (default 除外) 须是补造目录中的 PDF (manifest.files 中的, 含不登记的 fs_v1.pdf; 按文件名
     取, 别的名字永远用不上); 不含邮箱地址. fixture 根不存在或为空时没有问题."""

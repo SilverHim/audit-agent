@@ -40,6 +40,7 @@ PHASES: dict[str, dict[Lang, str]] = {
 GATES: dict[str, dict[Lang, str]] = {
     "ACC-01": {"zh": "承接决定", "en": "the acceptance decision"},
     "PLN-01/03": {"zh": "风险与重要性决定", "en": "the risk and materiality decision"},
+    "PLN-15": {"zh": "总体审计计划审批", "en": "the approval of the overall audit plan"},
     "FIN-01": {"zh": "意见类型决定", "en": "the opinion decision"},
     "RPT-01": {"zh": "报告签发决定", "en": "the report sign-off decision"},
 }

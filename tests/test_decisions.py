@@ -10,7 +10,6 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import BaseModel
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -31,6 +30,7 @@ from backend.contracts.models import (
     MaterialityChoice,
     OpinionType,
     Phase,
+    PlanConfirmation,
     PlanStatus,
     Procedure,
     ProcedureRun,
@@ -41,12 +41,13 @@ from backend.contracts.models import (
     RiskItem,
     RiskLevel,
     RunStatus,
+    RunTrigger,
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse
+from backend.contracts.ports import LLMClient
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.contracts.views import PlanMaterial
+from backend.contracts.views import PlanMaterial, PlanView
 from backend.core.config import get_settings
 from backend.orchestration import runner as runner_module
 from backend.orchestration.checkpoint import checkpoint_serde
@@ -77,6 +78,7 @@ from tests.fakes import (
     ScriptA4,
     ScriptAgent,
     acc01_decision,
+    api_client,
     assert_pack_synced,
     make_procedure,
     make_runner,
@@ -1450,7 +1452,7 @@ async def test_pln_other_basis_approves_when_loss_making() -> None:
     assert snapshot.values["materiality_cents"] == 12000000
 
 
-# ── R205: PLN-15 闸门与最小通过路径 (功能 planning, Xero 演示) ──
+# ── R205, R206: PLN-15 闸门, 决定校验与驳回修订 (功能 planning, Xero 演示) ──
 
 # acceptance 不开: 没有 TERMS (ACC-08 的执行由 R200 做), 材料的 terms 为空; 带 TERMS 的材料见 test_query
 XERO_P2 = ["CSH-02", "CSH-04", "CSH-05", "DOC-06", "REV-02", "REV-03", "REV-08"]
@@ -1464,19 +1466,22 @@ PLAN_APPROVE = GateDecision(
     decided_by="U-1",
     decided_at=NOW,
 )
+PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # 演示的驳回理由 (需求 R206 验收 3)
+# 需要项目质量复核, 也不确认不需要审计师的专家 (需求 R206 验收 2): 只作记录, 不拦截
+FIRST_YEAR_EQR = PlanConfirmation(
+    eqr_required=True, eqr_basis="Firm policy for first-year audits", auditor_expert_not_required=False
+)
 
 
-class SecondPlanAsFirst(MockLLMClient):
-    """PLN-15 第 2 修订起借用第 1 修订的固定输出 (llm_xero 只有 r1), 驳回出口的用例用."""
-
-    async def complete[T: BaseModel](self, req: LLMRequest, output_model: type[T]) -> LLMResponse[T]:
-        if req.procedure_id == "PLN-15" and req.fixture_key != "r1":
-            req = req.model_copy(update={"fixture_key": "r1"})
-        return await super().complete(req, output_model)
+def plan_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
+    """绑定 PLAN-1 v1 的 PLN-15 决定: approve 即 PLAN_APPROVE (带确认), 其余不带确认而带理由. changes 覆盖任意字段."""
+    if verdict is not GateVerdict.approve:
+        changes = {"decision": verdict, "plan_confirmation": None, "reason": "Need more", **changes}
+    return PLAN_APPROVE.model_copy(update=changes)
 
 
 async def at_plan_gate(llm: LLMClient | None = None) -> Started:
-    """Xero 演示项目 (数据已导入, 功能 critic, misstatement, planning) 跑到 PLN-15 闸门: ACC-01 approve → P1 (真实
+    """Xero 演示项目 (数据已导入, 功能 critic, planning) 跑到 PLN-15 闸门: ACC-01 approve → P1 (真实
     Agent; 规则引擎为 XERO_RULES, 大模型缺省读 llm_xero) → PLN-01/03 approve (收入 1%, 50%, 5%) → assemble_pack →
     plan_draft (A4 起草 PLAN-1) → 停在 gate_p1_plan. 闸门之外另停在 fieldwork 前, 看批准后派发什么 (越过闸门后的第一个
     节点不会再静态中断, 去哪看检查点历史)."""
@@ -1516,6 +1521,15 @@ def stored_plans(s: Started) -> list[AuditPlan]:
     plans = [r for r in s.output_store.rows if isinstance(r, AuditPlan)]
     assert all(AuditPlan.model_validate_json(p.model_dump_json()) == p for p in plans)
     return plans
+
+
+async def checkpoint_matches_store(s: Started) -> None:
+    """检查点中的各计划 (每个 ID 一项) 与 Store 中该计划的最新版逐个相等: 写出的每一版在检查点与 Store 中相同, 含置
+    superseded 的旧修订 (审核意见 R206-02, 即 R203 普审意见 03 的检查点一侧)."""
+    latest = {p.id: p for p in stored_plans(s)}  # 按写入顺序, 后写的覆盖
+    assert sorted((await checkpoint_values(s))["audit_plans"], key=lambda p: p.id) == [
+        latest[k] for k in sorted(latest)
+    ]
 
 
 def trail_of(s: Started, kind: TrailKind) -> list[TrailEntry]:
@@ -1571,20 +1585,95 @@ async def test_plan_gate_view_and_overview(plan_gate: Started) -> None:
     assert (await query.overview(EID)).current_gate is GateId.PLN_15
 
 
+# 其他闸门的专属字段 (GATE_SPECIFIC 中除 plan_confirmation 外的), PLN-15 的任何决定都不能带
+OTHER_GATE_FIELDS = {
+    "materiality": CHOICE,
+    "edits": [edit("RISK-OTHER")],  # 不存在的风险项: 版本校验跳过, 落到字段校验
+    "disposition": OpinionType.qualified,
+    "annotations": [ANNOTATION],
+}
+
+
+# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
+XERO_PLAN_ROWS = [
+    ("OBJ-REV-OCC", "REV-03"),
+    ("OBJ-REV-OCC", "REV-08"),
+    ("OBJ-REV-CUT", "REV-02"),
+    ("OBJ-REV-CUT", "REV-03"),
+    ("OBJ-REV-CUT", "REV-08"),
+    ("OBJ-CASH-EXI", "CSH-02"),
+    ("OBJ-CASH-EXI", "CSH-04"),
+    ("OBJ-CASH-EXI", "CSH-05"),
+    (None, "DOC-06"),
+]
+
+
+async def plan_page(s: Started) -> PlanView:
+    """经 HTTP 取审计计划页 (GET /plan), 与 StateQuery.plan 的结果相同."""
+    async with api_client(s.runner) as client:
+        response = await client.get(f"/api/v1/engagements/{EID}/plan")
+    assert response.status_code == 200, response.text
+    view = PlanView.model_validate(response.json())
+    assert view == await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).plan(EID)
+    return view
+
+
+@shared_loop
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_page_at_gate(plan_gate: Started) -> None:
+    """需求 R314 验收 2: 停在 gate_p1_plan 时 GET /plan: 当前计划 PLAN-1, 修订 [PLAN-1 v1 draft], 还没有决定, 特别风险
+    [RISK-REV-OCC, RISK-REV-CUT], 计划涉及的三个审计目标, 程序表 9 行都是全量."""
+    view = await plan_page(plan_gate)
+    assert view.current_plan_id == "PLAN-1" and view.decisions == []
+    assert [(p.id, p.version, p.status) for p in view.plans] == [("PLAN-1", 1, PlanStatus.draft)]
+    assert [r.id for r in view.risks] == ["RISK-REV-OCC", "RISK-REV-CUT"]
+    assert [o.id for o in view.objectives] == ["OBJ-REV-OCC", "OBJ-REV-CUT", "OBJ-CASH-EXI"]
+    assert [(r.objective_id, r.procedure_id) for r in view.rows] == XERO_PLAN_ROWS
+    assert {(r.extent, r.sample_size) for r in view.rows} == {("full", None)}
+
+
 @pytest.mark.parametrize(
-    ("changes", "code"),
+    ("decision", "code", "detail"),
     [
-        ({"plan_confirmation": None}, "MISSING_FIELD"),  # 验收 5: 效果要用它, 属最小路径
-        ({"target_version": 2}, "VERSION_MISMATCH"),  # 绑定的不是当前计划的当前版本
-        ({"target_id": "PLAN-2"}, "VERSION_MISMATCH"),
+        # R205 验收 5: 效果要用确认, 属最小路径; 绑定的不是当前计划的当前版本
+        (plan_decision(GateVerdict.approve, plan_confirmation=None), "MISSING_FIELD", "plan_confirmation"),
+        (plan_decision(GateVerdict.approve, target_version=2), "VERSION_MISMATCH", None),
+        (plan_decision(GateVerdict.approve, target_id="PLAN-2"), "VERSION_MISMATCH", None),
+        # 审核意见 R206-01: 绑定的版本不对时驳回与信息不足同样被拒, 不只 approve
+        (plan_decision(GateVerdict.reject, target_version=2), "VERSION_MISMATCH", None),
+        (plan_decision(GateVerdict.insufficient_info, target_id="PLAN-2"), "VERSION_MISMATCH", None),
+        # R206 验收 1
+        *[
+            (
+                plan_decision(
+                    GateVerdict.approve, plan_confirmation=PLAN_CONFIRMATION.model_copy(update={"eqr_basis": b})
+                ),
+                "INVALID_VALUE",
+                "eqr_basis",
+            )
+            for b in ("", " \n ")
+        ],
+        (plan_decision(GateVerdict.reject, reason=None), "MISSING_FIELD", "reason"),
+        (plan_decision(GateVerdict.insufficient_info, reason=""), "MISSING_FIELD", "reason"),
+        *[
+            (plan_decision(v, plan_confirmation=PLAN_CONFIRMATION), "FIELD_NOT_ALLOWED", "plan_confirmation")
+            for v in (GateVerdict.reject, GateVerdict.insufficient_info)
+        ],
+        *[
+            (plan_decision(v, **{name: value}), "FIELD_NOT_ALLOWED", name)
+            for v in GateVerdict
+            for name, value in OTHER_GATE_FIELDS.items()
+        ],
     ],
 )
 @shared_loop
 @needs("q1_snapshot", "q1_supplements")
-async def test_plan_approve_rejected_without_writing(plan_gate: Started, changes: dict[str, Any], code: str) -> None:
-    """验收 5: approve 不带 plan_confirmation 报 MISSING_FIELD; 绑定 PLAN-1 v2 (还没有) 或别的计划报 VERSION_MISMATCH;
-    都什么都不写."""
-    await assert_rejected(plan_gate, PLAN_APPROVE.model_copy(update=changes), code)
+async def test_plan_decision_rejected_without_writing(
+    plan_gate: Started, decision: GateDecision, code: str, detail: str | None
+) -> None:
+    """R205 验收 5, R206 验收 1: 停在 gate_p1_plan (PLAN-1 v1) 时被拒的 PLN-15 决定, 错误码与消息所指的字段; 都什么都
+    不写, 锁已释放. 其他闸门的决定带 plan_confirmation 见 test_submit_rejects_invalid_decision (ACC-01 approve)."""
+    await assert_rejected(plan_gate, decision, code, detail)
 
 
 @needs("q1_snapshot", "q1_supplements")
@@ -1652,48 +1741,108 @@ def plan_versions(s: Started) -> list[tuple[str, int, PlanStatus]]:
     return [(p.id, p.version, p.status) for p in stored_plans(s)]
 
 
+async def plan_gate_view(s: Started) -> tuple[str, int, list[str]]:
+    """停在 PLN-15 闸门时呈报的 (计划, 版本, 此前的驳回决定)."""
+    view = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).gate(EID)
+    assert view is not None and isinstance(view.material, PlanMaterial)
+    return view.target_id, view.target_version, [d.id for d in view.material.previous_decisions]
+
+
 @needs("q1_snapshot", "q1_supplements")
-async def test_plan_gate_restart_info_reject_and_revise() -> None:
-    """审核意见 R205-02 (原探针): 停在 gate_p1_plan 时进程重启 (新 runner, 同一检查点), recover 不推进, 不重跑 PLN-15;
-    信息不足只记决定, 仍停闸门, 计划, PLN-15 与阶段都不变; 驳回回 plan_draft, 真实 A4 以 rerun 起草 PLAN-2 v1 并把
-    PLAN-1 置 superseded, 再停闸门, 阶段仍 P1_Planning; 之后批准 PLAN-2 进 P2."""
-    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
-    rows = len(s.output_store.rows)
-    restarted = GraphRunner(s.runner.app, s.runner.deps)
-    await restarted.recover()
-    await wait_idle(restarted, EID)
-    s = Started(restarted, s.output_store, s.engagement_store)
-    assert restarted.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
-    assert len(s.output_store.rows) == rows and pln15_runs(s) == ["RUN-PLN-15-1"]
+async def test_plan_info_reject_revise_restart_and_approve() -> None:
+    """R206 验收 2, 3, 4, 5, 6(a) (R205 审核意见 02 的探针在此补断言), 一次运行依次:
+    信息不足只写决定与留痕, 仍停闸门, 呈报仍是 PLAN-1 v1, 计划, PLN-15 与阶段都不变;
+    驳回 D-P15R: 决定与 decision 留痕 (PLN-15) 写入, plan_draft 以 rerun 执行 RUN-PLN-15-2, 真实 A4 出 PLAN-2 v1
+    (第 2 修订, 回应 D-P15R, 修订理由为驳回理由) 并把 PLAN-1 置 superseded; 再停闸门呈报 PLAN-2 v1, 此前的驳回只有
+    D-P15R (信息不足不列); 阶段仍 P1_Planning, PLN-15 仍 planned; 最后一条决定绑定 PLAN-1 v1 而当前为 PLAN-2 v1,
+    路由为 represent;
+    此时进程重启 (新 runner, 同一检查点): recover 不推进 (检查点不变), 不重跑 PLN-15; 绑 PLAN-1 v1 的决定报
+    VERSION_MISMATCH;
+    批准 PLAN-2 v1 (需要项目质量复核, 未确认不需要专家: 只作记录, 不拦截): PLAN-2 v2 approved, 三项照写入,
+    PLN-15 completed, 阶段 P2_Executing, 越过闸门后下一节点为 schedule."""
+    s = await at_plan_gate()
+    await checkpoint_matches_store(s)
 
     async def decide(decision: GateDecision) -> EngagementState:
         await s.submit.submit(EID, decision)
-        await wait_idle(restarted, EID)
-        assert restarted.run_error(EID) is None, restarted.run_error(EID)
+        await wait_idle(s.runner, EID)
+        assert s.runner.run_error(EID) is None, s.runner.run_error(EID)
         return await checkpoint_values(s)
 
-    asked = PLAN_APPROVE.model_copy(
-        update={"id": "D-P15I", "decision": GateVerdict.insufficient_info, "plan_confirmation": None, "reason": "r"}
-    )
-    values = await decide(asked)
-    assert await s.next_nodes() == ("gate_p1_plan",) and plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)]
-    assert values["phase"] is Phase.P1_Planning and s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+    def decided(key: str) -> list[str | None]:
+        return [e.procedure_id for e in trail_of(s, TrailKind.decision) if e.idempotency_key == key]
 
-    reject = asked.model_copy(update={"id": PLAN_REJECT_ID, "decision": GateVerdict.reject, "reason": "Add timing"})
+    asked = plan_decision(GateVerdict.insufficient_info, id="D-P15I", reason="Awaiting partner availability")
+    commits = len(s.output_store.commits)
+    values = await decide(asked)
+    assert s.output_store.commits[commits:] == [[asked]] and decided("D-P15I") == ["PLN-15"]
+    assert await s.next_nodes() == ("gate_p1_plan",) and await plan_gate_view(s) == ("PLAN-1", 1, [])
+    assert plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)] and values["phase"] is Phase.P1_Planning
+    assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+    await checkpoint_matches_store(s)
+
+    reject = plan_decision(GateVerdict.reject, id=PLAN_REJECT_ID, reason=PLAN_REJECT_REASON)
     values = await decide(reject)
-    assert await s.next_nodes() == ("gate_p1_plan",) and values["phase"] is Phase.P1_Planning
+    assert await s.output_store.get(EID, GateDecision, PLAN_REJECT_ID) == reject and decided(PLAN_REJECT_ID) == [
+        "PLN-15"
+    ]
+    assert await s.next_nodes() == ("gate_p1_plan",) and await plan_gate_view(s) == ("PLAN-2", 1, [PLAN_REJECT_ID])
     assert plan_versions(s) == [
         ("PLAN-1", 1, PlanStatus.draft),
         ("PLAN-2", 1, PlanStatus.draft),
         ("PLAN-1", 2, PlanStatus.superseded),
     ]
-    assert pln15_runs(s) == ["RUN-PLN-15-1", "RUN-PLN-15-2"]
+    runs = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun) if r.procedure_id == "PLN-15"}
+    assert sorted(runs) == ["RUN-PLN-15-1", "RUN-PLN-15-2"] and runs["RUN-PLN-15-2"].trigger is RunTrigger.rerun
     [plan2] = [p for p in values["audit_plans"] if p.id == "PLAN-2"]
-    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, "Add timing")
+    assert (plan2.revision, plan2.addresses_decision_id, plan2.revision_reason, plan2.run_id) == (
+        2,
+        PLAN_REJECT_ID,
+        PLAN_REJECT_REASON,
+        "RUN-PLN-15-2",
+    )
+    assert values["phase"] is Phase.P1_Planning and s.latest_procedure("PLN-15").status is ProcedureStatus.planned
+    assert gate_route(GateId.PLN_15)(values) == "represent"  # 验收 5: 最后一条决定绑定的计划已被取代
+    await checkpoint_matches_store(s)
 
-    values = await decide(PLAN_APPROVE.model_copy(update={"id": "D-PLAN2", "target_id": "PLAN-2"}))
+    config = GraphRunner.config(EID)
+    before = (await s.runner.app.aget_state(config)).config, len(s.output_store.rows)
+    restarted = GraphRunner(s.runner.app, s.runner.deps)
+    await restarted.recover()
+    await wait_idle(restarted, EID)
+    s = Started(restarted, s.output_store, s.engagement_store)
+    assert restarted.run_error(EID) is None and await s.next_nodes() == ("gate_p1_plan",)
+    assert ((await restarted.app.aget_state(config)).config, len(s.output_store.rows)) == before
+    assert pln15_runs(s) == ["RUN-PLN-15-1", "RUN-PLN-15-2"]
+    await checkpoint_matches_store(s)
+    for verdict in GateVerdict:  # 绑定已被取代的 PLAN-1 v1: 哪种决定都被拒 (审核意见 R206-01)
+        await assert_rejected(s, plan_decision(verdict, id=f"D-OLD-{verdict.value}"), "VERSION_MISMATCH")
+
+    values = await decide(
+        plan_decision(GateVerdict.approve, id="D-PLAN2", target_id="PLAN-2", plan_confirmation=FIRST_YEAR_EQR)
+    )
     assert await s.next_nodes() == ("fieldwork", "fieldwork") and values["phase"] is Phase.P2_Executing
-    assert ("PLAN-2", 2, PlanStatus.approved) in plan_versions(s)
+    history = [snapshot.next async for snapshot in restarted.app.aget_state_history(config)]  # 新的在前
+    assert history[1:3] == [("schedule",), ("gate_p1_plan",)]
+    approved = stored_plans(s)[-1]
+    assert (approved.id, approved.version, approved.status) == ("PLAN-2", 2, PlanStatus.approved)
+    assert approved.model_dump(include=set(FIRST_YEAR_EQR.model_dump())) == FIRST_YEAR_EQR.model_dump()
+    assert approved in values["audit_plans"] and s.latest_procedure("PLN-15").status is ProcedureStatus.completed
+    await checkpoint_matches_store(s)
+    # R314 验收 3: 进入执行阶段后 GET /plan 照样返回, 当前计划为批准的 PLAN-2, 三项确认可读出
+    page = await plan_page(s)
+    assert page.current_plan_id == "PLAN-2" and page.plans[-1] == approved
+    confirmed = page.plans[-1].model_dump(include={"eqr_required", "eqr_basis", "auditor_expert_not_required"})
+    assert confirmed == FIRST_YEAR_EQR.model_dump()  # R206 验收 2: 三项确认经 GET /plan 读得出
+    assert [(p.id, p.version, p.status) for p in page.plans] == [
+        ("PLAN-1", 2, PlanStatus.superseded),
+        ("PLAN-2", 2, PlanStatus.approved),
+    ]
+    assert [(d.id, d.decision, d.reason) for d in page.decisions] == [
+        ("D-P15I", GateVerdict.insufficient_info, "Awaiting partner availability"),
+        (PLAN_REJECT_ID, GateVerdict.reject, PLAN_REJECT_REASON),
+        ("D-PLAN2", GateVerdict.approve, None),
+    ]
 
 
 class LostCheckpoint:

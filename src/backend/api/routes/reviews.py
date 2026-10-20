@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, cast
+from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Query
@@ -25,7 +25,6 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     ReviewTier,
-    SourceType,
     TargetType,
     TaskKind,
     TaskStatus,
@@ -38,7 +37,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.services.deferrals import is_active, latest_entries
 from backend.services.features import COLLAB
 from backend.services.presentation import assemble, record_presentation
-from backend.services.review_queue import review_tier, row_amount, subject_row, task_amount
+from backend.services.review_queue import review_tier, subject_amount, task_amount
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 from backend.services.trail_pages import all_of_kind
 
@@ -48,15 +47,6 @@ router = APIRouter(prefix="/engagements/{eid}", tags=["reviews"])
 def _allowed(task: ReviewTask, deps: AgentDeps) -> list[Decision]:
     permitted = deps.queue.allowed(task)
     return [item for item in Decision if item in permitted]
-
-
-async def subject_amount(deps: AgentDeps, eid: str, target: Judgment | AuditException | ProcedureRun) -> int | None:
-    """判断对象本身是交易行时该行的金额 (见 review_queue.subject_row), 否则或查不到该行为 None."""
-    pointer = subject_row(target) if isinstance(target, Judgment) else None
-    if pointer is None:
-        return None
-    row = await deps.financial_store.record(eid, cast(SourceType, pointer.source_type), pointer.source_id)
-    return row_amount(pointer.source_type, row) if row is not None else None
 
 
 @dataclass(frozen=True)
@@ -104,7 +94,8 @@ async def task_parts(
     if not isinstance(target, Judgment | AuditException | ProcedureRun):
         raise api_error("NOT_FOUND", task.target_id)
     misstatements = await updated_misstatement(deps, eid, target)
-    amount = task_amount(target, exceptions, await subject_amount(deps, eid, target), misstatements)
+    subject = await subject_amount(deps.financial_store, eid, target) if isinstance(target, Judgment) else None
+    amount = task_amount(target, exceptions, subject, misstatements)
     return TaskParts(
         procedure_name=template.name,
         target=target,

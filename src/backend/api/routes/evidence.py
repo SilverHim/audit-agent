@@ -1,5 +1,5 @@
-"""文件与证据: 上传与分类 (需求 R14), 文件登记, 合同与回函 (含修改与版本), ASIC 摘录的抽取结果 (需求 R290), 待审
-财报 (需求 R217), 原件, 财务明细."""
+"""文件与证据: 上传与分类 (需求 R14), 文件登记, 合同与回函 (含修改与版本), ASIC 摘录的抽取结果 (需求 R290), 原件,
+财务明细."""
 
 from typing import Annotated, Any
 
@@ -17,7 +17,6 @@ from backend.contracts.models import (
     Contract,
     DocumentRef,
     Engagement,
-    FinancialStatements,
     SourceType,
     User,
 )
@@ -199,42 +198,6 @@ async def registry_extract_history(
     """ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404."""
     async with catch_api():
         return [RegistryExtractView.of(r) for r in await service.registry_history(engagement.id, document_id)]
-
-
-@router.get("/financial-statements")
-async def get_financial_statements(
-    engagement: Annotated[Engagement, Depends(owned_engagement)],
-    deps: Annotated[AgentDeps, Depends(get_deps)],
-) -> FinancialStatements | None:
-    """待审财报的当前版本 (需求 R217): A3 从上传的财务报表文件抽取, 审计师可改; 没有已抽取的财务报表文件时为 null."""
-    async with catch_api():
-        return await deps.financial_store.financial_statements(engagement.id)
-
-
-@router.put("/financial-statements")
-async def edit_financial_statements(
-    body: ExtractionEdit,
-    engagement: Annotated[Engagement, Depends(owned_engagement)],
-    user: Annotated[User, Depends(current_user)],
-    service: Annotated[DataService, Depends(get_data_service)],
-) -> FinancialStatements:
-    """修改待审财报的抽取结果, 返回新的一版. field 为 prepared_at, directors_declaration_date,
-    comparative_restatement_entry_nos, lines[行代码].name, lines[行代码].amount_cents, lines[行代码].prior_amount_cents,
-    lines[行代码].account_codes (如 lines[SOFP-OREC].amount_cents); 两个列表的值写成逗号分隔的文本 (如 "620,621",
-    空串为空列表). 还没有待审财报 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 没有该行, 与当前相同 422
-    INVALID_VALUE; 锁定 423; 忙 409."""
-    async with catch_api():
-        return await service.edit_financial_statements(engagement.id, body, user.id)
-
-
-@router.get("/financial-statements/history")
-async def financial_statements_history(
-    engagement: Annotated[Engagement, Depends(owned_engagement)],
-    service: Annotated[DataService, Depends(get_data_service)],
-) -> list[ExtractionRecord]:
-    """待审财报的各版 (data 为该版 FinancialStatements), 按版本升序. 还没有抽取过 404."""
-    async with catch_api():
-        return await service.statements_history(engagement.id)
 
 
 @router.get("/records/{source_type}/{source_id}")

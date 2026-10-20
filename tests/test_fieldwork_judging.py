@@ -89,13 +89,15 @@ def setup(
     outcomes: dict[str, Any],
     rerun: list[str] | None = None,
     exceptions: list[AuditException] | None = None,
+    features: frozenset[str] | None = None,
 ) -> tuple[FieldworkAgent, RunContext, FakeJudgmentEngine]:
     """A6 与某判断程序第 1 次执行的上下文: 程序关联收入两条目标, 状态有 Numbat 风险清单与给定例外.
 
-    subjects 经 subject_sources 登记 (各判断程序接入前, 用它代替程序自己的取对象逻辑).
+    subjects 经 subject_sources 登记 (各判断程序接入前, 用它代替程序自己的取对象逻辑). features 缺省为基线.
     """
     engine = FakeJudgmentEngine(outcomes)
-    deps = replace(make_deps(FakeRegistry(), FakeTrail()), judgments=engine, review_llm=None)  # type: ignore[arg-type]
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=features)
+    deps = replace(deps, judgments=engine, review_llm=None)  # type: ignore[arg-type]
     ctx = make_ctx(deps, procedure_id)
     procedure = ctx.procedure.model_copy(
         update={"objective_ids": ["OBJ-REV-OCC", "OBJ-REV-CUT"], "rerun_subject_ids": rerun or []}

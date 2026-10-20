@@ -26,7 +26,7 @@ FEATURES: dict[str, FeatureSpec] = {
     "related_parties": FeatureSpec("关联方: GEN-08, GEN-03, GEN-01"),
     "going_concern": FeatureSpec("持续经营: GEN-07, GEN-06, GEN-04, FIN-02 与 gate_fin 两步, 报告持续经营段"),
     "misstatement": FeatureSpec("错报闭环: FIN-03, FIN-08, FIN-09, 等待更正, FIN-04 按状态累计, P3 骨架节点"),
-    "autonomy": FeatureSpec("自主度: 动态降级"),
+    "autonomy": FeatureSpec("自主度: 装配与判断两个时点的动态降级, 关键证据缺失的判断交人"),
     "acceptance": FeatureSpec("承接: ACC-08 与其闸门"),
     "planning": FeatureSpec("总体审计计划: PLN-15 与其闸门"),
     # 修订重要性要出计划的新修订, 有计划才说得通; 重估在错报闭环之后
@@ -39,6 +39,7 @@ BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回�
 COLLAB = "collab"  # 智能体协作增量的功能名 (A7 触发规则, 争议中状态与单列, 仲裁补全等按它开关)
 MISSTATEMENT = "misstatement"  # 错报闭环的功能名 (需求 R156 起: 新错报为 identified 并走生命周期; 关闭时为 uncorrected)
 PLANNING = "planning"  # 计划的功能名: 装配后起草总体审计计划, 停在 PLN-15 闸门, 计划批准才进 P2 (需求 R205)
+AUTONOMY = "autonomy"  # 自主度的功能名: 装配与判断两个时点的动态降级, 关键证据缺失的判断交人 (需求 R168, R170)
 
 
 def features_text(features: Iterable[str]) -> str:

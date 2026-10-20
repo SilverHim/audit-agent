@@ -22,6 +22,7 @@ import { Route as EngagementsEidDecisionsRouteImport } from './routes/engagement
 import { Route as EngagementsEidEvidenceRouteImport } from './routes/engagements/$eid/evidence'
 import { Route as EngagementsEidGateRouteImport } from './routes/engagements/$eid/gate'
 import { Route as EngagementsEidMisstatementsRouteImport } from './routes/engagements/$eid/misstatements'
+import { Route as EngagementsEidPlanRouteImport } from './routes/engagements/$eid/plan'
 import { Route as EngagementsEidReportRouteImport } from './routes/engagements/$eid/report'
 import { Route as EngagementsEidTrailRouteImport } from './routes/engagements/$eid/trail'
 import { Route as EngagementsEidDataIndexRouteImport } from './routes/engagements/$eid/data/index'
@@ -100,6 +101,11 @@ const EngagementsEidMisstatementsRoute =
     path: '/misstatements',
     getParentRoute: () => EngagementsEidRouteRoute,
   } as any)
+const EngagementsEidPlanRoute = EngagementsEidPlanRouteImport.update({
+  id: '/plan',
+  path: '/plan',
+  getParentRoute: () => EngagementsEidRouteRoute,
+} as any)
 const EngagementsEidReportRoute = EngagementsEidReportRouteImport.update({
   id: '/report',
   path: '/report',
@@ -176,6 +182,7 @@ export interface FileRoutesByFullPath {
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
+  '/engagements/$eid/plan': typeof EngagementsEidPlanRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
@@ -201,6 +208,7 @@ export interface FileRoutesByTo {
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
+  '/engagements/$eid/plan': typeof EngagementsEidPlanRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid': typeof EngagementsEidIndexRoute
@@ -228,6 +236,7 @@ export interface FileRoutesById {
   '/engagements/$eid/evidence': typeof EngagementsEidEvidenceRoute
   '/engagements/$eid/gate': typeof EngagementsEidGateRoute
   '/engagements/$eid/misstatements': typeof EngagementsEidMisstatementsRoute
+  '/engagements/$eid/plan': typeof EngagementsEidPlanRoute
   '/engagements/$eid/report': typeof EngagementsEidReportRoute
   '/engagements/$eid/trail': typeof EngagementsEidTrailRoute
   '/engagements/$eid/': typeof EngagementsEidIndexRoute
@@ -256,6 +265,7 @@ export interface FileRouteTypes {
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
+    | '/engagements/$eid/plan'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
@@ -281,6 +291,7 @@ export interface FileRouteTypes {
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
+    | '/engagements/$eid/plan'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid'
@@ -307,6 +318,7 @@ export interface FileRouteTypes {
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/gate'
     | '/engagements/$eid/misstatements'
+    | '/engagements/$eid/plan'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
     | '/engagements/$eid/'
@@ -423,6 +435,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EngagementsEidMisstatementsRouteImport
       parentRoute: typeof EngagementsEidRouteRoute
     }
+    '/engagements/$eid/plan': {
+      id: '/engagements/$eid/plan'
+      path: '/plan'
+      fullPath: '/engagements/$eid/plan'
+      preLoaderRoute: typeof EngagementsEidPlanRouteImport
+      parentRoute: typeof EngagementsEidRouteRoute
+    }
     '/engagements/$eid/report': {
       id: '/engagements/$eid/report'
       path: '/report'
@@ -510,6 +529,7 @@ interface EngagementsEidRouteRouteChildren {
   EngagementsEidEvidenceRoute: typeof EngagementsEidEvidenceRoute
   EngagementsEidGateRoute: typeof EngagementsEidGateRoute
   EngagementsEidMisstatementsRoute: typeof EngagementsEidMisstatementsRoute
+  EngagementsEidPlanRoute: typeof EngagementsEidPlanRoute
   EngagementsEidReportRoute: typeof EngagementsEidReportRoute
   EngagementsEidTrailRoute: typeof EngagementsEidTrailRoute
   EngagementsEidIndexRoute: typeof EngagementsEidIndexRoute
@@ -531,6 +551,7 @@ const EngagementsEidRouteRouteChildren: EngagementsEidRouteRouteChildren = {
   EngagementsEidEvidenceRoute: EngagementsEidEvidenceRoute,
   EngagementsEidGateRoute: EngagementsEidGateRoute,
   EngagementsEidMisstatementsRoute: EngagementsEidMisstatementsRoute,
+  EngagementsEidPlanRoute: EngagementsEidPlanRoute,
   EngagementsEidReportRoute: EngagementsEidReportRoute,
   EngagementsEidTrailRoute: EngagementsEidTrailRoute,
   EngagementsEidIndexRoute: EngagementsEidIndexRoute,

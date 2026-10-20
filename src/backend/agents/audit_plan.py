@@ -190,13 +190,14 @@ async def draft_plans(deps: AgentDeps, ctx: RunContext) -> list[AuditPlan]:
             f"{PROCEDURE_ID} 第 {revision} 修订未通过 {report.level_failed} 校验: {'; '.join(report.errors)}"
         )
     draft = cast(AuditPlanDraft, report.output)
+    planned = {i.procedure_id for i in items}  # 说明多于计划的程序时只收计划内的 (需求 R316)
     narrative = [PlanSection(section="overall_strategy", text=draft.overall_strategy)]
     narrative += [PlanSection(section=name, text=text) for name, text in draft.sections.items()]
     plan = AuditPlan.model_validate(
         {
             **fields,
             "narrative": narrative,
-            "procedure_notes": draft.procedure_notes,
+            "procedure_notes": [n for n in draft.procedure_notes if n.procedure_id in planned],
             "timetable": draft.timetable,
             "eqr_recommendation": draft.eqr_recommendation,
             "expert_assessment": draft.expert_assessment,

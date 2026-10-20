@@ -39,7 +39,7 @@ type TimelineEvent =
 // (同一事务写入) 或为空, 不能用时间拼 key. 留痕缺 ID 时退回它在按时间排序后的序号.
 export type TimelineItem = TimelineEvent & { key: string }
 
-const GATES: GateId[] = ['ACC-01', 'PLN-01/03', 'FIN-01', 'RPT-01']
+const GATES: GateId[] = ['ACC-01', 'PLN-01/03', 'PLN-15', 'FIN-01', 'RPT-01']
 
 // 任务 ID 形如 T-J-REV-02-1-SI-2026-0612-v1, 取判断对象 SI-2026-0612
 export function subjectOfTask(taskId: string): string {

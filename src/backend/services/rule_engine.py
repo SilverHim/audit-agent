@@ -4,8 +4,8 @@
 不执行, 记一条 RuleOutcome (status 取该检查, reason 取第一行的 reason 列, 为空时为 DEFAULT_REASON), 不出例外. 没有
 检查的规则照旧只执行规则 SQL. 检查出错与规则出错同样抛 RuleError.
 
-例外行可带 extra_pointers 列 (需求 R223): 在主指针 (source_type, source_id) 之后附加的证据指针, 如财报行的例外另指
-所映射科目的试算表行. 不进 detail, 也不进主指针的 locator.
+例外行可带 extra_pointers 列 (需求 R223): 在主指针 (source_type, source_id) 之后附加的证据指针, 如分录行的例外另指
+相关科目的试算表行. 不进 detail, 也不进主指针的 locator.
 """
 
 import json

@@ -136,9 +136,8 @@ class EngagementState(TypedDict):
     misstatements: Annotated[list[Misstatement], upsert_by_id]
     rerun_requests: Annotated[list[RerunRequest], append_unique]  # 过期程序的重跑请求, 只追加 (DecisionSubmit 写)
     uncorrected_schedule: UncorrectedSchedule | None  # 未更正错报汇总表, A9 写
-    # 签字前提的四类审计产出 (需求 R215): 声明书 REPLETTER (A5 FIN-07), 合规检查 CHECK-{程序} (A9 FIN-10, FIN-12,
-    # FIN-18), 治理层沟通 GC-{程序}-{run_no} (A10 RPT-07), 独立性声明 S307C (A10 RPT-08 起草, RPT-01 签字时由 A1 置
-    # signed)
+    # 签字前提的四类审计产出 (需求 R215): 声明书 REPLETTER (A5 FIN-07), 合规检查 CHECK-{程序} (A9 FIN-10, FIN-18),
+    # 治理层沟通 GC-{程序}-{run_no} (A10 RPT-07), 独立性声明 S307C (A10 RPT-08 起草, RPT-01 签字时由 A1 置 signed)
     representation_letter: WrittenRepresentationLetter | None
     compliance_checks: Annotated[list[ComplianceCheck], upsert_by_id]  # 按 id 与版本合并
     governance_communications: Annotated[list[GovernanceCommunication], upsert_by_id]  # 按 id 与版本合并

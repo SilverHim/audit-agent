@@ -1,36 +1,86 @@
-"""StateQuery (A 负责): 项目总览与闸门材料, 供前端读取.
+"""StateQuery (A 负责): 项目总览, 闸门材料与审计计划, 供前端读取.
 
-图的位置 (停在哪道闸门, 是否等复核) 读检查点; 程序状态与复核任务读 AuditOutputStore; 是否在执行读 runner.
+图的位置 (停在哪道闸门, 是否等复核) 与审计计划读检查点; 程序状态与复核任务读 AuditOutputStore; 是否在执行读 runner.
 """
 
 from collections import Counter
+from collections.abc import Sequence
 
 from langgraph.graph.state import CompiledStateGraph
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
+    AuditObjective,
+    AuditPlan,
     ClientProfile,
     Engagement,
+    GateId,
     Phase,
+    PlanItem,
     Procedure,
     ProcedureRun,
     RerunRequest,
     ReviewTask,
+    RiskLevel,
     TaskStatus,
 )
 from backend.contracts.state import EngagementState, fill_defaults
 from backend.contracts.views import (
     EngagementOverview,
     GateView,
+    PlanRow,
+    PlanView,
     ProcedureSummary,
 )
-from backend.orchestration.gates import current_gate, current_spec
+from backend.orchestration.gates import current_gate, current_plan, current_spec
 from backend.orchestration.runner import GraphRunner, at_rerun_point, awaiting_data, resume_required, review_waits
 from backend.services.data_quality import missing_tables
 from backend.services.features import frozen_features
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
+
+
+def plan_row(objective_id: str | None, item: PlanItem) -> PlanRow:
+    """程序表的一行. 范围: params 里有整数 sample_size (不含布尔) 为抽样, 否则全量 (现有程序都没有样本量参数)."""
+    size = item.params.get("sample_size")
+    if isinstance(size, int) and not isinstance(size, bool):
+        return PlanRow(objective_id=objective_id, procedure_id=item.procedure_id, extent="sample", sample_size=size)
+    return PlanRow(objective_id=objective_id, procedure_id=item.procedure_id, extent="full")
+
+
+def plan_rows(plan: AuditPlan, objectives: Sequence[AuditObjective]) -> list[PlanRow]:
+    """计划的程序表: 针对几个目标的程序每个目标一行; 按目标在 objectives 中的顺序分组 (不在其中的排在它们之后,
+    按 ID), 组内按程序编号; 没有目标的程序排最后."""
+    order = {o.id: n for n, o in enumerate(objectives)}
+    rows = [plan_row(oid, item) for item in plan.items for oid in (item.objective_ids or (None,))]
+
+    def key(row: PlanRow) -> tuple[int, str, str]:
+        rank = len(order) + 1 if row.objective_id is None else order.get(row.objective_id, len(order))
+        return rank, row.objective_id or "", row.procedure_id
+
+    return sorted(rows, key=key)
+
+
+def plan_view(values: EngagementState) -> PlanView:
+    """审计计划页的数据, 只取状态 (已补缺省值): 当前计划, 各修订的最新版本, PLN-15 决定, 当前计划涉及的审计目标,
+    特别风险 (特别风险目标下等级为 significant 的风险项; 同一目标下等级更低的不算, 目标等级取其下最高), 程序表.
+    没有计划时 current_plan_id 为空, 各列表为空."""
+    plan = current_plan(values["audit_plans"])
+    if plan is None:
+        return PlanView(current_plan_id=None, plans=[], decisions=[], objectives=[], risks=[], rows=[])
+    referenced = {oid for item in plan.items for oid in item.objective_ids}
+    significant = set(plan.significant_risk_objective_ids)
+    return PlanView(
+        current_plan_id=plan.id,
+        plans=sorted(values["audit_plans"], key=lambda p: p.revision),
+        decisions=sorted((d for d in values["gate_decisions"] if d.gate is GateId.PLN_15), key=lambda d: d.decided_at),
+        objectives=[o for o in values["audit_objectives"] if o.id in referenced],
+        risks=[
+            r for r in values["risk_register"] if r.objective_id in significant and r.level is RiskLevel.significant
+        ],
+        rows=plan_rows(plan, values["audit_objectives"]),
+    )
 
 
 class GraphStateQuery:
@@ -146,3 +196,8 @@ class GraphStateQuery:
             return None
         material, view = await spec.view(self.deps, eid, values)
         return GateView(gate=spec.gate, target_id=material.id, target_version=material.version, material=view)
+
+    async def plan(self, eid: str) -> PlanView:
+        """审计计划页 (需求 R314): 读检查点状态, 不另查 Store (见 plan_view); 停在闸门, 执行中与归档后都可读."""
+        snapshot = await self.app.aget_state(GraphRunner.config(eid))
+        return plan_view(fill_defaults(snapshot.values))

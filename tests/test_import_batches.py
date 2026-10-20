@@ -469,10 +469,13 @@ def test_company_names_compare_without_company_type_words() -> None:
     assert not same_company("Demo Company (AU)", NUMBAT_PROFILE.legal_name)
 
 
-async def test_workbook_without_ledger_sheets_is_a_document() -> None:
-    """没有一个工作表是账表的表格文件 (报表草稿) 作一份文件处理: A3 分类为财务报表; 确认后按该类型登记."""
+@pytest.mark.parametrize("suffix", ["xlsx", "pdf"])
+async def test_workbook_without_ledger_sheets_is_a_document(suffix: str) -> None:
+    """没有一个工作表是账表的表格文件 (报表草稿), 或 PDF 的报表, 作一份文件处理: A3 分类为财务报表; 确认后按该类型
+    登记, 只分类不抽取 (财务报表以账套为准, Issue #46 验收 1): 大模型调用除表格的逐表识别外只有分类."""
     env = Batch()
-    batch = await env.upload([("draft-financial-statements.xlsx", workbook_bytes())])
+    content = workbook_bytes() if suffix == "xlsx" else b"%PDF draft statements"
+    batch = await env.upload([(f"draft-financial-statements.{suffix}", content)])
     [item] = batch.items
     assert (item.item_kind, item.document_type, item.selected) == ("document", DocumentType.financial_statements, True)
     await env.service.confirm_batch(EID, batch.id, "U-1")
@@ -481,6 +484,8 @@ async def test_workbook_without_ledger_sheets_is_a_document() -> None:
         "classified",
     )
     assert env.data.written == [] and env.checkups == 1  # 没有表也体检一次
+    calls = [e.procedure_id for e in trail_entries(env, TrailKind.llm_call)]
+    assert [c for c in calls if c != "DOC-SHEET"] == ["DOC-CLASSIFY"]  # 表格文件另有逐表识别, 都没有抽取
 
 
 async def test_already_registered_file_is_not_staged_again() -> None:
