@@ -606,7 +606,8 @@ async def test_populations(xero17: Xero17) -> None:
     r01, _, r03 = ({i.source_id: i for i in r.items}[ORC1026] for r in rev08.rules)
     assert (r01.amount_cents, r01.fields) == (
         715000,
-        ORC1026_FIELDS | {"delivery_no": "SR-ORC1026", "signed_date": "2026-09-17", "signed_by": "Priya Natarajan"},
+        ORC1026_FIELDS
+        | {"records": [{"delivery_no": "SR-ORC1026", "signed_date": "2026-09-17", "signed_by": "Priya Natarajan"}]},
     )
     receipt = {"bank_transaction_ids": "BT-090-0124", "received_dates": "2026-10-14", "received_cents": 385000}
     assert (r03.amount_cents, r03.fields) == (715000, ORC1026_FIELDS | receipt)

@@ -427,22 +427,25 @@ async def test_rev08_populations_on_postgres(tmp_path: Path) -> None:
 
 
 async def test_rev08_one_item_per_invoice_on_postgres(tmp_path: Path) -> None:
-    """R324-05: 一张发票两条服务完成记录时总体仍一张一项. 测试库里本项目的服务完成记录另写一版, 给 ORC1020 加一条没
-    签收的 (补造目录不动): R01, R02 仍为 6 张 990000, ORC1020 的记录号, 签收日与签收人按记录 ID 逗号连接 (没签收的
-    为空串); 总体与由同一组表算出的 rev08_populations 相等."""
+    """R324-05, R324-13: 一张发票几条服务完成记录时总体仍一张一项. 测试库里本项目的服务完成记录另写一版, 给 ORC1020 加
+    一条没签收的与一条签收人写成 "姓, 名" 的 (补造目录不动): R01, R02 仍为 6 张 990000, ORC1020 的 records 为三条记录
+    (按记录 ID; 没签收的签收日与签收人为 null, 签收人里的逗号原样); 总体与由同一组表算出的 rev08_populations 相等."""
     snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
     project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
     tables = xero_tables()
     [orc1020] = [i for i in tables["sales_invoices"] if i.invoice_no == "ORC1020"]
-    unsigned = DeliveryNote(
-        id="SR-ORC1020-2",
-        delivery_no="SR-ORC1020-2",
-        invoice_id=orc1020.id,
-        shipped_date=date(2026, 9, 2),
-        signed_date=None,
-        signed_by=None,
-    )
-    notes = [*tables["delivery_notes"], unsigned]
+    extra = [
+        DeliveryNote(
+            id=f"SR-ORC1020-{n}",
+            delivery_no=f"SR-ORC1020-{n}",
+            invoice_id=orc1020.id,
+            shipped_date=date(2026, 9, 2),
+            signed_date=signed_date,
+            signed_by=signed_by,
+        )
+        for n, signed_date, signed_by in ((2, None, None), (3, date(2026, 9, 29), "Reilly, Tom"))
+    ]
+    notes = [*tables["delivery_notes"], *extra]
     await project.deps.data.write_tables(
         project.engagement.id,
         {TableKind.delivery_notes: notes},
@@ -461,11 +464,11 @@ async def test_rev08_one_item_per_invoice_on_postgres(tmp_path: Path) -> None:
     ]
     for population in rev08.populations[:2]:
         [item] = [i for i in population.items if i.source_id == orc1020.id]
-        assert (item.fields["delivery_no"], item.fields["signed_date"], item.fields["signed_by"]) == (
-            "SR-ORC1020,SR-ORC1020-2",
-            "2026-09-30,",
-            "Tom Reilly,",
-        )
+        assert item.fields["records"] == [
+            {"delivery_no": "SR-ORC1020", "signed_date": "2026-09-30", "signed_by": "Tom Reilly"},
+            {"delivery_no": "SR-ORC1020-2", "signed_date": None, "signed_by": None},
+            {"delivery_no": "SR-ORC1020-3", "signed_date": "2026-09-29", "signed_by": "Reilly, Tom"},
+        ]
 
 
 async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> None:

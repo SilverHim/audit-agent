@@ -190,18 +190,17 @@ REFUND_1020 = {  # 期末后退还 ORC1020 的 550.00: 090 账户的负数流水
     "payments": [],
     "bankTransactions": [],
 }
-RECORD_COLUMNS = ("delivery_no", "signed_date", "signed_by")
-# 场景 → (各规则的 (对象数, 金额合计), 与基线总体相同的规则, R02 中 ORC1024 的记录三列)
+# 场景 → (各规则的 (对象数, 金额合计), 与基线总体相同的规则, R02 中 ORC1024 的 records)
 REV08_INJECTIONS = {
     "no_record_orc1024": (
         [("R01", 5, 935000), ("R02", 6, 990000), ("R03", 5, 935000)],
         ["R03"],
-        (None, None, None),
+        None,
     ),
     "refund_1020": (
         [("R01", 6, 990000), ("R02", 6, 990000), ("R03", 5, 935000)],
         ["R01", "R02", "R03"],
-        ("SR-ORC1024", "2026-08-19", "Ruth Carmody"),
+        [{"delivery_no": "SR-ORC1024", "signed_date": "2026-08-19", "signed_by": "Ruth Carmody"}],
     ),
 }
 
@@ -229,7 +228,7 @@ def rev08_patch(scenario: str) -> Patch:
 @pytest.mark.parametrize("scenario", REV08_INJECTIONS)
 async def test_rev08_populations_follow_injections(xero_case: Any, tmp_path: Path, scenario: str) -> None:
     """R324-02: 注入副本上连库的 REV-08 总体等于由副本的表算出的 (rev08_populations). 删去 ORC1024 的记录: R01 为
-    5 张 935000, R02 仍为 6 张 990000 而 ORC1024 的记录三列为空, R03 同基线; 期末后参考号含 1020 的退款 (负数流水):
+    5 张 935000, R02 仍为 6 张 990000 而 ORC1024 的 records 为空, R03 同基线; 期末后参考号含 1020 的退款 (负数流水):
     R03 只认正数流水, 三条规则的总体都同基线."""
     counts, unchanged, orc1024 = REV08_INJECTIONS[scenario]
     case = xero_case(rev08_patch(scenario))
@@ -248,7 +247,7 @@ async def test_rev08_populations_follow_injections(xero_case: Any, tmp_path: Pat
     assert [p.rule_id for p in rev08.populations if p == base[p.rule_id]] == unchanged
     [r02] = [p for p in rev08.populations if p.rule_id == "R02"]
     [item] = [i for i in r02.items if i.fields["invoice_no"] == "ORC1024"]
-    assert tuple(item.fields[c] for c in RECORD_COLUMNS) == orc1024
+    assert item.fields["records"] == orc1024
 
 
 # ── live 组: T1, T4 真实大模型成对断言 (需求 R124); 两个用例的调用上限合计 15 次 ──

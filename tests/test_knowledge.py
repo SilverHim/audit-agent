@@ -3388,6 +3388,7 @@ def test_population_and_placeholder_checks(path: str, value: Any, problems: list
         ("rules.0.check", {"zh": "", "en": "Recorded in the correct period"}),  # zh 为空
         ("rules.0.population.description", {"en": "Posted"}),
         ("scope", {"zh": " \n ", "en": "Scope"}),  # 只有空白也算空 (审核 R324-11)
+        ("rules.0.check", {"zh": "入账期间正确", "en": "  "}),  # en 只有空白 (审核 R324-12)
     ],
 )
 def test_localized_texts_need_both_languages(path: str, value: dict[str, str]) -> None:

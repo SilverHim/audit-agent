@@ -1734,9 +1734,9 @@ def rev08_populations(
     window_days: int,
 ) -> list[RulePopulation]:
     """REV-08 R01, R02, R03 的被测总体, 按 REV-08.yaml 总体 SQL 的口径由表独立算一遍: 期末前 window_days 天 (两端都含)
-    入账的发票, 按发票 ID, 每张一项; R01 为有服务完成记录的, R02 为全部, 记录号, 签收日与签收人按记录 ID 逗号连接 (没
-    签收的为空串, 没有记录的三列为空); R03 为找得到收款的 (正数流水, 见 receipt_matches), 带收款流水 ID 与收款日
-    (逗号连接, 按流水 ID) 及收款合计."""
+    入账的发票, 按发票 ID, 每张一项; R01 为有服务完成记录的, R02 为全部, records 为记录数组 (按记录 ID, 每条
+    {delivery_no, signed_date, signed_by}, 没签收的为 None; 没有记录的为 None); R03 为找得到收款的 (正数流水, 见
+    receipt_matches), 带收款流水 ID 与收款日 (逗号连接, 按流水 ID) 及收款合计."""
     start = period_end - timedelta(days=window_days)
     window = sorted((i for i in invoices if start <= i.posting_date <= period_end), key=lambda i: i.id)
     recorded: dict[str, list[DeliveryNote]] = {}
@@ -1754,17 +1754,15 @@ def rev08_populations(
         return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
 
     def with_notes(invoice: SalesInvoice) -> PopulationItem:
-        found = recorded.get(invoice.id, [])
-
-        def joined(values: Iterable[str]) -> str | None:
-            return ",".join(values) if found else None
-
-        return item(
-            invoice,
-            delivery_no=joined(n.delivery_no for n in found),
-            signed_date=joined(n.signed_date.isoformat() if n.signed_date else "" for n in found),
-            signed_by=joined(n.signed_by or "" for n in found),
-        )
+        records = [
+            {
+                "delivery_no": n.delivery_no,
+                "signed_date": n.signed_date.isoformat() if n.signed_date else None,
+                "signed_by": n.signed_by,
+            }
+            for n in recorded.get(invoice.id, [])
+        ]
+        return item(invoice, records=records or None)
 
     r03 = []
     for invoice in window:
