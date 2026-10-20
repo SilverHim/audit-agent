@@ -1,9 +1,14 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from 'cn'
 import { MessageCircle } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { reviewsPresentReviewTaskMutation, reviewsSubmitReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
+import {
+  dataTablePageOptions,
+  reportsGetMisstatementsOptions,
+  reviewsPresentReviewTaskMutation,
+  reviewsSubmitReviewRecordMutation,
+} from '@/client/@tanstack/react-query.gen'
 import type {
   Assertion,
   Decision,
@@ -24,9 +29,19 @@ import { ExceptionDetail } from '@/components/exception-detail'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { UpdateFields, UpdatePayload } from '@/components/update-fields'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import {
+  accountOptions,
+  emptyUpdate,
+  misstatementUpdate,
+  type UpdateDraft,
+  updateBase,
+  updateFromPayload,
+  updateKindFor,
+} from '@/lib/misstatements'
 import { formatAud } from '@/lib/money'
 import {
   cardLayout,
@@ -478,6 +493,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
           {target.conclusion}
         </p>
       </div>
+      {target.misstatement_update ? <UpdatePayload update={target.misstatement_update} /> : null}
       <div className="flex flex-col gap-2.5 border-line-soft border-b px-4 py-4">
         <SectionLabel>{t.judgment.reasoning(target.reasoning_chain.length)}</SectionLabel>
         <ReasoningChain eid={eid} steps={target.reasoning_chain} />
@@ -668,6 +684,11 @@ export function ReviewDecisionCard({
     view.allowed_decisions.length === 1 ? view.allowed_decisions[0] : null,
   )
   const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
+  // 人给的错报更新载荷 (需求 R159, R163): 以判断带的 AI 载荷为起点, 可改
+  const carried = judgment?.misstatement_update ?? null
+  const [updateDraft, setUpdateDraft] = useState<UpdateDraft>(() =>
+    carried ? updateFromPayload(carried) : emptyUpdate(),
+  )
   const [dispute, setDispute] = useState<DisputeChoice | null>(null)
   const [withMisstatement, setWithMisstatement] = useState(false)
   const [consulted, setConsulted] = useState(false)
@@ -678,6 +699,12 @@ export function ReviewDecisionCard({
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
+  const updateKind = updateKindFor(view, decision)
+  // 失败与无归因任务的载荷依据错报的当前版本, 从错报列表取; 判断带载荷时不用
+  const misstatements = useQuery({
+    ...reportsGetMisstatementsOptions({ path: { eid } }),
+    enabled: Boolean(updateKind) && !carried,
+  })
   const isDispute = (decision as string | null) === 'dispute_resolution'
   const collabDispute = isDispute && collab
   const rule = isDispute ? attachRule(view, dispute) : 'optional'
@@ -712,11 +739,21 @@ export function ReviewDecisionCard({
     }
     const body = buildRecord(view, decision, draft, t)
     if (typeof body === 'string') return toast.error(body)
-    submit.mutate({ path: { eid }, body })
+    if (!updateKind) return submit.mutate({ path: { eid }, body })
+    const base = updateBase(view, misstatements.data?.items ?? [])
+    const update = misstatementUpdate(updateKind, base, updateDraft, t)
+    if (typeof update === 'string') return toast.error(update)
+    submit.mutate({ path: { eid }, body: { ...body, misstatement_update: update } })
   }
 
   const busy = disabled || submit.isPending
   const showsMisstatement = decision === 'misstatement' || (isDispute && attaching)
+  // 科目代码从本项目科目表选 (复用账表接口; 认定错报时才取)
+  const accounts = useQuery({
+    ...dataTablePageOptions({ path: { eid, kind: 'accounts' }, query: { limit: 200 } }),
+    enabled: showsMisstatement,
+  })
+  const codes = accountOptions(accounts.data?.rows ?? [], draft.accountCode)
   const copies = showsMisstatement ? copySources(judgment, dispute, collabDispute) : []
   const needsConclusion =
     decision === 'override' || decision === 'manual_result' || (isDispute && dispute === 'neither')
@@ -871,6 +908,21 @@ export function ReviewDecisionCard({
                 onChange={(event) => set({ account: event.target.value })}
               />
             </Field>
+            <Field id={`ms-code-${view.task.id}`} label={t.card.msFields.accountCode}>
+              <select
+                id={`ms-code-${view.task.id}`}
+                className={SELECT}
+                value={draft.accountCode}
+                onChange={(event) => set({ accountCode: event.target.value })}
+              >
+                <option value="">{t.card.msFields.noAccountCode}</option>
+                {codes.map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.name ? `${item.code} · ${item.name}` : item.code}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field id={`ms-assertion-${view.task.id}`} label={t.card.msFields.assertion}>
               <select
                 id={`ms-assertion-${view.task.id}`}
@@ -910,6 +962,16 @@ export function ReviewDecisionCard({
             </Field>
           </div>
         </div>
+      ) : null}
+
+      {updateKind ? (
+        <UpdateFields
+          id={`update-${view.task.id}`}
+          kind={updateKind}
+          value={updateDraft}
+          onChange={(patch) => setUpdateDraft((current) => ({ ...current, ...patch }))}
+          disabled={busy}
+        />
       ) : null}
 
       {decision === 'rerun' ? (

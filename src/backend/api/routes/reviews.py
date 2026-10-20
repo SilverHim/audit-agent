@@ -19,6 +19,7 @@ from backend.contracts.models import (
     Engagement,
     Judgment,
     Misstatement,
+    MisstatementUpdateKind,
     Procedure,
     ProcedureRun,
     RerunRequest,
@@ -60,6 +61,7 @@ class TaskParts:
     tier: ReviewTier
     allowed_resolutions: list[DisputeResolution]
     draft_rules: dict[DisputeResolution, DraftRule]
+    misstatement_update_kind: MisstatementUpdateKind | None  # 所属程序模板的错报更新类别 (需求 R163)
 
 
 async def updated_misstatement(
@@ -104,6 +106,7 @@ async def task_parts(
         tier=review_tier(task, target, amount, overview.performance_materiality_cents, overview.clearly_trivial_cents),
         allowed_resolutions=deps.queue.resolutions(task, target),
         draft_rules=deps.queue.draft_rules(task, target, COLLAB in overview.features),
+        misstatement_update_kind=template.misstatement_update_kind,
     )
 
 
@@ -140,6 +143,7 @@ async def list_review_tasks(
                     tier=parts.tier,
                     allowed_resolutions=parts.allowed_resolutions,
                     draft_rules=parts.draft_rules,
+                    misstatement_update_kind=parts.misstatement_update_kind,
                 )
             )
     return views

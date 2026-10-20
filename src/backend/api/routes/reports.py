@@ -10,6 +10,7 @@ from backend.api.errors import api_error, catch_api
 from backend.api.schemas import MisstatementReport, ReportBundle
 from backend.contracts.models import (
     AuditReportVersion,
+    CorrectionNotice,
     Engagement,
     GateDecision,
     GateId,
@@ -29,16 +30,18 @@ async def get_misstatements(
     deps: Annotated[AgentDeps, Depends(get_deps)],
     query: Annotated[GraphStateQuery, Depends(get_query)],
 ) -> MisstatementReport:
-    """汇总表取 SCHEDULE; 重要性与意见类型取项目总览."""
+    """汇总表取 SCHEDULE; 重要性与意见类型取项目总览; 更正通知取 Store 中的全部, 按提交时间 (需求 R163)."""
     async with catch_api():
         items = await deps.output_store.latest(engagement.id, Misstatement)
         schedule = await deps.output_store.get(engagement.id, UncorrectedSchedule, "SCHEDULE")
+        notices = await deps.output_store.latest(engagement.id, CorrectionNotice)
         overview = await query.overview(engagement.id)
     return MisstatementReport(
         items=items,
         schedule=schedule,
         materiality_cents=overview.materiality_cents,
         opinion_route=overview.opinion_route,
+        correction_notices=sorted(notices, key=lambda notice: notice.decided_at),
     )
 
 

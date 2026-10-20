@@ -20,6 +20,7 @@ const CASH: MisstatementDraft = {
   assertion: 'Cutoff',
   amount_cents: 5_000_000,
   direction: 'overstated',
+  account_code: '1100', // 科目代码随复制建议数据带入 (需求 R163)
 }
 
 function view(

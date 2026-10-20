@@ -30,6 +30,7 @@ import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { ExceptionDetail } from '@/components/exception-detail'
+import { MisstatementList } from '@/components/misstatement-lifecycle'
 import {
   CheckIcon,
   checkTone,
@@ -282,18 +283,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
         </dl>
         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
-        <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-[14px]">
-          {material.misstatements.map((item) => (
-            <li key={item.id} className="flex flex-wrap gap-2 rounded-lg border px-3 py-2">
-              <Code className="font-semibold">{item.id}</Code>
-              <span>
-                {item.account} · {t.assertions[item.assertion]} · {t.directions[item.direction]}
-              </span>
-              <span className="flex-1" />
-              <Code>{formatAud(item.amount_cents)}</Code>
-            </li>
-          ))}
-        </ul>
+        <MisstatementList items={material.misstatements} />
         {material.not_executed?.length ? (
           <>
             <span className="text-[13px] text-muted-foreground">

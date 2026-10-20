@@ -60,6 +60,7 @@ from tests.fakes import (
     NOW,
     FakeTrail,
     ScriptedLLM,
+    api_client,
     entries,
     make_ctx,
     record_writers,
@@ -152,6 +153,16 @@ def decision_rows(s: Started, decision_id: str) -> list[Any]:
 @pytest.fixture
 async def waiting() -> Started:
     return await at_fin03()
+
+
+async def test_review_tasks_show_update_kind(waiting: Started) -> None:
+    """需求 R163: 复核队列的各项带所属程序模板的错报更新类别, FIN-03 为 classification (前端据此在推翻时给分类表单,
+    R159 起必填 misstatement_update); 不带类别的程序为空 (见 test_review_tiers 的 Numbat 队列)."""
+    async with api_client(waiting.runner) as client:
+        views = (await client.get(f"/api/v1/engagements/{EID}/review-tasks?status=pending")).json()
+    assert views and {(v["task"]["procedure_id"], v["misstatement_update_kind"]) for v in views} == {
+        (FIN03, "classification")
+    }
 
 
 async def test_confirm_writes_classified_misstatement_in_same_commit(

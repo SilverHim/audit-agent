@@ -25,6 +25,7 @@ import {
   ReviewDecisionCard,
   UserBubble,
 } from '@/components/concierge'
+import { CorrectionCard } from '@/components/correction-card'
 import { DataRequestCard } from '@/components/data-requests'
 import { EvidenceLink } from '@/components/evidence-link'
 import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
@@ -73,6 +74,8 @@ type Current =
       deferred: boolean
     }
   | { kind: 'xero'; key: string; check: XeroProfileCheck; deferred: boolean }
+  // 等待客户更正 (总览 awaiting_correction, 需求 R163): 等更正时没有复核任务与闸门, 不能稍后处理
+  | { kind: 'correction'; key: string; ids: string[]; deferred: false }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
   // 人工程序的任务: 不出决定卡, 只给去人工程序页执行的入口 (需求 R303)
   | { kind: 'manual'; key: string; view: ReviewTaskView; deferred: boolean }
@@ -128,6 +131,9 @@ function Workspace() {
     if (overview?.current_gate && gate.data) {
       const key = `gate:${gate.data.gate}`
       list.push({ kind: 'gate', key, view: gate.data, deferred: deferredKeys.has(key) })
+    }
+    if (overview?.awaiting_correction) {
+      list.push({ kind: 'correction', key: 'correction', ids: overview.awaiting_correction_ids ?? [], deferred: false })
     }
     // 补交资料合成一项, 排在阶段决定之后, 复核任务之前; 标了客户无此类资料的一并列出 (只读)
     const open = (requests.data ?? []).filter((item) => item.status === 'open')
@@ -185,6 +191,7 @@ function Workspace() {
   const disabled = decisionsDisabled(overview)
 
   const defer = (item: Current) => {
+    if (item.kind === 'correction') return // 等更正不能稍后处理
     const targets =
       item.kind === 'gate'
         ? [{ target_type: 'gate' as const, target_id: item.view.gate }]
@@ -244,7 +251,9 @@ function Workspace() {
       ? '/engagements/$eid/gate'
       : current?.kind === 'xero'
         ? '/engagements/$eid/data'
-        : '/engagements/$eid/decisions'
+        : current?.kind === 'correction'
+          ? '/engagements/$eid/misstatements'
+          : '/engagements/$eid/decisions'
   const pendingLabel = overview?.current_gate
     ? (t.gates[overview.current_gate] ?? overview.current_gate)
     : overview && overview.pending_tasks > 0
@@ -472,6 +481,17 @@ function HistoryItem({
       </UserBubble>
     )
   }
+  if (item.kind === 'correction') {
+    return (
+      <UserBubble title={t.workspace.decisionRecorded(item.ids.join(lang === 'zh' ? '、' : ', '))}>
+        <span className="font-semibold">{t.lifecycle.noticeKinds[item.notice]}</span>
+        {item.entries.length ? <Code className="text-[13px]">{item.entries.join(', ')}</Code> : null}
+        <span className="whitespace-pre-wrap text-[14px] text-secondary-foreground">
+          {item.reason ? `“${item.reason}”` : t.workspace.noReason}
+        </span>
+      </UserBubble>
+    )
+  }
   return (
     <div className="flex flex-col gap-4">
       <QuestionBubble>{item.question}</QuestionBubble>
@@ -627,6 +647,17 @@ function CurrentItem({
           onDefer={() => onDefer(current)}
           deferring={deferring}
         />
+      </div>
+    )
+  }
+
+  if (current.kind === 'correction') {
+    return (
+      <div className="flex flex-col gap-4">
+        <ConciergeMessage>
+          <ConciergeText>{t.correction.intro(current.ids.length)}</ConciergeText>
+        </ConciergeMessage>
+        <CorrectionCard eid={eid} ids={current.ids} disabled={disabled} />
       </div>
     )
   }

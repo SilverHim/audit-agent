@@ -116,6 +116,35 @@ export type AccountCategoryIn = {
 };
 
 /**
+ * AdjustmentEntryView
+ *
+ * 可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否
+ * 已载入.
+ */
+export type AdjustmentEntryView = {
+    /**
+     * Entry No
+     */
+    entry_no: string;
+    /**
+     * Posting Date
+     */
+    posting_date: string;
+    /**
+     * Description
+     */
+    description: string | null;
+    /**
+     * Line Count
+     */
+    line_count: number;
+    /**
+     * Loaded
+     */
+    loaded: boolean;
+};
+
+/**
  * AgentId
  *
  * 智能体编号.
@@ -1537,6 +1566,73 @@ export type ConversationTurn = {
      * Aborted
      */
     aborted?: boolean;
+};
+
+/**
+ * CorrectionNotice
+ *
+ * 更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
+ * 第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入
+ * 更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写
+ * 理由, 不带凭证号.
+ */
+export type CorrectionNotice = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Kind
+     */
+    kind: 'adjustments_posted' | 'stop_waiting';
+    /**
+     * Misstatement Ids
+     */
+    misstatement_ids: Array<string>;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Decided By
+     */
+    decided_by: string;
+    /**
+     * Decided At
+     */
+    decided_at: string;
+};
+
+/**
+ * CorrectionNoticeIn
+ *
+ * 更正通知请求体 (需求 R163): CorrectionNotice 去掉 id, version, decided_by, decided_at, 由服务端填写.
+ */
+export type CorrectionNoticeIn = {
+    /**
+     * Kind
+     */
+    kind: 'adjustments_posted' | 'stop_waiting';
+    /**
+     * Misstatement Ids
+     */
+    misstatement_ids: Array<string>;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
 };
 
 /**
@@ -3561,6 +3657,10 @@ export type MisstatementReport = {
      */
     materiality_cents: number | null;
     opinion_route: OpinionType | null;
+    /**
+     * Correction Notices
+     */
+    correction_notices?: Array<CorrectionNotice>;
 };
 
 /**
@@ -4811,6 +4911,10 @@ export type ReviewTaskView = {
     draft_rules?: {
         [key in DisputeResolution]?: 'required' | 'hidden' | 'optional';
     };
+    /**
+     * Misstatement Update Kind
+     */
+    misstatement_update_kind?: 'classification' | 'verification' | null;
 };
 
 /**
@@ -8104,6 +8208,68 @@ export type ReportsGetTrailResponses = {
 };
 
 export type ReportsGetTrailResponse = ReportsGetTrailResponses[keyof ReportsGetTrailResponses];
+
+export type CorrectionsSubmitCorrectionNoticeData = {
+    body: CorrectionNoticeIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/correction-notices';
+};
+
+export type CorrectionsSubmitCorrectionNoticeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CorrectionsSubmitCorrectionNoticeError = CorrectionsSubmitCorrectionNoticeErrors[keyof CorrectionsSubmitCorrectionNoticeErrors];
+
+export type CorrectionsSubmitCorrectionNoticeResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type CorrectionsSubmitCorrectionNoticeResponse = CorrectionsSubmitCorrectionNoticeResponses[keyof CorrectionsSubmitCorrectionNoticeResponses];
+
+export type CorrectionsListAdjustmentEntriesData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/adjustment-entries';
+};
+
+export type CorrectionsListAdjustmentEntriesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CorrectionsListAdjustmentEntriesError = CorrectionsListAdjustmentEntriesErrors[keyof CorrectionsListAdjustmentEntriesErrors];
+
+export type CorrectionsListAdjustmentEntriesResponses = {
+    /**
+     * Response Corrections-List Adjustment Entries
+     *
+     * Successful Response
+     */
+    200: Array<AdjustmentEntryView>;
+};
+
+export type CorrectionsListAdjustmentEntriesResponse = CorrectionsListAdjustmentEntriesResponses[keyof CorrectionsListAdjustmentEntriesResponses];
 
 export type StandardsGetStandardData = {
     body?: never;

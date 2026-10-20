@@ -113,3 +113,18 @@ async def test_data_trail_written_on_replay_after_crash(
     key = f"{eid}:data:v{before + 1}:journal_entries"
     synced = [e for e in await all_of_kind(project.deps.trail, eid, TrailKind.data) if e.idempotency_key == key]
     assert [(e.actor, e.payload["action"]) for e in synced] == [(owner, "sync")]
+
+
+async def test_adjustment_entries_marked_loaded_after_notice(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """需求 R163 验收 2 (真实库与真实载入器): GET adjustment-entries 列补造的 AJE-X01 至 AJE-X05; 更正通知 D-CN1 生效
+    (载入 AJE-X01, AJE-X05) 之前都未载入, 之后这两笔为已载入."""
+    from backend.api.routes.corrections import list_adjustment_entries
+
+    project, misstatements = await communicated_project(tmp_path_factory.mktemp("xero"))
+    before = await list_adjustment_entries(project.engagement, project.deps)
+    await apply_notice(project.deps, project.engagement, misstatements, notice(decided_by=project.owner))
+    after = await list_adjustment_entries(project.engagement, project.deps)
+
+    assert [e.entry_no for e in before] == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
+    assert [e.entry_no for e in before if e.loaded] == []
+    assert [e.entry_no for e in after if e.loaded] == ["AJE-X01", "AJE-X05"]

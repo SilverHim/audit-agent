@@ -13,11 +13,21 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import Engagement, MisstatementUpdate, Phase, ReviewRecord, TrailEntry, TrailKind, User
+from backend.contracts.models import (
+    CorrectionNotice,
+    Engagement,
+    Misstatement,
+    MisstatementUpdate,
+    Phase,
+    ReviewRecord,
+    TrailEntry,
+    TrailKind,
+    User,
+)
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
 from backend.persistence.stores import PostgresUserStore
-from tests.fakes import FakeTrail
+from tests.fakes import FakeDatasetLoader, FakeFinancialStore, FakeOutputStore, FakeTrail
 
 
 @functools.cache
@@ -460,3 +470,145 @@ def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None
     [call] = api.decisions.submit.await_args_list
     record = call.args[1]
     assert isinstance(record, ReviewRecord) and record.misstatement_update == MisstatementUpdate.model_validate(update)
+
+
+# ── 更正通知与可载入的更正分录 (需求 R163) ──
+
+NOTICE_URL = "/api/v1/engagements/ENG-2026-001/correction-notices"
+POSTED = {"kind": "adjustments_posted", "misstatement_ids": ["M-D-XJ499"], "adjustment_entry_nos": ["AJE-X01"]}
+
+
+def test_correction_notice_filled_by_server(api: SimpleNamespace) -> None:
+    """验收 1: 202 {id: D-{uuid4}}; 交给 DecisionSubmit 的通知 id 同响应, decided_by 为当前用户, decided_at 为服务端
+    时刻 (带时区, 不早于请求前), 其余字段原样; 请求体带 decided_by 422 (服务端填, 不收)."""
+    before = datetime.now(UTC)
+    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED)
+    assert response.status_code == 202
+    [call] = api.decisions.submit.await_args_list
+    eid, notice = call.args
+    assert isinstance(notice, CorrectionNotice) and eid == "ENG-2026-001"
+    assert response.json() == {"id": notice.id} and notice.id.startswith("D-") and len(notice.id) == 38
+    assert (notice.decided_by, notice.kind, notice.misstatement_ids, notice.adjustment_entry_nos) == (
+        "USR-1",
+        "adjustments_posted",
+        ["M-D-XJ499"],
+        ["AJE-X01"],
+    )
+    assert notice.reason is None and notice.decided_at.tzinfo is not None and notice.decided_at >= before
+    forged = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED | {"decided_by": "USR-9"})
+    assert forged.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        ("NOT_AWAITING_CORRECTION", 409),
+        ("ENGAGEMENT_BUSY", 409),
+        ("RESUME_REQUIRED", 409),
+        ("FEATURES_MISMATCH", 409),
+        ("MISSING_FIELD", 422),
+        ("FIELD_NOT_ALLOWED", 422),
+        ("INVALID_VALUE", 422),
+        ("ENGAGEMENT_LOCKED", 423),
+    ],
+)
+def test_correction_notice_error_mapping(api: SimpleNamespace, code: str, status: int) -> None:
+    """验收 1: DecisionSubmit 的拒绝按错误码表映射, 原样带消息; NOT_AWAITING_CORRECTION 为 409."""
+    api.decisions.submit.side_effect = DecisionRejected(code, "当前不在等待更正")
+    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED)
+    assert (response.status_code, response.json()["detail"]) == (status, {"code": code, "message": "当前不在等待更正"})
+
+
+def test_correction_notice_body_checked(api: SimpleNamespace) -> None:
+    """请求体的种类不认识 422, 不交 DecisionSubmit; 不是本人的项目 404."""
+    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED | {"kind": "posted"})
+    assert response.status_code == 422 and not api.decisions.submit.await_args_list
+    other = api.client.post(NOTICE_URL.replace("001", "002"), headers=_auth(api), json=POSTED)
+    assert other.status_code == 404
+
+
+def use_engagement(api: SimpleNamespace, **fields: Any) -> SimpleNamespace:
+    """本人的项目改几个字段 (如数据集), 返回应用的依赖 (SimpleNamespace, 测试按需加存储)."""
+    deps = api.client.app.state.deps
+    deps.engagement_store.mine = deps.engagement_store.mine.model_copy(update=fields)
+    return deps  # type: ignore[no-any-return]
+
+
+@pytest.mark.external  # Xero 补造的更正分录
+@pytest.mark.parametrize(("loaded", "expected"), [([], []), (["AJE-X01", "AJE-X05"], ["AJE-X01", "AJE-X05"])])
+def test_adjustment_entries_of_xero(api: SimpleNamespace, loaded: list[str], expected: list[str]) -> None:
+    """验收 2: Xero 的 AJE-X01 至 AJE-X05 共 5 笔 (凭证号, 入账日, 摘要, 行数取补造的分录); 总账里还没有时都未载入,
+    D-CN1 载入 AJE-X01, AJE-X05 之后这两笔为已载入 (按总账里有没有该凭证号的行判断)."""
+    from tests.xero_fakes import XERO_DATASET, XeroFakeDatasetLoader, xero_adjustments
+
+    lines = {("journal_entry", r.id): r.model_dump() for r in xero_adjustments(loaded)} if loaded else {}
+    deps = use_engagement(api, dataset=XERO_DATASET)
+    deps.financial_store = FakeFinancialStore(records=lines)
+    deps.datasets = XeroFakeDatasetLoader(FakeFinancialStore())
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
+    assert response.status_code == 200
+    rows = response.json()
+    by_no = {r.entry_no: r for r in deps.datasets.adjustment_entries(XERO_DATASET)}
+    assert [r["entry_no"] for r in rows] == ["AJE-X01", "AJE-X02", "AJE-X03", "AJE-X04", "AJE-X05"]
+    for row in rows:
+        summary = by_no[row["entry_no"]]
+        assert (row["posting_date"], row["description"], row["line_count"]) == (
+            summary.posting_date.isoformat(),
+            summary.description,
+            summary.line_count,
+        )
+    assert [r["entry_no"] for r in rows if r["loaded"]] == expected
+
+
+@pytest.mark.parametrize("dataset", ["demo", None])
+def test_adjustment_entries_empty_without_adjustments(api: SimpleNamespace, dataset: str | None) -> None:
+    """验收 2: Numbat (数据集没有更正分录) 与没有数据集的新客户都为 [], 后者不读数据集."""
+    deps = use_engagement(api, dataset=dataset)
+    deps.datasets = FakeDatasetLoader(FakeFinancialStore())
+    deps.financial_store = FakeFinancialStore()
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
+    assert (response.status_code, response.json()) == (200, [])
+
+
+def test_misstatements_carry_lifecycle_and_notices(api: SimpleNamespace) -> None:
+    """验收 3: items 为各错报的最新版本, 带生命周期字段与科目代码; correction_notices 为 Store 中的全部更正通知, 按
+    提交时间; 重要性与意见取总览."""
+    early, late = datetime(2026, 10, 20, 3, 30, tzinfo=UTC), datetime(2026, 10, 22, 4, tzinfo=UTC)
+    first = CorrectionNotice(id="D-CN1", decided_by="USR-1", decided_at=early, **POSTED)
+    second = CorrectionNotice(
+        id="D-STOP", kind="stop_waiting", misstatement_ids=["M-1"], reason="r", decided_by="USR-1", decided_at=late
+    )
+    verifying = Misstatement.model_validate(
+        MISSTATEMENT.model_dump() | {"version": 4, "status": "verifying", "correction_notice_id": "D-CN1"}
+    )
+    deps = use_engagement(api)
+    deps.output_store = FakeOutputStore([MISSTATEMENT, verifying, second, first])
+    api.client.app.state.query.overview = AsyncMock(
+        return_value=SimpleNamespace(materiality_cents=32431, opinion_route=None)
+    )
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/misstatements", headers=_auth(api))
+    assert response.status_code == 200
+    body = response.json()
+    [item] = body["items"]
+    assert (item["version"], item["status"], item["account_code"], item["correction_notice_id"]) == (
+        4,
+        "verifying",
+        "710",
+        "D-CN1",
+    )
+    assert [n["id"] for n in body["correction_notices"]] == ["D-CN1", "D-STOP"]
+    assert (body["materiality_cents"], body["schedule"]) == (32431, None)
+
+
+MISSTATEMENT = Misstatement(  # 第 1 版 (identified), 由人对判断认定; 科目代码由草稿带入
+    id="M-D-XJ499",
+    judgment_id="J-GEN-02-1-XJ-499",
+    exception_id=None,
+    review_record_id="D-1",
+    type="factual",
+    account="Office Equipment",
+    assertion="Accuracy",
+    amount_cents=75000,
+    direction="overstated",
+    account_code="710",
+)

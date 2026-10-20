@@ -1,12 +1,21 @@
-import type { ConciergeCitation, GateId, Phase, TrailEntry, TrailKind } from '@/client/types.gen'
+import type { ConciergeCitation, CorrectionNotice, GateId, Phase, TrailEntry, TrailKind } from '@/client/types.gen'
 
-// 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 稍后处理, 数据管理, 历史问答
+// 把审计留痕整理成对话流里的事件: 阶段变化, 程序完成 (相邻的合并), 人工决定 (理由原文), 更正通知, 稍后处理, 数据管理,
+// 历史问答
 
 type TimelineEvent =
   | { kind: 'created'; at: string }
   | { kind: 'phase'; at: string; phase: Phase }
   | { kind: 'completed'; at: string; ids: string[] }
   | { kind: 'decision'; at: string; target: string; gate: GateId | null; verdict: string; reason: string | null }
+  | {
+      kind: 'correction'
+      at: string
+      notice: CorrectionNotice['kind']
+      ids: string[]
+      entries: string[]
+      reason: string | null
+    }
   | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null; xero: boolean }
   | {
       kind: 'qa'
@@ -57,6 +66,12 @@ function skippedTables(value: unknown): Record<string, string> | null {
 function str(value: unknown): string | null {
   return typeof value === 'string' && value.length ? value : null
 }
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+const NOTICE_KINDS: CorrectionNotice['kind'][] = ['adjustments_posted', 'stop_waiting']
 
 // 工作台按页取留痕: 先取最近的一页 (GET /trail?newest=true), "更早" 以已取到的最早一条为游标 (before) 往前翻一页.
 // 只取 buildTimeline 会变成事件的几类 (TIMELINE_KINDS), 呈递, 大模型调用等不显示的留痕不占每页的名额
@@ -113,6 +128,13 @@ export function buildTimeline(entries: TrailEntry[], complete = true): TimelineI
     }
     if (kind === 'decision') {
       flush()
+      // 更正通知 (需求 R162): 载荷带通知种类, 所列错报与凭证号; 摘要不按 "对象 决定" 的格式, 不拆
+      const notice = NOTICE_KINDS.find((item) => item === payload.kind)
+      if (notice) {
+        const [ids, entries] = [strings(payload.misstatement_ids), strings(payload.adjustment_entry_nos)]
+        items.push({ kind: 'correction', key, at, notice, ids, entries, reason: str(payload.reason) })
+        continue
+      }
       const parts = entry.summary.trim().split(/\s+/)
       const verdict = parts.at(-1) ?? ''
       const head = parts.slice(0, -1).join(' ')

@@ -3834,7 +3834,7 @@
           "reports"
         ],
         "summary": "Get Misstatements",
-        "description": "汇总表取 SCHEDULE; 重要性与意见类型取项目总览.",
+        "description": "汇总表取 SCHEDULE; 重要性与意见类型取项目总览; 更正通知取 Store 中的全部, 按提交时间 (需求 R163).",
         "operationId": "reports-get_misstatements",
         "security": [
           {
@@ -4084,6 +4084,116 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrailEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/correction-notices": {
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "Submit Correction Notice",
+        "description": "停在等待更正时提交更正通知 (第 7 节 \"更正通知\"): id 为 D-{uuid4}, 提交人与时刻由服务端填写; handler 直接\nawait submit. 不在等更正 409 NOT_AWAITING_CORRECTION, 其余校验同其他决定.",
+        "operationId": "corrections-submit_correction_notice",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionNoticeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/adjustment-entries": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "List Adjustment Entries",
+        "description": "项目数据集可载入的更正分录 (DatasetLoader.adjustment_entries, 按凭证号), loaded 为总账里已有该凭证号的行;\n没有数据集或数据集没有更正分录 (如 Numbat) 为空.",
+        "operationId": "corrections-list_adjustment_entries",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdjustmentEntryView"
+                  },
+                  "title": "Response Corrections-List Adjustment Entries"
                 }
               }
             }
@@ -4632,6 +4742,49 @@
         ],
         "title": "AccountCategoryIn",
         "description": "审计师修改科目的标准分类."
+      },
+      "AdjustmentEntryView": {
+        "properties": {
+          "entry_no": {
+            "type": "string",
+            "title": "Entry No"
+          },
+          "posting_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Posting Date"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "line_count": {
+            "type": "integer",
+            "title": "Line Count"
+          },
+          "loaded": {
+            "type": "boolean",
+            "title": "Loaded"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entry_no",
+          "posting_date",
+          "description",
+          "line_count",
+          "loaded"
+        ],
+        "title": "AdjustmentEntryView",
+        "description": "可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否\n已载入."
       },
       "AgentId": {
         "type": "string",
@@ -7440,6 +7593,119 @@
         ],
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
+      },
+      "CorrectionNotice": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adjustments_posted",
+              "stop_waiting"
+            ],
+            "title": "Kind"
+          },
+          "misstatement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Misstatement Ids"
+          },
+          "adjustment_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adjustment Entry Nos",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "decided_by": {
+            "type": "string",
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "misstatement_ids",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "CorrectionNotice",
+        "description": "更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的\n第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入\n更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写\n理由, 不带凭证号."
+      },
+      "CorrectionNoticeIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adjustments_posted",
+              "stop_waiting"
+            ],
+            "title": "Kind"
+          },
+          "misstatement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Misstatement Ids"
+          },
+          "adjustment_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adjustment Entry Nos",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "misstatement_ids"
+        ],
+        "title": "CorrectionNoticeIn",
+        "description": "更正通知请求体 (需求 R163): CorrectionNotice 去掉 id, version, decided_by, decided_at, 由服务端填写."
       },
       "CriticReasonCode": {
         "type": "string",
@@ -11295,6 +11561,14 @@
                 "type": "null"
               }
             ]
+          },
+          "correction_notices": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionNotice"
+            },
+            "type": "array",
+            "title": "Correction Notices",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -13597,6 +13871,21 @@
             "type": "object",
             "title": "Draft Rules",
             "default": {}
+          },
+          "misstatement_update_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "classification",
+                  "verification"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misstatement Update Kind"
           }
         },
         "additionalProperties": false,
