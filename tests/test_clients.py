@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -37,6 +37,7 @@ from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader, read_planning
 from backend.services.abn import abn_problem
 from backend.services.data_quality import source_label
+from backend.services.data_service import DataService
 from tests.external import optional, snapshot_dir
 from tests.fakes import (
     FAKE_GUID,
@@ -108,9 +109,13 @@ async def post(client: httpx.AsyncClient, body: dict[str, Any]) -> httpx.Respons
 
 @pytest.mark.external
 async def test_clients_are_listed_per_client() -> None:
-    """数据集客户按画像 id 各一行 (不按数据集), 默认数据集的客户在前; 还没进库的没有 latest_version."""
+    """数据集客户按画像 id 各一行 (不按数据集), 演示公司 (数据集带演示资料, R287) 在前; 还没进库的没有 latest_version.
+    数据管理服务的演示来源同组装根 (项目的数据集载入器)."""
     runner = demo_runner()
     async with api_client(runner) as client:
+        client._transport.app.state.data_service = DataService(  # type: ignore[attr-defined]
+            runner.deps, runner, demo=cast(RoutingDatasetLoader, runner.deps.datasets)
+        )
         rows = (await client.get(CLIENTS)).json()
     by_id = {row["client_id"]: row for row in rows}
     numbat = by_id["CLIENT-001"]
@@ -120,14 +125,20 @@ async def test_clients_are_listed_per_client() -> None:
         "abn": "68900042015",
         "origin": "dataset",
         "latest_version": None,
-        "datasets": [{"dataset": "demo", "period_start": None, "period_end": None, "default": False}],
+        "datasets": [{"dataset": "demo", "period_start": None, "period_end": None, "default": False, "demo": False}],
     }
     assert len(rows) == len(by_id)  # 每个客户一行
     if optional(snapshot_dir, "20261017-q1") is not None:  # 有 Xero 快照时另核对它的一行
         q1 = by_id["CLIENT-XERO-3C1332BB-Q1"]
         assert rows[0] == q1 and q1["legal_name"] == "Demo Company (AU) Pty Ltd" and q1["abn"] == "25900043021"
         assert q1["datasets"] == [
-            {"dataset": "xero/20261017-q1", "period_start": "2026-07-01", "period_end": "2026-09-30", "default": True}
+            {
+                "dataset": "xero/20261017-q1",
+                "period_start": "2026-07-01",
+                "period_end": "2026-09-30",
+                "default": True,
+                "demo": True,
+            }
         ]
 
 

@@ -2,6 +2,7 @@
 数值一致 (断言数据, 不断言文档措辞)."""
 
 import functools
+import inspect
 import json
 import re
 import shutil
@@ -167,17 +168,23 @@ def test_manifest_layout() -> None:
     assert manifest["snapshot"]["name"] == "xero/20261017-q1"  # type: ignore[index]
     paths = [f["path"] for f in manifest["files"]]  # type: ignore[index]
     # llm/ 是大模型 fixture 的运行副本 (R78): 各程序段加 fixture 后随之变, 只与正本推出的集合比 (集合包含口径)
-    # 另有上传处理的固定输出中复制进来的账表识别 (DOC-SHEET, 按上传的文件名取, 与数据集无关)
+    # 另有上传处理的固定输出中复制进来的账表识别 (DOC-SHEET, 按上传的文件名取, 与数据集无关), 以及正本没有的程序由
+    # llm_xero_only17 补位的 (R287: 现为 RPT-03 两稿)
     llm = [p for p in paths if p.startswith("llm/")]
     fixtures = REPO / "tests" / "fixtures" / "llm_xero"
     uploads = REPO / "tests" / "fixtures" / "llm_variants" / "upload"
+    only17 = REPO / "tests" / "fixtures" / "llm_xero_only17"
+    programs = {p.name for p in fixtures.iterdir() if p.is_dir()}
+    filled = [p for p in only17.glob("*/*.json") if p.parent.name not in programs]
     assert llm == sorted(
         [
             "llm/README.md",
             *(f"llm/{p.relative_to(fixtures).as_posix()}" for p in fixtures.glob("*/*.json")),
+            *(f"llm/{p.relative_to(only17).as_posix()}" for p in filled),
             *(f"llm/{p.relative_to(uploads).as_posix()}" for p in uploads.glob("DOC-SHEET/*.json")),
         ]
     )
+    assert {"llm/RPT-03/r1.json", "llm/RPT-03/r2.json"} <= set(llm)  # 正本还没有 RPT-03, 应用里才走得到报告
     assert [p for p in paths if not p.startswith("llm/")] == [
         "README.md",  # 生成方式与合同底稿的署名, 许可 (R286)
         "adjustments/journal_entries.csv",
@@ -2811,8 +2818,10 @@ def test_snapshot_is_the_mock(tmp_path: Path) -> None:
 
 def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> None:
     """R78: 运行副本 llm/ 先清空再原样复制正本的 <程序>/<对象>.json, 另写 README; 正本删掉的文件不留副本; 正本根目录,
-    程序目录或文件是符号链接时拒绝, 且在清空之前拒绝 (llm/ 保持原样); 正本不存在时只写 README."""
+    程序目录或文件是符号链接时拒绝, 且在清空之前拒绝 (llm/ 保持原样); 正本不存在时只写 README. 补位来源见
+    test_write_llm_fixtures_fills_missing_programs, 这里给不存在的补位目录."""
     source, out, uploads = tmp_path / "llm_xero", tmp_path / "out", tmp_path / "upload"
+    no_fill = tmp_path / "no_fill"
     (source / "CSH-02").mkdir(parents=True)
     (source / "CSH-02" / "BA-01.json").write_bytes(b'{"a": 1}\n')
     (source / "notes.md").write_text("not copied", encoding="utf-8")
@@ -2821,12 +2830,12 @@ def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> N
     for program in ("DOC-SHEET", "DOC-CLASSIFY"):  # 上传固定输出只复制 programs 列出的
         (uploads / program).mkdir(parents=True)
         (uploads / program / "tb.json").write_bytes(b'{"b": 2}\n')
-    generator.write_llm_fixtures(out, source, uploads)
+    generator.write_llm_fixtures(out, source, uploads, fill=no_fill)
     copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*") if p.is_file())
     assert copied == ["CSH-02/BA-01.json", "DOC-SHEET/tb.json", "README.md"]
     assert (out / "llm" / "DOC-SHEET" / "tb.json").read_bytes() == b'{"b": 2}\n'
     missing = tmp_path / "missing"
-    generator.write_llm_fixtures(out, source, missing)
+    generator.write_llm_fixtures(out, source, missing, fill=no_fill)
     copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*") if p.is_file())
     assert copied == ["CSH-02/BA-01.json", "README.md"]
     assert (out / "llm" / "CSH-02" / "BA-01.json").read_bytes() == b'{"a": 1}\n'
@@ -2834,17 +2843,42 @@ def test_write_llm_fixtures_copies_clears_and_rejects_links(tmp_path: Path) -> N
 
     (source / "CSH-02" / "LINK.json").symlink_to(source / "CSH-02" / "BA-01.json")
     with pytest.raises(SystemExit, match=r"CSH-02/LINK\.json"):
-        generator.write_llm_fixtures(out, source, missing)
+        generator.write_llm_fixtures(out, source, missing, fill=no_fill)
     (source / "CSH-02" / "LINK.json").unlink()
     (source / "REV-02").symlink_to(source / "CSH-02", target_is_directory=True)  # 程序目录是符号链接
     with pytest.raises(SystemExit, match=r"REV-02/BA-01\.json"):
-        generator.write_llm_fixtures(out, source)
+        generator.write_llm_fixtures(out, source, fill=no_fill)
     (source / "REV-02").unlink()
     linked = tmp_path / "linked"
     linked.symlink_to(source)
     with pytest.raises(SystemExit, match="符号链接"):
-        generator.write_llm_fixtures(out, linked)
+        generator.write_llm_fixtures(out, linked, fill=no_fill)
     assert (out / "llm" / "CSH-02" / "BA-01.json").exists()  # 被拒时 llm/ 保持原样
 
-    generator.write_llm_fixtures(out, tmp_path / "missing", tmp_path / "missing")
+    generator.write_llm_fixtures(out, tmp_path / "missing", tmp_path / "missing", fill=no_fill)
     assert [p.name for p in (out / "llm").rglob("*") if p.is_file()] == ["README.md"]
+
+
+def test_write_llm_fixtures_fills_missing_programs(tmp_path: Path) -> None:
+    """R287: 正本没有的程序目录整个取补位来源 (llm_xero_only17) 的, 正本有的程序整个取正本的, 不按文件混用 (补位来源里
+    同程序多出的文件也不复制); 补位来源是符号链接时拒绝. 缺省的补位来源为 tests/fixtures/llm_xero_only17."""
+    source, fill, out = tmp_path / "llm_xero", tmp_path / "only17", tmp_path / "out"
+    (source / "CSH-02").mkdir(parents=True)
+    (source / "CSH-02" / "BA-091.json").write_bytes(b'{"from": "source"}\n')
+    (fill / "CSH-02").mkdir(parents=True)
+    for name in ("BA-091.json", "BA-090.json"):  # 正本有 CSH-02: 补位来源的两份都不要
+        (fill / "CSH-02" / name).write_bytes(b'{"from": "fill"}\n')
+    (fill / "RPT-03").mkdir()
+    (fill / "RPT-03" / "r1.json").write_bytes(b'{"revision": 1}\n')
+    generator.write_llm_fixtures(out, source, tmp_path / "missing", fill=fill)
+    copied = sorted(p.relative_to(out / "llm").as_posix() for p in (out / "llm").rglob("*.json"))
+    assert copied == ["CSH-02/BA-091.json", "RPT-03/r1.json"]
+    assert (out / "llm" / "CSH-02" / "BA-091.json").read_bytes() == b'{"from": "source"}\n'
+    assert (out / "llm" / "RPT-03" / "r1.json").read_bytes() == b'{"revision": 1}\n'
+
+    linked = tmp_path / "linked"
+    linked.symlink_to(fill, target_is_directory=True)
+    with pytest.raises(SystemExit, match="符号链接"):
+        generator.write_llm_fixtures(out, source, tmp_path / "missing", fill=linked)
+    assert generator.ONLY17_FIXTURES == REPO / "tests" / "fixtures" / "llm_xero_only17"
+    assert inspect.signature(generator.write_llm_fixtures).parameters["fill"].default == generator.ONLY17_FIXTURES

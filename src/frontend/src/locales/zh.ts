@@ -610,6 +610,8 @@ export const zh: Messages = {
     datasetsFailed: '客户清单读取失败，暂不能新建项目。',
     newClient: '新建客户…',
     noDataset: '该客户没有演示数据集：ACC-04 的登记核查留待你人工确认，客户数据在项目里导入。',
+    demoTag: '演示',
+    demoNote: '演示公司：建项目后，在数据管理页按审计进行到的位置逐阶段载入合成演示资料。',
   },
   abnLookup: {
     checksumOk: (abn) => `${abn}：校验位正确`,

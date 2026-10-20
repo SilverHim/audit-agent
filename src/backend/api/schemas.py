@@ -198,6 +198,7 @@ class ClientDataset(Model):
     period_start: date | None = None  # 数据集自带的审计期间; 不自带 (如 Numbat) 为空
     period_end: date | None = None
     default: bool = False  # 数据集名等于配置项 DEMO_DATASET
+    demo: bool = False  # 带演示资料 (补造目录), 可在数据管理页按阶段导入 (需求 R270, R287); 前端据此标 "演示"
 
 
 class ClientSummary(Model):

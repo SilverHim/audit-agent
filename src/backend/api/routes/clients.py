@@ -1,6 +1,7 @@
 """GET /clients: 新建项目时可选的客户 (每个客户一行, 不按数据集); POST /clients: 新建客户 (需求 R288);
 GET /clients/abn-lookup: 表单里的 ABN 在线核对 (需求 R289)."""
 
+from collections.abc import Callable
 from typing import Annotated
 from uuid import uuid4
 
@@ -9,20 +10,24 @@ from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps
 from backend.agents.client_intel import normalize_name
-from backend.api.deps import current_user, get_deps
+from backend.api.deps import current_user, get_data_service, get_deps
 from backend.api.errors import api_error
 from backend.api.schemas import AbnLookupView, ClientCreate, ClientDataset, ClientSummary
 from backend.contracts.errors import AbnTaken, RegistryUnavailable, VersionConflict
 from backend.contracts.models import ClientProfile, ProfileSource, User
 from backend.core.config import get_settings
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
+from backend.services.data_service import DataService
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 
 
-def dataset_clients(deps: AgentDeps) -> dict[str, tuple[ClientProfile, list[ClientDataset]]]:
+def dataset_clients(
+    deps: AgentDeps, has_demo: Callable[[str], bool] = lambda _: False
+) -> dict[str, tuple[ClientProfile, list[ClientDataset]]]:
     """数据集客户 (DatasetLoader 现算), 按画像 id 归并: id → (数据集画像, 该客户的数据集). 画像或期间读不了的数据集
-    跳过 (同 GET /datasets); 同一客户有多个数据集时画像取数据集名最小的那个."""
+    跳过 (同 GET /datasets); 同一客户有多个数据集时画像取数据集名最小的那个. has_demo 判断数据集带不带演示资料
+    (ClientDataset.demo), 缺省都不带 (只要归并结果的调用方不必给)."""
     default = get_settings().DEMO_DATASET
     found: dict[str, tuple[ClientProfile, list[ClientDataset]]] = {}
     for name in sorted(deps.datasets.datasets()):
@@ -33,17 +38,26 @@ def dataset_clients(deps: AgentDeps) -> dict[str, tuple[ClientProfile, list[Clie
             continue
         start, end = period if period is not None else (None, None)
         entry = found.setdefault(profile.id, (profile, []))
-        entry[1].append(ClientDataset(dataset=name, period_start=start, period_end=end, default=name == default))
+        entry[1].append(
+            ClientDataset(
+                dataset=name, period_start=start, period_end=end, default=name == default, demo=has_demo(name)
+            )
+        )
     return found
 
 
 @router.get("")
 async def list_clients(
-    _user: Annotated[User, Depends(current_user)], deps: Annotated[AgentDeps, Depends(get_deps)]
+    _user: Annotated[User, Depends(current_user)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+    service: Annotated[DataService, Depends(get_data_service)],
 ) -> list[ClientSummary]:
     """每个客户一行: 库里各客户的最新一版, 并上还没进库的数据集客户. origin 取第 1 版的来源, 老版本没记时数据集
-    客户为 dataset. 排序: 有默认数据集的在前, 再按名称 (不分大小写) 与编号."""
-    datasets = dataset_clients(deps)
+    客户为 dataset. 数据集带不带演示资料 (demo) 同数据管理页概览的 demo.available (DataService.demo.has_supplement,
+    只查目录在不在, 需求 R287). 排序: 有带演示资料的数据集的 (演示公司) 在前, 再是有默认数据集的, 再按名称 (不分
+    大小写) 与编号."""
+    demo = service.demo
+    datasets = dataset_clients(deps, demo.has_supplement if demo is not None else lambda _: False)
     stored = {entry.profile.id: entry for entry in await deps.engagement_store.clients()}
     rows: list[ClientSummary] = []
     for client_id in set(datasets) | set(stored):
@@ -63,7 +77,14 @@ async def list_clients(
                 datasets=from_dataset[1] if from_dataset is not None else [],
             )
         )
-    rows.sort(key=lambda row: (not any(d.default for d in row.datasets), row.legal_name.casefold(), row.client_id))
+    rows.sort(
+        key=lambda row: (
+            not any(d.demo for d in row.datasets),
+            not any(d.default for d in row.datasets),
+            row.legal_name.casefold(),
+            row.client_id,
+        )
+    )
     return rows
 
 

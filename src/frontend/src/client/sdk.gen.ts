@@ -78,7 +78,9 @@ export const datasetsListDatasets = <ThrowOnError extends boolean = false>(optio
  * List Clients
  *
  * 每个客户一行: 库里各客户的最新一版, 并上还没进库的数据集客户. origin 取第 1 版的来源, 老版本没记时数据集
- * 客户为 dataset. 排序: 有默认数据集的在前, 再按名称 (不分大小写) 与编号.
+ * 客户为 dataset. 数据集带不带演示资料 (demo) 同数据管理页概览的 demo.available (DataService.demo.has_supplement,
+ * 只查目录在不在, 需求 R287). 排序: 有带演示资料的数据集的 (演示公司) 在前, 再是有默认数据集的, 再按名称 (不分
+ * 大小写) 与编号.
  */
 export const clientsListClients = <ThrowOnError extends boolean = false>(options?: Options<ClientsListClientsData, ThrowOnError>): RequestResult<ClientsListClientsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ClientsListClientsResponses, unknown, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],

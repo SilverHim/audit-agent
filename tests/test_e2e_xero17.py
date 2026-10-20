@@ -341,9 +341,10 @@ async def test_report_and_lock(xero17: Xero17) -> None:
     assert e.value.code == "ENGAGEMENT_LOCKED"
 
 
-async def assert_report(x: Xero17) -> None:
+async def assert_report(x: Xero17, reject_id: str | None = None) -> None:
     """REPORT-1 v1 draft; REPORT-2 v2 signed (负责人签字, 回应退回决定): 意见段以 "Opinion" 开头, 没有持续经营段,
-    基础段写明 Simplified Disclosures, 签名块以 "Jordan Ellis\\n" 开头, 不引判断; 项目归档并锁定."""
+    基础段写明 Simplified Disclosures, 签名块以 "Jordan Ellis\\n" 开头, 不引判断; 项目归档并锁定. reject_id 为
+    RPT-01 退回决定的 ID, 缺省为本路径决定表的 (经接口提交时由接口生成, 需求 R287 传入)."""
     reports = {r.id: r for r in await x.runner.deps.output_store.latest(x.eid, AuditReportVersion)}
     assert (reports["REPORT-1"].version, reports["REPORT-1"].status) == (1, ReportStatus.draft)
     signed = reports["REPORT-2"]
@@ -351,7 +352,7 @@ async def assert_report(x: Xero17) -> None:
         2,
         ReportStatus.signed,
         x.owner,
-        xero17_gates(x.owner)["rpt_reject"].id,
+        reject_id or xero17_gates(x.owner)["rpt_reject"].id,
     )
     assert (signed.opinion_type, signed.judgment_refs) == (OpinionType.unqualified, [])
     sections = signed.sections

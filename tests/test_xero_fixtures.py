@@ -5,7 +5,8 @@ xero_expected_document); 没登记的程序只做通用核对, 后续需求要�
 判断引擎一次通过, 结论与证据按 Xero 演示数据集设计第 6.2 节 (需求 R109). DOC-06 两份回函与 CSH-02 BA-091 的 fixture
 经 CSH-04 → DOC-06 → CSH-02 一次执行验收 (需求 R111). REV-02 六张发票的 fixture 经 REV-08 → REV-03 → REV-02
 一次执行验收, 指针只引该发票上下文里有的来源 (需求 R110). 只开现有 17 条路径的 RPT-03 两稿另放
-tests/fixtures/llm_xero_only17 (需求 R117), 不复制到运行副本, 不进 FIXTURE_SETS, 守卫见文末.
+tests/fixtures/llm_xero_only17 (需求 R117), 不进 FIXTURE_SETS, 守卫见文末; 正本还没有的程序由它补进运行副本 (需求 R287,
+FixtureSet.fill).
 
 正本与运行副本 (data/xero_demo/20261017-q1/llm) 相同由 tests/test_knowledge.py 按 FIXTURE_SETS 核对. 这里按集合包含
 断言, 不写死文件清单, 目录为空时通过; 各程序段加 fixture 时不必改这里 (要核对文件对应的在

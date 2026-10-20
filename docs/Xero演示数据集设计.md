@@ -1153,7 +1153,8 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 ├── representation/representation_letter.pdf
 ├── manual/                              人工队列提交物 (FIN-08 两次回复, 声明书登记, RPT-07 回复), 演示脚本与测试读, 载入器不读
 └── llm/<程序>/<对象>.json, README.md     mock 大模型 fixture 的运行副本 (同 data/demo/llm): 生成脚本从正本
-                                         tests/fixtures/llm_xero 清空后原样复制, 另写说明; mock 按项目数据集读这里
+                                         tests/fixtures/llm_xero 清空后原样复制, 正本没有的程序目录由
+                                         tests/fixtures/llm_xero_only17 补上 (现为 RPT-03), 另写说明; mock 按项目数据集读这里
 ```
 
 ### 9.2 快照怎么来, 怎么对应
@@ -1317,7 +1318,7 @@ data/xero_demo/20261017-q1/              与快照目录同名, 一个快照一�
 - rpt07_reply.json: {procedure_id RPT-07, communicated_on 2026-10-22, form written, recipients [Alex Morgan], matters [SIG_PRACTICES, DIFFICULTIES, REPORT_FORM, INDEPENDENCE], corrected_misstatements 5, uncorrected_misstatements 0, responded_on 2026-10-22, response (董事回复原文, 写在生成规格里, 见第 4.8 节)}.
 - 校验: FIN-08 两轮键集合相同, 时刻为 UTC (以 Z 结尾), 回复晚于沟通且早于所涉更正分录的录入时间, 两轮的 adjustment_entry_nos 恰好覆盖 5 笔更正分录; 声明书登记的文件在 manifest 中 (类型 representation_letter, 日期同 dated_at), 签署人在其文本层, 附表为空; RPT-07 的已更正数等于更正分录笔数, 未更正数等于声明书附表行数.
 
-**大模型 fixture**: Xero 的 fixture 正本放 `tests/fixtures/llm_xero/<程序>/<对象>.json` (各程序的需求写), 生成脚本原样复制到 `data/xero_demo/20261017-q1/llm/` 并列入 manifest; mock 模式按项目数据集选目录 (Xero 项目读补造目录的 llm/, 其余读 LLM_FIXTURES_ROOT). document 指针直接用 manifest 的文件 ID. Numbat 的 fixture (`tests/fixtures/llm`, `data/demo/llm`) 不动.
+**大模型 fixture**: Xero 的 fixture 正本放 `tests/fixtures/llm_xero/<程序>/<对象>.json` (各程序的需求写), 生成脚本原样复制到 `data/xero_demo/20261017-q1/llm/` 并列入 manifest. 正本没有的程序目录整个取 `tests/fixtures/llm_xero_only17` (只开现有 17 条路径的固定输出, R117) 的, 现为 RPT-03 两稿, 应用里只开现有程序的演示项目才走得到报告 (R287); 正本有了该程序 (全接入的报告两稿, R189, R259) 即以正本为准, 两层不按文件混用. mock 模式按项目数据集选目录 (Xero 项目读补造目录的 llm/, 其余读 LLM_FIXTURES_ROOT). document 指针直接用 manifest 的文件 ID. Numbat 的 fixture (`tests/fixtures/llm`, `data/demo/llm`) 不动.
 
 **注入补丁** (`tests/fixtures/xero_injections/<场景>.json`): {scenario, title, ops}; op 六种: set (file, 定位, field, before, after), delete (file, 定位, before), add (file, key 或 append, after), add_file (file, content), tb_shift (code, delta_cents), render (what: registry_pdfs). file 以 "api/" 或 "xero_demo/" 开头; 定位三种: match (JSON 数组中按字段相等, 须恰好命中 1 个), key (JSON 对象的键), row (CSV 主键列); before 为 null 表示改前不存在. 执行前断言当前值等于 before.
 实现见 `tests/xero_injection.py` (R74, 补丁为 extra=forbid 的 Pydantic 模型): set 的 field 用点号写嵌套字段, 为空时指定位到的元素本身 (如对象某个键的整个值); delete 的 before 为被删的整个值; add 的 key 须原来没有, append 追加到 JSON 数组或 CSV 末尾 (CSV 行须按表头给全部列); add_file 的目标须原来没有; file 不能跳出副本目录; tb_shift 只改副本期末试算表. 夹具 `xero_case` 在 tests/conftest.py, 会话级哈希守护 `xero_originals_unchanged` 同在; 空补丁 T0 作机制自测.
