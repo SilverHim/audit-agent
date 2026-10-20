@@ -811,7 +811,14 @@
     },
     {
       "path": "llm/PLN-15/r1.json",
-      "sha256": "c3416d0652af4fded8d72b4a52cc9ea9cd04c7ce7cd216a3c0f2dc6976dd70f2",
+      "sha256": "93cd0cdd664e1061f18a5feb3ec4517d8613fb24052f6d9cb672fdaefef53984",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/PLN-15/r2.json",
+      "sha256": "144c7de55954c733928647e686f3ed2c5d7b0c1bd3e3d419af33b38566695464",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

@@ -52,11 +52,9 @@ from tests.fakes import (
     profile_update,
     wait_idle,
 )
-from tests.fixture_sets import XERO
 from tests.test_collab import CASH_DRAFT, COLLAB, CONSULT, disputed
 from tests.test_decisions import (
     FIXED_PROFILE,
-    SecondPlanAsFirst,
     Started,
     acc01_decision,
     at_plan_gate,
@@ -368,7 +366,7 @@ async def test_plan_decision_caught_up(
     驳回的下一节点为 plan_draft, 以 rerun 起草 PLAN-2 v1 再停闸门 (RUN-PLN-15-2 与 PLAN-2 v1 各只一个); 信息不足仍停
     闸门, 计划不变. decision 留痕不重复; 再 resume 一次检查点, Store 与留痕都不变. (批准的补做见 test_decisions 的
     test_plan_approve_caught_up_after_lost_checkpoint.)"""
-    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
+    s = await at_plan_gate()
     decision = plan_decision(verdict, id="D-P15-LOST")
     await submit_lost(s, decision)
     with pytest.raises(DecisionRejected) as e:

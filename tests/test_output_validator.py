@@ -1320,11 +1320,14 @@ async def check_plan_draft(draft: AuditPlanDraft, ctx: ValidationContext | None 
     return await validator.validate(EID, PLN15, respond(draft), context)
 
 
-async def test_plan_draft_passes() -> None:
-    """合格的叙述通过 (时间表等于期末的一项不算早于期末). Xero 的固定输出正本经 A4 校验通过, 见
-    test_risk_assessor.test_pln15_xero_fixture_passes_once."""
-    report = await check_plan_draft(plan_draft())
-    assert (report.level_failed, report.errors, report.output) == (None, [], plan_draft())
+@pytest.mark.parametrize("extra", [[], ["REV-05"]])
+async def test_plan_draft_passes(extra: list[str]) -> None:
+    """合格的叙述通过 (时间表等于期末的一项不算早于期末); 说明多出计划以外的程序 (REV-05) 照样通过, 输出原样 (A4
+    合成计划时不收, 需求 R316, 见 test_risk_assessor.test_pln15_xero_fixture_passes_once). Xero 的固定输出正本经 A4
+    校验通过, 见同一用例."""
+    draft = plan_draft(procedure_notes=plan_notes(*PLAN_PROCEDURES, *extra))
+    report = await check_plan_draft(draft)
+    assert (report.level_failed, report.errors, report.output) == (None, [], draft)
 
 
 PLAN_MISSING = "procedure_notes 缺计划的程序: CSH-02"
@@ -1337,11 +1340,6 @@ PLAN_EARLY = [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]
     ("changes", "level", "errors"),
     [
         ({"procedure_notes": plan_notes(*PLAN_PROCEDURES[1:])}, "semantic", [PLAN_MISSING]),
-        (
-            {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-05")},
-            "semantic",
-            ["procedure_notes 有计划以外的程序: REV-05"],
-        ),
         (
             {"procedure_notes": plan_notes(*PLAN_PROCEDURES, "REV-02")},
             "semantic",
@@ -1377,9 +1375,9 @@ PLAN_EARLY = [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]
     ],
 )
 async def test_plan_draft_failures(changes: dict[str, Any], level: str, errors: list[str]) -> None:
-    """验收 4: 程序说明与计划的程序不等 (缺, 多, 重复), 时间表早于期末, 缺必备段 (或只有空白), 段里重复总体策略,
-    项目质量复核建议没写依据 → semantic, 几项一并列出; 引用模板 standards 以外的片段 → reference, 不再查语义. 都不可
-    重试."""
+    """验收 4: 程序说明缺计划的程序或重复 (多出的不算, 需求 R316), 时间表早于期末, 缺必备段 (或只有空白), 段里重复
+    总体策略, 项目质量复核建议没写依据 → semantic, 几项一并列出; 引用模板 standards 以外的片段 → reference, 不再查
+    语义. 都不可重试."""
     report = await check_plan_draft(plan_draft(**changes))
     assert (report.level_failed, report.errors, report.retryable) == (level, errors, False)
 

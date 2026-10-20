@@ -79,8 +79,8 @@ class ValidationContext(Model):
     # 本项目采用版本的客户画像 (需求 R128): client_profile 指针只认它 (ID 相同, locator 为其顶层字段名), 不读
     # EngagementStore; 为空时这类指针解析不了
     client_profile: ClientProfile | None = None
-    # PLN-15 的计划叙述 (AuditPlanDraft, 需求 R204): procedure_notes 须恰好覆盖这些程序 (计划 items 的程序编号),
-    # 时间表不早于 period_end (审计期间止). 其余输出不用, 为空
+    # PLN-15 的计划叙述 (AuditPlanDraft, 需求 R204): procedure_notes 须覆盖这些程序 (计划 items 的程序编号; 多出的
+    # 不算失败, 合成计划时不收, 需求 R316), 时间表不早于 period_end (审计期间止). 其余输出不用, 为空
     expected_procedure_ids: list[str] | None = None
     period_end: date | None = None
     # FIN-09 的更正验证草稿 (CorrectionVerificationDraft, 需求 R164): fully_corrected 须与 "规则算出的剩余额为 0" 一致,

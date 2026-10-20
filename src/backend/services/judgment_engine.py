@@ -401,7 +401,8 @@ def plan_checks(
     """计划叙述 (PLN-15) 的引用与语义两级. 返回 (未通过的级别, 错误). standards 为模板 standards.
 
     引用: standards_cited 只能取模板 standards 中的片段.
-    语义: procedure_notes 的程序编号集合恰为 ctx.expected_procedure_ids (计划 items 的, 不缺不多, 不重复); 时间表各项
+    语义: procedure_notes 覆盖 ctx.expected_procedure_ids (计划 items 的, 不缺, 不重复; 多出计划以外的程序不算失败,
+    A4 合成计划时只收计划内的, 需求 R316: 一份固定输出适用于各功能集); 时间表各项
     不早于 ctx.period_end; sections 含 scope, significant_risks, materiality, timing, 不含 overall_strategy (另有字段,
     合成计划叙述时排在首段); 项目质量复核建议写了依据. ctx 缺 expected_procedure_ids 或 period_end 时抛 ValueError.
     """
@@ -414,12 +415,9 @@ def plan_checks(
     noted = [n.procedure_id for n in draft.procedure_notes]
     expected = set(ctx.expected_procedure_ids)
     missing = sorted(expected - set(noted))
-    extra = sorted(set(noted) - expected)
     repeated = sorted({p for p in noted if noted.count(p) > 1})
     if missing:
         errors.append(f"procedure_notes 缺计划的程序: {', '.join(missing)}")
-    if extra:
-        errors.append(f"procedure_notes 有计划以外的程序: {', '.join(extra)}")
     if repeated:
         errors.append(f"procedure_notes 的程序重复: {', '.join(repeated)}")
     early = [f"{m.milestone} ({m.due})" for m in draft.timetable if m.due < ctx.period_end]

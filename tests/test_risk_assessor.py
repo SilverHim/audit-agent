@@ -4,6 +4,7 @@
 import json
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -25,6 +26,7 @@ from backend.contracts.models import (
     GateVerdict,
     MaterialityCandidates,
     MonthlyFigures,
+    Phase,
     PlanStatus,
     ProcedureStatus,
     RiskItem,
@@ -68,6 +70,7 @@ from tests.fakes import (
 )
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started, acc01_decision, pln_decision
+from tests.test_demo_walkthrough import DEMO_FEATURES
 from tests.test_output_validator import PLAN_PROCEDURES
 from tests.test_p1 import p1_setup
 from tests.test_xero_fixtures import xero_state
@@ -344,6 +347,8 @@ async def test_rerun_keeps_revised_risks_and_recomputes_candidates() -> None:
 
 PLAN_FEATURES = PLANNING_FEATURES | {"acceptance"}  # PLN-15 的骨架另看 TERMS
 XERO_PLAN = XERO.fixtures / "PLN-15" / "r1.json"  # Xero 的固定输出正本 (验收 3)
+XERO_PLAN_R2 = XERO.fixtures / "PLN-15" / "r2.json"  # 第 2 修订: 回应演示的驳回理由 (需求 R316)
+JOURNALS = ["GEN-02", "GEN-05"]  # 功能 journals 装配的 P2 固定集 (需求 R146)
 CASH, REVENUE = ["OBJ-CASH-EXI"], ["OBJ-REV-OCC", "OBJ-REV-CUT"]
 # 验收 1: Xero 装配后的 P2 程序 (PLAN_PROCEDURES, 按程序编号) → 关联目标
 PLAN_OBJECTIVES = dict(zip(PLAN_PROCEDURES, [CASH, CASH, CASH, [], ["OBJ-REV-CUT"], REVENUE, REVENUE], strict=True))
@@ -520,11 +525,15 @@ async def test_pln15_request_prompt_and_trail() -> None:
 
 
 @needs("q1_snapshot", "q1_supplements")
-async def test_pln15_xero_fixture_passes_once() -> None:
-    """验收 3: Xero 正本一次通过校验 (1 行 llm_call), 叙述按设计稿第 6.6, 2.7 节: 总体策略在首, 各段, 7 条程序各一条
-    说明, 时间表 (外勤 10-19 至 10-22, 报告日 10-23, 送达股东 2027-01-31), 不需要项目质量复核及其依据."""
-    ctx, deps, trail = await plan_context()
+@pytest.mark.parametrize("extra", [[], JOURNALS], ids=["journals_off", "journals_on"])
+async def test_pln15_xero_fixture_passes_once(extra: list[str]) -> None:
+    """验收 3: Xero 正本一次通过校验 (1 行 llm_call), 叙述按设计稿第 6.6, 2.7 节: 总体策略在首, 各段, 计划的程序各一条
+    说明, 时间表 (外勤 10-19 至 10-22, 报告日 10-23, 送达股东 2027-01-31), 不需要项目质量复核及其依据. 正本的说明有
+    9 条 (需求 R316): 功能 journals 关闭时计划 7 个程序, 多出的 GEN-05, GEN-02 两条不收进计划; 打开时 (演示配置)
+    计划 9 个程序, 9 条都收."""
+    ctx, deps, trail = await plan_context(features=PLAN_FEATURES | ({"collab", "journals"} if extra else set()))
     [plan] = (await drafted(ctx, deps))["audit_plans"]
+    assert [i.procedure_id for i in plan.items] == sorted([*PLAN_PROCEDURES, *extra])
     assert len(llm_calls(trail)) == 1
     text = {s.section: s.text for s in plan.narrative}
     assert [s.section for s in plan.narrative] == [
@@ -562,7 +571,7 @@ async def test_pln15_xero_fixture_passes_once() -> None:
     assert {name: [p for p in phrases if p not in text[name]] for name, phrases in expected.items()} == {
         name: [] for name in expected
     }
-    assert [n.procedure_id for n in plan.procedure_notes] == sorted(PLAN_OBJECTIVES)
+    assert [n.procedure_id for n in plan.procedure_notes] == [i.procedure_id for i in plan.items]
     assert [(m.due, m.milestone.split(",")[0]) for m in plan.timetable] == [
         (date(2026, 10, 19), "Fieldwork starts"),
         (date(2026, 10, 22), "Fieldwork completed"),
@@ -571,6 +580,18 @@ async def test_pln15_xero_fixture_passes_once() -> None:
     ]
     assert plan.eqr_recommendation.required is False
     assert all(p in plan.eqr_recommendation.basis for p in ("not listed", "law or regulation", "ASQM 1 para 34(f)"))
+
+
+@pytest.mark.parametrize("fixture", [XERO_PLAN, XERO_PLAN_R2], ids=["r1", "r2"])
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_fixtures_cover_the_demo_procedures(fixture: Path) -> None:
+    """守卫 (需求 R316): 演示配置 (.env.example 的 FEATURES) 下 Xero 装配出的 P2 程序, 都在 PLN-15 固定输出 r1, r2 的
+    程序说明里. 防的是演示配置打开新功能后 (如关联方, 持续经营的程序接入时, 需求 R147, R192) 固定输出缺这些程序的说明,
+    计划叙述校验不过, PLN-15 落为失败任务, 演示停在计划审批前; 接入时在 r1, r2 补说明 (多出的说明不收进计划, 不必删)."""
+    ctx, _, _ = await plan_context(features=DEMO_FEATURES)
+    assembled = {p.id for p in ctx.state["procedure_pack"] if p.phase is Phase.P2_Executing}
+    noted = {n["procedure_id"] for n in json.loads(fixture.read_text(encoding="utf-8"))["procedure_notes"]}
+    assert assembled and sorted(assembled - noted) == []
 
 
 @needs("q1_snapshot", "q1_supplements")
@@ -606,17 +627,30 @@ async def test_pln15_revision_answers_the_rejection() -> None:
     """验收 6: 状态有 PLAN-1 v1 (第 1 次执行) 与 PLN-15 的驳回 (对别的计划 PLAN-9 一条, 对 PLAN-1 两条, 最近一条为
     D-P15R): RUN-PLN-15-2 出 PLAN-2 v1 draft (revision 2, 回应 D-P15R, 理由取其 reason), PLAN-1 出 v2 superseded (记本次
     执行, 其余不变); 请求的 fixture_key 为 r2, 提示词含 "## Revision 2" 与该理由. 上一修订已是 superseded 时只写新修订.
-    只有针对别的计划的驳回时抛 LookupError, 不起草."""
+    只有针对别的计划的驳回时抛 LookupError, 不起草. 第 2 修订的正本 r2.json (需求 R316 验收 3) 经真实校验一次通过:
+    timing 段与时间表写明两份银行询证函随外勤开始于 10-19 发出, 外勤结束 10-22 前收回, 都不早于期末; 其余各段与
+    时间表以外的字段同 r1."""
     first_ctx, first_deps, _ = await plan_context()
     first = await drafted(first_ctx, first_deps)
     [plan1], [run1] = first["audit_plans"], first["procedure_runs"]
     other = plan_reject("PLAN-9", "Not this plan", "D-X")
     earlier = plan_reject(plan1.id, "An earlier reason", "D-A")
     gates = [*first_ctx.state["gate_decisions"], other, earlier, plan_reject(plan1.id)]
-    llm = ScriptedLLM({"r2": [XERO_PLAN.read_text(encoding="utf-8")] * 2})
-    ctx, deps, _ = await plan_context(llm, audit_plans=[plan1], procedure_runs=[run1], gate_decisions=gates)
+    llm = ScriptedLLM({"r2": [XERO_PLAN_R2.read_text(encoding="utf-8")] * 2})
+    ctx, deps, trail = await plan_context(llm, audit_plans=[plan1], procedure_runs=[run1], gate_decisions=gates)
     patch = await drafted(ctx, deps)
     plan2, retired = patch["audit_plans"]
+    assert [e.payload["level_failed"] for e in llm_calls(trail)] == [None]
+    timing = next(s.text for s in plan2.narrative if s.section == "timing")
+    assert all(p in timing for p in ("19 October 2026", "two bank confirmation requests", "22 October 2026"))
+    assert [(m.due, m.milestone.split(" (")[0]) for m in plan2.timetable if "Bank confirmation" in m.milestone] == [
+        (date(2026, 10, 19), "Bank confirmation requests sent for both accounts"),
+        (date(2026, 10, 22), "Bank confirmation replies received, before fieldwork is completed"),
+    ]
+    first, second = (json.loads(p.read_text(encoding="utf-8")) for p in (XERO_PLAN, XERO_PLAN_R2))
+    del first["sections"]["timing"]
+    del second["sections"]["timing"]
+    assert {k: v for k, v in first.items() if k != "timetable"} == {k: v for k, v in second.items() if k != "timetable"}
     assert (plan2.id, plan2.version, plan2.status, plan2.revision, plan2.run_id) == (
         "PLAN-2",
         1,

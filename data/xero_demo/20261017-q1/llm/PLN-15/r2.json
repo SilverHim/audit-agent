@@ -1,0 +1,96 @@
+{
+  "overall_strategy": "The audit covers the financial report of Demo Company (AU) Pty Ltd for the shortened financial year from 1 July 2026 to 30 September 2026, required by a shareholder direction under s293, and prepared under Australian Accounting Standards - Simplified Disclosures. It is a first audit of a small company with one director who also keeps the books, so the direction of the audit is substantive: we rely on no controls and focus on revenue occurrence and cut-off, cash, management override of controls, the opening balances and going concern, with overall materiality of $324.31 based on revenue. Fieldwork runs from 19 to 22 October 2026, the report is planned for 23 October 2026, and members are to receive the financial report by 31 January 2027 (ASA 300 para 7).",
+  "sections": {
+    "scope": "We will audit the financial report of Demo Company (AU) Pty Ltd, a small proprietary company, for the financial year from 1 July 2026 to 30 September 2026. The directors resolved on 14 August 2026 to end this financial year on 30 September 2026, a shortened financial year under s323D(2A) of the Corporations Act 2001; no financial year in the previous five years was shortened in reliance on that subsection. The audit is required by a direction under s293 given on 20 August 2026 by Sam Whitfield, who holds 15 of the 100 shares (15% of the votes), requiring the financial report to be prepared and audited (s293(3)(c)). The applicable financial reporting framework is Australian Accounting Standards - Simplified Disclosures (Tier 2 general purpose financial statements), as set out in the engagement letter dated 28 August 2026. Tessellate Audit Partners consented to act on 25 August 2026 and was appointed by resolution of the sole director on 27 August 2026.",
+    "initial_audit": "This is the first audit of the company and the financial report for the year ended 30 June 2026 was not audited, so there is no predecessor auditor to communicate with. Before starting, we completed the client and engagement acceptance procedures (ASA 300 para 13). Opening balances at 1 July 2026 were entered in Xero on 16 July 2026 as a conversion balance of $19,212.21 credited to 840 Historical Adjustment; we will determine whether the closing balances at 30 June 2026 have been correctly brought forward, whether they reflect appropriate accounting policies, and perform specific procedures on the opening bank, receivable, payable and equity balances, including retained earnings of $7,912 (debit) (ASA 510 para 6). The corresponding figures are unaudited and the auditor's report will state this in an Other Matter paragraph (ASA 710 para 14).",
+    "significant_risks": "Revenue occurrence (RISK-REV-OCC) is a presumed fraud risk: revenue of $32,431 for the three months is 7.7 times the $4,200 recorded for the whole of FY2026, across 26 invoices to 14 customers. Revenue cut-off (RISK-REV-CUT) is also significant: six invoices totalling $9,000 (excluding GST) were raised on 16 and 17 September 2026, including a $6,500 development invoice to DIISR (ORC1026) whose service completion falls close to the period end. REV-08 matches every invoice in the 20 days to 30 September 2026 to delivery or service records and receipts, REV-03 evaluates the terms of the revenue contracts, and REV-02 judges the cut-off of each invoice in that window at or above performance materiality. Management override of controls is a significant risk in every audit (ASA 240 para 32) and is heightened here because Alex Morgan is the sole director and also keeps the books, so all journals are entered by the person who approves them. Irrespective of that assessment we will enquire about inappropriate or unusual journal activity and test journal entries and other adjustments, including the 16 July 2026 conversion entry and entries made at the period end (ASA 240 para 33(a)).",
+    "going_concern": "The trial balance shows events and conditions that may cast significant doubt on the company's ability to continue as a going concern (ASA 570 para 10): the Business Bank Account (090) was overdrawn throughout the quarter and by $10,900.44 at 30 September 2026; the company made a loss of $13,226.96 for the three months; and total liabilities of $31,944.25, including $19,212.21 in 840 Historical Adjustment and $7,535 of unpaid PAYG withholding, exceed total assets of $10,805.29, leaving net liabilities of $21,138.96. We will ask whether management has made a preliminary assessment, discuss it and management's plans with the director, and if no assessment has been made, discuss the basis for using the going concern basis of accounting.",
+    "other_significant_balances": "Material balances not covered by an audit objective: wages and salaries (477) of $33,500 since the three employees started on 20 July 2026, with PAYG withholding payable (825) of $7,535 unpaid, and no superannuation recorded as payable (826); the classification of the $19,212.21 credit in 840 Historical Adjustment, which arose from the opening bank balances; office equipment (710) of $750 against accumulated depreciation (711) of $825; accounts receivable (610) of $10,199.50; accounts payable (800) of $4,005.16 and GST (820) of $1,191.97; and the opening balances. We will test these balances with substantive procedures in the same fieldwork window, using the materiality amounts below.",
+    "materiality": "Overall materiality is $324.31, being 1% of revenue of $32,431 for the three months, with performance materiality of $162.16 (50% of overall materiality) and a clearly trivial threshold of $16.22 (5% of overall materiality). Revenue is the measure the shareholders focus on for a loss-making company, and materiality is set for the three-month financial report without annualising. Performance materiality is set at the low end because this is a first audit with significant risks in revenue and in management override.",
+    "timing": "Fieldwork runs from 19 to 22 October 2026. On 19 October 2026, the first day of fieldwork, we send the two bank confirmation requests to Wattlebrook Bank Limited for the Business Bank Account (090) and the Business Savings Account (091) as at 30 September 2026, and we expect both replies before fieldwork ends on 22 October 2026, so that the cash procedures can be completed in the same window as the revenue procedures. Misstatements are communicated to the director as fieldwork proceeds. The auditor's report is planned to be dated 23 October 2026, after the director approves the financial report, and the financial report and auditor's report are to be given to members by 31 January 2027.",
+    "reporting": "We will issue an auditor's report on the financial report for the financial year ended 30 September 2026, including an Other Matter paragraph stating that the corresponding figures are unaudited. As a proprietary company reporting because of a shareholder direction, the company must report to members within four months after the end of the financial year (s315(4)), that is no later than 31 January 2027."
+  },
+  "procedure_notes": [
+    {
+      "procedure_id": "CSH-02",
+      "nature_timing_extent": "At fieldwork, evaluate any difference between the bank confirmation replies and the general ledger balances of both accounts at 30 September 2026, using receipts and payments in the 10 days after the period end and the 5 days before it to explain reconciling items; differences above the clearly trivial threshold of $16.22 are accumulated."
+    },
+    {
+      "procedure_id": "CSH-04",
+      "nature_timing_extent": "At the start of fieldwork, send confirmation requests to Wattlebrook Bank Limited for both bank accounts (090 and 091) as at 30 September 2026, covering balances, facilities and guarantees."
+    },
+    {
+      "procedure_id": "CSH-05",
+      "nature_timing_extent": "At fieldwork, reconcile the bank statement lines for the whole quarter to the general ledger for both accounts up to 30 September 2026, covering every account and the full population of lines."
+    },
+    {
+      "procedure_id": "DOC-06",
+      "nature_timing_extent": "As the replies arrive during fieldwork, extract the confirmed balances, accrued interest and facility details from each bank reply for the confirmation evaluation."
+    },
+    {
+      "procedure_id": "GEN-02",
+      "nature_timing_extent": "At fieldwork, after the journal scan, judge each journal entry it reports, including the 16 July 2026 conversion entry, against the related invoices, contracts, bank statements and supporting documents, and attribute it to a business reason or propose a misstatement; entries that cannot be explained are referred for more evidence (ASA 240 para 33(a))."
+    },
+    {
+      "procedure_id": "GEN-05",
+      "nature_timing_extent": "At fieldwork, scan every journal entry posted from 1 July to 30 September 2026 with the journal rules (non-standard entries, full revenue reversals, voided entries re-posted to a different party, possible duplicate invoices, round amounts, payments just below the approval limit and reversals near the period end), reporting entries above the clearly trivial threshold of $16.22; the rules that rely on entry times are skipped because the entry timestamps in the Xero demonstration data are not reliable."
+    },
+    {
+      "procedure_id": "REV-02",
+      "nature_timing_extent": "At fieldwork, judge the cut-off of each sales invoice dated in the 20 days to 30 September 2026 with a net amount at or above performance materiality of $162.16, against service completion records and contracts."
+    },
+    {
+      "procedure_id": "REV-03",
+      "nature_timing_extent": "At fieldwork, evaluate the terms of the revenue contracts for the period to 30 September 2026, including performance obligations, acceptance and billing terms, for occurrence and cut-off."
+    },
+    {
+      "procedure_id": "REV-08",
+      "nature_timing_extent": "At fieldwork, match each sales invoice dated in the 20 days to 30 September 2026 to delivery or service completion records and to receipts in the bank statements; unmatched invoices become exceptions."
+    }
+  ],
+  "timetable": [
+    {
+      "milestone": "Fieldwork starts",
+      "due": "2026-10-19"
+    },
+    {
+      "milestone": "Bank confirmation requests sent for both accounts (090 and 091)",
+      "due": "2026-10-19"
+    },
+    {
+      "milestone": "Bank confirmation replies received, before fieldwork is completed",
+      "due": "2026-10-22"
+    },
+    {
+      "milestone": "Fieldwork completed",
+      "due": "2026-10-22"
+    },
+    {
+      "milestone": "Auditor's report dated",
+      "due": "2026-10-23"
+    },
+    {
+      "milestone": "Financial report and auditor's report given to members (s315(4))",
+      "due": "2027-01-31"
+    }
+  ],
+  "eqr_recommendation": {
+    "required": false,
+    "basis": "The company is not listed, no law or regulation requires an engagement quality review of this audit, and the firm has not determined that one is needed to address a quality risk (ASQM 1 para 34(f))."
+  },
+  "expert_assessment": "No auditor's expert is needed (ASA 620): the balances are cash, receivables, payables, payroll and tax amounts and small office equipment, none of which needs specialised valuation or actuarial skills.",
+  "standards_cited": [
+    "ASA300-P07",
+    "ASA300-P09",
+    "ASA300-P13",
+    "ASA510-P06",
+    "ASA710-P14",
+    "ASA240-P32",
+    "ASA240-P33",
+    "ASA570-P10",
+    "ASQM1-P34f",
+    "CA2001-S293",
+    "CA2001-S315-4",
+    "CA2001-S323D-2A"
+  ]
+}

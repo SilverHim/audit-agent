@@ -10,7 +10,6 @@ from typing import Any, cast
 import pytest
 import pytest_asyncio
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import BaseModel
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
@@ -46,7 +45,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse
+from backend.contracts.ports import LLMClient
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.contracts.views import PlanMaterial, PlanView
 from backend.core.config import get_settings
@@ -1481,15 +1480,6 @@ def plan_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
     return PLAN_APPROVE.model_copy(update=changes)
 
 
-class SecondPlanAsFirst(MockLLMClient):
-    """PLN-15 第 2 修订起借用第 1 修订的固定输出 (llm_xero 只有 r1), 驳回出口的用例用."""
-
-    async def complete[T: BaseModel](self, req: LLMRequest, output_model: type[T]) -> LLMResponse[T]:
-        if req.procedure_id == "PLN-15" and req.fixture_key != "r1":
-            req = req.model_copy(update={"fixture_key": "r1"})
-        return await super().complete(req, output_model)
-
-
 async def at_plan_gate(llm: LLMClient | None = None) -> Started:
     """Xero 演示项目 (数据已导入, 功能 critic, planning) 跑到 PLN-15 闸门: ACC-01 approve → P1 (真实
     Agent; 规则引擎为 XERO_RULES, 大模型缺省读 llm_xero) → PLN-01/03 approve (收入 1%, 50%, 5%) → assemble_pack →
@@ -1758,7 +1748,7 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
     VERSION_MISMATCH;
     批准 PLAN-2 v1 (需要项目质量复核, 未确认不需要专家: 只作记录, 不拦截): PLAN-2 v2 approved, 三项照写入,
     PLN-15 completed, 阶段 P2_Executing, 越过闸门后下一节点为 schedule."""
-    s = await at_plan_gate(SecondPlanAsFirst(XERO.fixtures))
+    s = await at_plan_gate()
 
     async def decide(decision: GateDecision) -> EngagementState:
         await s.submit.submit(EID, decision)
