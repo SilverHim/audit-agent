@@ -1,10 +1,10 @@
-import { formatAud } from '@/lib/money'
+import { formatAud, formatPct } from '@/lib/money'
 import type { Messages } from '@/locales/en'
 
 // 例外明细 (AuditException.detail, 即规则 SQL 的其余输出列) 按字段显示 (需求 R350): 以 _cents 结尾的按全站金额
-// 格式, 以 _pct 结尾的按百分比 (一位小数), 其余按文本 (认得的取值换成文案). 数据库的 numeric 列序列化后可能是
-// 字符串, 一并按数解析. 字段名取文案里的标签, 没有的退回字段名. 对象逐个字段展开; 数组的元素以逗号连接, 元素是
-// 对象时各自展开
+// 格式, 以 _pct 结尾的按百分比 (一位小数), 其余按文本 (该字段认得的取值换成文案). 数据库的 numeric 列序列化后可能
+// 是字符串, 一并按数解析. 字段名取文案里的标签, 没有的退回字段名. 对象逐个字段展开; 数组的元素以逗号连接 (空数组
+// 为 "—"), 元素是对象时各自展开. 闸门材料的例外与复核页无归因任务的失败原因共用 (components/exception-detail)
 
 export type DetailRow =
   | { key: string; label: string; text: string } // 一个字段
@@ -26,9 +26,9 @@ function valueText(key: string, value: unknown, labels: Labels): string {
   if (value === null || value === undefined) return '—'
   const number = asNumber(value)
   if (key.endsWith('_cents') && number !== null) return formatAud(number)
-  if (key.endsWith('_pct') && number !== null) return `${(number * 100).toFixed(1)}%`
+  if (key.endsWith('_pct') && number !== null) return formatPct(number, 1)
   if (typeof value === 'boolean') return value ? labels.yes : labels.no
-  if (typeof value === 'string') return labels.values[value] ?? value
+  if (typeof value === 'string') return labels.values[key]?.[value] ?? value
   return String(value)
 }
 
@@ -43,7 +43,7 @@ function row(key: string, value: unknown, labels: Labels): DetailRow {
     return { key, label, rows: items }
   }
   const text = Array.isArray(value)
-    ? value.map((item) => valueText(key, item, labels)).join(', ')
+    ? value.map((item) => valueText(key, item, labels)).join(', ') || '—'
     : valueText(key, value, labels)
   return { key, label, text }
 }

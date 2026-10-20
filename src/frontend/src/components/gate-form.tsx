@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Fragment, type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   gatesGetGateOptions,
@@ -29,6 +29,7 @@ import { AbnLookupNote } from '@/components/abn-lookup-note'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { ExceptionDetail } from '@/components/exception-detail'
 import {
   CheckIcon,
   checkTone,
@@ -48,7 +49,6 @@ import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
-import { type DetailRow, detailRows } from '@/lib/exception-detail'
 import { useI18n } from '@/lib/i18n'
 import { initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
@@ -158,29 +158,6 @@ function PercentInput({
       </span>
     </div>
   )
-}
-
-// 例外明细按字段显示 (lib/exception-detail, 需求 R350); 对象的字段缩进一层. 有的规则 (如 ACC-04) 例外没有明细,
-// 空的不显示
-function DetailRows({ rows }: { rows: DetailRow[] }) {
-  return (
-    <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5 text-[13px]">
-      {rows.map((item) => (
-        <Fragment key={item.key}>
-          <dt className="text-muted-foreground">{item.label}</dt>
-          <dd className="m-0 text-secondary-foreground">
-            {'rows' in item ? <DetailRows rows={item.rows} /> : item.text}
-          </dd>
-        </Fragment>
-      ))}
-    </dl>
-  )
-}
-
-function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
-  const { t } = useI18n()
-  const rows = detailRows(detail, t.exceptionDetail)
-  return rows.length ? <DetailRows rows={rows} /> : null
 }
 
 // PLN-07 A03 的月度趋势 (本期按月的收入, 费用与员工费用); 没有月度数 (旧结果或没有总账) 时不显示

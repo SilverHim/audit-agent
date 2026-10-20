@@ -12,9 +12,10 @@ export function formatAudShort(cents: number | null | undefined): string {
   return `AUD ${new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(cents / 100)}`
 }
 
-export function formatPct(value: number | null | undefined): string {
+// 小数比例 → 百分比, 缺省两位小数 (0.005 → "0.50%")
+export function formatPct(value: number | null | undefined, digits = 2): string {
   if (value == null) return '—'
-  return `${(value * 100).toFixed(2)}%`
+  return `${(value * 100).toFixed(digits)}%`
 }
 
 export function audToCents(aud: string): number | null {

@@ -20,6 +20,7 @@ import type {
 } from '@/client/types.gen'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { ExceptionDetail } from '@/components/exception-detail'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -248,15 +249,10 @@ function FailureDetail({ failure }: { failure: PresentedFailure | null | undefin
     )
   }
   if (failure?.source === 'exception') {
-    const detail = Object.entries(failure.detail ?? {})
     return (
       <div className="flex flex-col gap-1" data-testid="presented-failure">
         {failure.rule_id ? <span>{p.rule(failure.rule_id)}</span> : null}
-        {detail.length ? (
-          <Code className="text-[12.5px] text-secondary-foreground">
-            {detail.map(([key, value]) => `${key}: ${String(value)}`).join(' · ')}
-          </Code>
-        ) : null}
+        <ExceptionDetail detail={failure.detail ?? {}} />
       </div>
     )
   }

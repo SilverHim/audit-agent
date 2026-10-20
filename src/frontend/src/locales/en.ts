@@ -359,10 +359,10 @@ export const en = {
       posting_date: 'Posting date',
       reason: 'Reason',
     } as Record<string, string>,
+    // 取值按字段分组: 只换该字段的取值 (balance_sheet 的 "opening" 只对 PLN-07 的 basis 成立)
     values: {
-      balance_sheet: 'Balance sheet, opening',
-      profit_or_loss: 'Profit or loss, prior period',
-    } as Record<string, string>,
+      basis: { balance_sheet: 'Balance sheet, opening', profit_or_loss: 'Profit or loss, prior period' },
+    } as Record<string, Record<string, string>>,
     yes: 'yes',
     no: 'no',
   },

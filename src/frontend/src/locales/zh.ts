@@ -336,7 +336,7 @@ export const zh: Messages = {
       posting_date: '记账日期',
       reason: '原因',
     },
-    values: { balance_sheet: '资产负债类，期初', profit_or_loss: '损益类，上期' },
+    values: { basis: { balance_sheet: '资产负债类，期初', profit_or_loss: '损益类，上期' } },
     yes: '是',
     no: '否',
   },
