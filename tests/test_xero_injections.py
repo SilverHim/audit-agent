@@ -3,11 +3,15 @@
   tests/test_xero_case (R74 验收 3) 断言, 不另写.
 - T1 收入截止 (需求 R122, 设计稿第 8.3 节), T4 银行回函余额差异 (需求 R123, 第 8.6 节): 规则引擎预置该场景的例外
   与候选行, 大模型输出叠在 tests/fixtures/llm_injected/<场景>.
+- 真实大模型成对断言 (需求 R124) 的辅助 (paired_side, assert_t1_pair, assert_t4_pair) 写在这里, 连库 live 用例与
+  这里不联网的自测共用.
 离线跑法只检编排与校验链路: 判断结论是预写的 fixture, 不证明系统能识别错报 (第 8.1 节). 副本要本地快照 (没有时跳过),
 标 external. 连库的见 tests/test_xero_injections_db."""
 
-from collections.abc import Callable
+import re
+from collections.abc import Awaitable, Callable
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -15,10 +19,12 @@ import pytest_asyncio
 
 from backend.contracts.data import TableKind
 from backend.contracts.models import (
+    Assertion,
     AuditException,
     Confirmation,
     ConfirmationResult,
     CriticVerdict,
+    Direction,
     EvidencePointer,
     ExceptionDisposition,
     Judgment,
@@ -27,10 +33,11 @@ from backend.contracts.models import (
     ProposedAction,
     TrailKind,
 )
-from backend.contracts.ports import AuditOutputStore
+from backend.contracts.ports import AuditOutputStore, LLMClient
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState
 from tests.test_e2e_xero17 import Xero17, run_xero17
+from tests.tools.live_budget import Budget
 from tests.xero_fakes import (
     ORC1026,
     REPO,
@@ -43,7 +50,9 @@ from tests.xero_fakes import (
 from tests.xero_harness import (
     LayeredMockLLMClient,
     Ran,
+    RoutedLLMClient,
     TableDiff,
+    XeroHarness,
     imported_tables,
     offline_deps,
     request_text,
@@ -354,3 +363,142 @@ async def test_t4_offline_deposit_in_transit(xero_case: Any) -> None:
     d04 = {x.id: x for x in baseline["exceptions"]}["X-CSH-02-1-D04-1"]
     assert exceptions["X-CSH-02-1-D04-1"] == d04 and d04.amount_cents == 4853
     same_judgments(ran.state, baseline, {"J-CSH-02-1-BA-091"})
+
+
+# ── 真实大模型成对断言 (需求 R124) 的辅助与不联网的自测 ──
+
+T4_TRANSIT = "J-CSH-02-1-BA-090"
+Build = Callable[[XeroCase, LLMClient], Awaitable[XeroHarness]]  # 在副本上装配测试台 (离线或连库), 大模型为给定客户端
+
+
+async def paired_side(
+    build: Build,
+    case: XeroCase,
+    mock_roots: list[Path],
+    live: LLMClient,
+    key: tuple[str, str],
+    budget: Budget,
+    programs: list[str],
+    judgment_id: str | None,
+) -> tuple[Ran, list[XeroHarness]]:
+    """成对断言的一侧: 只有被测对象 key (程序, fixture_key) 交 live (经 budget 计数, 超限即停发), 其余 (上游 DOC-04,
+    REV-03, DOC-06, 同程序的其他对象, A7) 读 mock_roots; 测试台跑 programs 的依赖闭包. 被测判断 judgment_id 没出来
+    (三次尝试都未通过校验) 时换新项目重做, 至多 1 次; 该侧本不该有判断 (None) 时不重做. 每次做完查一次预算 (已超限
+    即失败). 返回最后一次的结果与各次的测试台 (取留痕用)."""
+    built: list[XeroHarness] = []
+    for _ in range(2):
+        client = RoutedLLMClient(LayeredMockLLMClient(mock_roots), live, {key}, budget)
+        h = await build(case, client)
+        ran = await run_programs(h, programs)
+        built.append(h)
+        budget.check()
+        if judgment_id is None or any(j.id == judgment_id for j in ran.state["judgments"]):
+            break
+    return ran, built
+
+
+def judgment_of(state: EngagementState, judgment_id: str) -> Judgment:
+    found = [j for j in state["judgments"] if j.id == judgment_id]
+    assert found, f"没有判断 {judgment_id}"
+    return found[0]
+
+
+def assert_t1_pair(base: EngagementState, injected: EngagementState) -> None:
+    """R124 验收 2: ORC1026 的判断在 T0 副本上为 accept 且无错报草稿; 在 T1 副本上为 misstatement, 草稿金额 650000,
+    Cutoff, overstated, 科目含 200, Sales 或 Revenue (不分大小写), 解释的例外含 R01 与 R03."""
+    before, after = judgment_of(base, T1_ORC1026), judgment_of(injected, T1_ORC1026)
+    assert (before.proposed_action, before.misstatement_draft) == (ProposedAction.accept, None)
+    draft = after.misstatement_draft
+    assert after.proposed_action is ProposedAction.misstatement and draft is not None
+    assert (draft.amount_cents, draft.assertion, draft.direction) == (650000, Assertion.Cutoff, Direction.overstated)
+    assert re.search(r"200|sales|revenue", draft.account, re.IGNORECASE), draft.account
+    explained = {x.rule_id for x in injected["exceptions"] if x.id in after.exception_ids}
+    assert {"R01", "R03"} <= explained, after.exception_ids
+
+
+def assert_t4_pair(base: EngagementState, injected: EngagementState) -> None:
+    """R124 验收 3: T0 副本上没有 BA-090 的 D01 例外, 也没有 BA-090 的判断; T4 副本上有 D01 (-55000), BA-090 的判断为
+    accept 或 close 且无错报草稿."""
+
+    def d01(state: EngagementState) -> list[AuditException]:
+        return [x for x in state["exceptions"] if x.rule_id == "D01" and x.source_ids == ["BA-090"]]
+
+    assert d01(base) == [] and T4_TRANSIT not in {j.id for j in base["judgments"]}
+    assert [x.amount_cents for x in d01(injected)] == [-55000]
+    transit = judgment_of(injected, T4_TRANSIT)
+    assert transit.proposed_action in (ProposedAction.accept, ProposedAction.close), transit.proposed_action
+    assert transit.misstatement_draft is None
+
+
+def offline_build(rules: Any) -> Build:
+    """自测用的装配: 离线测试台, 规则预置 rules."""
+
+    async def build(case: XeroCase, llm: LLMClient) -> XeroHarness:
+        return await offline_deps(case, llm=llm, rules=rules)
+
+    return build
+
+
+async def test_paired_assertions_tell_right_from_wrong(xero_case: Any) -> None:
+    """R124 自测 (不联网): live 换成读 fixture 的假客户端, 基线侧给运行副本的输出, 注入侧给 llm_injected 的: 两对断言都
+    通过, 且各侧只有被测对象交给 live. 答反的都报错: T1 两侧都 accept, T4 基线侧也有 D01, T4 的判断建议了错报."""
+    t0, t1, t4 = xero_case("T0", base="t0"), xero_case("T1", base="t1"), xero_case("T4", base="t4")
+    budget = Budget(max_calls=10)
+    base, _ = await paired_side(
+        offline_build(XERO_RULES),
+        t0,
+        [t0.supplements / "llm"],
+        LayeredMockLLMClient([t0.supplements / "llm"]),
+        ("REV-02", ORC1026),
+        budget,
+        ["REV-02", "CSH-02"],
+        T1_ORC1026,
+    )
+    cutoff, _ = await paired_side(
+        offline_build(T1_RULES),
+        t1,
+        [t1.supplements / "llm"],
+        LayeredMockLLMClient([LLM_INJECTED / "T1"]),
+        ("REV-02", ORC1026),
+        budget,
+        ["REV-02"],
+        T1_ORC1026,
+    )
+    transit, _ = await paired_side(
+        offline_build(t4_rules(t4)),
+        t4,
+        [LLM_INJECTED / "T4", t4.supplements / "llm"],
+        LayeredMockLLMClient([LLM_INJECTED / "T4"]),
+        ("CSH-02", "BA-090"),
+        budget,
+        ["CSH-02"],
+        T4_TRANSIT,
+    )
+    assert (budget.used.calls, budget.exceeded) == (3, False)  # 两侧的 ORC1026 与 T4 的 BA-090 各一次
+    assert_t1_pair(base.state, cutoff.state)
+    assert_t4_pair(base.state, transit.state)
+    with pytest.raises(AssertionError):
+        assert_t1_pair(base.state, base.state)
+    with pytest.raises(AssertionError):
+        assert_t4_pair(transit.state, transit.state)
+    wrong = judgment_of(transit.state, T4_TRANSIT).model_copy(
+        update={"proposed_action": ProposedAction.misstatement, "misstatement_draft": T1_DRAFT}
+    )
+    with pytest.raises(AssertionError):
+        assert_t4_pair(base.state, {**transit.state, "judgments": [wrong]})  # type: ignore[typeddict-item]
+
+
+async def test_paired_side_redoes_once_without_the_judgment(xero_case: Any, tmp_path: Path) -> None:
+    """R124 自测: 被测对象的输出三次都不合格 (live 返回空对象) 时判断出不来, 换新项目重做一次后不再重做: 共装配两次,
+    live 计 6 次调用 (每次三次尝试); 基线侧本不该有判断 (judgment_id 为 None) 时只做一次."""
+    t0 = xero_case("T0")
+    bad = tmp_path / "bad"
+    (bad / "REV-02").mkdir(parents=True)
+    (bad / "REV-02" / f"{ORC1026}.json").write_text("{}", encoding="utf-8")
+    budget = Budget(max_calls=10)
+    args = (offline_build(XERO_RULES), t0, [t0.supplements / "llm"], LayeredMockLLMClient([bad]), ("REV-02", ORC1026))
+    ran, built = await paired_side(*args, budget, ["REV-02"], T1_ORC1026)
+    assert len(built) == 2 and budget.used.calls == 6
+    assert T1_ORC1026 not in {j.id for j in ran.state["judgments"]}
+    _, once = await paired_side(*args, Budget(max_calls=10), ["REV-02"], None)
+    assert len(once) == 1
