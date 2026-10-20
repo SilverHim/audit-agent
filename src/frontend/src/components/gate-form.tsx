@@ -49,6 +49,7 @@ import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
 import { procedureName } from '@/lib/review'
@@ -663,10 +664,14 @@ function PlanningFields({
             <li key={item.basis} className="flex flex-wrap gap-x-2">
               <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
               <Code>{formatAud(item.base_amount_cents)}</Code>
-              <span className="text-muted-foreground">
-                · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
-                <Code>{formatAud(item.high_cents)}</Code>
-              </span>
+              {item.not_applicable ? (
+                <span className="text-muted-foreground">· {t.planning.notApplicable[item.not_applicable]}</span>
+              ) : (
+                <span className="text-muted-foreground">
+                  · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
+                  <Code>{formatAud(item.high_cents)}</Code>
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -683,7 +688,7 @@ function PlanningFields({
               onChoice({ ...choice, basis, pct: next?.pct_high ?? choice.pct })
             }}
           >
-            {candidates.candidates.map((item) => (
+            {selectableCandidates(candidates).map((item) => (
               <option key={item.basis} value={item.basis}>
                 {t.bases[item.basis] ?? item.basis}
               </option>
@@ -928,17 +933,6 @@ function buildDecision(
     return { ...base, annotations }
   }
   return base
-}
-
-function initialChoice(candidates: MaterialityCandidates): MaterialityChoice {
-  const usable = candidates.candidates.find((item) => item.base_amount_cents > 0) ?? candidates.candidates[0]
-  const range = candidates.performance_pct_range ?? [0.5, 0.75]
-  return {
-    basis: usable?.basis ?? 'revenue',
-    pct: usable?.pct_high ?? 0.01,
-    performance_pct: range[1],
-    clearly_trivial_pct: candidates.clearly_trivial_pct ?? 0.05,
-  }
 }
 
 // 表单视图: 材料加决定卡片

@@ -255,6 +255,29 @@ async def test_pln01_candidates_follow_params_order() -> None:
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
 
 
+@pytest.mark.parametrize(
+    ("basis", "base", "expected"),
+    [
+        ("profit_before_tax", -150000000, "loss"),  # 税前亏损
+        ("profit_before_tax", 0, "not_positive"),
+        ("revenue", 0, "not_positive"),
+        ("total_assets", -1, "not_positive"),
+    ],
+)
+async def test_pln01_marks_non_positive_basis_not_applicable(basis: str, base: int, expected: str) -> None:
+    """需求 R351: 基准金额不为正的候选照常列出, 金额照算, 标本期不适用 (税前利润为负记 loss, 其余 not_positive);
+    其余两项不标. 防把它从材料里删掉, 或只认税前利润."""
+    rows = [r | {"base_amount_cents": base} if r["basis"] == basis else r for r in NUMBAT_M01_ROWS]
+    agent, ctx, _ = setup("PLN-01", only("PLN-01", RuleResult(exceptions=[], rows={"M01": rows})))
+    patch = await agent.run(ctx)
+    found = {c.basis: c for c in patch["materiality_candidates"].candidates}
+    assert [c.basis for c in found.values()] == ["revenue", "total_assets", "profit_before_tax"]
+    assert {b: c.not_applicable for b, c in found.items()} == {
+        b: expected if b == basis else None for b in ("revenue", "total_assets", "profit_before_tax")
+    }
+    assert (found[basis].base_amount_cents, found[basis].low_cents) == (base, scaled(base, found[basis].pct_low))
+
+
 async def test_pln01_uses_params_snapshot_not_template() -> None:
     agent, ctx, _ = setup("PLN-01")
     params = ctx.run.params_snapshot | {

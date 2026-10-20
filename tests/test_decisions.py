@@ -1399,7 +1399,8 @@ async def test_same_version_with_different_content_in_store_rejected() -> None:
 
 
 def loss_making(base_amount_cents: int) -> Agents:
-    """PLN-01 同 Numbat, 但税前利润基准金额改为 base_amount_cents (亏损为负), 候选区间随之."""
+    """PLN-01 同 Numbat, 但税前利润基准金额改为 base_amount_cents (亏损为负), 候选区间随之; 不标本期不适用
+    (not_applicable, 需求 R351 起由 A4 标), 即旧材料的样子: 闸门按金额拒绝, 不看标记."""
 
     def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
         numbat = cast(ScriptAgent, numbat_p1_agents(deps)["PLN-01"]).script

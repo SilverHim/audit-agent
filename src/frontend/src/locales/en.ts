@@ -455,6 +455,10 @@ export const en = {
   planning: {
     analytics: 'Preliminary analysis',
     candidates: 'Materiality candidates',
+    notApplicable: {
+      loss: 'not applicable this period: loss before tax, so profit before tax cannot be the basis',
+      not_positive: 'not applicable this period: the base amount is not positive',
+    },
     basis: 'Basis',
     overallPct: (low: string, high: string) => `Overall materiality (${low} to ${high} of the base)`,
     performancePct: (low: string, high: string) => `Performance materiality (${low} to ${high} of overall)`,

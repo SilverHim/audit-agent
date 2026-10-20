@@ -16,6 +16,7 @@ from backend.contracts.models import (
     AuditPlan,
     MaterialityCandidate,
     MaterialityCandidates,
+    MaterialityInapplicable,
     MonthlyFigures,
 )
 from backend.contracts.services import RuleResult
@@ -74,10 +75,19 @@ def scaled(base_cents: int, pct: float) -> int:
     return int((Decimal(base_cents) * Decimal(str(pct))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def inapplicable(basis: str, base_cents: int) -> MaterialityInapplicable | None:
+    """候选本期不适用的原因 (需求 R351): 基准金额为正时为空; 税前利润为负记 loss, 其余不为正的记 not_positive.
+    依据 ASA 320 第 A5 段 (税前利润不宜作基准时改用收入等其他基准); 不为正的基准乘比例得不出重要性."""
+    if base_cents > 0:
+        return None
+    return "loss" if basis == "profit_before_tax" and base_cents < 0 else "not_positive"
+
+
 def materiality_candidates(
     rows: Sequence[Mapping[str, Any]], params: Mapping[str, Any]
 ) -> tuple[list[MaterialityCandidate], tuple[float, float], float]:
-    """按 PLN-01 M01 的行 (basis, base_amount_cents) 与参数算候选, 顺序同 params.candidates.
+    """按 PLN-01 M01 的行 (basis, base_amount_cents) 与参数算候选, 顺序同 params.candidates. 基准金额不为正的
+    照常列出, 标本期不适用 (inapplicable), 闸门不能以它通过 (gates.check_materiality).
 
     返回 (候选, 执行重要性比例范围, 明显微小比例). M01 缺某个基准的行时抛 LookupError.
     """
@@ -95,6 +105,7 @@ def materiality_candidates(
                 pct_high=spec["pct_high"],
                 low_cents=scaled(base, spec["pct_low"]),
                 high_cents=scaled(base, spec["pct_high"]),
+                not_applicable=inapplicable(spec["basis"], base),
             )
         )
     low, high = params["performance_pct_range"]

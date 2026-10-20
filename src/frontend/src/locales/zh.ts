@@ -414,6 +414,10 @@ export const zh: Messages = {
   planning: {
     analytics: '初步分析',
     candidates: '重要性候选',
+    notApplicable: {
+      loss: '本期不适用：税前亏损，不能以税前利润为基准',
+      not_positive: '本期不适用：基准金额不为正',
+    },
     basis: '基准',
     overallPct: (low, high) => `重要性水平（基准的 ${low} 至 ${high}）`,
     performancePct: (low, high) => `实际执行的重要性（重要性水平的 ${low} 至 ${high}）`,

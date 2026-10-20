@@ -10806,6 +10806,21 @@
           "high_cents": {
             "type": "integer",
             "title": "High Cents"
+          },
+          "not_applicable": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "loss",
+                  "not_positive"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Applicable"
           }
         },
         "additionalProperties": false,

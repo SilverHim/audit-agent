@@ -522,6 +522,8 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
+# 重要性候选本期不适用的原因 (需求 R351): 税前亏损 (以税前利润为基准时), 其余基准金额不为正
+MaterialityInapplicable = Literal["loss", "not_positive"]
 # 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理; staged 为智能导入的批次里上传而
 # 尚未确认 (需求 R277): 类型为 other, 不被程序使用, 启动时也不补做, 确认时按确认单改为对应的类型与状态;
 # not_imported 为确认时没勾选的文件 (未导入, 终态): 类型仍为 other, 不被程序与体检使用, 要导入就重新上传
@@ -1262,6 +1264,8 @@ class MaterialityCandidate(Model):
     pct_high: float  # 比例上限
     low_cents: int  # 候选下限 = 基准金额 × pct_low
     high_cents: int  # 候选上限 = 基准金额 × pct_high
+    # 本期不适用的原因: 基准金额不为正时有值 (ASA 320 第 A5 段), 候选照常呈报, 不能选为重要性基准 (需求 R351)
+    not_applicable: MaterialityInapplicable | None = None
 
 
 class MaterialityCandidates(Versioned):

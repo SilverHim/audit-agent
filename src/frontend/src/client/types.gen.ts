@@ -3327,6 +3327,10 @@ export type MaterialityCandidate = {
      * High Cents
      */
     high_cents: number;
+    /**
+     * Not Applicable
+     */
+    not_applicable?: 'loss' | 'not_positive' | null;
 };
 
 /**

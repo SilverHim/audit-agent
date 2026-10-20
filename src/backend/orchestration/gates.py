@@ -321,7 +321,8 @@ def materiality_amounts(candidates: MaterialityCandidates, choice: MaterialityCh
 
 def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoice) -> None:
     """重要性选择的取值校验, 不过报 INVALID_VALUE: basis 在候选中, 且该候选的基准金额为正 (Q18: 如税前亏损时
-    不能以税前利润为基准, 候选照常列出供审计师参考); pct 在该候选 [pct_low, pct_high] 内;
+    不能以税前利润为基准; 候选照常列出并标本期不适用, 需求 R351. 按金额判断, 不看标记, 没有标记的旧候选同样拒绝);
+    pct 在该候选 [pct_low, pct_high] 内;
     performance_pct 在 performance_pct_range 内 (闭区间); clearly_trivial_pct 大于 0 且不超过候选给的比例 (Q8)."""
     candidate = next((c for c in candidates.candidates if c.basis == choice.basis), None)
     if candidate is None:
@@ -329,7 +330,8 @@ def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoi
     if candidate.base_amount_cents <= 0:
         raise DecisionRejected(
             "INVALID_VALUE",
-            f"materiality.basis {choice.basis} 的基准金额不为正 ({candidate.base_amount_cents} 分), 不能作为重要性基准",
+            f"materiality.basis {choice.basis} 本期不适用: 基准金额不为正 ({candidate.base_amount_cents} 分), "
+            "不能作为重要性基准",
         )
     if not candidate.pct_low <= choice.pct <= candidate.pct_high:
         raise DecisionRejected("INVALID_VALUE", f"materiality.pct 应在 [{candidate.pct_low}, {candidate.pct_high}] 内")
