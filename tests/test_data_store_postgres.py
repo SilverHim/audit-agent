@@ -1463,6 +1463,79 @@ async def test_migration_0020_round_trip(storage) -> None:  # type: ignore[no-un
         await engine.dispose()
 
 
+async def test_migration_0021_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
+    """需求 R306: 以属主角色在一个事务里走 0021 降级, 升级 (两次), 再降级, 最后回滚. 两个项目各有三份文件: 程序存档的
+    登记摘录 (registry_extract, auditor_upload, 没有上传人), 审计师上传的摘录 (有上传人), 银行直达的回函. 升级只把
+    第一份改为 registry (两个项目都改, 在 all_projects 块内), 降级改回. 需另设 TEST_DATABASE_OWNER_URL."""
+    from alembic.operations import Operations
+    from alembic.runtime.migration import MigrationContext
+    from sqlalchemy import text
+
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL: 测试库的属主角色 (迁移用)")
+    _, (first, second), _, _ = storage
+    module = migration("0021_registry_channel")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    rows = [
+        ("DOC-archived0001", "registry_extract", "auditor_upload", None),
+        ("DOC-uploaded0001", "registry_extract", "auditor_upload", "U-1"),
+        ("DOC-reply0000001", "confirmation", "bank_direct", None),
+    ]
+    engine = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with engine.connect() as conn:
+            outer = await conn.begin()
+            try:
+
+                async def channels(eid: str) -> dict[str, str]:
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+                    found = await conn.execute(
+                        text(
+                            "SELECT id, channel FROM documents WHERE id IN ('DOC-archived0001', 'DOC-uploaded0001', "
+                            "'DOC-reply0000001')"
+                        )
+                    )
+                    return {row[0]: row[1] for row in found}
+
+                await conn.run_sync(run("downgrade"))
+                for eid in (first.id, second.id):
+                    await conn.execute(text("SELECT set_config('app.engagement_id', :e, true)"), {"e": eid})
+                    for document_id, kind, channel, uploader in rows:
+                        await conn.execute(
+                            text(
+                                "INSERT INTO documents (engagement_id, id, type, file_name, file_path, sha256, "
+                                "page_count, reliability, status, uploaded_at, channel, uploaded_by) VALUES (:e, :i, "
+                                ":t, :i, '/x', :i, 1, 'external_original', 'extracted', now(), :c, :u)"
+                            ),
+                            {"e": eid, "i": document_id, "t": kind, "c": channel, "u": uploader},
+                        )
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))  # 可重复执行
+                upgraded = {
+                    "DOC-archived0001": "registry",
+                    "DOC-uploaded0001": "auditor_upload",
+                    "DOC-reply0000001": "bank_direct",
+                }
+                assert [await channels(e) for e in (first.id, second.id)] == [upgraded, upgraded]
+                await conn.execute(text("SELECT set_config('app.engagement_id', '', true)"))
+                await conn.run_sync(run("downgrade"))
+                restored = {**upgraded, "DOC-archived0001": "auditor_upload"}
+                assert [await channels(e) for e in (first.id, second.id)] == [restored, restored]
+            finally:
+                await outer.rollback()
+    finally:
+        await engine.dispose()
+
+
 async def test_migration_0012_round_trip(storage) -> None:  # type: ignore[no-untyped-def]
     """需求 R90: 以属主角色在一个事务里走 0012 降级再升级 (两次), 最后回滚. 降级后 documents 没有两列; 降级时已有的行
     升级后读回文件日期为空, 关联对象为 []. 需另设 TEST_DATABASE_OWNER_URL."""

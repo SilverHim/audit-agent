@@ -206,6 +206,22 @@ class CriticReasonType(StrEnum):
     reasoning_error = "reasoning_error"  # 结论不能从其所依据的事实推出
 
 
+class CriticReasonCode(StrEnum):
+    """独立复核跳过 (skipped) 或没做成 (not_applicable) 的原因代码 (需求 R309), 前端按界面语言显示;
+    Judgment.critic_reason 照旧写中文原句."""
+
+    critic_off = "critic_off"  # skipped: 功能开关 critic 关闭
+    no_review_model = "no_review_model"  # skipped: 未配置复核模型 (只在测试)
+    level_l1 = "level_l1"  # skipped: 程序运行时自主度 L1, 审计师逐条复核
+    level_l2 = "level_l2"  # skipped: 程序运行时自主度 L2, 审计师逐条复核
+    not_triggered = "not_triggered"  # skipped: 未命中触发规则
+    no_evidence = "no_evidence"  # not_applicable: 判断没有能解析的证据指针
+    first_round_invalid = "first_round_invalid"  # not_applicable: 第一轮输出重试后仍未通过校验
+    second_round_invalid = "second_round_invalid"  # not_applicable: 第二轮输出重试后仍未通过校验
+    chain_invalid = "chain_invalid"  # not_applicable: 判为一致, 但独立推理链没有通过校验
+    review_error = "review_error"  # not_applicable: 复核出错 (调用或读取存储失败)
+
+
 class DisputeResolution(StrEnum):
     """争议任务的仲裁结果."""
 
@@ -473,8 +489,9 @@ MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
 DocumentStatus = Literal["received", "classified", "extracted", "needs_manual", "staged", "not_imported"]
 # 需人工处理时卡在哪一步: 分类 (判断不了类型), 读取 (读不出文字), 抽取 (抽取校验不过), 关联 (对不上业务对象)
 DocumentFailedStep = Literal["classify", "read", "extract", "link"]
-# 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件
-DocumentChannel = Literal["auditor_upload", "bank_direct", "xero"]
+# 文件的来源渠道: 审计师上传, 银行直接回函 (函证平台), Xero 附件, 登记 (程序向登记机构查询后存档的摘录与人员检索
+# 结果, 如 GEN-08; 需求 R306)
+DocumentChannel = Literal["auditor_upload", "bank_direct", "xero", "registry"]
 
 
 # ── 2.2 证据与判断 ─────────────────────────────────────────
@@ -544,6 +561,10 @@ class Judgment(Versioned):
     critic_trigger: CriticTrigger | None = None  # 命中的触发规则 (功能 collab 打开时); 跳过, collab 关闭与旧数据为空
     critic_reason_type: CriticReasonType | None = None  # 不一致的理由类型, 其余为空
     critic_reason: str | None = None  # 理由: 一致或不一致的依据, 跳过或没做成的原因
+    # 跳过或没做成时原因的代码与技术细节 (需求 R309): 前端按代码取界面语言的文案, 细节 (校验级别与错误, 异常信息)
+    # 原样显示; 一致, 不一致 (理由由复核模型写), 人工建的判断与 R309 之前的数据为空, 前端照 critic_reason 原文显示
+    critic_reason_code: CriticReasonCode | None = None
+    critic_reason_detail: str | None = None
     critic_conclusion: str | None = None  # 第一轮只看证据得出的独立结论, 争议时与 A6 结论并排
     critic_reasoning_chain: list[ReasoningStep] = []  # 第一轮的独立推理链, 无效时仲裁不提供 a7_upheld
     # 第一轮的建议动作与错报草稿 (功能 collab 打开时写回, 需求 R150); 草稿没通过第一轮校验 (建议错报而缺, 金额对不上,
@@ -1584,7 +1605,7 @@ class DocumentRef(Model):
     uploaded_at: datetime  # 存档时间
     media_type: str = "application/pdf"  # 媒体类型, 如 text/csv
     channel: DocumentChannel = "auditor_upload"  # 来源渠道
-    uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函) 为空
+    uploaded_by: str | None = None  # 上传人的用户 ID; 系统存档 (如数据集载入, 函证回函, GEN-08 的登记存档) 为空
     failed_step: DocumentFailedStep | None = None  # 需人工处理时卡在哪一步, 其余状态为空
     document_date: date | None = None  # 文件日期, 如签署或发出日; 审计师补登记 (需求 R90), 没登记为空
     related_ids: list[str] = []  # 关联对象 ID, 如公司 ACN, 分录号, 银行流水; 审计师补登记, 没登记为空

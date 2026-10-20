@@ -191,6 +191,8 @@ def test_programs_reading_registrations_declare_the_document_types() -> None:
         # 需求 R134: 合同与凭证关联的文件; 后者类型不定, 列全部可作证据的类型 (加了新的证据类型须跟上, 否则该类文件的
         # 补登记不让 GEN-02 过期)
         "GEN-02": list(DOCUMENT_EVIDENCE),
+        # 需求 R138: 关系的证据可靠性取登记 PDF 的文件登记, 重建也按它取文件
+        "GEN-08": [DocumentType.registry_extract],
     }
     rev03 = LIBRARY.load("REV-03")
     undeclared = rev03.model_copy(update={"document_reads": []})

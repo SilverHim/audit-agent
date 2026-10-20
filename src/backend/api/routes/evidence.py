@@ -168,8 +168,8 @@ async def list_registry_extracts(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> list[RegistryExtractView]:
-    """上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的
-    不列."""
+    """审计师上传的各份 ASIC 摘录的当前抽取结果 (需求 R290, R306: 渠道 auditor_upload), 按文件 ID; 现在登记为
+    registry_extract 而还没有抽取结果的不列."""
     async with catch_api():
         return [RegistryExtractView.of(r) for r in await service.registry_extracts(engagement.id)]
 
@@ -184,7 +184,7 @@ async def edit_registry_extract(
 ) -> RegistryExtractView:
     """修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
     registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
-    文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+    文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
     INVALID_VALUE; 锁定 423; 忙 409."""
     async with catch_api():
         return RegistryExtractView.of(await service.edit_registry_extract(engagement.id, document_id, body, user.id))
@@ -196,7 +196,7 @@ async def registry_extract_history(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> list[RegistryExtractView]:
-    """ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404."""
+    """ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404."""
     async with catch_api():
         return [RegistryExtractView.of(r) for r in await service.registry_history(engagement.id, document_id)]
 

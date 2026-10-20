@@ -17,6 +17,7 @@ from backend.agents.review import CRITIC_SYSTEM, ReviewAgent, trigger
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
+    CriticReasonCode,
     CriticTrigger,
     CriticVerdict,
     DeclaredParty,
@@ -916,3 +917,91 @@ async def test_document_page_not_given_is_unsupported() -> None:
     assert [s.status for s in j.critic_reasoning_chain] == [StepStatus.unsupported, StepStatus.supported]
     task = deps.queue.make_task(TaskKind.dispute, j, j.procedure_id, j.run_id, NOW)
     assert DisputeResolution.a7_upheld not in deps.queue.resolutions(task, j)
+
+
+# ── 原因代码 (R309): 跳过与没做成的原因带代码, 前端按界面语言显示; 中文原句照旧 ──
+
+
+async def coded(case: str) -> Judgment:
+    """按 case 跑一次复核, 返回写好 critic 字段的判断."""
+    if case in ("level_l1", "level_l2"):
+        return (await reviewed(level=AutonomyLevel.L1 if case == "level_l1" else AutonomyLevel.L2))[1]
+    if case == "not_triggered":
+        return (await reviewed(proposed_action=ProposedAction.misstatement))[1]
+    if case == "consistent":
+        return (await reviewed(proposed_action=ProposedAction.close))[1]
+    x = Xero(features=frozenset()) if case == "critic_off" else Xero()
+    if case == "no_review_model":  # make_deps 给了 llm 没给 review_llm
+        return await ReviewAgent(x.deps).review(x.ctx, x.judgment())
+    if case == "no_evidence":
+        lost = [ReasoningStep(kind=StepKind.fact, text=CHAIN_TEXT, evidence=[NOT_GIVEN])]
+        return await x.agent(scripted(x.invoice.id, [], [])).review(
+            x.ctx, x.judgment(evidence=[NOT_GIVEN], reasoning_chain=lost)
+        )
+    review = {
+        "critic_off": scripted(x.invoice.id, [x.independent()], [verdict()]),
+        "first_round_invalid": scripted(x.invoice.id, ["not json"] * 3, [verdict()]),
+        "second_round_invalid": scripted(x.invoice.id, [x.independent()], ["not json"] * 3),
+        "chain_invalid": scripted(x.invoice.id, [x.independent([])], [verdict()]),
+        "review_error": ScriptedLLM({}),  # 没有这个对象的回复, 调用出错
+    }[case]
+    return await x.agent(review).review(x.ctx, x.judgment(proposed_action=ProposedAction.close))
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("case", "verdict_", "reason"),
+    [
+        ("critic_off", CriticVerdict.skipped, "功能开关 critic 关闭, 不做独立复核"),
+        ("no_review_model", CriticVerdict.skipped, "未配置复核模型, 不做独立复核"),
+        ("level_l1", CriticVerdict.skipped, "L1: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"),
+        ("level_l2", CriticVerdict.skipped, "L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"),
+        ("not_triggered", CriticVerdict.skipped, "未命中独立复核的触发规则"),
+        ("no_evidence", CriticVerdict.not_applicable, "独立复核没有完成: 判断没有能解析的证据指针"),
+    ],
+)
+async def test_skip_reasons_carry_codes_without_detail(case: str, verdict_: CriticVerdict, reason: str) -> None:
+    """R309 验收 1 的后端部分: 跳过的各原因 (及没有能解析的证据) 带代码, 中文原句同 R309 之前, 没有技术细节."""
+    j = await coded(case)
+    assert (j.critic_verdict, j.critic_reason, j.critic_reason_code, j.critic_reason_detail) == (
+        verdict_,
+        reason,
+        CriticReasonCode(case),
+        None,
+    )
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("case", "head", "detail"),
+    [
+        ("first_round_invalid", "第一轮输出未通过 syntax 校验 (", "syntax: "),
+        ("second_round_invalid", "第二轮输出未通过 syntax 校验 (", "syntax: "),
+        ("chain_invalid", "判为一致, 但独立推理链没有通过校验, 不计复核分项 (", ""),
+        ("review_error", "", ""),
+    ],
+)
+async def test_incomplete_reasons_carry_codes_and_detail(case: str, head: str, detail: str) -> None:
+    """没做成 (not_applicable) 的原因带代码; 技术细节 (未通过的级别与错误, 异常信息) 另记 critic_reason_detail, 与中文
+    原句里括注的那部分相同 (前端原样显示)."""
+    j = await coded(case)
+    assert (j.critic_verdict, j.critic_reason_code) == (CriticVerdict.not_applicable, CriticReasonCode(case))
+    assert j.critic_reason is not None and j.critic_reason_detail is not None
+    assert j.critic_reason_detail.startswith(detail) and len(j.critic_reason_detail) > len(detail)
+    errors = j.critic_reason_detail.removeprefix(detail)
+    tail = f"{errors})" if head else errors
+    assert j.critic_reason == f"独立复核没有完成: {head}{tail}"
+
+
+@pytest.mark.external
+async def test_reviewed_and_human_judgments_have_no_reason_code() -> None:
+    """复核做成了 (理由由复核模型写) 与人工建的判断不带代码与细节, 前端照 critic_reason 原文显示."""
+    j = await coded("consistent")
+    assert (j.critic_verdict, j.critic_reason, j.critic_reason_code, j.critic_reason_detail) == (
+        CriticVerdict.consistent,
+        "Same finding.",
+        None,
+        None,
+    )
+    human = Xero().judgment()  # 人工建的判断不经复核, 两项取缺省
+    assert (human.critic_reason_code, human.critic_reason_detail) == (None, None)

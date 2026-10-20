@@ -1,7 +1,7 @@
 id: GEN-08
 name: 股权穿透与关联方关系图
 # 规格书 6.1.1 (A5 含 GEN-08), 7.2 节 (L4); ASA 550 第 15 段 (识别关联方关系时留意记录与文件中未申报的关联方).
-# 无 SQL, 不调大模型. A5 经 RegistrySource 查登记 (agents/ownership, 需求 R137):
+# 无 SQL, 不调大模型. A5 经 RegistrySource 查登记 (agents/ownership, 需求 R137, R138):
 # 1. ABN Lookup 客户画像 (本项目采用的版本) 的 ABN, 取 ACN; 查不到或没有 ACN (不是公司) 抛 LookupError, 执行失败.
 # 2. 取报告主体的 ASIC 公司摘录, 再沿母公司链向上穿透 (逐层取其摘录), 至多 max_depth 层. 母公司链 = 持股不低于
 #    significant_pct 的法人股东逐层向上 (控制或重大影响); 持股更低的法人股东只按摘录建节点与关系, 不查其摘录, 不检索
@@ -14,12 +14,19 @@ name: 股权穿透与关联方关系图
 # payload 为查询参数, 结构化结果 (去掉 PDF 原件) 与存档文件的 ID (ABN 查询没有文件); 人员检索那行的摘要只写检索序号,
 # 不写姓名与出生日期. 摘录与检索结果的 PDF 存档为 registry_extract (external_original, 已抽取). 关系只取公司摘录
 # (人员检索只用来发现新公司); 节点与关系的写法见接口文档第 6 节.
+# 幂等 (需求 R138): 幂等键跨执行共用. 成功的查询在重跑与恢复时不再调 RegistrySource, 由 payload 与已登记的
+# registry_extract 文件重建 (缺结果, 缺文件 ID 或文件未登记抛 LookupError); 查不到的那行记 success 为假, 重跑与恢复时
+# 都再查 (留痕多出同键的行); 新建的客户上传的摘录 (结果带 document_id) 每次重读. 失败路径: 客户不可穿透或查询抛错时
+# 整次失败, A1 建 failed 任务, rerun 只补查没有成功留痕的; 新建的客户没有人员检索来源 (RegistryUnavailable no_source)
+# 时不算失败, 出 R02. 重跑时关系图版本取状态中的 +1; 当前结果中 (不属于被过期重跑取代的执行) 已有的同 (规则,
+# source_ids) 例外不再出, 过期重跑以新结果为准, 照常出在新执行下.
 # 规则 (在代码中生成, 例外 ID X-GEN-08-{run_no}-{规则}-{n}):
 # - R01 关联候选未申报 (high): 关系图中报告主体以外的公司, 不在画像的申报清单 (related_parties 与 ownership 中的公司)
 #   中. 按 ACN 比对 (申报项的 acn, 或 abn 的后 9 位); 申报项两者都没有时按名称比对: 两边经 services/party_names
 #   .party_name_key 规范化 (不去前缀, 去 entity_suffixes), 键相等即算申报. 不引 AASB 段号 (决定 3).
-# - R02 穿透中断 (medium): 摘录查不到, 法人股东没有 ACN, 或法人股东链超过 max_depth; 由需求 R138 出例外. 本条起
-#   这些公司照样建节点 (searched 为假) 与关系, 不再往下穿透.
+# - R02 穿透中断 (medium): 发现的公司 (含报告主体) 摘录查不到, 没有 ACN, 或在母公司链上超过 max_depth (detail.reason
+#   依次为 查不到摘录, 没有 ACN, 达到 max_depth); 或有高管因没有人员检索来源而未检索 (没有人员检索来源, 高管未检索).
+#   这些公司照样建节点 (searched 为假) 与关系, 不再往下穿透. 持股低于 significant_pct 的法人股东不在链上, 不出 R02.
 phase: P2_Executing
 cycle: Pervasive
 owner: A5
@@ -27,7 +34,10 @@ feature: related_parties          # 功能开关 (services/features.py): 关联�
 fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
 outputs: [ownership_graph, exceptions, documents]
 document_types: [registry_extract]
-# reads [registry_extracts] 由需求 R138 加: 本条重跑仍出关系图 v1 (Store 按 id 与版本返回旧的), 重跑出 v2 在 R138
+# 审计师上传或修改 ASIC 摘录后过期, 重跑出关系图的下一版 (需求 R138). 另读登记 PDF 的文件登记 (documents): 关系的
+# 证据可靠性取它, 重建也按它取文件, 补登记后过期 (需求 R304 的写法, 只看 registry_extract 一类)
+reads: [registry_extracts, documents]
+document_reads: [registry_extract]
 engine: rule
 autonomy_level: L4
 assertions: [Completeness]

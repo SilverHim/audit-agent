@@ -1363,6 +1363,14 @@ export type ConversationTurn = {
 };
 
 /**
+ * CriticReasonCode
+ *
+ * 独立复核跳过 (skipped) 或没做成 (not_applicable) 的原因代码 (需求 R309), 前端按界面语言显示;
+ * Judgment.critic_reason 照旧写中文原句.
+ */
+export type CriticReasonCode = 'critic_off' | 'no_review_model' | 'level_l1' | 'level_l2' | 'not_triggered' | 'no_evidence' | 'first_round_invalid' | 'second_round_invalid' | 'chain_invalid' | 'review_error';
+
+/**
  * CriticReasonType
  *
  * 独立复核判不一致的理由类型.
@@ -1842,7 +1850,7 @@ export type DocumentRef = {
     /**
      * Channel
      */
-    channel?: 'auditor_upload' | 'bank_direct' | 'xero';
+    channel?: 'auditor_upload' | 'bank_direct' | 'xero' | 'registry';
     /**
      * Uploaded By
      */
@@ -2791,6 +2799,11 @@ export type Judgment = {
      * Critic Reason
      */
     critic_reason?: string | null;
+    critic_reason_code?: CriticReasonCode | null;
+    /**
+     * Critic Reason Detail
+     */
+    critic_reason_detail?: string | null;
     /**
      * Critic Conclusion
      */

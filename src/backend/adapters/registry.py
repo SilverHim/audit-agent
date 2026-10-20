@@ -16,14 +16,23 @@ from backend.contracts.ports import AbnLookup, DataStore, EngagementStore, Evide
 async def latest_extractions(
     financial: FinancialDataStore, data: DataStore, eid: str
 ) -> list[tuple[DocumentRef, ExtractionRecord]]:
-    """各份 ASIC 摘录的当前抽取结果 (需求 R290): 现在登记为 registry_extract 的文件中有抽取版本的, 各取最新一版
-    (审计师修改出的新版本即取它), 按文件 ID. ACC-04 (UploadedExtracts) 与接口 (DataService.registry_extracts) 共用."""
-    documents = {d.id: d for d in await financial.documents(eid, DocumentType.registry_extract)}
+    """各份 ASIC 摘录的当前抽取结果 (需求 R290): 审计师上传 (uploaded_extracts) 而现在登记为 registry_extract 的文件中
+    有抽取版本的, 各取最新一版 (审计师修改出的新版本即取它), 按文件 ID. ACC-04 (UploadedExtracts) 与接口
+    (DataService.registry_extracts) 共用."""
+    documents = {d.id: d for d in await uploaded_extracts(financial, eid)}
     latest: dict[str, ExtractionRecord] = {}
     for record in await data.extraction_versions(eid, REGISTRY_TARGET):
         if record.target_id in documents:
             latest[record.target_id] = record  # 按版本升序读出, 后面的覆盖前面的
     return [(documents[k], latest[k]) for k in sorted(latest)]
+
+
+async def uploaded_extracts(financial: FinancialDataStore, eid: str) -> list[DocumentRef]:
+    """审计师上传的 ASIC 摘录: 登记为 registry_extract 且渠道为 auditor_upload 的文件 (需求 R306). 程序向登记机构查询
+    后存档的 (渠道 registry, 如 GEN-08 的摘录与人员检索结果) 不算: 它们的结构化结果在留痕里, 没有抽取版本, 算进来会
+    被当成 "没能读出的摘录"."""
+    documents = await financial.documents(eid, DocumentType.registry_extract)
+    return [d for d in documents if d.channel == "auditor_upload"]
 
 
 class UploadedExtracts:
@@ -53,7 +62,7 @@ class UploadedExtracts:
         unread 为没能读出的份数; 对得上的那份可能正是没读出的, ACC-04 两项待人工确认); 都读出了而 ACN 都对不上为
         None."""
         found = await self.latest(eid)
-        unread = len(await self.financial.documents(eid, DocumentType.registry_extract)) - len(found)
+        unread = len(await uploaded_extracts(self.financial, eid)) - len(found)
         matched = [item for item in found if item[1].acn == acn]
         if not matched and (unread or not found):
             raise RegistryUnavailable(

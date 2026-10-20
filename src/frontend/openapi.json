@@ -2022,7 +2022,7 @@
           "evidence"
         ],
         "summary": "List Registry Extracts",
-        "description": "上传的各份 ASIC 摘录的当前抽取结果 (需求 R290), 按文件 ID; 现在登记为 registry_extract 而还没有抽取结果的\n不列.",
+        "description": "审计师上传的各份 ASIC 摘录的当前抽取结果 (需求 R290, R306: 渠道 auditor_upload), 按文件 ID; 现在登记为\nregistry_extract 而还没有抽取结果的不列.",
         "operationId": "evidence-list_registry_extracts",
         "security": [
           {
@@ -2074,7 +2074,7 @@
           "evidence"
         ],
         "summary": "Edit Registry Extract",
-        "description": "修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,\nregistered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).\n文件不是 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422\nINVALID_VALUE; 锁定 423; 忙 409.",
+        "description": "修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,\nregistered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).\n文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422\nINVALID_VALUE; 锁定 423; 忙 409.",
         "operationId": "evidence-edit_registry_extract",
         "security": [
           {
@@ -2141,7 +2141,7 @@
           "evidence"
         ],
         "summary": "Registry Extract History",
-        "description": "ASIC 摘录抽取结果的各版, 按版本升序. 文件不是 ASIC 摘录或还没有抽取结果 404.",
+        "description": "ASIC 摘录抽取结果的各版, 按版本升序. 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404.",
         "operationId": "evidence-registry_extract_history",
         "security": [
           {
@@ -7191,6 +7191,23 @@
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
       },
+      "CriticReasonCode": {
+        "type": "string",
+        "enum": [
+          "critic_off",
+          "no_review_model",
+          "level_l1",
+          "level_l2",
+          "not_triggered",
+          "no_evidence",
+          "first_round_invalid",
+          "second_round_invalid",
+          "chain_invalid",
+          "review_error"
+        ],
+        "title": "CriticReasonCode",
+        "description": "独立复核跳过 (skipped) 或没做成 (not_applicable) 的原因代码 (需求 R309), 前端按界面语言显示;\nJudgment.critic_reason 照旧写中文原句."
+      },
       "CriticReasonType": {
         "type": "string",
         "enum": [
@@ -8068,7 +8085,8 @@
             "enum": [
               "auditor_upload",
               "bank_direct",
-              "xero"
+              "xero",
+              "registry"
             ],
             "title": "Channel",
             "default": "auditor_upload"
@@ -9812,6 +9830,27 @@
               }
             ],
             "title": "Critic Reason"
+          },
+          "critic_reason_code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CriticReasonCode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "critic_reason_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Critic Reason Detail"
           },
           "critic_conclusion": {
             "anyOf": [

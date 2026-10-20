@@ -376,6 +376,18 @@ export const zh: Messages = {
         different_conclusion: '得出不同结论',
         reasoning_error: '推理有误',
       },
+      reasonCodes: {
+        critic_off: '独立复核功能已关闭，未做独立复核',
+        no_review_model: '未配置复核模型，未做独立复核',
+        level_l1: 'L1：审计师逐条复核，不经独立复核',
+        level_l2: 'L2：审计师逐条复核，不经独立复核',
+        not_triggered: '未命中独立复核的触发规则',
+        no_evidence: '独立复核没有完成：判断引用的证据都解析不了',
+        first_round_invalid: '独立复核没有完成：独立结论未通过校验',
+        second_round_invalid: '独立复核没有完成：与原结论的比对未通过校验',
+        chain_invalid: '独立复核没有完成：判为一致，但独立推理链未通过校验，不计复核分项',
+        review_error: '独立复核没有完成：复核出错',
+      },
       triggers: {
         main: '自主执行且建议接受或关闭',
         internal_copy: '证据全为内部副本',
@@ -1061,6 +1073,13 @@ export const zh: Messages = {
       external_copy: '外部副本',
       internal_original: '内部原件',
       internal_copy: '内部副本',
+    },
+    // 没有上传人的文件在上传人一栏显示的来源 (需求 R306, 键见 en.ts 的 DocumentSource); 审计师上传的显示上传人
+    channels: {
+      systemArchive: '系统存档',
+      bank_direct: '银行直达回函',
+      xero: 'Xero 附件',
+      registry: '登记机构查询存档',
     },
     noDocuments: '还没有文件。',
     events: {

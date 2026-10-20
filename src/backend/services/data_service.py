@@ -18,7 +18,7 @@ from uuid import uuid4
 from langgraph.types import Command
 from pydantic import BaseModel, ValidationError
 
-from backend.adapters.registry import latest_extractions
+from backend.adapters.registry import latest_extractions, uploaded_extracts
 from backend.adapters.xero_supplements import STAGE_REQUESTS, DemoPlan, DemoSource, plan
 from backend.agents.base import AgentDeps
 from backend.agents.checkup import DataCheckup, checkup_entries, request_entry
@@ -1938,13 +1938,14 @@ class DataService:
     # ── ASIC 摘录的抽取结果 (需求 R290) ──
 
     async def registry_extracts(self, eid: str) -> list[ExtractionRecord]:
-        """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 现在登记为 registry_extract 的文件中有抽取版本的,
-        各取最新一版, 按文件 ID; 与 ACC-04 读的同一份 (adapters.registry.latest_extractions)."""
+        """各份 ASIC 摘录的当前抽取结果 (GET /registry-extracts): 审计师上传 (渠道 auditor_upload, 需求 R306) 而现在
+        登记为 registry_extract 的文件中有抽取版本的, 各取最新一版, 按文件 ID; 与 ACC-04 读的同一份
+        (adapters.registry.latest_extractions)."""
         return [record for _, record in await latest_extractions(self.deps.financial_store, self.deps.data, eid)]
 
     async def registry_history(self, eid: str, document_id: str) -> list[ExtractionRecord]:
-        """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是 ASIC
-        摘录或还没有抽取结果 404."""
+        """一份 ASIC 摘录抽取结果的各版 (GET /registry-extracts/{document_id}/history), 按版本升序; 文件不是审计师
+        上传的 ASIC 摘录或还没有抽取结果 404."""
         return await self._registry_records(eid, document_id)
 
     async def edit_registry_extract(
@@ -1999,8 +2000,8 @@ class DataService:
         return record
 
     async def _registry_documents(self, eid: str) -> set[str]:
-        """现在登记为 ASIC 摘录 (registry_extract) 的文件 ID."""
-        return {d.id for d in await self.deps.financial_store.documents(eid, DocumentType.registry_extract)}
+        """审计师上传而现在登记为 ASIC 摘录 (registry_extract) 的文件 ID (adapters.registry.uploaded_extracts)."""
+        return {d.id for d in await uploaded_extracts(self.deps.financial_store, eid)}
 
     async def _registry_records(self, eid: str, document_id: str) -> list[ExtractionRecord]:
         """一份 ASIC 摘录抽取结果的各版, 按版本升序; 文件不是 ASIC 摘录或还没有抽取结果抛 LookupError."""

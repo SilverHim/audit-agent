@@ -147,6 +147,19 @@ export function draftFromMisstatement(draft: ReviewDraft, proposed: Misstatement
   }
 }
 
+// 独立复核的理由怎么显示 (后端 R309): 跳过或没做成的带 critic_reason_code, 按界面语言取文案, 没做成的另带技术细节
+// (critic_reason_detail: 校验级别与错误, 异常信息, 原样显示). 没有代码的照 critic_reason 原文 (raw 为真): 一致或不一致
+// 时理由由复核模型写; R309 之前存下的判断只有中文原句. 认不出的代码 (前端比后端旧) 也照原文
+export type CriticReasonText = { text: string; detail: string | null; raw: boolean }
+
+export function criticReasonText(judgment: Judgment, t: Messages): CriticReasonText | null {
+  const code = judgment.critic_reason_code
+  const coded = code ? t.judgment.critic.reasonCodes[code] : undefined
+  if (coded) return { text: coded, detail: judgment.critic_reason_detail ?? null, raw: false }
+  if (!judgment.critic_reason) return null
+  return { text: judgment.critic_reason, detail: null, raw: true }
+}
+
 // 争议任务两方的建议 (后端 R150): a6 为原判断的建议动作与错报草稿, a7 为独立复核的 (critic_ 字段; 功能 collab
 // 之前的判断没有, 为 null)
 export type DisputeSide = 'a6' | 'a7'

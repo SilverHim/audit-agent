@@ -797,6 +797,58 @@ XERO17_ANNOTATION = Annotation(
 XERO17_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]  # REV-03 的判断对象, 按编号
 XERO17_INVOICES = [str(row["id"]) for row in XERO_S01_ROWS]  # REV-02 的判断对象 (S01 六张), 按发票 ID
 
+# ── 打开功能 journals 的增量 (需求 R146; 设计稿第 7.2 节第 12, 13 步): GEN-05 七条例外, GEN-02 七条判断与其决定 ──
+
+XERO_JOURNALS_FEATURES = BASELINE | {"journals"}  # 基线加分录测试 (GEN-05, GEN-02)
+XERO_JOURNAL_VOUCHERS = ["XJ-397", "XJ-405", "XJ-430", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # GEN-02 的判断对象
+# 审计师对 XJ-499 判断认定错报所附草稿: 取判断的草稿 (设计稿第 6.3 节; 科目代码由 R156 回填)
+XERO_XJ499_DRAFT = MisstatementDraft(
+    type="factual",
+    account="Office equipment (710)",
+    assertion="Existence",
+    amount_cents=75000,
+    direction="overstated",
+)
+# 审计师调阅报销单 E003 后推翻 XJ-575 的判断 (设计稿第 4 节第 17 行, 第 7.2 节第 13 步): 录入时把姓写错, 改为接受
+XERO_XJ575_REASON = (
+    "Expense claim E003 was inspected: it is Odette Garrison's approved claim for AUD 296.95, and the surname on "
+    "XJ-560 was entered wrongly."
+)
+XERO_XJ575_CONCLUSION = (
+    "XJ-575 pays Odette Garrison's approved expense claim E003 of AUD 296.95; the payee name on the voided entry "
+    "XJ-560 was a data entry error, so the repost is supported and no misstatement arises."
+)
+
+
+def xero_journal_reviews(actor: str = ENGAGEMENT.owner_id) -> list[ReviewRecord]:
+    """GEN-02 七条判断的复核决定, 按凭证号: XJ-499 认定错报 (草稿 XERO_XJ499_DRAFT), XJ-575 推翻为接受 (理由与新结论
+    见上), 其余 5 条 confirm. 都绑定判断第 1 版. 七条任务与 REV-03, CSH-02 的同在第一轮出现, 排在 xero17_reviews 之后
+    提交时仍待决."""
+
+    def record(voucher: str, decision: Decision = Decision.confirm, **fields: Any) -> ReviewRecord:
+        return ReviewRecord(
+            id=f"D-GEN02-{voucher}",
+            task_id=f"T-J-GEN-02-1-{voucher}-v1",
+            target_version=1,
+            decision=decision,
+            reviewed_by=actor,
+            decided_at=NOW,
+            **fields,
+        )
+
+    special = {
+        "XJ-499": record(
+            "XJ-499",
+            Decision.misstatement,
+            reason="The fixed asset register shows no office equipment, so the AUD 750.00 asset has no basis.",
+            misstatement_draft=XERO_XJ499_DRAFT,
+        ),
+        "XJ-575": record(
+            "XJ-575", Decision.override, reason=XERO_XJ575_REASON, override_conclusion=XERO_XJ575_CONCLUSION
+        ),
+    }
+    return [special.get(voucher) or record(voucher) for voucher in XERO_JOURNAL_VOUCHERS]
+
 
 def new_xero_deps(**kwargs: Any) -> AgentDeps:
     """还没有数据的 Xero 演示项目 (演示数据导入从空写起, 需求 R269): 空的假财务存储, 数据管理存储未就绪 (数据版本 0,
@@ -881,10 +933,13 @@ async def finish_xero17(
     eid: str,
     actor: str = ENGAGEMENT.owner_id,
     before_review: Callable[[GraphRunner, str, ReviewRecord], Awaitable[None]] | None = None,
+    reviews: Sequence[ReviewRecord] | None = None,
+    stop_at_fin: bool = False,
 ) -> None:
-    """确认数据已齐之后 (停在 PLN-01/03 闸门) 推到签字归档: PLN-01/03 approve, 10 条复核 (每次提交前须停在
-    await_events, 没有后台错误), FIN-01 approve 无保留意见, RPT-01 先退回再批准. 每步等后台停下. before_review 在
-    提交每条复核之前以 (runner, eid, 决定) 调 (如先呈递它的任务, 需求 R155)."""
+    """确认数据已齐之后 (停在 PLN-01/03 闸门) 推到签字归档: PLN-01/03 approve, 复核 (缺省为 xero17_reviews 的 10 条;
+    每次提交前须停在 await_events, 没有后台错误), FIN-01 approve 无保留意见, RPT-01 先退回再批准. 每步等后台停下.
+    before_review 在提交每条复核之前以 (runner, eid, 决定) 调 (如先呈递它的任务, 需求 R155); stop_at_fin 为真时停在
+    FIN-01 闸门, 不作 FIN-01 与 RPT-01 的决定 (需求 R146: 意见与报告不在本组)."""
     submit = GraphDecisionSubmit(runner.app, runner.deps, runner)
     gates = xero17_gates(actor)
 
@@ -898,12 +953,14 @@ async def finish_xero17(
 
     assert await at() == ("gate_p1_risk",), runner.run_error(eid)
     await send(gates["pln"])
-    for review in xero17_reviews(actor):
+    for review in xero17_reviews(actor) if reviews is None else reviews:
         assert await at() == ("await_events",), (review.task_id, runner.run_error(eid))
         if before_review is not None:
             await before_review(runner, eid, review)
         await send(review)
     assert await at() == ("gate_fin",), runner.run_error(eid)
+    if stop_at_fin:
+        return
     await send(gates["fin"])
     assert await at() == ("gate_rpt01",)
     await send(gates["rpt_reject"])
