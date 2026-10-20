@@ -1,7 +1,8 @@
 """注入测试的离线断言 (设计稿 v2.1 第 8 节): 在 xero_case 的副本上经测试台 (tests/xero_harness) 跑现有程序.
 - T0 基线副本 (需求 R121): 不打补丁的副本与原目录等价, 现有程序在副本上的结果即各场景的对照值. 七张表逐行相同已由
   tests/test_xero_case (R74 验收 3) 断言, 不另写.
-- T1 收入截止 (需求 R122, 设计稿第 8.3 节): 规则引擎预置该场景的例外, 大模型输出叠在 tests/fixtures/llm_injected/T1.
+- T1 收入截止 (需求 R122, 设计稿第 8.3 节), T4 银行回函余额差异 (需求 R123, 第 8.6 节): 规则引擎预置该场景的例外
+  与候选行, 大模型输出叠在 tests/fixtures/llm_injected/<场景>.
 离线跑法只检编排与校验链路: 判断结论是预写的 fixture, 不证明系统能识别错报 (第 8.1 节). 副本要本地快照 (没有时跳过),
 标 external. 连库的见 tests/test_xero_injections_db."""
 
@@ -17,6 +18,7 @@ from backend.contracts.models import (
     AuditException,
     Confirmation,
     ConfirmationResult,
+    CriticVerdict,
     EvidencePointer,
     ExceptionDisposition,
     Judgment,
@@ -34,6 +36,7 @@ from tests.xero_fakes import (
     REPO,
     XERO_RULES,
     xero_contracts,
+    xero_csh02_rows,
     xero_documents,
     xero_rev08_exception,
 )
@@ -43,6 +46,7 @@ from tests.xero_harness import (
     TableDiff,
     imported_tables,
     offline_deps,
+    request_text,
     run_programs,
     table_diff,
 )
@@ -238,3 +242,115 @@ async def test_t1_offline_cutoff_misstatement(xero_case: Any) -> None:
         (ORC1026, LLM_INJECTED / "T1")
     ]
     same_judgments(ran.state, baseline, {j.id for j in baseline["judgments"]} - {T1_ORC1026})
+
+
+# ── T4 银行回函余额差异 (需求 R123) ──
+
+
+def t4_b01(run: ProcedureRun) -> AuditException:
+    """T4 的 CSH-05 B01: BA-090 对账单期末 -1090044 (BT-090-0072), 账面 (副本试算表 090) -1035044, 差 -55000; 字段同
+    连库 SqlRuleEngine 的结果 (连库用例断言两者相等)."""
+    return AuditException(
+        id=f"X-CSH-05-{run.run_no}-B01-1",
+        procedure_id="CSH-05",
+        run_id=run.id,
+        rule_id="B01",
+        severity="medium",
+        source_ids=["BA-090"],
+        amount_cents=-55000,
+        detail={
+            "statement_balance_cents": -1090044,
+            "book_balance_cents": -1035044,
+            "last_bank_transaction_id": "BT-090-0072",
+        },
+        evidence=[
+            EvidencePointer(
+                type="bank",
+                source_type="bank_account",
+                source_id="BA-090",
+                locator="amount_cents, statement_balance_cents, book_balance_cents, last_bank_transaction_id",
+                reliability="external_copy",
+            )
+        ],
+    )
+
+
+def t4_rules(case: XeroCase) -> dict[str, Callable[[ProcedureRun], RuleResult]]:
+    """T4 的规则预置: CSH-05 出 B01; CSH-02 的候选行 (D02 至 D04) 按副本的表派生; 其余同 T0 (XERO_RULES). PLN-07 在
+    副本上 A01 少了 090 一条, 只在连库断言, 离线沿用 T0 的 (不影响现金一串)."""
+    return {
+        **XERO_RULES,
+        "CSH-05": lambda run: RuleResult(exceptions=[t4_b01(run)], rows={}),
+        "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows(case.loader)),
+    }
+
+
+def test_t4_patch_moves_the_receipt_into_the_period(xero_case: Any) -> None:
+    """验收 1: 补丁把 JournalNumber 637 (Yarra Transport 付 ORC1021 的 550.00) 的日期由 10-06 改为 09-30, 试算表 090 由
+    -1090044 调为 -1035044, 610 由 1019950 调为 964950 (xero_case 已核对副本借贷平衡且等于分录推出的余额); 导入后的各表
+    与原目录相比只有 XJ-637-1, -2 的入账日与这两行试算表."""
+    case: XeroCase = xero_case("T4")
+    moved = {"posting_date": (date(2026, 10, 6), date(2026, 9, 30))}
+    assert table_diff(imported_tables(), imported_tables(case.loader)) == {
+        TableKind.journal_entries: TableDiff(added=[], deleted=[], changed={"XJ-637-1": moved, "XJ-637-2": moved}),
+        TableKind.trial_balance: TableDiff(
+            added=[],
+            deleted=[],
+            changed={
+                "current:090": {"balance_cents": (-1090044, -1035044)},
+                "current:610": {"balance_cents": (1019950, 964950)},
+            },
+        ),
+    }
+
+
+async def test_t4_offline_deposit_in_transit(xero_case: Any) -> None:
+    """验收 2: T4 副本上跑 CSH-02 的依赖闭包, 规则预置 B01 与副本的候选行, BA-090 的判断与 A7 两轮取 llm_injected/T4:
+    C-BA-090 账面 -1035044, 差额 -55000, 结果 difference, D01 例外 -55000; 判断 accept, 解释 CSH-05 B01 与 CSH-02 D01
+    两条, 引 D03 的 XJ-637-2 与 D02 的 BT-090-0081 (两行都在请求的上下文里); A7 复核一致; 全部一次通过. BA-091 一侧
+    (C-BA-091 agreed, D04 例外 4853, 判断 misstatement) 与 T0 副本上的逐字段相同 (判断除 RUN_FIELDS)."""
+    t4, t0 = xero_case("T4", base="t4"), xero_case("T0", base="t0")
+    client = LayeredMockLLMClient([LLM_INJECTED / "T4", t4.supplements / "llm"])
+    ran = await run_programs(await offline_deps(t4, llm=client, rules=t4_rules(t4)), ["CSH-02"])
+    baseline = (await run_programs(await offline_deps(t0), ["CSH-02"])).state
+    confirmations = {c.id: c for c in ran.state["confirmations"]}
+    c090 = confirmations["C-BA-090"]
+    assert (c090.result, c090.confirmed_balance_cents, c090.book_balance_cents, c090.difference_cents) == (
+        ConfirmationResult.difference,
+        -1090044,
+        -1035044,
+        -55000,
+    )
+    exceptions = {x.id: x for x in ran.state["exceptions"]}
+    assert (exceptions["X-CSH-02-1-D01-1"].source_ids, exceptions["X-CSH-02-1-D01-1"].amount_cents) == (
+        ["BA-090"],
+        -55000,
+    )
+    judgments = {j.id: j for j in ran.state["judgments"]}
+    transit = judgments["J-CSH-02-1-BA-090"]
+    assert (transit.proposed_action, transit.misstatement_draft) == (ProposedAction.accept, None)
+    assert transit.exception_ids == ["X-CSH-05-1-B01-1", "X-CSH-02-1-D01-1"]
+    assert {("journal_entry", "XJ-637-2"), ("bank_transaction", "BT-090-0081")} <= {
+        (p.source_type, p.source_id) for p in transit.evidence
+    }
+    assert transit.critic_verdict is CriticVerdict.consistent
+    [request] = [r for r in client.requests if (r.procedure_id, r.fixture_key) == ("CSH-02", "BA-090")]
+    assert '"id": "XJ-637-2"' in request_text(request) and '"id": "BT-090-0081"' in request_text(request)
+    calls = llm_calls(ran)
+    assert {(attempt, failed) for _, _, attempt, failed in calls} == {(1, None)}
+    assert [(pid, key) for pid, key, *_ in calls if pid in ("CSH-02", "GEN-09")] == [
+        ("CSH-02", "BA-090"),  # A7 两轮紧跟在该判断之后
+        ("GEN-09", "BA-090-r1"),
+        ("GEN-09", "BA-090-r2"),
+        ("CSH-02", "BA-091"),
+    ]
+    assert sorted((r.procedure_id, r.fixture_key) for r in client.reads if r.root == LLM_INJECTED / "T4") == [
+        ("CSH-02", "BA-090"),
+        ("GEN-09", "BA-090-r1"),
+        ("GEN-09", "BA-090-r2"),
+    ]
+    before = {c.id: c for c in baseline["confirmations"]}
+    assert confirmations["C-BA-091"] == before["C-BA-091"] and before["C-BA-091"].result is ConfirmationResult.agreed
+    d04 = {x.id: x for x in baseline["exceptions"]}["X-CSH-02-1-D04-1"]
+    assert exceptions["X-CSH-02-1-D04-1"] == d04 and d04.amount_cents == 4853
+    same_judgments(ran.state, baseline, {"J-CSH-02-1-BA-091"})

@@ -532,14 +532,14 @@ CSH02_LOOKBACK_DAYS = 5  # CSH-02 D03, D04 的窗口与 D02 的期后天数, 同
 CSH02_SUBSEQUENT_DAYS = 10
 
 
-def xero_csh02_rows() -> dict[str, list[dict[str, Any]]]:
+def xero_csh02_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[dict[str, Any]]]:
     """CSH-02 D02, D03, D04 的行: 由演示数据导入之后的表 (xero_tables) 按规则的口径派生, 同 Numbat
     (tests.fakes 的 csh02_subsequent_rows, csh02_window_rows); 期末取快照, 作废对按数据集声明的格式与模板剔除.
     读快照, 规则引擎取 CSH-02 时才算, 每次新建. 结果: D02 为 BA-090 期后 21 行 (BA-091 期后没有流水), D03 中
-    BA-091 只剩 XJ-601-1, D04 里没有 4853 (BA-091 回函的应计利息) 的行."""
-    tables = xero_tables()
-    traits = xero_traits()
-    period = xero_loader().period(XERO_DATASET)
+    BA-091 只剩 XJ-601-1, D04 里没有 4853 (BA-091 回函的应计利息) 的行. 给了 loader 时取它指向的副本 (注入场景)."""
+    tables = xero_tables(loader)
+    traits = xero_traits(loader)
+    period = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
     assert period is not None
     window = csh02_window_rows(
         tables["journal_entries"],
