@@ -98,12 +98,16 @@ class ValidationReport(Model, Generic[T]):
     """OutputValidator 对一次 LLM 输出的四级校验结果."""
 
     level_failed: Literal["syntax", "structure", "reference", "semantic"] | None  # 未通过的级别, 全部通过为空
-    retryable: bool  # 能否回传错误重试: 语法, 结构失败为真
     unsupported_steps: list[int]  # 证据指针解析不了的推理步骤下标
     errors: list[str]  # 错误信息
     notes: list[str] = []  # 不影响通过与否的提示, 如回函渠道与回执不符; 随 llm_call 留痕记录
     # 通过结构校验的输出, 解析得了的证据指针 type 与 reliability 已按来源改写; 语法或结构失败为空
     output: T | None = None
+
+    @property
+    def retryable(self) -> bool:
+        """能否回传错误重试: 没通过 (四级中任一级) 即可 (需求 R348). 只标 unsupported 的步骤不算没通过."""
+        return self.level_failed is not None
 
 
 class LLMCallResult(Model, Generic[T]):

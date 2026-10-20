@@ -136,7 +136,7 @@ completion → gate_fin → { report_draft | summarize }
 - 规则可声明执行前检查（开发接口文档第 8.1 节 `checks`）：检查命中的规则不执行，执行记录里记 skipped 或 not_executable 与理由，不出 Exception，也不建复核任务，在程序详情页列出（规格书第 2.3 节写的"进复核队列"本版不做）。如 GEN-05 在数据集声明录入时间不可靠时跳过看录入时间的规则，没有审批人字段时 JE-R04 记 not_executable；GEN-05 因此不建复核任务。
 - 分录例外归因（GEN-02）的建议动作不受限制：同一笔可能被分录归因与科目程序各建议一次认定错报，由审计师避免重复（第 6 节 T12 一条）。
 - LLM 与混合程序出 Judgment：结论、推理链、证据指针、反方论证、建议动作、置信度。推理链中 fact 步骤须带证据指针，standard 步骤指向准则片段，inference 步骤引用前序步骤。
-- OutputValidator 做四级校验：语法、结构、引用、语义。语法与结构不通过时把错误回传 LLM，最多重试 2 次；重试耗尽后，混合程序的对象有规则例外时建 unattributed 任务，否则建 failed 任务；LLM 程序按对象建 failed 任务，不影响同一 Run 的其他对象。
+- OutputValidator 做四级校验：语法、结构、引用、语义。任一级不通过时把错误回传 LLM，最多重试 2 次（需求 R348；只把步骤标为 unsupported 的不算不通过）；重试耗尽后，混合程序的对象有规则例外时建 unattributed 任务，否则建 failed 任务；LLM 程序按对象建 failed 任务，不影响同一 Run 的其他对象。
 - 置信度由证据覆盖率、规则一致性、LLM 自报三项加权，权重放在 rules.json。
 - 以下情况需要人：自主度为 L1 或 L2；建议动作为 misstatement 或 more_evidence；CSH-02 有差异或回函应计利息未入账；校验失败或程序执行失败。其余自动关闭。
 - 复核决定只做五种：

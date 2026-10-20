@@ -44,6 +44,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import build_run
 from backend.services.features import BASELINE
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from backend.services.presentation import failure_of
 from tests.fakes import NOW, FakeTrail, ScriptedLLM, finished, make_ctx, make_run, xero_document
 from tests.fixture_sets import XERO
@@ -479,27 +480,24 @@ async def test_fin03_judgments_downgraded_with_autonomy(llm: Any, expected: dict
 
 @pytest.mark.external
 @pytest.mark.parametrize(
-    ("replies", "attempts", "level"),
+    ("reply", "level"),
     [
-        (["not json", "not json", "not json"], 3, "syntax"),  # 不是 JSON (语法级, 同结构级重试 2 次)
+        ("not json", "syntax"),  # 不是 JSON
         (
-            [
-                json.dumps(
-                    json.loads(fixture_raw("XJ-499")) | {"nature": {"type": "projected", "fraud_indicative": False}}
-                )
-            ],
-            1,
+            json.dumps(
+                json.loads(fixture_raw("XJ-499")) | {"nature": {"type": "projected", "fraud_indicative": False}}
+            ),
             "semantic",
         ),
     ],
     ids=["syntax", "semantic"],
 )
-async def test_failed_classification_creates_failed_task_allowing_manual_result(
-    replies: list[str], attempts: int, level: str
-) -> None:
-    """验收 7: 大模型连续 3 次语法或结构失败 (重试耗尽), 或引用, 语义失败 (只调 1 次, 如类型为 projected) 时, 该错报
-    建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开 manual_result_allowed,
-    需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数与留痕."""
+async def test_failed_classification_creates_failed_task_allowing_manual_result(reply: str, level: str) -> None:
+    """验收 7: 大模型连续 3 次没通过 (重试耗尽; 语法级, 或语义级如类型为 projected, 后者自需求 R348 起也回传重试) 时,
+    该错报建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开
+    manual_result_allowed, 需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数
+    与留痕."""
+    replies, attempts = [reply] * MAX_ATTEMPTS, MAX_ATTEMPTS
     llm = ScriptedLLM({"XJ-499": replies, "BA-091": [fixture_raw("BA-091")]})
     trail = FakeTrail()
     deps = fin03_deps(trail, llm)

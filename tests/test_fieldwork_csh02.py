@@ -36,6 +36,7 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits, TrialBalanceRow
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes, save_outputs
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -385,18 +386,18 @@ async def test_accrued_interest_only_prompt_and_draft_amount(amount: int, level:
     相同金额搜索已由规则做完, 有 D04 即未入账; proposed_action: close 须没有 D04, 应计利息的错报写法 (factual, 银行欠
     客户为 Interest income, 客户欠银行为 Interest expense, Completeness, understated, 金额为 D04 去掉符号), 同时有
     D01 与 D04 时的取舍 (差异没被调节项解释时草稿记余额差异, 结论另说应计利息未入账; 否则草稿记应计利息). 认定错报
-    的输出引回函 accrued_interest_cents, 金额 700000 (按 Q12 绝对值等于归因例外的金额) 一次通过; 650000 引用级失败
-    (不重试)."""
+    的输出引回函 accrued_interest_cents, 金额 700000 (按 Q12 绝对值等于归因例外的金额) 一次通过; 650000 引用级失败,
+    回传重试 (需求 R348) 三次仍不过."""
     books = [
         TrialBalanceRow(period="current", account_code="1010", balance_cents=120840000),
         TrialBalanceRow(period="current", account_code="1020", balance_cents=40000000),
     ]
     confirmations = [extracted("BA-01", 120840000, 0), extracted("BA-02", 40000000, 1, 700000)]
     agent, ctx, trail = setup(confirmations, books=books, real_engine=True)
-    llm = ScriptedLLM({"BA-02": [accrued_draft(amount)]})
+    llm = ScriptedLLM({"BA-02": [accrued_draft(amount)] * MAX_ATTEMPTS})
     agent.deps.judgments.llm = llm  # type: ignore[attr-defined]
     patch = await agent.run(ctx)
-    [request] = [r for r in llm.requests if r.procedure_id == "CSH-02"]
+    request = next(r for r in llm.requests if r.procedure_id == "CSH-02")
     prompt = request.messages[0].content
     task = section(prompt, "Task")
     assert "agrees with the book balance" in task and "differs from the book balance" not in task
@@ -421,8 +422,11 @@ async def test_accrued_interest_only_prompt_and_draft_amount(amount: int, level:
     unexplained, explained = both.split("otherwise")
     assert "do not explain" in unexplained and "balance difference" in unexplained
     assert "accrued interest has not been recorded" in unexplained and "accrued interest" in explained
-    [call] = [e for e in trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "CSH-02"]
-    assert (call.payload["fixture_key"], call.payload["attempt"], call.payload["level_failed"]) == ("BA-02", 1, level)
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "CSH-02"]
+    attempts = 1 if level is None else MAX_ATTEMPTS
+    assert [(e.payload["fixture_key"], e.payload["attempt"], e.payload["level_failed"]) for e in calls] == [
+        ("BA-02", n, level) for n in range(1, attempts + 1)
+    ]
     if level is None:
         [judgment] = patch["judgments"]
         assert judgment.misstatement_draft is not None and judgment.misstatement_draft.amount_cents == 700000

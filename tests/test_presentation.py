@@ -386,9 +386,10 @@ async def test_failed_subject_takes_last_llm_call_of_that_subject(tmp_path: Path
 
 @pytest.mark.parametrize("recorded", [False, True], ids=["no_key", "none"])
 async def test_non_judge_failed_subject_found_by_fixture_key(recorded: bool) -> None:
-    """判断引擎以外的调用方 (A3 的 DOC-06 回函抽取, fixture_key 即账户) 不记对象: BA-01 账号不符 (语义失败, 只调 1
-    次) 时失败卡片按 fixture_key 找到这次调用; 留痕记了 subject_id 而为空时同样回落 (第 2 轮审核 R158-11)."""
-    agent, ctx, trail = doc06_setup(doc06_scripted(BA_01=[doc06_raw("BA-01", account_no="99999999")]))
+    """判断引擎以外的调用方 (A3 的 DOC-06 回函抽取, fixture_key 即账户) 不记对象: BA-01 账号不符 (语义失败, 回传
+    重试三次仍不过, 需求 R348) 时失败卡片按 fixture_key 找到这几次调用; 留痕记了 subject_id 而为空时同样回落 (第 2 轮
+    审核 R158-11)."""
+    agent, ctx, trail = doc06_setup(doc06_scripted(BA_01=[doc06_raw("BA-01", account_no="99999999")] * 3))
     patch = await agent.run(ctx)
     [task] = patch["review_tasks"]
     [run] = patch["procedure_runs"]
@@ -397,7 +398,7 @@ async def test_non_judge_failed_subject_found_by_fixture_key(recorded: bool) -> 
         calls = [e.model_copy(update={"payload": {**e.payload, "subject_id": None}}) for e in calls]
     failure = failure_of(task, run, calls)
     assert failure is not None
-    assert (failure.subject_id, failure.level_failed, failure.attempts) == ("BA-01", "semantic", 1)
+    assert (failure.subject_id, failure.level_failed, failure.attempts) == ("BA-01", "semantic", 3)
 
 
 def test_presentation_entry_time_is_injected() -> None:

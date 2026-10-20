@@ -42,6 +42,7 @@ from backend.contracts.state import StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import GraphNodes, apply_patch, build_run
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import needs
 from tests.fakes import (
     DOC_EL,
@@ -625,18 +626,18 @@ async def test_plan_fixtures_cover_the_demo_procedures(fixture: Path) -> None:
 
 @needs("q1_snapshot", "q1_supplements")
 @pytest.mark.parametrize(
-    ("replies", "level", "attempts"),
+    ("reply", "level"),
     [
-        (["not json"] * 3, "syntax", 3),
-        (['{"overall_strategy": "only"}'] * 3, "structure", 3),
-        ([plan_raw(standards_cited=["ASA315-P12"])], "reference", 1),
-        ([plan_raw(timetable=[{"milestone": "Planning", "due": "2026-09-01"}])], "semantic", 1),
+        ("not json", "syntax"),
+        ('{"overall_strategy": "only"}', "structure"),
+        (plan_raw(standards_cited=["ASA315-P12"]), "reference"),
+        (plan_raw(timetable=[{"milestone": "Planning", "due": "2026-09-01"}]), "semantic"),
     ],
 )
-async def test_pln15_failed_check_fails_the_run(replies: list[str], level: str, attempts: int) -> None:
-    """验收 4, 5: 语法与结构失败重试至 3 次仍失败, 或引用, 语义失败 (不重试): A4 抛 ValueError (含失败的级别), 经
-    A1 的 run_agent 转为 RUN-PLN-15-1 failed 与 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun), 不写计划."""
-    ctx, deps, trail = await plan_context(ScriptedLLM({"r1": replies}))
+async def test_pln15_failed_check_fails_the_run(reply: str, level: str) -> None:
+    """验收 4, 5: 任一级不过都回传重试 (引用与语义级自需求 R348 起), 至 3 次仍失败: A4 抛 ValueError (含失败的级别),
+    经 A1 的 run_agent 转为 RUN-PLN-15-1 failed 与 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun), 不写计划."""
+    ctx, deps, trail = await plan_context(ScriptedLLM({"r1": [reply] * MAX_ATTEMPTS}))
     agent = RiskAssessorAgent(deps)
     patch, writer = await GraphNodes(deps, 2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and "audit_plans" not in patch
@@ -648,7 +649,7 @@ async def test_pln15_failed_check_fails_the_run(replies: list[str], level: str, 
     [task] = patch["review_tasks"]
     assert (task.id, task.kind, task.subject_id) == ("T-RUN-PLN-15-1-v1", TaskKind.failed, None)
     assert deps.queue.allowed(task) == frozenset({Decision.rerun})
-    assert [e.payload["attempt"] for e in llm_calls(trail)] == list(range(1, attempts + 1))
+    assert [e.payload["attempt"] for e in llm_calls(trail)] == list(range(1, MAX_ATTEMPTS + 1))
 
 
 @needs("q1_snapshot", "q1_supplements")

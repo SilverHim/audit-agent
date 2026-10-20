@@ -62,6 +62,7 @@ from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
+    MAX_ATTEMPTS,
     OUTCOME_STANDARDS,
     PLAN_REQUIRED_SECTIONS,
     CheckResult,
@@ -297,7 +298,7 @@ async def test_registered_check_decides_report(monkeypatch: pytest.MonkeyPatch) 
     odd = await validator.validate(EID, probe_template(), respond(ProbeOut(value=3)), ctx)
     assert (odd.level_failed, odd.retryable, odd.errors, odd.notes, odd.unsupported_steps) == (
         "semantic",
-        False,
+        True,
         ["value 须为偶数"],
         ["奇数"],
         [],
@@ -394,7 +395,8 @@ async def test_pointer_type_and_reliability_come_from_source() -> None:
 )
 async def test_unresolvable_pointer_marks_its_step(bad: EvidencePointer) -> None:
     report = await check(with_step(cutoff_draft(), 1, evidence=[bad]))
-    assert report.level_failed is None and report.unsupported_steps == [1]
+    # 只标 unsupported 是降级, 算通过, 不重试 (需求 R348)
+    assert report.level_failed is None and not report.retryable and report.unsupported_steps == [1]
     assert len(report.errors) == 1 and report.errors[0].startswith("第 1 步指针")
     # 解析不了的指针原样保留
     assert report.output.reasoning_chain[1].evidence == [bad]
@@ -459,7 +461,7 @@ async def test_no_resolvable_pointer_is_reference_failure() -> None:
     report = await check(
         draft.model_copy(update={"reasoning_chain": chain, "evidence": [broken(p) for p in draft.evidence]})
     )
-    assert report.level_failed == "reference" and not report.retryable
+    assert report.level_failed == "reference" and report.retryable
     assert report.unsupported_steps == [0, 1, 2, 3]
     assert report.errors[-1] == "没有一个能解析的证据指针"
 
@@ -737,7 +739,7 @@ XJ_T = [
 )
 async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_line: bool, passes: bool) -> None:
     """REV-02 错报金额取收入行 (不含 GST) 时须引用该分录行 (真实判断引擎与 ScriptedLLM): 被引用的行金额计入可取值,
-    不引用不计 (不放宽校验)."""
+    不引用不计 (不放宽校验). 不过时回传重试, 同一输出共调 MAX_ATTEMPTS 次 (需求 R348)."""
     records = dict(NUMBAT_RECORDS) | {("sales_invoice", SI_T.id): SI_T.model_dump()}
     records |= {("journal_entry", x.id): x.model_dump() for x in XJ_T}
     financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), records)
@@ -753,7 +755,7 @@ async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_lin
         evidence=cited,
     )
     draft = draft.model_copy(update={"evidence": [*cited, DELIVERY, CLAUSE, STANDARD]})
-    llm = ScriptedLLM({SI_T.id: [draft.model_dump_json()]})
+    llm = ScriptedLLM({SI_T.id: [draft.model_dump_json()] * MAX_ATTEMPTS})
     engine = JudgmentEngine(llm, OutputValidator(financial, LIBRARY, trail), trail, LIBRARY)
     lines = [
         {"source_type": "journal_entry", **x.model_dump(mode="json"), "account_name": None, "account_category": None}
@@ -770,7 +772,9 @@ async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_lin
     task = {"params": {"period_end": "2026-06-30", "window_days": 20, "threshold_cents": 9000000}, "risks": []}
     jctx = JudgmentContext(subject_id=SI_T.id, task=task, data=data, fixture_key=SI_T.id)
     outcome = await engine.judge(EID, REV02, make_run("REV-02"), jctx, "U-1")
-    [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    assert len(calls) == (1 if passes else MAX_ATTEMPTS)
+    entry = calls[-1]
     if passes:
         assert outcome.judgment is not None and entry.payload["level_failed"] is None
     else:
@@ -780,7 +784,7 @@ async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_lin
 
 async def test_misstatement_amount_not_traceable_is_reference_failure() -> None:
     report = await check(misstated(14000000))
-    assert report.level_failed == "reference" and not report.retryable
+    assert report.level_failed == "reference" and report.retryable
     assert report.errors == ["错报金额 14000000 不等于引用行的金额, 两条引用行之差或归因例外的金额"]
 
 
@@ -811,8 +815,8 @@ SALES = Account(code="200", name="Sales", type="revenue", category="revenue", ca
 
 @pytest.mark.parametrize(("code", "passes"), [("200", True), (None, True), ("9999", False)])
 async def test_misstatement_account_code_must_be_in_the_chart(code: str | None, passes: bool) -> None:
-    """R156 验收 9: REV-02 草稿带科目表有的 account_code 200 通过; 9999 → 引用级失败, 不重试; 不带代码不查 (现有
-    fixture 照旧). GEN-02 XJ-499 的 Xero fixture (710) 经真实科目表通过见 test_fieldwork_gen02."""
+    """R156 验收 9: REV-02 草稿带科目表有的 account_code 200 通过; 9999 → 引用级失败 (可重试, 需求 R348); 不带代码
+    不查 (现有 fixture 照旧). GEN-02 XJ-499 的 Xero fixture (710) 经真实科目表通过见 test_fieldwork_gen02."""
     financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=[SALES])
     validator = OutputValidator(financial, LIBRARY, FakeTrail())
     draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": code}))
@@ -821,7 +825,7 @@ async def test_misstatement_account_code_must_be_in_the_chart(code: str | None, 
         assert report.level_failed is None and report.output.misstatement_draft.account_code == code
     else:
         error = f"错报草稿的科目代码 {code} 不在本项目科目表中"
-        assert (report.level_failed, report.retryable, report.errors) == ("reference", False, [error])
+        assert (report.level_failed, report.retryable, report.errors) == ("reference", True, [error])
 
 
 # ── 独立复核第一轮的错报草稿 (R150, 只记不判失败) ──
@@ -943,7 +947,7 @@ def test_supported_amounts_skip_zero_and_bool() -> None:
 )
 async def test_semantic_failures(change: Any, error: str) -> None:
     report = await check(change(cutoff_draft()))
-    assert report.level_failed == "semantic" and not report.retryable
+    assert report.level_failed == "semantic" and report.retryable
     assert error in report.errors
 
 
@@ -997,7 +1001,7 @@ async def test_extraction_pointer_outside_document_fails_whole_output(change: di
     out = con001()
     evidence = [out.evidence[0].model_copy(update=change), *out.evidence[1:]]
     report = await extract(out.model_copy(update={"evidence": evidence}))
-    assert report.level_failed == "reference" and not report.retryable
+    assert report.level_failed == "reference" and report.retryable
     assert report.unsupported_steps == [] and len(report.errors) == 1
 
 
@@ -1105,20 +1109,20 @@ async def test_reply_accrued_interest_needs_its_own_pointer(
     accrued: int | None, pointers: list[EvidencePointer], passed: bool
 ) -> None:
     """需求 R104: 回函应计利息非空时须有 locator 为 accrued_interest_cents 的本文档指针 (页码在页数内), 不成立为
-    引用失败 (不重试)."""
+    引用失败 (可重试, 需求 R348)."""
     base = reply_extraction()
     output = base.model_copy(update={"accrued_interest_cents": accrued, "evidence": [*base.evidence, *pointers]})
     report = await check_reply(output, sent_confirmation())
     if passed:
         assert report.level_failed is None and report.output.accrued_interest_cents == accrued
     else:
-        assert (report.level_failed, report.retryable) == ("reference", False)
+        assert (report.level_failed, report.retryable) == ("reference", True)
 
 
 async def test_reply_account_must_match_confirmed_account() -> None:
     assert (await check_reply(reply_extraction(), sent_confirmation())).level_failed is None
     report = await check_reply(reply_extraction(account_no="23456702"), sent_confirmation())
-    assert report.level_failed == "semantic" and not report.retryable
+    assert report.level_failed == "semantic" and report.retryable
     assert report.errors == ["回函账号 23456702 与账户 BA-01 的账号 12345601 不符"]
     missing = await check_reply(reply_extraction(), sent_confirmation("BA-09"))
     assert missing.level_failed == "semantic" and missing.errors == ["被函证的账户 BA-09 不存在"]
@@ -1195,7 +1199,7 @@ async def test_report_draft_passes() -> None:
 )
 async def test_report_reference_failures(judgments: list[Judgment], error: str) -> None:
     report = await check_report(QUALIFIED_DRAFT, judgments)
-    assert report.level_failed == "reference" and not report.retryable and report.errors == [error]
+    assert report.level_failed == "reference" and report.retryable and report.errors == [error]
 
 
 @pytest.mark.parametrize(
@@ -1213,7 +1217,7 @@ async def test_report_reference_failures(judgments: list[Judgment], error: str) 
 )
 async def test_report_semantic_failures(changes: dict[str, Any], opinion: OpinionType, error: str) -> None:
     report = await check_report(QUALIFIED_DRAFT.model_copy(update=changes), [confirmed_judgment()], opinion)
-    assert report.level_failed == "semantic" and not report.retryable and error in report.errors
+    assert report.level_failed == "semantic" and report.retryable and error in report.errors
 
 
 async def test_report_needs_opinion_type() -> None:
@@ -1373,9 +1377,9 @@ PLAN_EARLY = [Milestone(milestone="Planning meeting", due=date(2026, 9, 29))]
 async def test_plan_draft_failures(changes: dict[str, Any], level: str, errors: list[str]) -> None:
     """验收 4: 程序说明缺计划的程序或重复 (多出的不算, 需求 R316), 时间表早于期末, 缺必备段 (或只有空白), 段里重复
     总体策略, 项目质量复核建议没写依据 → semantic, 几项一并列出; 引用模板 standards 以外的片段 → reference, 不再查
-    语义. 都不可重试."""
+    语义. 都可重试 (需求 R348)."""
     report = await check_plan_draft(plan_draft(**changes))
-    assert (report.level_failed, report.errors, report.retryable) == (level, errors, False)
+    assert (report.level_failed, report.errors, report.retryable) == (level, errors, True)
 
 
 @pytest.mark.parametrize(
@@ -1429,12 +1433,12 @@ async def test_classification_nature_semantics(
     type_: MisstatementType, fraud: bool, reason: str | None, error: str | None
 ) -> None:
     """R157 验收 3: 分类草稿同判断草稿各级之外, 语义级另查性质: 类型为 projected (不做审计抽样), 或有舞弊迹象而理由
-    为空 (含全空白), 判 semantic, 不重试; 其余通过, 输出仍是分类草稿."""
+    为空 (含全空白), 判 semantic (可重试, 需求 R348); 其余通过, 输出仍是分类草稿."""
     report = await check_fin03(classified(type_, fraud, reason))
     if error is None:
         assert report.level_failed is None and isinstance(report.output, MisstatementClassificationDraft)
     else:
-        assert (report.level_failed, report.retryable, report.errors) == ("semantic", False, [error])
+        assert (report.level_failed, report.retryable, report.errors) == ("semantic", True, [error])
 
 
 async def test_classification_reference_failure_comes_before_nature() -> None:
@@ -1516,11 +1520,12 @@ async def test_fin03_xero_fixtures_pass_four_levels(
 async def test_fin03_judge_returns_the_classification_draft() -> None:
     """R157 验收 4, 6: judge 带回通过校验的草稿 (JudgmentOutcome.draft, 即分类草稿, 判断之外的性质由调用方取, 序列化
     时也在); 提示词按 judge 给的顶层变量渲染 (data 的各列表为空; 按头注释给齐时的渲染见 test_knowledge). XJ-499 改为
-    有舞弊迹象而理由为空: 判 semantic, 只调 1 次, judgment 与 draft 都为空, 失败类型 unattributed (混合程序)."""
+    有舞弊迹象而理由为空: 判 semantic, 回传重试仍不过, 共调 MAX_ATTEMPTS 次 (需求 R348), judgment 与 draft 都为空,
+    失败类型 unattributed (混合程序)."""
     good = fin03_fixture("XJ-499")
     fraud = json.loads(good)
     fraud["nature"]["fraud_indicative"] = True
-    llm = ScriptedLLM({"XJ-499": [good, json.dumps(fraud)]})
+    llm = ScriptedLLM({"XJ-499": [good, *[json.dumps(fraud)] * MAX_ATTEMPTS]})
     trail = FakeTrail()
     engine = JudgmentEngine(llm, xero_validator(), trail, LIBRARY)
     misstatement = {"id": "M-D-XJ499", "version": 1, "judgment_id": "J-GEN-02-1-XJ-499", "type": "factual"}
@@ -1541,7 +1546,12 @@ async def test_fin03_judge_returns_the_classification_draft() -> None:
     assert passed.model_dump(mode="json")["draft"]["nature"]["type"] == "factual"  # 序列化不丢性质 (审核 R157-05)
     assert passed.draft.evidence == passed.judgment.evidence  # 指针已按来源改写, 同判断
     failed = await engine.judge(EID, FIN03, make_run("FIN-03"), jctx, "U-1")
-    assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (None, None, "unattributed", 1)
+    assert (failed.judgment, failed.draft, failed.failure, failed.attempts) == (
+        None,
+        None,
+        "unattributed",
+        MAX_ATTEMPTS,
+    )
     assert trail.entries[-1].payload["level_failed"] == "semantic"
 
 
@@ -1651,12 +1661,12 @@ async def test_going_concern_reference_failures(
     change: Any, judgments: list[Judgment] | None, errors: list[str]
 ) -> None:
     """验收 3: 引用的判断不在状态中, 不是当前版本, 未确认, 没引用 required_refs 中的判断, 或指针全部解析不了
-    → reference, 不重试, errors 恰为引用级的问题. 底稿另带一处语义缺陷 (第 3 步只引 P19, 语义级照查会报 P18), 引用级
-    不过时不查语义."""
+    → reference (可重试, 需求 R348), errors 恰为引用级的问题. 底稿另带一处语义缺陷 (第 3 步只引 P19, 语义级照查
+    会报 P18), 引用级不过时不查语义."""
     advice = change(with_step(gc_advice(), 3, evidence=gc_advice().reasoning_chain[3].evidence[1:]))
     assert going_concern_semantics(advice)  # 底稿确有语义缺陷
     report = await check_gc(advice, judgments)
-    assert (report.level_failed, report.retryable, report.errors) == ("reference", False, errors)
+    assert (report.level_failed, report.retryable, report.errors) == ("reference", True, errors)
 
 
 @pytest.mark.external
@@ -1670,9 +1680,9 @@ async def test_going_concern_reference_failures(
     ],
 )
 async def test_going_concern_chain_semantic_failures(change: Any, error: str) -> None:
-    """验收 4 (推理链): 规则同判断草稿 (chain_semantics) → semantic, 不重试."""
+    """验收 4 (推理链): 规则同判断草稿 (chain_semantics) → semantic (可重试, 需求 R348)."""
     report = await check_gc(change(gc_advice()))
-    assert (report.level_failed, report.retryable) == ("semantic", False)
+    assert (report.level_failed, report.retryable) == ("semantic", True)
     assert error in report.errors
 
 
@@ -1799,13 +1809,14 @@ OTHER_ONLY = "other_accounts 只能列匹配凭证中错报科目以外的科目
 )
 async def test_fin09_verification_semantics(residual: int, changes: dict[str, Any], error: str | None) -> None:
     """R164 验收 5, 7 (XJ-499, 匹配凭证 AJE-X01, 错报科目 710): fully_corrected 与 "规则算出的剩余额为 0" 不一致,
-    other_accounts 含匹配凭证以外的科目 (720) 或错报科目本身 (710), 或有重复时判 semantic, 不重试; 一致时通过."""
+    other_accounts 含匹配凭证以外的科目 (720) 或错报科目本身 (710), 或有重复时判 semantic (可重试, 需求 R348);
+    一致时通过."""
     raw = json.dumps({**json.loads(fin09_fixture("XJ-499")), **changes})
     report = await check_fin09(raw, residual, XJ499_CODES)
     if error is None:
         assert (report.level_failed, report.errors) == (None, [])
     else:
-        assert (report.level_failed, report.retryable, report.errors) == ("semantic", False, [error])
+        assert (report.level_failed, report.retryable, report.errors) == ("semantic", True, [error])
 
 
 @pytest.mark.external
@@ -1845,14 +1856,17 @@ def fin09_judge_context(residual: int | None, codes: list[str] | None) -> Judgme
 @pytest.mark.external
 async def test_fin09_judge_forwards_rule_results_to_validation() -> None:
     """R164: judge 把 JudgmentContext 的剩余额与匹配凭证的科目原样交给校验. 剩余额 0 时通过, 带回更正验证草稿
-    (JudgmentOutcome.draft); 剩余额 25000 时判 semantic, 只调 1 次, 失败类型 unattributed (混合程序)."""
+    (JudgmentOutcome.draft); 剩余额 25000 时判 semantic, 回传重试仍不过, 共调 MAX_ATTEMPTS 次 (需求 R348), 失败
+    类型 unattributed (混合程序)."""
     raw = fin09_fixture("XJ-499")
-    engine = JudgmentEngine(ScriptedLLM({"XJ-499": [raw, raw]}), adjusted_validator(), FakeTrail(), LIBRARY)
+    engine = JudgmentEngine(
+        ScriptedLLM({"XJ-499": [raw] * (1 + MAX_ATTEMPTS)}), adjusted_validator(), FakeTrail(), LIBRARY
+    )
     passed = await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(0, XJ499_CODES), "U-1")
     assert passed.judgment is not None and passed.judgment.id == "J-FIN-09-1-M-D-XJ499"
     assert isinstance(passed.draft, CorrectionVerificationDraft) and passed.draft.other_accounts == ["711", "820"]
     failed = await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(25000, XJ499_CODES), "U-1")
-    assert (failed.judgment, failed.failure, failed.attempts) == (None, "unattributed", 1)
+    assert (failed.judgment, failed.failure, failed.attempts) == (None, "unattributed", MAX_ATTEMPTS)
 
 
 @pytest.mark.external

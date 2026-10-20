@@ -21,9 +21,18 @@ from backend.adapters.llm import (
 from backend.agents.base import RunContext
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction, JudgmentDraft
-from backend.contracts.models import AgentId, DocumentRef, Reliability, RunStatus, TaskKind, TrailEntry, TrailKind
+from backend.contracts.models import (
+    AgentId,
+    DocumentRef,
+    Reliability,
+    RunStatus,
+    StepStatus,
+    TaskKind,
+    TrailEntry,
+    TrailKind,
+)
 from backend.contracts.ports import LLMMessage, LLMRequest
-from backend.contracts.services import ValidationContext
+from backend.contracts.services import JudgmentContext, ValidationContext
 from backend.core.config import get_settings
 from backend.main import build_deps
 from backend.orchestration.nodes import GraphNodes
@@ -50,7 +59,7 @@ from tests.fakes import (
     make_run,
 )
 from tests.test_llm_live import OUTPUT_LIMIT, Server, client, completion, finished
-from tests.test_output_validator import cutoff_draft
+from tests.test_output_validator import cutoff_draft, misstated, with_step
 
 EID = ENGAGEMENT.id
 SETTINGS = get_settings()
@@ -265,36 +274,83 @@ async def test_fixture_not_found_retries_three_times(tmp_path: Path) -> None:
     assert len(trail.entries) == 3
 
 
-async def test_reference_failure_is_not_retried() -> None:
+async def test_reference_failure_is_retried() -> None:
+    """需求 R348: 抽取类的引用级失败 (页码超出文件) 同样回传重试; 第 2 次通过."""
     bad = json.loads(raw("CON-001"))
     bad["evidence"][0]["page"] = 9
     llm = ScriptedLLM({"CON-001": [json.dumps(bad), raw("CON-001")]})
     engine, _ = setup(llm)
     result = await call(engine)
-    assert result.attempts == 1 and len(llm.requests) == 1
-    assert result.report.level_failed == "reference" and not result.report.retryable
+    assert (result.attempts, len(llm.requests), result.report.level_failed) == (2, 2, None)
+    assert "页码 9 不在" in llm.requests[1].messages[-1].content
 
 
-async def test_semantic_failure_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
-    draft = cutoff_draft().model_copy(update={"reasoning_chain": []})
-    llm = ScriptedLLM({"SI-2026-0612": [draft.model_dump_json(), cutoff_draft().model_dump_json()]})
+def rev02_judge(llm: ScriptedLLM, monkeypatch: pytest.MonkeyPatch) -> tuple[FakeTrail, Any]:
+    """REV-02 (混合程序) 对 SI-2026-0612 的 judge: Numbat 的合同与行, 提示词换成固定的一句; 返回 (留痕, 调用)."""
     trail = FakeTrail()
     deps = make_deps(
         FakeRegistry(), trail, financial_store=FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS), llm=llm
     )
     engine = deps.judgments
     monkeypatch.setattr(engine, "render", lambda template, variables: "REV-02 prompt")
-    result = await engine.call_llm(
-        EID,
-        deps.library.load("REV-02"),
-        make_run("REV-02"),
-        {},
-        ValidationContext(standards_of=None),
-        AgentId.A6,
-        "SI-2026-0612",
+    ctx = JudgmentContext(subject_id="SI-2026-0612", task={}, data={}, fixture_key="SI-2026-0612")
+    return trail, lambda: engine.judge(EID, deps.library.load("REV-02"), make_run("REV-02"), ctx, "U-1")
+
+
+def llm_levels(trail: FakeTrail) -> list[str | None]:
+    return [e.payload["level_failed"] for e in trail.entries if e.kind is TrailKind.llm_call]
+
+
+GOOD = cutoff_draft()
+BAD_PLAN = [
+    # 语义级 (需求 R348 验收 1)
+    (with_step(GOOD, 3, evidence=[GOOD.evidence[0]]), "semantic", "第 3 步 standard 没有指向准则片段"),
+    (with_step(GOOD, 4, from_steps=[0, 4]), "semantic", "第 4 步 inference 引用了非前序步骤 [4]"),
+    (GOOD.model_copy(update={"misstatement_draft": None}), "semantic", "建议认定错报, 但没有错报草稿"),
+    # 引用级判为失败的那类 (验收 2)
+    (misstated(14000000), "reference", "错报金额 14000000 不等于引用行的金额"),
+]
+
+
+@pytest.mark.parametrize(("bad", "level", "error"), BAD_PLAN)
+async def test_failed_judgment_is_retried_with_its_errors(
+    bad: JudgmentDraft, level: str, error: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """需求 R348 验收 1, 2: 语义级与引用级判为失败的输出把错误回传重试, 末条消息为 RETRY_PROMPT 列出上次的错误;
+    第 2 次通过时得出判断, 尝试 2 次, 留痕两条."""
+    llm = ScriptedLLM({"SI-2026-0612": [bad.model_dump_json(), GOOD.model_dump_json()]})
+    trail, judge = rev02_judge(llm, monkeypatch)
+    outcome = await judge()
+    assert outcome.judgment is not None and outcome.attempts == 2 and len(outcome.trail_ids) == 2
+    assert llm_levels(trail) == [level, None]
+    retry = llm.requests[1].messages[-1]
+    assert (
+        retry.role == "user"
+        and retry.content.startswith("Your previous reply failed validation")
+        and error in (retry.content)
     )
-    assert result.attempts == 1 and result.report.level_failed == "semantic"
-    assert isinstance(result.report.output, JudgmentDraft)
+
+
+async def test_unsupported_pointer_alone_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R348 验收 2: 只有一步的指针解析不了 (该步标 unsupported, 降级不是失败) 时不重试, 判断照常得出."""
+    gone = with_step(GOOD, 1, evidence=[GOOD.evidence[1].model_copy(update={"source_id": "DN-9999"})])
+    llm = ScriptedLLM({"SI-2026-0612": [gone.model_dump_json(), GOOD.model_dump_json()]})
+    trail, judge = rev02_judge(llm, monkeypatch)
+    outcome = await judge()
+    assert outcome.judgment is not None and (outcome.attempts, len(llm.requests), llm_levels(trail)) == (1, 1, [None])
+    assert outcome.judgment.reasoning_chain[1].status is StepStatus.unsupported
+
+
+async def test_three_failures_of_any_level_fail_the_judgment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R348 验收 3: 语法, 结构, 语义各不过一次, 共 MAX_ATTEMPTS 次后判失败 (混合程序为 unattributed); 备着的第 4
+    份合格输出不再调用."""
+    semantic = GOOD.model_copy(update={"reasoning_chain": []})
+    replies = ["not json", "{}", semantic.model_dump_json(), GOOD.model_dump_json()]
+    llm = ScriptedLLM({"SI-2026-0612": replies})
+    trail, judge = rev02_judge(llm, monkeypatch)
+    outcome = await judge()
+    assert (outcome.judgment, outcome.failure, outcome.attempts) == (None, "unattributed", MAX_ATTEMPTS)
+    assert llm_levels(trail) == ["syntax", "structure", "semantic"] and len(llm.requests) == MAX_ATTEMPTS
 
 
 # ── 留痕 ─────────────────────────────────────────

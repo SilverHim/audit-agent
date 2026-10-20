@@ -303,16 +303,18 @@ async def test_hybrid_failure_is_unattributed() -> None:
     assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "unattributed", 3, 3)
 
 
-async def test_hybrid_reference_failure_is_unattributed_without_retry() -> None:
+async def test_hybrid_reference_failure_is_unattributed_after_retries() -> None:
+    """错报金额对不上引用行: 引用级失败, 回传重试 (需求 R348) 三次仍不过, 混合程序为 unattributed."""
     untraceable = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": 1}))
-    outcome, _ = await judge("REV-02", rev02_context(), [untraceable.model_dump_json()])
-    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "unattributed", 1, 1)
+    outcome, _ = await judge("REV-02", rev02_context(), [untraceable.model_dump_json()] * 3)
+    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "unattributed", 3, 3)
 
 
 async def test_llm_failure_is_failed() -> None:
+    """推理链为空: 语义级失败, 回传重试 (需求 R348) 三次仍不过, 大模型程序为 failed."""
     bad = rev03_draft().model_copy(update={"reasoning_chain": []})
-    outcome, _ = await judge("REV-03", rev03_context(), [bad.model_dump_json()])
-    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "failed", 1, 1)
+    outcome, _ = await judge("REV-03", rev03_context(), [bad.model_dump_json()] * 3)
+    assert (outcome.judgment, outcome.failure, outcome.attempts, len(outcome.trail_ids)) == (None, "failed", 3, 3)
 
 
 # ── 权重与组装 ─────────────────────────────────────────

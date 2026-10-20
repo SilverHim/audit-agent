@@ -177,22 +177,24 @@ def assert_con002_handed_to_human(agent: IngestAgent, patch: dict[str, Any], fin
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
 
 
-async def test_structure_failures_hand_contract_to_human() -> None:
-    replies = {c: [raw(c)] for c in CONTRACT_IDS} | {"CON-002": ["{}", "{}", "{}"]}
+def con002_with(change: dict[str, Any]) -> str:
+    """CON-002 的固定输出, 第一个证据指针改掉 change 里的字段 (引用级不过)."""
+    bad = json.loads(raw("CON-002"))
+    bad["evidence"][0] |= change
+    return json.dumps(bad)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["{}", con002_with({"page": 5}), con002_with({"source_id": NUMBAT_CONTRACTS[0].id})],
+    ids=["structure", "page", "other_document"],
+)
+async def test_three_failures_hand_contract_to_human(bad: str) -> None:
+    """结构级与引用级不过都回传重试 (需求 R348), 三次都不过即转人工; 备着的合格输出不再调用."""
+    replies = {c: [raw(c)] for c in CONTRACT_IDS} | {"CON-002": [bad, bad, bad, raw("CON-002")]}
     agent, ctx, financial, llm = setup(replies)
     patch = await agent.run(ctx)
     assert [r.fixture_key for r in llm.requests].count("CON-002") == 3
-    assert_con002_handed_to_human(agent, patch, financial)
-
-
-@pytest.mark.parametrize("change", [{"page": 5}, {"source_id": NUMBAT_CONTRACTS[0].id}])
-async def test_reference_failure_not_retried(change: dict[str, Any]) -> None:
-    bad = json.loads(raw("CON-002"))
-    bad["evidence"][0] |= change
-    replies = {c: [raw(c)] for c in CONTRACT_IDS} | {"CON-002": [json.dumps(bad), raw("CON-002")]}
-    agent, ctx, financial, llm = setup(replies)
-    patch = await agent.run(ctx)
-    assert [r.fixture_key for r in llm.requests].count("CON-002") == 1
     assert_con002_handed_to_human(agent, patch, financial)
 
 

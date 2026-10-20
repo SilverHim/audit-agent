@@ -430,20 +430,21 @@ async def test_three_syntax_failures_fail_the_run() -> None:
         ({"opinion": "Opinion\n\nclean"}, "semantic"),
     ],
 )
-async def test_reference_or_semantic_failure_fails_after_one_call(changes: dict[str, Any], level: str) -> None:
-    llm = ScriptedLLM({"r1": [r1_raw(**changes), r1_raw()]})
+async def test_reference_or_semantic_failure_fails_after_retries(changes: dict[str, Any], level: str) -> None:
+    """引用级与语义级不过时同样回传重试 (需求 R348); 三次都不过即执行失败, 备着的合格稿不再调用."""
+    llm = ScriptedLLM({"r1": [*[r1_raw(**changes)] * 3, r1_raw()]})
     agent, ctx, _ = setup(llm=llm)
     result = await handed_to_human(agent, ctx)
     assert f"未通过 {level} 校验" in result["failure_reason"]
-    assert len(llm.requests) == 1
+    assert len(llm.requests) == 3
 
 
 @pytest.mark.parametrize(
     "bad_replies",
     [
         ["{}", "{}", "{}"],
-        [r1_raw(opinion="## Qualified Opinion\n\nbody")],
-        [r1_raw(judgment_keys=["REV-02:SI-2026-0618"])],
+        [r1_raw(opinion="## Qualified Opinion\n\nbody")] * 3,
+        [r1_raw(judgment_keys=["REV-02:SI-2026-0618"])] * 3,
     ],
     ids=["structure", "semantic", "reference"],
 )
