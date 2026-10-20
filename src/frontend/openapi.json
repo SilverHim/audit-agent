@@ -5313,6 +5313,18 @@
             ],
             "title": "Reply"
           },
+          "registry": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registry"
+          },
           "statements": {
             "anyOf": [
               {

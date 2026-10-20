@@ -429,6 +429,12 @@ export type BatchItem = {
         [key: string]: unknown;
     } | null;
     /**
+     * Registry
+     */
+    registry?: {
+        [key: string]: unknown;
+    } | null;
+    /**
      * Statements
      */
     statements?: {

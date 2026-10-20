@@ -673,6 +673,7 @@ class BatchItem(Model):
     job: str | None = None  # 文件: 定下类型的那条 classify 留痕 ID, 确认时抽取结果按它的作业写入
     contract: Contract | None = None  # 文件: 合同的抽取要素 (尚未写入)
     reply: dict[str, Any] | None = None  # 文件: 回函副本的抽取结果 (ConfirmationExtraction 的 JSON, 尚未写入)
+    registry: dict[str, Any] | None = None  # 文件: ASIC 摘录的抽取结果 (RegistryExtraction 的 JSON, 尚未写入, R308)
     statements: dict[str, Any] | None = None  # 文件: 待审财报的抽取结果 (StatementsExtraction 的 JSON, 尚未写入, R217)
     issues: list[BatchIssue] = []  # 问题 (标红)
     selected: bool = False  # 是否勾选写入
