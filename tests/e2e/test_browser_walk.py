@@ -1,0 +1,174 @@
+"""需求 R345: 浏览器端到端走查. 模拟审计师在页面上走完 Xero 演示: 注册登录, 新建演示项目, 按数据管理页的提示分批
+导入演示资料并确认数据已齐, 各闸门在表单视图按决定表决定, 复核任务逐条在表单视图处理, 签字归档. 驱动 (walk.mjs)
+只经页面操作推进, 读数经接口; 每步截图, 记控制台报错与失败请求, 超时记 "卡住"; 报告写 var/e2e/<UTC>/report.md.
+
+决定同 R311 (tests/test_demo_walkthrough_live.py 的 decision_table: BA-091 与 XJ-499 认定错报, XJ-575 推翻为接受,
+其余确认; 争议能维持原判断就维持, 否则 "两者都不采用"; failed 任务每个对象至多重跑一次), RPT-01 先退回一次再签字,
+打开 planning 时 PLN-15 先退回一次再批准 (同 R317). 功能集取 .env.example 的 FEATURES. 后端连测试库
+(TEST_DATABASE_URL), 存储与检查点都是真实的; mock 模式读演示运行副本的固定输出, live 模式调真实模型 (配置同 R311,
+经 tests.external.live_llm_settings 取, 没配时跳过). 两个用例都标 slow, 默认测试不跑.
+"""
+
+import os
+from collections import Counter
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+
+from tests.e2e.harness import backend, frontend, out_dir, require_tools, run_walk, write_report
+from tests.external import LLM_KEYS, live_llm_settings
+from tests.fixture_sets import XERO
+from tests.test_demo_walkthrough_live import (
+    CONFIRM_CONCLUSION,
+    RERUN_REASON,
+    LiveWalk,
+    assert_hard,
+    decision_table,
+    evaluate,
+    warn_soft,
+)
+from tests.tools.live_budget import Budget, install_budget
+from tests.xero_fakes import DEMO_FEATURES, REPO, XERO17_ANNOTATION, XERO17_MATERIALITY
+from tests.xero_flow import READY_REASON
+
+pytestmark = [pytest.mark.slow, pytest.mark.external]
+MAX_CALLS = 160  # 用量上限: 同 R311 的驱动 (固定输出走一遍 45 次, 打开 planning 时 47 次), 留出重试与重跑的余量
+# 各段的超时 (毫秒): 页面上的一个操作, 打开页面 (开发服务首次打开要预构建依赖), 后台一段执行 (live 时模型调用多,
+# 放宽); 驱动整体 (秒)
+TIMEOUTS = {
+    "mock": {"action_ms": 30_000, "nav_ms": 120_000, "idle_ms": 180_000},
+    "live": {"action_ms": 60_000, "nav_ms": 120_000, "idle_ms": 1_800_000},
+}
+WALK_TIMEOUT_S = {"mock": 1_800, "live": 7_200}
+PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # PLN-15 退回的理由 (同 R206, R317)
+# 驱动认的页面文字 (英文界面, src/frontend/src/locales/en.ts)
+LABELS = {
+    "register": "Create account",
+    "newEngagement": "New engagement",
+    "create": "Create and open",
+    "demoTitle": "Demo data",
+    "demoStages": {
+        "acceptance": "acceptance files",
+        "fieldwork": "fieldwork ledgers and files",
+        "manual": "representation letter",
+    },
+    "ready": "Data complete, continue planning",
+    "readyConfirm": "Confirm data complete",
+    "record": "Record decision",
+    "section": "Section",
+    "comment": "Comment",
+    "noExpert": "No auditor's expert is needed",
+    "signed": "Signed and archived",
+}
+
+
+def gates_expected() -> list[str]:
+    """依次决定的闸门: 打开 planning 时 PLN-01/03 之后多两次 PLN-15 (先退回再批准)."""
+    plan = ["PLN-15", "PLN-15"] if "planning" in DEMO_FEATURES else []
+    return ["ACC-01", "PLN-01/03", *plan, "FIN-01", "RPT-01", "RPT-01"]
+
+
+def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, Any]:
+    """驱动的配置: 页面地址, 注册用的账号 (随机用户名与口令; 姓名同报告签字块), 决定表与各闸门的决定, 超时."""
+    table = {
+        subject: {"decision": e.decision, "reason": e.reason, "draft": e.draft, "conclusion": e.conclusion}
+        for subject, e in decision_table("").items()
+    }
+    return {
+        "base": base,
+        "locale": "en-AU",
+        "out_dir": str(out),
+        "shots_dir": str(out / "shots"),
+        "user": {"full_name": "Jordan Ellis", "username": f"e2e-{uuid4().hex[:12]}", "password": uuid4().hex},
+        "client_name": "Demo Company (AU)",
+        "labels": LABELS,
+        "table": table,
+        "materiality": XERO17_MATERIALITY.model_dump(),
+        "fin_policy": fin_policy,
+        "fin_reason": "Opinion follows the schedule of uncorrected misstatements (candidate {candidate}).",
+        "rpt_reject": {
+            "section": XERO17_ANNOTATION.section.value,
+            "comment": XERO17_ANNOTATION.comment,
+            "reason": "The basis for opinion paragraph must name the financial reporting framework.",
+        },
+        "plan_reject_reason": PLAN_REJECT_REASON,
+        "ready_reason": READY_REASON,
+        "rerun_reason": RERUN_REASON,
+        "confirm_conclusion": CONFIRM_CONCLUSION,
+        "timeouts": TIMEOUTS[mode],
+        "max_steps": 200,
+    }
+
+
+def walk_of(results: dict[str, Any]) -> LiveWalk:
+    """驱动结果转成 R311 汇总 (evaluate) 用的走法记录."""
+    return LiveWalk(
+        eid=results["eid"],
+        owner=results["owner"],
+        gates=results["gates"],
+        fin=results["fin"],
+        candidate=results["candidate"],
+        failures=Counter({(pid, subject): n for pid, subject, n in results["failures"]}),
+        troubled={task: (pid, subject, kind) for task, (pid, subject, kind) in results["troubled"].items()},
+        decisions=[(task, decision) for task, decision in results["decisions"]],
+    )
+
+
+async def browser_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: Budget, mode: str, fin_policy: str, **llm: str
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过."""
+    require_tools()
+    url = os.getenv("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("需设 TEST_DATABASE_URL: 已迁移并建好检查点表的测试库")
+    XERO.ready()  # 演示运行副本 (mock 的固定输出) 齐备
+    out = out_dir(datetime.now(UTC))
+    env = {
+        "DATABASE_URL": url,
+        "CHECKPOINT_BACKEND": "postgres",
+        "DATASET_ROOT": str(REPO / "data"),
+        "EVIDENCE_ROOT": str(tmp_path / "evidence"),
+        "LLM_MODE": mode,
+        "FEATURES": ",".join(sorted(DEMO_FEATURES)),
+        "SETTINGS_SECRET_KEY": "",  # 不读库里存的模型设置, 只用这里给的
+        "XERO_CLIENT_ID": "",
+        "XERO_CLIENT_SECRET": "",
+        **llm,
+    }
+    async with backend(monkeypatch, env) as (api, app):
+        install_budget(app.state.deps, budget)
+        async with frontend(out, api) as base:
+            results = await run_walk(walk_config(out, base, mode, fin_policy), out, WALK_TIMEOUT_S[mode])
+        data = await evaluate(app.state.runner, walk_of(results), budget) if results["eid"] else {}
+    return results, data, write_report(out, mode, results, data)
+
+
+async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """mock 模式在本机走一遍: 走到归档, 没有问题; 闸门序列同 R287 (打开 planning 时多两次 PLN-15); R311 的硬性检查
+    都过 (每个判断对象有结论, 指针都能解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; FIN-01 选无保留
+    意见 (固定输出的报告两稿按它写)."""
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "unqualified"
+    )
+    assert results["issues"] == [], report
+    assert results["reached_archive"] and results["gates"] == gates_expected(), report
+    assert_hard(data)
+    assert (data["reruns"], data["troubled_tasks"]) == ({}, []), report
+    assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}, report
+
+
+@pytest.mark.live(max_calls=MAX_CALLS)
+async def test_browser_walk_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_budget: Budget) -> None:
+    """live 模式 (真实模型): 同一驱动走到归档, R311 的硬性检查都过; 走查发现的问题与建议动作的差异写进报告, 不在这里
+    判失败 (由协调者看报告另立需求). FIN-01 按汇总表的候选意见决定."""
+    configured = live_llm_settings()  # 没配时跳过
+    llm = {key: str(getattr(configured, key)) for key in LLM_KEYS}
+    results, data, report = await browser_walk(tmp_path, monkeypatch, live_budget, "live", "candidate", **llm)
+    live_budget.reported = True
+    warn_soft(data)
+    assert results["reached_archive"], report
+    assert_hard(data)
