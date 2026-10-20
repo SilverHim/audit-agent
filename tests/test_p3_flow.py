@@ -332,6 +332,19 @@ async def test_misstatements_found_late_loop_back_to_triage(tmp_path: Path) -> N
     assert s.phase_runs() == {"RUN-FIN-03-1"}
 
 
+async def test_completion_does_not_write_phase_when_fin02_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """功能打开时 completion 不写阶段 (第 1 轮审核 R160-03): 程序库副本加桩 FIN-02, completion 执行它, 走完一轮到
+    FIN-01 闸门; 写阶段的提交里只有 RUN-FIN-03-1, RUN-FIN-02-1 的提交不写阶段."""
+    monkeypatch.setitem(STUB_OUTPUTS, "FIN-02", "[misstatements]")
+    monkeypatch.setitem(SCRIPTS, "FIN-02", lambda deps, ctx: {"procedure_runs": [finished(ctx.run)]})
+    s = await at_p3(tmp_path, stubs=("FIN-08", "FIN-02"))
+    await s.submit_and_wait(record(TASK, id="D-C1"))
+
+    assert (await s.runner.app.aget_state(CONFIG)).next == ("gate_fin",)
+    assert ("FIN-02", 1) in s.runs
+    assert s.phase_runs() == {"RUN-FIN-03-1"}
+
+
 async def test_no_misstatements_runs_through_without_waiting(tmp_path: Path) -> None:
     """验收 6: P2 没有错报: FIN-03 空执行 (RUN-FIN-03-1 成功, 程序 completed, 不等人), 经各节点到 summarize, SCHEDULE
     没有项目, 候选意见 unqualified, 停在 FIN-01 闸门."""

@@ -392,13 +392,13 @@ def test_after_fan_in_waits_for_pending_task() -> None:
     assert after_fan_in(nodes)(state) == "await_events"
 
 
-@pytest.mark.parametrize(("features", "settled"), [(NUMBAT_FEATURES, "completion"), (MISSTATEMENT_ON, TRIAGE)])
-def test_after_fan_in_completes_when_all_done(features: frozenset[str], settled: str) -> None:
-    """P2 全部结清且没有待决任务: 进完成阶段; 功能 misstatement 打开时先进错报分诊 (需求 R160 验收 3)."""
-    nodes = GraphNodes(make_deps(FakeRegistry(), FakeTrail(), features=features), parallel_cap=4)
+def test_after_fan_in_completes_when_all_done() -> None:
+    """P2 全部结清且没有待决任务: 走 completion 出口进完成阶段; 功能 misstatement 打开时主图把这个出口接到错报分诊
+    (需求 R160 验收 3, 见 test_misstatement_graph_structure 的 fan_in 边; 去处只由 build_graph 定)."""
+    nodes = _p2_nodes()
     state = _p2_state(nodes, {"REV-08": DONE, "REV-03": DONE, "REV-02": DONE})
 
-    assert after_fan_in(nodes)(state) == settled
+    assert after_fan_in(nodes)(state) == "completion"
 
 
 def test_after_fan_in_raises_when_awaiting_without_task() -> None:
@@ -593,7 +593,7 @@ MISSTATEMENT_EDGES = [
     ("await_correction", "verify_correction", False, None),
     ("communicate", "await_correction", True, None),
     ("communicate", "verify_correction", True, None),
-    ("fan_in", TRIAGE, True, None),
+    ("fan_in", TRIAGE, True, "completion"),  # after_fan_in 的 completion 出口接到分诊
     ("final_review", "completion", True, None),
     ("final_review", TRIAGE, True, None),
     ("gate_fin", "summarize", True, "reject"),
@@ -620,7 +620,7 @@ def test_baseline_graph_structure() -> None:
 
 
 def test_misstatement_graph_structure() -> None:
-    """需求 R160 验收 1, 2: 功能 misstatement 打开时多出完成阶段的 8 个节点与 MISSTATEMENT_EDGES, P2 结清改去
+    """需求 R160 验收 1, 2: 功能 misstatement 打开时多出完成阶段的 7 个节点与 MISSTATEMENT_EDGES, P2 结清改去
     misstatement_triage, FIN-01 驳回改回 summarize; 静态中断仍是 4 个闸门. 其余同基线."""
     deps = make_deps(FakeRegistry(), FakeTrail(), features=MISSTATEMENT_ON)
     app = compile_graph(make_graph_nodes(deps), InMemorySaver())
@@ -708,7 +708,9 @@ SETTLED_ONES = [
 
 
 def with_misstatements(*misstatements: Misstatement) -> EngagementState:
-    return initial_state(ENGAGEMENT, [], NUMBAT_PROFILE.version) | {"misstatements": list(misstatements)}  # type: ignore[return-value]
+    """完成阶段的状态: 程序包有 FIN-03 (分诊能分类), 错报为给定的."""
+    pack = [make_procedure("FIN-03", Phase.P3_Completion)]
+    return initial_state(ENGAGEMENT, pack, NUMBAT_PROFILE.version) | {"misstatements": list(misstatements)}  # type: ignore[return-value]
 
 
 @pytest.mark.parametrize(
@@ -719,6 +721,7 @@ def with_misstatements(*misstatements: Misstatement) -> EngagementState:
         (after_triage, [], "communicate"),
         (after_communicate, [CLASSIFIED, COMMUNICATED], "await_correction"),
         (after_communicate, [CLASSIFIED, *SETTLED_ONES], "verify_correction"),
+        (after_communicate, [VERIFYING, CLASSIFIED, *SETTLED_ONES], "verify_correction"),  # 已收到更正通知的去验证
         (after_verify, [NEW, RECOMMUNICATE, COMMUNICATED], TRIAGE),  # 先分类
         (after_verify, [RECOMMUNICATE, COMMUNICATED], "communicate"),  # 再重新沟通
         (after_verify, [COMMUNICATED, *SETTLED_ONES], "await_correction"),  # 再等其余的更正
@@ -731,6 +734,15 @@ def test_p3_routes(route: Any, misstatements: list[Misstatement], expected: str)
     """表驱动: 回 misstatement_triage 的条件都是有未分类的 identified 错报 (完成阶段新认定的); after_communicate 看有无
     communicated; after_verify 依次看未分类, 须重新沟通, 仍在等更正."""
     assert route(with_misstatements(*misstatements)) == expected
+
+
+def test_after_triage_raises_without_fin03() -> None:
+    """程序包里没有 FIN-03 (旧项目或手工装配) 而有未分类的错报: 分诊是空操作, 回去也分不了类, 抛 ScheduleStuck 列出
+    错报, 不在分诊上空转到递归上限 (第 1 轮审核 R160-01); 没有未分类的照常去沟通."""
+    state = with_misstatements(NEW, CLASSIFIED) | {"procedure_pack": []}
+    with pytest.raises(ScheduleStuck, match=f"{NEW.id}.*FIN-03"):
+        after_triage(state)  # type: ignore[arg-type]
+    assert after_triage(with_misstatements(CLASSIFIED) | {"procedure_pack": []}) == "communicate"  # type: ignore[arg-type]
 
 
 def test_after_verify_raises_while_verifying_left() -> None:

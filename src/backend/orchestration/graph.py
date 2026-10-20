@@ -26,7 +26,7 @@ interrupt() (种类见 waits.py).
 """
 
 import functools
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from typing import Any, Literal, Protocol, TypeVar
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -34,7 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
-from backend.agents.workpaper import unclassified
+from backend.agents.workpaper import FIN03, unclassified
 from backend.contracts.models import (
     GateId,
     MisstatementStatus,
@@ -172,7 +172,7 @@ def route_schedule(nodes: GraphNodes) -> Callable[[EngagementState], list[Send] 
     return route
 
 
-AfterFanIn = Literal["p1_ingest", "schedule", "await_events", "await_data", "completion", "misstatement_triage"]
+AfterFanIn = Literal["p1_ingest", "schedule", "await_events", "await_data", "completion"]
 
 
 def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
@@ -181,15 +181,13 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     P2 以外等到了数据的程序 (LATE 中回到 planned 的, 即 DOC-04) → p1_ingest 补跑 (需求 R272);
     有可派发的 P2 程序 (待执行且前置都已完成) → schedule, 不因别的程序等复核或等数据而停下;
     有待决的复核任务 → await_events 等审计师;
-    P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion (功能 misstatement 打开时为
-    misstatement_triage, 需求 R160);
+    P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion, 即进完成阶段 (功能 misstatement
+    打开时主图把这个出口接到 misstatement_triage, 由 build_graph 按功能集定, 需求 R160);
     有程序在等数据 (awaiting_data, 任何阶段) → await_data 等数据到达 (需求 R272).
     都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 或 in_dispute 而没有待决任务),
     或等人处理 (awaiting_human, in_dispute) 却没有待决任务, 进 await_events 会永远等不到决定; 消息逐个列出程序与状态.
     外层传 nodes 是为了拿程序库 (闭包, 同 route_schedule).
     """
-
-    settled: AfterFanIn = "misstatement_triage" if MISSTATEMENT in nodes.deps.features else "completion"
 
     def route(state: EngagementState) -> AfterFanIn:
         pack = state["procedure_pack"]
@@ -202,7 +200,7 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
         p2 = p2_procedures(pack)
         waiting_data = any(p.status is ProcedureStatus.awaiting_data for p in pack)
         if all(p.status in SETTLED for p in p2) and not waiting_data:
-            return settled
+            return "completion"
         if waiting_data:
             return "await_data"
         unfinished = [p for p in p2 if p.status in UNFINISHED]
@@ -219,8 +217,15 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
 
 def after_triage(state: EngagementState) -> Literal["misstatement_triage", "communicate"]:
     """misstatement_triage 之后: 还有未分类的 identified 错报 (复核人在 FIN-03 任务上认定了新错报) 回去再分类
-    (FIN-03 下一次执行只判它们), 否则去沟通."""
-    return "misstatement_triage" if unclassified(state) else "communicate"
+    (FIN-03 下一次执行只判它们), 否则去沟通. 程序包里没有 FIN-03 (旧项目或手工装配) 时分诊是空操作, 回去也分不了类:
+    抛 ScheduleStuck 列出错报, 不在分诊上空转到递归上限 (同 P2 的守卫, 第 1 轮审核 R160-01)."""
+    pending = unclassified(state)
+    if not pending:
+        return "communicate"
+    if not any(p.id == FIN03 for p in state["procedure_pack"]):
+        ids = ", ".join(m.id for m in pending)
+        raise ScheduleStuck(f"有未分类的错报 {ids}, 程序包里却没有 {FIN03}, 分诊分不了类")
+    return "misstatement_triage"
 
 
 def after_communicate(state: EngagementState) -> Literal["await_correction", "verify_correction"]:
@@ -321,12 +326,10 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     # 条件边: 执行完由路由函数选下一个节点; 第三个参数列出所有可能的去向
     g.add_conditional_edges("schedule", route_with_defaults(route_schedule(nodes)), ["fieldwork", "fan_in"])
     g.add_edge("fieldwork", "fan_in")  # 所有并行实例都结束后才进 fan_in
-    settled = "misstatement_triage" if misstatement else "completion"  # P2 结清后的去处
-    g.add_conditional_edges(
-        "fan_in",
-        route_with_defaults(after_fan_in(nodes)),
-        ["p1_ingest", "schedule", "await_events", "await_data", settled],
-    )
+    # P2 结清 (路由的 completion 出口) 后的去处只在这里按功能集定: 功能 misstatement 打开时先进错报分诊
+    after_p2: dict[Hashable, str] = {name: name for name in ("p1_ingest", "schedule", "await_events", "await_data")}
+    after_p2["completion"] = "misstatement_triage" if misstatement else "completion"
+    g.add_conditional_edges("fan_in", route_with_defaults(after_fan_in(nodes)), after_p2)
     g.add_edge("await_events", "fan_in")  # 审计师处理完复核, 回 fan_in 重新判断
     g.add_edge("await_data", "fan_in")  # 程序要的数据到了 (或重查), 回 fan_in 重新判断
     if misstatement:  # 完成阶段的错报闭环 (需求 R160)

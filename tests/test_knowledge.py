@@ -47,7 +47,7 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import initial_state
 from backend.core.config import get_settings
-from backend.orchestration.graph import P3_NODES
+from backend.orchestration.graph import P3_NODES, compile_graph
 from backend.orchestration.nodes import MISSTATEMENT_NODES
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
@@ -56,7 +56,18 @@ from backend.services.features import FEATURES
 from backend.services.judgment_engine import output_model, prompt_env
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
 from tests.external import optional, supplements_dir
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES, audit_plan, engagement_terms
+from tests.fakes import (
+    ENGAGEMENT,
+    NUMBAT_CONTRACTS,
+    NUMBAT_PROFILE,
+    NUMBAT_REPLIES,
+    FakeRegistry,
+    FakeTrail,
+    audit_plan,
+    engagement_terms,
+    make_deps,
+    make_graph_nodes,
+)
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
 
@@ -3081,8 +3092,8 @@ def test_runtime_check_fails_without_runtime_copy(tmp_path: Path) -> None:
         check_runtime(replace(NUMBAT, runtime=runtime))
 
 
-# 功能 misstatement 打开时完成阶段各节点在图上的先后 (需求 R160): 分诊到报表检查 (await_correction 不执行程序), 最后
-# completion; 回流只回到分诊, 所以先后即节点在 P3_NODES 中的次序
+# 功能 misstatement 打开时完成阶段执行程序的节点在图上的先后 (需求 R160): 分诊到最终复核 (await_correction 不执行
+# 程序), 最后 completion; 回流只回到分诊, 所以先后即节点在 P3_NODES 中的次序 (用例里按主图的边核对)
 P3_ORDER = [node for node in (*P3_NODES, "completion") if node in MISSTATEMENT_NODES]
 
 
@@ -3098,6 +3109,9 @@ def test_p3_dependencies_follow_node_order() -> None:
     程序排在它之前 (节点在前, 或同节点内在前); 裁定第 1 批的依赖表与节点顺序一致 (FIN-04 在 FIN-03, FIN-09, PLN-19
     之后; FIN-15 在 FIN-09, FIN-04 之后; FIN-02 所在的 completion 在 final_review 之后; Issue #46 起没有 FIN-12), 表里的
     程序还没有模板的也核对."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=frozenset({"critic", "misstatement"}))
+    edges = {(e.source, e.target) for e in compile_graph(make_graph_nodes(deps)).get_graph().edges}
+    assert all(step in edges for step in pairwise(P3_ORDER)), P3_ORDER  # 次序即主图上前进的边 (第 1 轮审核 R160-05)
     placed = {pid for pids in MISSTATEMENT_NODES.values() for pid in pids}
     library = ProcedureLibrary(ROOT, frozenset(FEATURES))
     p3 = [t for t in library.all() if t.phase is Phase.P3_Completion and t.gate is None]
