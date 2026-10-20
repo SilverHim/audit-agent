@@ -9,6 +9,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     Decision,
     Judgment,
+    ManualRequest,
     ProposedAction,
     ReviewTask,
     TargetType,
@@ -37,7 +38,8 @@ def make_outcome(procedure_id: str, level: AutonomyLevel, action: ProposedAction
 
 
 def make_task(procedure_id: str, kind: TaskKind, subject_id: str | None) -> ReviewTask:
-    """某条程序的复核任务, 指向该程序第 1 次执行."""
+    """某条程序的复核任务, 指向该程序第 1 次执行; manual 任务带一份空请求 (模型校验要求)."""
+    request = ManualRequest(instructions="", result_model=None, min_evidence=0, material={})
     return ReviewTask(
         id=f"T-RUN-{procedure_id}-1-v1",
         kind=kind,
@@ -48,6 +50,7 @@ def make_task(procedure_id: str, kind: TaskKind, subject_id: str | None) -> Revi
         run_id=f"RUN-{procedure_id}-1",
         subject_id=subject_id,
         created_at=NOW,
+        manual_request=request if kind is TaskKind.manual else None,
     )
 
 

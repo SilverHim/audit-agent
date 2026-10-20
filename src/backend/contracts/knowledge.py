@@ -2,6 +2,8 @@
 
 from typing import Any, Literal
 
+from pydantic import Field
+
 from backend.contracts.data import DataInput, TableKind
 from backend.contracts.models import (
     AgentId,
@@ -64,6 +66,15 @@ class LLMSpec(Model):
     max_tokens: int = 4096  # 单次调用最多输出的 token 数, 程序 YAML 可覆盖
 
 
+class ManualSpec(Model):
+    """人工程序 (engine manual 且不是闸门) 交给人的要求 (需求 R92): 派发时抄进 manual 任务的请求 (ManualRequest)."""
+
+    instructions: str  # 给执行人的说明
+    result_model: str | None  # 结构化结果的模型名, 须在 contracts/manual_results.RESULT_MODELS 登记; 为空不收结构化结果
+    min_evidence: int = Field(default=1, ge=0)  # 至少要附的证据文件指针数, 不小于 0
+    subject: str = "RESULT"  # manual 任务的 subject_id
+
+
 class ProcedureTemplate(Model):
     """审计程序模板, 对应 knowledge/procedures/ 下的一个 YAML."""
 
@@ -93,6 +104,7 @@ class ProcedureTemplate(Model):
     evidence_required: list[EvidenceType] = []  # 需要取得的证据种类, 用于算证据覆盖率
     rules: list[RuleSpec] = []  # 规则 SQL, 规则与混合程序用
     llm: LLMSpec | None = None  # LLM 调用配置, LLM 与混合程序用
+    manual: ManualSpec | None = None  # 人工程序交给人的要求, 人工程序须有, 其余程序不能写 (加载时校验)
 
 
 class StandardFragment(Model):

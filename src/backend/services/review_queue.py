@@ -15,6 +15,7 @@ from backend.contracts.models import (
     EvidencePointer,
     ExceptionDisposition,
     Judgment,
+    ManualRequest,
     ProcedureRun,
     ProposedAction,
     ReviewTask,
@@ -60,13 +61,13 @@ TRANSACTION_SOURCES = ("sales_invoice", "journal_entry", "bank_transaction")
 CHECK_EVIDENCE_BELOW = 0.70  # 置信度低于它: 查验证据
 BATCH_ABOVE = 0.90  # 置信度高于它才可能批量确认; 不超过它 (且不低于上一档): 阅读推理链
 # 各类任务允许的决定 (第 7 节允许决定矩阵), 每种任务类型一行. dispute 任务只能仲裁 (确认会绕过仲裁); failed 任务带判断
-# 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). manual 先为空集, 由人工程序登记
+# 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). manual 任务 (人工程序) 只能提交结果
 ALLOWED: dict[TaskKind, frozenset[Decision]] = {
     TaskKind.normal: frozenset({Decision.confirm, Decision.override, Decision.misstatement}),
     TaskKind.unattributed: frozenset({Decision.override, Decision.misstatement}),
     TaskKind.failed: frozenset({Decision.rerun}),
     TaskKind.dispute: frozenset({Decision.dispute_resolution}),
-    TaskKind.manual: frozenset(),
+    TaskKind.manual: frozenset({Decision.manual_result}),
 }
 
 
@@ -234,7 +235,26 @@ class ReviewQueue:
         run_id: str,
         now: datetime,
         subject_id: str | None = None,
+        material: Mapping[str, Any] | None = None,
     ) -> ReviewTask:
+        """建一条待决任务, ID 为 T-{目标 ID}[-{subject_id}]-v{目标版本} (subject_id 只在 failed 任务进 ID).
+
+        manual 任务 (人工程序, 需求 R92): 目标为本次执行记录, subject_id 缺省取模板 manual.subject, 请求
+        (manual_request) 取模板 manual 段的说明, 结果模型与证据下限, 加上 material (派发时生成的材料, 缺省为空).
+        例: make_task(TaskKind.manual, RUN-TST-M01-1 v1, "TST-M01", ...) → T-RUN-TST-M01-1-v1, subject_id RESULT.
+        """
+        request = None
+        if kind is TaskKind.manual:
+            spec = self.library.load(procedure_id).manual
+            if spec is None:
+                raise ValueError(f"{procedure_id} 没有 manual 段, 不能建 manual 任务")
+            subject_id = subject_id if subject_id is not None else spec.subject
+            request = ManualRequest(
+                instructions=spec.instructions,
+                result_model=spec.result_model,
+                min_evidence=spec.min_evidence,
+                material=dict(material or {}),
+            )
         target_type = {
             Judgment: TargetType.Judgment,
             AuditException: TargetType.AuditException,
@@ -251,4 +271,5 @@ class ReviewQueue:
             run_id=run_id,
             subject_id=subject_id,
             created_at=now,
+            manual_request=request,
         )

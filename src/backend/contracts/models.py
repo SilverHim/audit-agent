@@ -1,6 +1,7 @@
 """领域对象, 定义见 开发接口文档.md 第 2 节. 其他包只引用, 不另行定义."""
 
 import re
+import unicodedata
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self
@@ -166,7 +167,7 @@ class TaskKind(StrEnum):
     unattributed = "unattributed"  # 例外没有判断解释
     failed = "failed"  # 执行或校验失败
     dispute = "dispute"  # 独立复核 (A7) 与 A6 结论不一致, 由审计师仲裁
-    manual = "manual"  # 人工程序 (engine manual) 由人执行并提交结果 (尚未使用)
+    manual = "manual"  # 人工程序 (engine manual 且不是闸门) 由人执行并提交结果 (需求 R92)
 
 
 class CriticVerdict(StrEnum):
@@ -874,6 +875,16 @@ class UncorrectedSchedule(Versioned):
 # ── 2.5 复核与决定 ─────────────────────────────────────────
 
 
+class ManualRequest(Model):
+    """manual 任务交给人的请求 (需求 R92): 派发时抄自程序模板的 manual 段, 加上派发时生成的材料. 提交 manual_result
+    时按它核对证据数与结构化结果 (decisions.check_manual_result)."""
+
+    instructions: str  # 给执行人的说明
+    result_model: str | None  # 结构化结果的模型名 (contracts/manual_results 登记), 为空时 details 须为空
+    min_evidence: int = Field(ge=0)  # 至少要附的证据文件指针数, 不小于 0
+    material: dict[str, Any]  # 派发时生成的材料 (需求 R93 由程序 owner 的 prepare 生成), 原样给人看
+
+
 class ReviewTask(Versioned):
     """复核任务: 需要人处理的一件事, 进复核队列."""
 
@@ -883,16 +894,28 @@ class ReviewTask(Versioned):
     target_id: str  # 要处理的对象 ID
     target_version: int  # 建任务时对象的版本, 提交决定时校验
     run_id: str  # 发现问题的那次执行
-    subject_id: str | None = None  # failed, unattributed 任务的判断对象; 整次执行失败时为空
+    subject_id: str | None = (
+        None  # failed, unattributed 任务的判断对象, manual 任务为模板 manual.subject; 整次执行失败时为空
+    )
     status: TaskStatus = TaskStatus.pending  # 待决或已决定
     created_at: datetime  # 创建时间
+    manual_request: ManualRequest | None = None  # manual 任务的请求, 其余类型为空
+
+    @model_validator(mode="after")
+    def request_matches_kind(self) -> Self:
+        """manual 任务须带请求, 其余类型不能带 (需求 R92)."""
+        if (self.kind is TaskKind.manual) != (self.manual_request is not None):
+            raise ValueError(f"{self.id}: manual 任务须带 manual_request, 其余类型不能带 ({self.kind})")
+        return self
 
 
 class ManualResult(Model):
-    """人工直接给出的结果, 用于 manual_result 决定."""
+    """人工直接给出的结果, 用于 manual_result 决定 (failed 任务的人工执行, manual 任务的人工程序结果)."""
 
     conclusion: str  # 人给出的结论
     evidence: list[EvidencePointer] = []  # 人给出的证据
+    performed_on: date | None = None  # 人执行的日期, manual 任务必填 (不晚于决定当天的悉尼日期)
+    details: dict[str, Any] = {}  # 按任务请求的结果模型给的结构化结果, 原样存下; 没有结果模型时为空
 
 
 class ReviewRecord(Versioned):
@@ -1014,6 +1037,102 @@ class Confirmation(Versioned):
     difference_cents: int | None = None  # 回函减账面, 单位分, CSH-02 写入
     result: ConfirmationResult = ConfirmationResult.pending  # 函证结果
     evidence: list[EvidencePointer] = []  # DOC-06 抽取字段的页码指针
+
+
+OWNERSHIP_GRAPH_ID = "OWNERSHIP"  # 股权与任职关系图在每个项目里的固定 ID (需求 R136)
+PartyRelation = Literal["director", "secretary", "shareholder"]  # 关系图中人或公司对一家公司的关系
+
+
+class PartyNode(Model):
+    """股权与任职关系图中的一个人或一家公司. ID 规则见接口文档第 0 节 (company_node_id, person_node_id)."""
+
+    id: str  # 公司 ACN-{acn}; 个人 PER-{姓}-{名}-{yyyymmdd}, 没有出生日期时 PER-{姓}-{名}-NODOB
+    kind: PartyKind  # 个人或公司
+    name: str  # 名称或姓名, 按登记摘录原样
+    acn: str | None = None  # ACN, 9 位数字; 个人为空
+    abn: str | None = None  # ABN, 11 位数字; 只有报告主体取画像的 ABN, 其余为空
+    birth_date: date | None = None  # 出生日期 (个人, 摘录高管栏有); 只持股不任职的没有
+    searched: bool = False  # 是否做过人员检索 (个人) 或取过公司摘录 (公司)
+
+    @model_validator(mode="after")
+    def numbers(self) -> Self:
+        """ACN, ABN 只查位数, 同 DeclaredParty."""
+        problem = digits_problem(self.acn, 9, "acn") or digits_problem(self.abn, 11, "abn")
+        if problem:
+            raise ValueError(problem)
+        return self
+
+
+class PartyLink(Model):
+    """关系图中的一条关系: from_id 对 to_id (公司) 的任职或持股, 证据为登记摘录中对应的那一行."""
+
+    from_id: str  # 任职或持股的人或公司 (PartyNode.id)
+    to_id: str  # 被任职或被持股的公司 (PartyNode.id)
+    relation: PartyRelation  # 董事, 秘书或股东
+    shares: int | None = Field(default=None, ge=0)  # 持股数 (股东); 任职为空
+    pct: Share | None = None  # 持股比例, 0 至 1 (股东); 任职为空
+    appointed: date | None = None  # 任职起始日 (高管)
+    ceased: date | None = None  # 离任日 (高管); 在任为空
+    evidence: EvidencePointer  # 登记摘录中这一行的 document 指针
+
+
+class OwnershipGraph(Versioned):
+    """股权与任职关系图 (A5 GEN-08 建, 需求 R136): 报告主体向上穿透的法人股东, 控制或关键人员, 以及他们任职或持股的
+    其他公司. 项目里只有一份, ID 固定为 OWNERSHIP; 重建出新版本."""
+
+    run_id: str  # 建它的那次执行; 合并时须为本次执行 (merge.check_own_run)
+    reporting_entity_id: str  # 报告主体的节点 ID (ACN-{acn}), 须在 nodes 中
+    nodes: list[PartyNode]  # 节点, ID 不重复
+    links: list[PartyLink]  # 关系, 端点都在 nodes 中
+
+    @model_validator(mode="after")
+    def closed(self) -> Self:
+        """节点 ID 不重复; 报告主体与每条关系的两端都在 nodes 中."""
+        ids = [node.id for node in self.nodes]
+        duplicated = sorted({i for i in ids if ids.count(i) > 1})
+        if duplicated:
+            raise ValueError(f"节点 ID 重复: {', '.join(duplicated)}")
+        ends = {self.reporting_entity_id, *(end for link in self.links for end in (link.from_id, link.to_id))}
+        missing = sorted(ends - set(ids))
+        if missing:
+            raise ValueError(f"不在 nodes 中的节点: {', '.join(missing)}")
+        return self
+
+
+def node_name_part(text: str) -> str:
+    """节点 ID 中的姓或名: 先做 Unicode 分解 (NFKD, 带附加符的字母拆成字母与附加符), 转大写, 再去掉 A-Z 与 0-9
+    以外的字符 (附加符, 空格, 撇号, 连字符, 非拉丁字母等). 例 "O'Connor" → OCONNOR, "José" → JOSE."""
+    return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", text).upper())
+
+
+def company_node_id(acn: str) -> str:
+    """公司节点的 ID: ACN-{acn}. ACN 先去掉空白 ("900 043 021" 同 "900043021"), 之后不是 9 位数字时抛 ValueError."""
+    digits = "".join(acn.split())
+    problem = digits_problem(digits, 9, "acn")
+    if problem:
+        raise ValueError(problem)
+    return f"ACN-{digits}"
+
+
+def person_node_id(family_name: str, given_names: str, birth_date: date | None) -> str:
+    """个人节点的 ID: PER-{姓}-{名}-{yyyymmdd}; 没有出生日期 (只持股不任职, 摘录股东栏没有) 时末段为 NODOB.
+    姓与名各自经 node_name_part; 姓规范化后为空 (如只有非拉丁字母) 时抛 ValueError, 不同的人不并成一个 ID.
+    名可以为空 (单名). 例: PER-MORGAN-ALEX-19790412, PER-WHITFIELD-SAM-NODOB."""
+    family = node_name_part(family_name)
+    if not family:
+        raise ValueError(f"姓规范化后为空, 建不出节点 ID: {family_name!r}")
+    born = birth_date.strftime("%Y%m%d") if birth_date is not None else "NODOB"
+    return f"PER-{family}-{node_name_part(given_names)}-{born}"
+
+
+def split_full_name(full_name: str) -> tuple[str, str]:
+    """摘录中只有全名时拆成 (姓, 名). 含逗号时按 "姓, 名" 在第一个逗号处拆 ("MORGAN, Alex" → MORGAN, Alex); 否则
+    姓取最后一个词, 名取其余词 (只有一个词时为空). 各段多余的空白合成一个空格."""
+    if "," in full_name:
+        family, given = full_name.split(",", 1)
+        return " ".join(family.split()), " ".join(given.split())
+    words = full_name.split()
+    return (words[-1], " ".join(words[:-1])) if words else ("", "")
 
 
 class DocumentRef(Model):

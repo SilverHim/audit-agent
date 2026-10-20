@@ -2861,9 +2861,36 @@ export type LlmTestResult = {
 };
 
 /**
+ * ManualRequest
+ *
+ * manual 任务交给人的请求 (需求 R92): 派发时抄自程序模板的 manual 段, 加上派发时生成的材料. 提交 manual_result
+ * 时按它核对证据数与结构化结果 (decisions.check_manual_result).
+ */
+export type ManualRequest = {
+    /**
+     * Instructions
+     */
+    instructions: string;
+    /**
+     * Result Model
+     */
+    result_model: string | null;
+    /**
+     * Min Evidence
+     */
+    min_evidence: number;
+    /**
+     * Material
+     */
+    material: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * ManualResult
  *
- * 人工直接给出的结果, 用于 manual_result 决定.
+ * 人工直接给出的结果, 用于 manual_result 决定 (failed 任务的人工执行, manual 任务的人工程序结果).
  */
 export type ManualResult = {
     /**
@@ -2874,6 +2901,16 @@ export type ManualResult = {
      * Evidence
      */
     evidence?: Array<EvidencePointer>;
+    /**
+     * Performed On
+     */
+    performed_on?: string | null;
+    /**
+     * Details
+     */
+    details?: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -4005,6 +4042,7 @@ export type ReviewTask = {
      * Created At
      */
     created_at: string;
+    manual_request?: ManualRequest | null;
 };
 
 /**

@@ -29,7 +29,7 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions"}),
     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
     AgentId.A4: frozenset({"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions"}),
-    AgentId.A5: frozenset({"confirmations", "documents"}),
+    AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph"}),
     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
     AgentId.A7: frozenset(),  # GEN-09 由 A6 同步调用, 结果写在 A6 的判断上, A7 自己不返回状态片段
     AgentId.A9: frozenset({"uncorrected_schedule"}),
@@ -62,6 +62,7 @@ FIELD_REPLAY: dict[str, Replay] = {
     "analytics": Replay.singleton,
     "materiality_candidates": Replay.singleton,
     "uncorrected_schedule": Replay.singleton,
+    "ownership_graph": Replay.singleton,
 }
 SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
 LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式
@@ -281,6 +282,20 @@ def check_run(patch: StatePatch, procedure_id: str, run_id: str) -> list[str]:
     return reasons
 
 
+def check_own_run(patch: StatePatch, run_id: str) -> list[str]:
+    """片段中带 run_id 而不带 procedure_id 的对象 (如关系图) 只能是本次执行写的: run_id 须等于本次执行, 否则重放
+    (按 run_id 或核对所属程序取回) 对不上第一次合并的结果. 按模型字段判断, 不按类名. 带 procedure_id 的 (判断, 例外,
+    任务) 可以是本程序或别的程序之前的执行写的, 由本次改出新版本 (如 REV-02 把 REV-08 的例外置 attributed),
+    由 check_refs 核对所属程序."""
+    reasons = []
+    for field, value in patch.items():
+        for item in objects(value):
+            fields = type(item).model_fields
+            if "run_id" in fields and "procedure_id" not in fields and item.run_id != run_id:
+                reasons.append(f"{field} 中 {item.id} 的 run_id {item.run_id} 不是本次执行 {run_id}")
+    return reasons
+
+
 def check_patch(
     patch: StatePatch,
     *,
@@ -297,12 +312,18 @@ def check_patch(
     procedure_id, run_id: 本次执行的程序与执行记录 ID, 即 ctx.run.procedure_id 与 ctx.run.id.
     state: 执行时的编排状态, 只读, 用来查外键与已有版本.
     outputs: 本程序模板声明的产出字段 (template.outputs); 片段只能含这些与 procedure_runs.
-    先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键与本次执行的终态.
+    先查字段归属, 声明与类型, 不过就不再往下查 (对象类型不对时, 后面的检查无从谈起); 再一并查 ID, 外键, 本次执行的终态
+    与只能由本次执行写的对象 (check_own_run).
     例: check_patch(patch, writer=agent.agent_id, procedure_id=ctx.run.procedure_id, run_id=ctx.run.id,
     state=ctx.state, outputs=ctx.template.outputs)
     """
     reasons = check_fields(patch, writer, procedure_id, outputs)
     if not reasons:
-        reasons = [*check_ids(patch, state), *check_refs(patch, state), *check_run(patch, procedure_id, run_id)]
+        reasons = [
+            *check_ids(patch, state),
+            *check_refs(patch, state),
+            *check_run(patch, procedure_id, run_id),
+            *check_own_run(patch, run_id),
+        ]
     if reasons:
         raise MergeRejected(reasons)

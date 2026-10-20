@@ -57,6 +57,7 @@ from tests.fakes import (
     make_deps,
     make_procedure,
     make_run,
+    ownership_graph,
 )
 
 PACK = [make_procedure("REV-08", Phase.P2_Executing), make_procedure("REV-03", Phase.P2_Executing)]
@@ -196,10 +197,48 @@ def test_agent_fields_match_section_6_table() -> None:
         "risk_register",
         "exceptions",
     }
-    assert AGENT_FIELDS[AgentId.A5] == {"confirmations", "documents"}
+    assert AGENT_FIELDS[AgentId.A5] == {"confirmations", "documents", "exceptions", "ownership_graph"}
     assert AGENT_FIELDS[AgentId.A6] == {"exceptions", "judgments", "review_tasks", "confirmations"}
     assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule"}
     assert AGENT_FIELDS[AgentId.A10] == {"report_versions", "review_tasks"}
+
+
+def test_a5_may_write_ownership_graph_and_a6_may_not() -> None:
+    """R136 验收 3: A5 执行 GEN-08 的片段带 ownership_graph 与例外通过; A6 的片段带它被拒, 原因与异常文本含字段名."""
+    gen08 = make_run("GEN-08")
+    graph = ownership_graph(gen08.id)
+    found = exception("X-GEN-08-1-R01-1", "GEN-08", gen08.id)
+    state = make_state(procedure_pack=[*PACK, make_procedure("GEN-08", Phase.P2_Executing)])
+    patch = {"ownership_graph": graph, "exceptions": [found], "procedure_runs": [finished(gen08)]}
+    outputs = ["ownership_graph", "exceptions", "documents"]
+    check_patch(patch, writer=AgentId.A5, procedure_id="GEN-08", run_id=gen08.id, state=state, outputs=outputs)
+    with pytest.raises(MergeRejected, match="merge_rejected: A6 不能写字段 ownership_graph"):
+        check_patch(
+            a6_patch(ownership_graph=graph),
+            writer=AgentId.A6,
+            procedure_id="REV-03",
+            run_id=RUN.id,
+            state=make_state(),
+            outputs=[*declared("REV-03"), "ownership_graph"],
+        )
+
+
+def test_ownership_graph_must_come_from_this_run() -> None:
+    """R136 审核意见 05: 关系图 (带 run_id, 不带 procedure_id) 的 run_id 须为本次执行: 指向 CSH-04 的执行 (在状态中)
+    或不存在的执行, 都被拒, 原因含对象 ID 与两个 run_id."""
+    gen08, csh04 = make_run("GEN-08"), finished(make_run("CSH-04"))
+    state = make_state(procedure_pack=[*PACK, make_procedure("GEN-08", Phase.P2_Executing)], procedure_runs=[csh04])
+    for wrong in (csh04.id, "RUN-GEN-08-9"):
+        reason = f"ownership_graph 中 OWNERSHIP 的 run_id {wrong} 不是本次执行 {gen08.id}"
+        with pytest.raises(MergeRejected, match=reason):
+            check_patch(
+                {"ownership_graph": ownership_graph(wrong), "procedure_runs": [finished(gen08)]},
+                writer=AgentId.A5,
+                procedure_id="GEN-08",
+                run_id=gen08.id,
+                state=state,
+                outputs=["ownership_graph", "exceptions", "documents"],
+            )
 
 
 def test_every_registered_agent_has_field_table() -> None:
@@ -650,14 +689,15 @@ def test_outputs_match_agent_fields_and_replay_registry() -> None:
 
 
 def test_outputs_problems_rejected_when_nodes_are_built(tmp_path: Path) -> None:
-    """R85 验收 3: 临时模板 outputs [ownership_graph] 而 owner A6: GraphNodes 构造时抛 ValueError, 含程序与字段;
-    两条程序都声明 singleton 字段 (评分卡) 也报出."""
-    library = library_with(tmp_path, **{"X-OG": "owner: A6\noutputs: [ownership_graph]\n"})
+    """R85 验收 3: 临时模板 outputs 为没有登记的状态字段 (materiality_cents) 而 owner A6: GraphNodes 构造时抛
+    ValueError, 含程序与字段 (R136 起 ownership_graph 已登记, 改用只在图状态中的字段); 两条程序都声明 singleton
+    字段 (评分卡) 也报出."""
+    library = library_with(tmp_path, **{"X-MC": "owner: A6\noutputs: [materiality_cents]\n"})
     assert output_problems(library) == [
-        "X-OG: ownership_graph 不在 A6 的写入范围内",
-        "X-OG: ownership_graph 没有登记重放取回方式 (merge.FIELD_REPLAY)",
+        "X-MC: materiality_cents 不在 A6 的写入范围内",
+        "X-MC: materiality_cents 没有登记重放取回方式 (merge.FIELD_REPLAY)",
     ]
-    with pytest.raises(ValueError, match="X-OG: ownership_graph"):
+    with pytest.raises(ValueError, match="X-MC: materiality_cents"):
         GraphNodes(make_deps(FakeRegistry(), FakeTrail(), library=library), 2)
     twice = library_with(tmp_path / "twice", **{"X-SC": "owner: A2\noutputs: [acceptance_scorecard]\n"})
     assert output_problems(twice) == ["ACC-04, X-SC: 都声明 acceptance_scorecard, 而其取回方式为 singleton"]

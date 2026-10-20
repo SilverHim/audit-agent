@@ -53,7 +53,7 @@ def test_allowed_has_one_row_per_task_kind() -> None:
         TaskKind.unattributed: {Decision.override, Decision.misstatement},
         TaskKind.failed: {Decision.rerun},
         TaskKind.dispute: {Decision.dispute_resolution},
-        TaskKind.manual: set(),
+        TaskKind.manual: {Decision.manual_result},  # 需求 R92: 人工程序的任务只能提交结果
     } == ALLOWED
 
 
@@ -73,9 +73,13 @@ def test_registered_decisions_apply_to_their_kind_only(monkeypatch: pytest.Monke
 # ── 字段规则 ─────────────────────────────────────────
 
 
+# 按任务类型登记的行: 人工程序的结果另须执行日期 (需求 R92, 其校验见 test_manual)
+KIND_ROWS = {(TaskKind.manual, Decision.manual_result)}
+
+
 def test_generic_rows_equal_old_tables() -> None:
-    """现有 6 种决定各有一条通用行, 必填与只允许字段同改表之前; 尚无按任务类型的行."""
-    assert set(REVIEW_FIELDS) == {(None, d) for d in Decision}
+    """现有 6 种决定各有一条通用行, 必填与只允许字段同改表之前; 按任务类型的行只有 KIND_ROWS."""
+    assert set(REVIEW_FIELDS) == {(None, d) for d in Decision} | KIND_ROWS
     for decision in Decision:
         rules = REVIEW_FIELDS[(None, decision)]
         assert (list(rules.required), set(rules.allowed)) == (OLD_REQUIRED[decision], OLD_ALLOWED[decision])
@@ -83,8 +87,10 @@ def test_generic_rows_equal_old_tables() -> None:
 
 @pytest.mark.parametrize("kind", list(TaskKind))
 def test_every_kind_falls_back_to_generic_row(kind: TaskKind) -> None:
+    """没有按任务类型登记的 (任务类型, 决定) 都用该决定的通用行, 登记了的用自己的行."""
     for decision in Decision:
-        assert review_fields(kind, decision) is REVIEW_FIELDS[(None, decision)]
+        expected = REVIEW_FIELDS[(kind, decision) if (kind, decision) in KIND_ROWS else (None, decision)]
+        assert review_fields(kind, decision) is expected
 
 
 def test_every_allowed_decision_has_field_rules() -> None:
@@ -100,7 +106,7 @@ def test_check_fields_same_as_old_tables(decision: Decision) -> None:
     if decision is Decision.dispute_resolution:  # 仲裁取 a6_upheld: 不另填 neither 的两项
         required["dispute_resolution"] = DisputeResolution.a6_upheld
     base = record("T-1", decision, **({"reason": None} | required))
-    for kind in TaskKind:
+    for kind in (k for k in TaskKind if (k, decision) not in KIND_ROWS):  # 按任务类型登记的行另测
         check_review_fields(base, kind)
         for name in OLD_REQUIRED[decision]:
             with pytest.raises(DecisionRejected) as e:

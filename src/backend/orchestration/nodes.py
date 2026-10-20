@@ -65,7 +65,7 @@ from backend.orchestration.trail import phase_transition, procedure_transitions,
 from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
 from backend.services.data_quality import request_id
 from backend.services.features import COLLAB
-from backend.services.procedure_library import ProcedureLibrary, highest_risk
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program
 from backend.services.review_queue import ReviewQueue
 
 logger = logging.getLogger(__name__)
@@ -169,6 +169,27 @@ def done_status(template: ProcedureTemplate) -> ProcedureStatus:
     return ProcedureStatus.planned if template.gate is not None else ProcedureStatus.completed
 
 
+DISPATCH_FIELDS = ("review_tasks",)  # 人工程序执行片段 (派发) 可写的字段, 另有本次执行记录
+
+
+def writer_of(template: ProcedureTemplate, agent: ProcedureAgent[Any]) -> AgentId:
+    """执行片段的写入者: 人工程序 (需求 R92, procedure_library.manual_program) 的执行即派发, 写入者为 A10; 其余为执行
+    它的 Agent."""
+    return AgentId.A10 if manual_program(template) else agent.agent_id
+
+
+def check_dispatch(
+    patch: StatePatch, *, writer: AgentId, procedure_id: str, run_id: str, state: EngagementState
+) -> None:
+    """人工程序执行片段 (派发片段, 需求 R92) 的合并校验, 不过抛 MergeRejected: 同 check_patch, 但字段限本次执行记录与
+    DISPATCH_FIELDS (模板 outputs 列的是人交回结果后 owner 整理出的字段, 需求 R93, 这里不按它查), 任务限 manual 类.
+    writer 为 writer_of 给的 A10; 别的写入者按其写入范围查 (如 A9 不能写 review_tasks)."""
+    check_patch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=state, outputs=DISPATCH_FIELDS)
+    other = [t.id for t in patch.get("review_tasks", []) if t.kind is not TaskKind.manual]
+    if other:
+        raise MergeRejected([f"派发片段只能建 manual 任务, {', '.join(other)} 不是"])
+
+
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
     """片段里的 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务), 不论是否已决定."""
     return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
@@ -214,7 +235,8 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
     - documents: FinancialDataStore.documents 中本程序声明类型 (template.document_types) 的文件, 与第一次执行交回的
       同类 (上传的其他类文件与导入账表的原件不取). 只到类型粒度: CSH-04 存档按哈希取回审计师先上传的别类文件时,
       重放不带回它; 上传后分类为 confirmation 的副本不在 CSH-04, DOC-06 的在线片段里, 重放会带回;
-    - singleton (评分卡, 分析结果, 重要性候选, 汇总表): 固定 ID 的最新版本; 模型带 run_id 时须属于本程序, 否则节点错误;
+    - singleton (评分卡, 分析结果, 重要性候选, 汇总表, 关系图): 固定 ID 的最新版本; 模型带 run_id (关系图) 时须
+      属于本程序, 否则节点错误;
     - by_procedure (新字段用): 各对象最新版本中 run_id 属于本程序的.
     本次执行的复核任务 (含 A1 代写的 failed 任务) 总按 run_id 取回.
     再补齐引用, 使片段自成一体: 片段中对象 (判断, 评分卡, 分析结果) 的 exception_ids 与任务的例外目标所指的例外,
@@ -442,21 +464,22 @@ class GraphNodes:
     async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
         """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
 
-        正常时为 Agent 的片段与 Agent 编号. Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
+        正常时为 Agent 的片段与写入者 (writer_of). Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
         返回 A1 代写的失败片段 (fail_run) 与 A1. failure_reason 为 "异常类名: 异常文本",
         校验不过为 "merge_rejected: 原因".
         LangGraph 的中断等控制流信号 (GraphBubbleUp) 不算失败, 照常抛出.
         """
+        writer = writer_of(ctx.template, agent)
+        procedure_id, run_id = ctx.run.procedure_id, ctx.run.id
         try:
             patch = await agent.run(ctx)
-            check_patch(
-                patch,
-                writer=agent.agent_id,
-                procedure_id=ctx.run.procedure_id,
-                run_id=ctx.run.id,
-                state=ctx.state,
-                outputs=ctx.template.outputs,
-            )
+            if manual_program(ctx.template):  # 人工程序的执行片段是派发片段 (需求 R92)
+                check_dispatch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state)
+            else:
+                outputs = ctx.template.outputs
+                check_patch(
+                    patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state, outputs=outputs
+                )
         except GraphBubbleUp:
             raise
         except MergeRejected as e:
@@ -464,7 +487,7 @@ class GraphNodes:
         except Exception as e:
             reason = f"{type(e).__name__}: {e}"
         else:
-            return patch, agent.agent_id
+            return patch, writer
         return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
 
     async def perform(
@@ -513,7 +536,7 @@ class GraphNodes:
             problems = check_refs(patch, state)
             if problems:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
-            writer = AgentId.A1 if stored_run.status is RunStatus.failed else agent.agent_id
+            writer = AgentId.A1 if stored_run.status is RunStatus.failed else writer_of(template, agent)
         return StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
 
     async def attempt(

@@ -56,6 +56,7 @@ from tests.fakes import (
     make_deps,
     make_run,
     make_runner,
+    ownership_graph,
     profile_update,
     wait_idle,
 )
@@ -583,3 +584,43 @@ async def test_by_procedure_takes_only_this_programs_objects(monkeypatch: pytest
     patch = await stored_outputs(deps, EID, template, run1)
 
     assert patch == {"procedure_runs": [run1, run2], "gauges": [mine, later]}
+
+
+# ── R136: 股权与任职关系图 (singleton, 带 run_id) ──
+
+EXTRACT = stored_document(
+    "5", DocumentType.registry_extract, "900043021.pdf", reliability=Reliability.external_original
+)
+
+
+async def test_gen08_replay_takes_its_ownership_graph_and_csh04_does_not() -> None:
+    """R136 验收 5: GEN-08 (A5, outputs [ownership_graph, exceptions, documents]; 程序 YAML 由 R137 加, 这里用临时模板)
+    第 1 次执行已为终态: 重放片段含 OWNERSHIP 的最新版本 (属 GEN-08 的执行), RUN-GEN-08-1 下的例外与登记摘录;
+    同一 Store 里重放 CSH-04 不取回 OWNERSHIP."""
+    gen08, csh04 = finished(make_run("GEN-08")), finished(make_run("CSH-04"))
+    graph1 = ownership_graph(gen08.id)
+    graph2 = graph1.model_copy(update={"version": 2, "nodes": graph1.nodes[:2], "links": graph1.links[:2]})
+    found = exception(1).model_copy(update={"id": "X-GEN-08-1-R01-1", "procedure_id": "GEN-08", "run_id": gen08.id})
+    store = FakeOutputStore([gen08, csh04, graph1, graph2, found, exception(2)])
+    deps = make_deps(
+        FakeRegistry(), FakeTrail(), output_store=store, financial_store=FakeFinancialStore([EXTRACT, REPLY, UPLOADED])
+    )
+    csh04_template = deps.library.load("CSH-04")
+    gen08_template = csh04_template.model_copy(
+        update={
+            "id": "GEN-08",
+            "outputs": ["ownership_graph", "exceptions", "documents"],
+            "document_types": [DocumentType.registry_extract],
+        }
+    )
+
+    patch = await stored_outputs(deps, EID, gen08_template, gen08)
+
+    assert patch == {
+        "procedure_runs": [gen08],
+        "ownership_graph": graph2,
+        "exceptions": [found],
+        "documents": [EXTRACT],
+    }
+    replayed = await stored_outputs(deps, EID, csh04_template, csh04)
+    assert "ownership_graph" not in replayed and replayed["documents"] == [REPLY]

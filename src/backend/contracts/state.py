@@ -20,6 +20,7 @@ from backend.contracts.models import (
     MaterialityCandidates,
     Misstatement,
     OpinionType,
+    OwnershipGraph,
     Phase,
     Procedure,
     ProcedureRun,
@@ -117,6 +118,7 @@ class EngagementState(TypedDict):
     judgments: Annotated[list[Judgment], upsert_by_id]  # 判断, 按 id 与版本合并
     review_tasks: Annotated[list[ReviewTask], upsert_by_id]  # 复核任务, 按 id 与版本合并
     confirmations: Annotated[list[Confirmation], upsert_by_id]  # 函证, 按 id 与版本合并
+    ownership_graph: OwnershipGraph | None  # 股权与任职关系图 (OWNERSHIP), A5 GEN-08 写 (需求 R136)
     report_versions: Annotated[list[AuditReportVersion], upsert_by_id]  # 报告版本, 按 id 与版本合并
     review_records: Annotated[list[ReviewRecord], append_unique]  # 复核决定, 只追加
     gate_decisions: Annotated[list[GateDecision], append_unique]  # 闸门决定, 只追加
@@ -148,6 +150,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "judgments": [],
     "review_tasks": [],
     "confirmations": [],
+    "ownership_graph": None,
     "report_versions": [],
     "review_records": [],
     "gate_decisions": [],

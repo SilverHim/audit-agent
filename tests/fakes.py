@@ -85,6 +85,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     EvidencePointer,
+    EvidenceType,
     GateDecision,
     GateId,
     GateVerdict,
@@ -97,6 +98,9 @@ from backend.contracts.models import (
     MisstatementDraft,
     MisstatementType,
     OpinionType,
+    OwnershipGraph,
+    PartyLink,
+    PartyNode,
     PersonSearch,
     Phase,
     Procedure,
@@ -2451,6 +2455,59 @@ def finished(run: ProcedureRun, status: RunStatus = RunStatus.succeeded) -> Proc
     return run.model_copy(update={"status": status, "ended_at": NOW})
 
 
+def ownership_graph(run_id: str = "RUN-GEN-08-1", version: int = 1) -> OwnershipGraph:
+    """合成的股权与任职关系图 (需求 R136, 只填契约用到的): 报告主体 ACN-900043021, Alex Morgan 任董事并持 85 股,
+    Sam Whitfield 只持 15 股 (没有出生日期). 关系的证据为一份摘录 (高管第 1 页, 股东第 2 页)."""
+
+    def row(page: int, locator: str) -> EvidencePointer:
+        return EvidencePointer(
+            type=EvidenceType.external,
+            source_type="document",
+            source_id="DOC-0123456789ab",
+            locator=locator,
+            page=page,
+            reliability=Reliability.external_original,
+        )
+
+    entity, alex, sam = "ACN-900043021", "PER-MORGAN-ALEX-19790412", "PER-WHITFIELD-SAM-NODOB"
+    return OwnershipGraph(
+        id="OWNERSHIP",
+        version=version,
+        run_id=run_id,
+        reporting_entity_id=entity,
+        nodes=[
+            PartyNode(id=entity, kind="company", name="Demo Company (AU) Pty Ltd", acn="900043021", abn="25900043021"),
+            PartyNode(id=alex, kind="person", name="Alex Morgan", birth_date=date(1979, 4, 12), searched=True),
+            PartyNode(id=sam, kind="person", name="Sam Whitfield"),
+        ],
+        links=[
+            PartyLink(
+                from_id=alex,
+                to_id=entity,
+                relation="director",
+                appointed=date(2015, 3, 2),
+                evidence=row(1, "officeholders[0]"),
+            ),
+            PartyLink(
+                from_id=alex,
+                to_id=entity,
+                relation="shareholder",
+                shares=85,
+                pct=0.85,
+                evidence=row(2, "shareholders[0]"),
+            ),
+            PartyLink(
+                from_id=sam,
+                to_id=entity,
+                relation="shareholder",
+                shares=15,
+                pct=0.15,
+                evidence=row(2, "shareholders[1]"),
+            ),
+        ],
+    )
+
+
 class ScriptAgent(ProcedureAgent[None]):
     """脚本 Agent: 不查数据也不调 LLM, 片段由 script(ctx) 给出 (也可在其中抛异常), 编排测试用它代替真实 Agent.
 
@@ -3102,11 +3159,14 @@ class LayeredMockLLM:
     def __init__(self, *roots: Path) -> None:
         self.clients = [MockLLMClient(root) for root in roots]
 
+    def locate(self, req: LLMRequest) -> tuple[MockLLMClient, str] | None:
+        """要读的固定输出: (所在根的客户端, 相对根的文件); 都没有为 None."""
+        for name in (f"{req.procedure_id}/{req.fixture_key}.json", f"{req.procedure_id}/default.json"):
+            for client in self.clients:
+                if (client.root / name).exists():
+                    return client, name
+        return None
+
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
-        for client in self.clients:
-            if (client.root / req.procedure_id / f"{req.fixture_key}.json").exists():
-                return await client.complete(req, output_model)
-        for client in self.clients:
-            if (client.root / req.procedure_id / "default.json").exists():
-                return await client.complete(req, output_model)
-        return await self.clients[0].complete(req, output_model)
+        found = self.locate(req)  # 选中的根里 {fixture_key}.json 要么就是它, 要么不存在, MockLLMClient 读的即它
+        return await (found[0] if found is not None else self.clients[0]).complete(req, output_model)
