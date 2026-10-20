@@ -606,14 +606,14 @@ async def test_request_upload_keeps_registered_reliability_and_records_the_type(
     保留; 文件登记的版本随之再记一版 (field type), history 的最新一版即当前登记 (审核 R90-02, R90-05)."""
     import asyncio
 
-    from tests.test_data_checkup import service_for
+    from tests.test_data_checkup import CONTRACT_REQUEST, service_for
 
     data = FakeDataStore(ready=False)
-    _runner, service, financial = service_for(data)
+    _runner, service, financial = service_for(data, contract_wanted=True)
     async with service.holding(EID, []):
-        await service.checkup(EID)  # 提出报表草稿请求
+        await service.checkup(EID)  # 提出合同请求
     [document] = await service.upload_documents(
-        EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id="REQ-financial_statements"
+        EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id=CONTRACT_REQUEST
     )
     await asyncio.gather(*list(service.tasks))
     await service.set_document_type(EID, document.id, DocumentType.minutes, "其实是董事会纪要", "U-1")
@@ -621,17 +621,15 @@ async def test_request_upload_keeps_registered_reliability_and_records_the_type(
     assert await data.extraction_versions(EID, "document", document.id) == []  # 没补登记过: 改类型不记版本
     await service.set_document_details(EID, {document.id: edit(reliability="internal_original")}, "U-1")
 
-    await service.upload_documents(
-        EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id="REQ-financial_statements"
-    )
+    await service.upload_documents(EID, [("minutes.pdf", b"%PDF minutes")], actor="U-1", request_id=CONTRACT_REQUEST)
     await asyncio.gather(*list(service.tasks))
 
     found = next(d for d in financial.document_refs if d.id == document.id)
-    assert (found.type, found.reliability) == (DocumentType.financial_statements, Reliability.internal_original)
+    assert (found.type, found.reliability) == (DocumentType.contract, Reliability.internal_original)
     history = await service.document_history(EID, document.id)
     assert [(r.version, r.field) for r in history] == [(1, None), (2, "reliability"), (3, "type")]
     assert history[-1].data == {
-        "type": "financial_statements",
+        "type": "contract",
         "reliability": "internal_original",
         "document_date": None,
         "related_ids": [],

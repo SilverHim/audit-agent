@@ -563,7 +563,6 @@ async def assert_documents(x: Xero17) -> None:
         "REQ-journal_entries": "received",
         "REQ-contract": "received",
         "REQ-approval_log": "open",
-        "REQ-financial_statements": "open",
     }
 
 

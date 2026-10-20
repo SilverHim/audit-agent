@@ -6042,8 +6042,7 @@
           "journals_agree_tb",
           "count_agrees_source",
           "mapping_complete",
-          "preparer_approver_available",
-          "tb_agrees_statements"
+          "preparer_approver_available"
         ],
         "title": "CheckId",
         "description": "数据质量体检项. 前端按编号本地化文案, params 的键见各项注释."

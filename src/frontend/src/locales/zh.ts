@@ -1002,7 +1002,6 @@ export const zh: Messages = {
       count_agrees_source: '接入笔数与源系统一致',
       mapping_complete: '科目映射',
       preparer_approver_available: '分录录入人与审批人',
-      tb_agrees_statements: '试算表与报表草稿勾稽',
     },
     checkDetail: {
       debits: (debit, credit) => `借方 ${debit}，贷方 ${credit}`,
@@ -1016,10 +1015,6 @@ export const zh: Messages = {
       mapping: (mapped, total) =>
         mapped === total ? `${total} 个科目已全部归入标准分类` : `${total} 个科目中 ${mapped} 个已归入标准分类`,
       fields: (fields, source) => `${source} 接口不提供${fields}。`,
-      statementsMissing: '客户尚未提供报表草稿。',
-      statementsNoTb: '已收到报表草稿，还缺试算表。',
-      statementsPending: (n) => `已收到 ${n} 份报表草稿，勾稽在“财报与会计记录勾稽”程序中执行。`,
-      statementsDiff: (difference) => `差异 ${difference}`,
     },
     fieldNames: { created_by: '录入人', approved_by: '审批人' },
     handleInConcierge: '在审计助理中处理',

@@ -1149,7 +1149,9 @@ def statements_setup(*overlays: Path) -> tuple[GraphRunner, DataService, FakeFin
     再读 Xero 的固定输出正本 (DOC-STATEMENTS) 与上传固定输出."""
     runner, _, financial, evidence, data = setup()
     evidence.ids[FS_PDF], evidence.page_counts[FS_PDF] = FS_DOC, 6
-    data.data_requests[FS_REQUEST] = document_request(DocumentType.financial_statements, "not_provided", NOW)
+    data.data_requests[FS_REQUEST] = document_request(
+        DocumentType.financial_statements, "not_provided", NOW, ["FIN-12"]
+    )
     llm = LayeredMockLLM(*overlays, LLM_XERO, UPLOAD_FIXTURES)
     deps = runner.deps
     validator = OutputValidator(deps.financial_store, deps.library, deps.trail)
@@ -1168,7 +1170,7 @@ async def extracted_statements(*overlays: Path) -> tuple[GraphRunner, DataServic
 async def test_statements_uploaded_by_request_are_extracted_without_classification() -> None:
     """验收 1, 3: 按 REQ-financial_statements 上传 fs_v1.pdf, 不调分类, 1 行 llm_call (DOC-STATEMENTS, run_id 为
     UPLOAD-{文件 ID}-{作业号}); 写第 1 版 (同 fs_v1.json, document_id 为该文件), 抽取版本记一版 (A3); record 按行代码
-    取当前版本的行 (带 fs_id, fs_version), 查不到为 None; 文件置 extracted, 请求转 received, 记数据变动."""
+    取当前版本的行 (带 fs_id, fs_version), 查不到为 None; 文件置 extracted, 记数据变动; 请求由体检撤回 (Issue #46)."""
     runner, _, financial, data = await extracted_statements()
 
     doc = document(financial, FS_PDF)
@@ -1206,7 +1208,7 @@ async def test_statements_uploaded_by_request_are_extracted_without_classificati
         "fs_version": 1,
     }
     assert await financial.record(EID, "financial_statement_line", "SOFP-XXX") is None
-    assert data.data_requests[FS_REQUEST].status == "received"
+    assert data.data_requests[FS_REQUEST].status == "withdrawn"  # 报表以账套为准 (Issue #46), 体检撤回旧请求
     assert DataInput.financial_statements in {c.input for c in data.data_changes}
 
 
@@ -1233,7 +1235,7 @@ async def test_statements_output_that_fails_validation_needs_manual(tmp_path: Pa
 
 async def test_spreadsheet_statements_are_classified_without_extraction() -> None:
     """财务报表只抽 PDF (报表行按文本层逐页抽): 按请求上传的 Excel 草稿定为 financial_statements 后停在 classified,
-    不调 DOC-STATEMENTS, 不算没做完 (启动不补做); 待审财报仍为空, 请求照旧算收到."""
+    不调 DOC-STATEMENTS, 不算没做完 (启动不补做); 待审财报仍为空, 请求由体检撤回 (Issue #46)."""
     runner, service, financial, data = statements_setup()
     await service.upload_documents(
         EID, [("draft-financial-statements.xlsx", workbook_bytes())], actor="U-1", request_id=FS_REQUEST
@@ -1247,7 +1249,7 @@ async def test_spreadsheet_statements_are_classified_without_extraction() -> Non
     assert isinstance(trail, FakeTrail)
     assert [e.procedure_id for e in trail.entries if e.kind is TrailKind.llm_call] == []
     assert await financial.financial_statements(EID) is None
-    assert data.data_requests[FS_REQUEST].status == "received"
+    assert data.data_requests[FS_REQUEST].status == "withdrawn"
 
 
 async def test_edit_statements_line_creates_a_new_version_and_marks_readers_stale() -> None:

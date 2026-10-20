@@ -570,7 +570,7 @@ class Chosen:
 class Requested:
     """上传时对应的待补交文件请求 (需求 R15)."""
 
-    request_id: str  # 请求 ID, 如 REQ-financial_statements
+    request_id: str  # 请求 ID, 如 REQ-contract
     document_type: DocumentType  # 请求的文件类型
 
 

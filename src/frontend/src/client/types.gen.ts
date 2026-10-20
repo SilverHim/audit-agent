@@ -770,7 +770,7 @@ export type CategoryVersion = {
  *
  * 数据质量体检项. 前端按编号本地化文案, params 的键见各项注释.
  */
-export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available' | 'tb_agrees_statements';
+export type CheckId = 'debits_equal_credits' | 'journals_agree_tb' | 'count_agrees_source' | 'mapping_complete' | 'preparer_approver_available';
 
 /**
  * ClientCreate

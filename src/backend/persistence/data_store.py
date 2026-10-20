@@ -133,6 +133,14 @@ async def record_categories(conn: AsyncConnection, eid: str, accounts: Sequence[
     return result
 
 
+def stored_checks(rows: Iterable[Mapping[str, Any]]) -> list[DataCheck]:
+    """表 data_checks 的行转成体检结果, 按 CheckId 顺序. 已删去的旧项 (Issue #46 前的 tb_agrees_statements) 略过:
+    它只在旧项目最近一次体检里还有, 下一次体检整表重写时清掉."""
+    order = {check.value: n for n, check in enumerate(CheckId)}
+    checks = [DataCheck.model_validate({k: r[k] for k in DataCheck.model_fields}) for r in rows if r["id"] in order]
+    return sorted(checks, key=lambda c: order[c.id])
+
+
 def approval_values(raw: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     """审批日志一行 (行快照) 要补进总账分录的: (凭证号, 导入时对应了的列: 录入人, 审批人, 审批时间). apply_approvals
     与 with_approvals 共用, 库里与内存中按同一口径补."""
@@ -260,9 +268,7 @@ class PostgresDataStore(Store):
 
     async def checks(self, eid: str) -> list[DataCheck]:
         t = m.data_checks
-        rows = await self.rows(eid, select(t.c.id, t.c.status, t.c.params, t.c.request_id))
-        order = list(CheckId)
-        return sorted((DataCheck.model_validate(r) for r in rows), key=lambda c: order.index(c.id))
+        return stored_checks(await self.rows(eid, select(t.c.id, t.c.status, t.c.params, t.c.request_id)))
 
     async def open_requests(self, eid: str) -> int:
         t = m.data_requests
@@ -322,11 +328,7 @@ class PostgresDataStore(Store):
         rows = await self.rows(eid, select(t))
         if not rows:
             return None
-        order = list(CheckId)
-        checks = sorted(
-            (DataCheck.model_validate({k: r[k] for k in DataCheck.model_fields}) for r in rows),
-            key=lambda c: order.index(c.id),
-        )
+        checks = stored_checks(rows)
         return CheckRun(data_version=rows[0]["data_version"], checked_at=rows[0]["checked_at"], checks=checks)
 
     async def requests(self, eid: str) -> list[DataRequest]:

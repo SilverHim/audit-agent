@@ -35,7 +35,6 @@ from backend.contracts.models import (
     DocumentRef,
     DocumentType,
     Engagement,
-    FinancialStatements,
     ProcedureStatus,
     Reliability,
     TrailEntry,
@@ -317,7 +316,7 @@ async def test_locked_steps_refuse_to_run_without_the_lock(call: str) -> None:
 
 def test_acceptance_uploads_the_engagement_documents(flow: Flow) -> None:
     """停在 ACC-01 闸门时导入承接: 上传 2 份 (上传人为发起人), A3 分类为 minutes, engagement_letter, 补登记文件日期;
-    数据版本 0 → 1; 体检一次, 缺账表与待审财报的请求为 open (体检另对没有合同提出 REQ-contract)."""
+    数据版本 0 → 1; 体检一次, 缺账表的请求为 open (体检另对没有合同提出 REQ-contract; 不再要报表草稿, Issue #46)."""
     assert flow.acceptance == DemoImportResult(
         stage="acceptance", status="imported", uploaded=["appointment.pdf", "engagement_letter.pdf"], data_version=1
     )
@@ -328,10 +327,10 @@ def test_acceptance_uploads_the_engagement_documents(flow: Flow) -> None:
     ]
     assert state["data_version"] == 1
     assert actions(state["trail"]) == Counter(
-        {"upload": 2, "classify": 2, "edit": 2, "check": 1, "request_raised": 5, "demo_import": 1}
+        {"upload": 2, "classify": 2, "edit": 2, "check": 1, "request_raised": 4, "demo_import": 1}
     )
     assert state["requests"] == dict.fromkeys(
-        ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries", "REQ-contract", "REQ-financial_statements"], "open"
+        ["REQ-accounts", "REQ-trial_balance", "REQ-journal_entries", "REQ-contract"], "open"
     )
     assert [e.procedure_id for e in state["trail"] if e.kind is TrailKind.llm_call] == ["DOC-CLASSIFY"] * 2
     edits = [e for e in state["trail"] if e.payload.get("action") == "edit"]  # 补登记: 记发起人与清单的理由
@@ -412,7 +411,6 @@ def test_fieldwork_uploads_classifies_extracts_and_registers(flow: Flow) -> None
         "REQ-trial_balance": "received",
         "REQ-journal_entries": "received",
         "REQ-contract": "received",
-        "REQ-financial_statements": "open",
         "REQ-approval_log": "open",  # Xero 的录入人为连接器占位值
     }
     assert flow.after_fieldwork["ready_at"] is None
@@ -496,37 +494,6 @@ def test_doc04_reuses_the_uploaded_contracts_after_ready(flow: Flow) -> None:
 
 
 # ── 财报 (验收 6) ──
-
-
-def test_statements_upload_answers_the_open_request(flow: Flow) -> None:
-    """REQ-financial_statements 为 open: 按请求上传 fs_v1.pdf, 不调大模型分类, classify 留痕带 request_id; 请求转
-    received; 补登记 internal_original, 2026-10-22, [FS].
-    R217 验收 3: A3 随即抽取 (1 行 llm_call DOC-STATEMENTS, run_id 为 UPLOAD-{文件 ID}-{作业号}, 作业号即那条
-    classify 留痕), 写待审财报第 1 版 (逐字段等于 fs_v1.json: 编制日, 董事声明日, document_id 为该文件, 比较数凭证号,
-    35 行), 抽取版本只记这一版 (A3), 文件置 extracted, 记数据变动 financial_statements."""
-    assert flow.statements is not None and flow.statements.uploaded == ["fs_v1.pdf"]
-    fs = by_name(flow.after_statements["documents"])["fs_v1.pdf"]
-    assert (fs.type, fs.status, fs.reliability, fs.document_date, fs.related_ids) == (
-        DocumentType.financial_statements,
-        "extracted",
-        Reliability.internal_original,
-        date(2026, 10, 22),
-        ["FS"],
-    )
-    new = added(flow.after_ready, flow.after_statements)
-    [classify_entry] = [e for e in new if e.payload.get("action") == "classify"]
-    assert classify_entry.payload["request_id"] == "REQ-financial_statements"
-    [call] = [e for e in new if e.kind is TrailKind.llm_call]
-    assert (call.procedure_id, call.run_id) == ("DOC-STATEMENTS", f"UPLOAD-{fs.id}-{classify_entry.id}")
-    assert flow.after_statements["requests"]["REQ-financial_statements"] == "received"
-    [version] = flow.after_statements["statements"]
-    assert (version.version, version.changed_by, version.field) == (1, "A3", None)
-    statements = FinancialStatements.model_validate(version.data)
-    assert statements == xero_financial_statements() and statements.document_id == fs.id
-    assert (statements.prepared_at, statements.directors_declaration_date) == (date(2026, 10, 22), date(2026, 10, 23))
-    assert (statements.comparative_restatement_entry_nos, len(statements.lines)) == (["XJ-397"], 35)
-    changes = flow.after_statements["changes"][len(flow.after_ready["changes"]) :]
-    assert DataInput.financial_statements in {c.input for c in changes}
 
 
 async def test_statements_without_an_open_request_are_classified() -> None:
@@ -752,8 +719,8 @@ async def test_backfill_error_is_recorded_as_failed(
 
 
 def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
-    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后待审财报的请求仍 open,
-    建议 statements; 三段都导入后 stages_done 齐, 不再建议. last 为最近一次 (有写入的) 导入的结果."""
+    """停在 ACC-01 闸门建议 acceptance, 导入后不再建议; 等数据就绪建议 fieldwork; 确认就绪后不再建议 (不再要报表
+    草稿, Issue #46); 三段都导入后 stages_done 齐. last 为最近一次 (有写入的) 导入的结果."""
     got = {
         k: (d.available, d.stages_done, d.suggested, d.last.stage if d.last else None) for k, d in flow.demos.items()
     }
@@ -761,7 +728,7 @@ def test_summary_follows_where_the_flow_stops(flow: Flow) -> None:
         "gate": (True, [], "acceptance", None),
         "accepted": (True, ["acceptance"], None, "acceptance"),
         "awaiting": (True, ["acceptance"], "fieldwork", "acceptance"),
-        "ready": (True, ["acceptance", "fieldwork"], "statements", "fieldwork"),
+        "ready": (True, ["acceptance", "fieldwork"], None, "fieldwork"),
         "statements": (True, ["acceptance", "fieldwork", "statements"], None, "statements"),
     }
     assert (flow.demos["accepted"].last, flow.demos["ready"].last) == (flow.acceptance, flow.fieldwork)

@@ -170,18 +170,19 @@ async def test_marking_while_waiting_resumes_and_withdraws_unneeded_requests() -
 async def test_required_tables_and_unknown_requests_rejected() -> None:
     runner, _, data = await waiting_for_data()  # 还没有任何数据: 必需的三张表各有请求
     assert isinstance(data, FakeDataStore)
-    data.data_requests["REQ-financial_statements"] = data.data_requests["REQ-financial_statements"].model_copy(
-        update={"status": "received", "resolved_at": NOW}
+    received_at = {"status": "received", "resolved_at": NOW}
+    data.data_requests["REQ-approval_log"] = table_request(TableKind.approval_log, "missing_table", {}, NOW).model_copy(
+        update=received_at
     )
     async with api_client(runner) as client:
         required = await client.post(unavailable_url("REQ-accounts"), json={"reason": REASON})
         unknown = await client.post(unavailable_url("REQ-nope"), json={"reason": REASON})
-        received = await client.post(unavailable_url("REQ-financial_statements"), json={"reason": REASON})
-        blank = await client.post(unavailable_url("REQ-financial_statements"), json={"reason": "  "})
+        received = await client.post(unavailable_url("REQ-approval_log"), json={"reason": REASON})
+        blank = await client.post(unavailable_url("REQ-approval_log"), json={"reason": "  "})
         engagements = runner.deps.engagement_store
         assert isinstance(engagements, FakeEngagementStore)
         await engagements.update(EID, locked=True)
-        locked = await client.post(unavailable_url("REQ-financial_statements"), json={"reason": REASON})
+        locked = await client.post(unavailable_url("REQ-approval_log"), json={"reason": REASON})
 
     assert (required.status_code, required.json()["detail"]["code"]) == (422, "INVALID_VALUE")
     assert unknown.status_code == 404

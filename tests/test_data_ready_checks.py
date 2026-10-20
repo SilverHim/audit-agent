@@ -86,7 +86,6 @@ async def test_failed_checkup_needs_reason_to_confirm() -> None:
             "count_agrees_source": "passed",
             "mapping_complete": "passed",
             "preparer_approver_available": "passed",
-            "tb_agrees_statements": "missing_data",  # 缺资料不算不通过
         }
         balance = next(c for c in data.check_results if c.id is CheckId.debits_equal_credits)
         assert balance.params == {"debit_cents": 5271620100, "credit_cents": 5271620000}

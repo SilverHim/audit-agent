@@ -1109,7 +1109,6 @@ export const en = {
       count_agrees_source: 'Count agrees to the source system',
       mapping_complete: 'Account mapping',
       preparer_approver_available: 'Journal preparer and approver',
-      tb_agrees_statements: 'Trial balance agrees to the draft statements',
     } as Record<string, string>,
     checkDetail: {
       debits: (debit: string, credit: string) => `Debits ${debit}, credits ${credit}`,
@@ -1126,11 +1125,6 @@ export const en = {
           ? `All ${total} accounts are assigned to a standard category`
           : `${mapped} of ${total} accounts assigned to a standard category`,
       fields: (fields: string, source: string) => `${source} does not provide ${fields}.`,
-      statementsMissing: 'The client has not provided the draft statements.',
-      statementsNoTb: 'Draft statements received; the trial balance is still missing.',
-      statementsPending: (n: number) =>
-        `${n} draft statements file${n === 1 ? '' : 's'} received. The agreement is checked in Statements agree to accounting records.`,
-      statementsDiff: (difference: string) => `Difference ${difference}`,
     },
     fieldNames: { created_by: 'preparer', approved_by: 'approver' } as Record<string, string>,
     handleInConcierge: 'Handle in Concierge',

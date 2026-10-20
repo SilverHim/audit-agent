@@ -122,9 +122,7 @@ class CheckId(StrEnum):
     count_agrees_source = "count_agrees_source"  # 记录数与来源一致 {source, expected, received}
     mapping_complete = "mapping_complete"  # 科目都已归入标准分类 {mapped, total}
     preparer_approver_available = "preparer_approver_available"  # 有录入人与审批人 {source, missing_fields}
-    # 试算表与报表草稿一致 {statements: 已提供的报表草稿文件数}; 报表数字的抽取与勾稽归 FIN-12 (还没实现), 届时另给
-    # difference_cents
-    tb_agrees_statements = "tb_agrees_statements"
+    # Issue #46 起财务报表以账套为准, 删去 "试算表与报表草稿一致" (tb_agrees_statements): 存储里的旧项读时略过
 
 
 # 体检结果: 通过, 不通过, 缺数据做不了, 还没做
@@ -179,7 +177,8 @@ class CheckInputs(Model):
 RequestKind = Literal["table", "document"]  # 补交的是账表 (走导入) 还是文件 (走上传)
 # 提出的原因: 就绪必需的表缺失, 来源不提供某些字段, 客户没提供
 RequestReason = Literal["missing_table", "field_unavailable", "not_provided"]
-# 待补交, 已收到, 已撤回 (要它的程序都不再执行, 资料又没到), 客户无此类资料 (审计师标记, 需求 R280; 定论, 不再重开)
+# 待补交, 已收到, 已撤回 (要它的程序都不再执行, 资料又没到; 或体检不再提这项请求, 见 data_quality.RETIRED_REQUESTS),
+# 客户无此类资料 (审计师标记, 需求 R280; 定论, 不再重开)
 RequestStatus = Literal["open", "received", "withdrawn", "unavailable"]
 
 
