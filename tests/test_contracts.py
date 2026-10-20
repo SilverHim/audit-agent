@@ -687,14 +687,19 @@ def test_independence_declaration_form_matches_contraventions() -> None:
 
 
 def test_engagement_terms_contract() -> None:
-    """验收 2, 3: EngagementTerms (TERMS) 不可改, 不收多余字段, 框架与核对结果只收登记的取值, 存储 JSON 往返不变 (检查点
-    往返见 test_state_compat); 要素与确认各只放自己那一类的项, 放错抛 ValidationError 并写明项名.
+    """验收 2, 3: EngagementTerms (TERMS) 不可改, 不收多余字段, 框架 (取值同 ReportingFramework, 特殊目的为 spfr, 审核
+    R198-04) 与核对结果只收登记的取值, 存储 JSON 往返不变 (检查点往返见 test_state_compat); 要素与确认各只放自己
+    那一类的项, 放错抛 ValidationError 并写明项名.
     EngagementTermsExtraction 的字段恰为 EngagementTerms 的 framework 至 year_change, 从 TERMS 的这部分解析回来不变."""
     terms = engagement_terms()
     with pytest.raises(ValidationError):
         terms.consent.given_on = date(2026, 8, 27)  # type: ignore[union-attr, misc]
     data = terms.model_dump()
-    for change in ({"extra": 1}, {"framework": "ifrs"}, {"checks": [{**data["checks"][0], "status": "warning"}]}):
+    for change in (
+        {"extra": 1},
+        {"framework": "special_purpose"},
+        {"checks": [{**data["checks"][0], "status": "warning"}]},
+    ):
         with pytest.raises(ValidationError):
             EngagementTerms.model_validate({**data, **change})
     misplaced = TermsItem(item="prepare_fr", present=True).model_dump()
@@ -704,6 +709,6 @@ def test_engagement_terms_contract() -> None:
     assert terms.checks[0].status is TermsCheckStatus.passed
 
     facts = list(EngagementTermsExtraction.model_fields)
-    assert facts == list(EngagementTerms.model_fields)[2:13] and (facts[0], facts[-1]) == ("framework", "year_change")
+    assert facts == list(EngagementTerms.model_fields)[2:14] and (facts[0], facts[-1]) == ("framework", "year_change")
     extraction = EngagementTermsExtraction.model_validate(terms.model_dump(include=set(facts)))
     assert extraction.model_dump() == terms.model_dump(include=set(facts))

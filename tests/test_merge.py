@@ -628,20 +628,42 @@ def test_exception_ids_must_exist() -> None:
     assert reasons == [f"Judgment {J1} 引用的例外 X-REV-08-1-R01-2 不存在"]
 
 
-def test_scorecard_exception_ids_must_exist() -> None:
-    acc04 = make_run("ACC-04")
-    scorecard = AcceptanceScorecard(
-        id="SCORECARD", registry_checks=[], exception_ids=["X-ACC-04-1-abn_active-1"], client_profile_version=1
-    )
-    patch = {"acceptance_scorecard": scorecard, "exceptions": [], "procedure_runs": [finished(acc04)]}
-    state = initial_state(ENGAGEMENT, [make_procedure("ACC-04")], 1)
+@pytest.mark.parametrize(
+    ("procedure_id", "field", "material", "dangling"),
+    [
+        (
+            "ACC-04",
+            "acceptance_scorecard",
+            AcceptanceScorecard(
+                id="SCORECARD", registry_checks=[], exception_ids=["X-ACC-04-1-abn_active-1"], client_profile_version=1
+            ),
+            "AcceptanceScorecard SCORECARD 引用的例外 X-ACC-04-1-abn_active-1 不存在",
+        ),
+        (
+            "ACC-08",
+            "engagement_terms",
+            engagement_terms().model_copy(update={"exception_ids": ["X-ACC-08-1-T05-1"]}),
+            "EngagementTerms TERMS 引用的例外 X-ACC-08-1-T05-1 不存在",
+        ),
+    ],
+)
+def test_gate_material_exception_ids_must_exist(procedure_id: str, field: str, material: Any, dangling: str) -> None:
+    """闸门材料 (评分卡; 约定条款, 审核 R198-01) 的 exception_ids 指向片段与状态中都没有的例外时拒绝, 原因含例外 ID."""
+    run = make_run(procedure_id)
+    patch = {field: material, "exceptions": [], "procedure_runs": [finished(run)]}
+    state = initial_state(ENGAGEMENT, [make_procedure(procedure_id)], 1)
 
     with pytest.raises(MergeRejected) as info:
         check_patch(
-            patch, writer=AgentId.A2, procedure_id="ACC-04", run_id=acc04.id, state=state, outputs=declared("ACC-04")
+            patch,  # type: ignore[arg-type]
+            writer=AgentId.A2,
+            procedure_id=procedure_id,
+            run_id=run.id,
+            state=state,
+            outputs=declared(procedure_id),
         )
 
-    assert info.value.reasons == ["AcceptanceScorecard SCORECARD 引用的例外 X-ACC-04-1-abn_active-1 不存在"]
+    assert info.value.reasons == [dangling]
 
 
 # ── 验收 4: 本次执行的终态 ──

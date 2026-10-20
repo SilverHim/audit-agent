@@ -24,7 +24,7 @@ autonomy_level: L1
 gate: ACC-08
 depends_on: [ACC-01]
 params:
-  acceptable_frameworks: [tier1_gpfs, tier2_gpfs, special_purpose]   # 可接受的财务报告框架 (T01)
+  acceptable_frameworks: [tier1_gpfs, tier2_gpfs, spfr]   # 可接受的财务报告框架 (T01), 取值同 ReportingFramework
   min_direction_votes_pct: 5       # s293(1): 发出指示的股东至少持 5% 表决权 (T04)
   direction_deadline_months: 12    # s293(2)(b): 指示不晚于财年结束后 12 个月 (T04)
 standards:

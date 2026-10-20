@@ -14,6 +14,7 @@ from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
     ComplianceCheck,
+    EngagementTerms,
     Judgment,
     ProcedureRun,
     ReviewTask,
@@ -117,7 +118,7 @@ TARGET_FIELDS: dict[TargetType, str] = {
 }
 
 # 带 exception_ids 的对象: 合并时查所指的例外都在 (check_refs), 重放时补齐所指的例外 (nodes.add_referenced_exceptions)
-EXCEPTION_REFERRERS = (Judgment, AcceptanceScorecard, AnalyticsResult, ComplianceCheck)
+EXCEPTION_REFERRERS = (Judgment, AcceptanceScorecard, AnalyticsResult, ComplianceCheck, EngagementTerms)
 
 STATE_HINTS = get_type_hints(EngagementState)  # 状态各字段的类型注解, 已去掉 reducer (Annotated)
 
@@ -217,7 +218,7 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
 
     - Judgment, AuditException, ReviewTask, ComplianceCheck: procedure_id 在程序包中; run_id 在片段或状态的执行记录中,
       且该记录属于同一程序.
-    - EXCEPTION_REFERRERS (判断, 评分卡, 分析结果, 合规检查): exception_ids 的每一项在片段或状态的例外中.
+    - EXCEPTION_REFERRERS (判断, 评分卡, 分析结果, 合规检查, 约定条款): exception_ids 的每一项在片段或状态的例外中.
     - ReviewTask: target_type 对应字段中有 target_id. 待决任务的 target_version 须等于目标当前版本 (否则提交决定时
       必报版本不符); 已决定任务 (重放取回的) 记的是复核时的版本, 目标之后可能被决定改出新版本, 只须不高于当前版本.
     - 反向: 片段把某对象改出新版本, 而状态中有以它的原版本为目标的待决任务 (片段没有一并更新该任务), 任务随之过期.

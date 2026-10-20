@@ -2585,6 +2585,11 @@ def engagement_terms(run_id: str = "RUN-ACC-08-1", version: int = 1) -> Engageme
         letter_dated_on=date(2026, 8, 28),
         letter_signed_by="Alex Morgan",
         letter_signed_on=date(2026, 9, 2),
+        letter_evidence=[  # 出具日在第 1 页, 签回人与签回日在第 3 页 (R199 验收 2)
+            *page(DOC_EL, 1, "letter_dated_on"),
+            *page(DOC_EL, 3, "letter_signed_by"),
+            *page(DOC_EL, 3, "letter_signed_on"),
+        ],
         direction=ShareholderDirection(
             signed_by="Sam Whitfield",
             shares_held=15,

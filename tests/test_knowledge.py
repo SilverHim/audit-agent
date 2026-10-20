@@ -9,7 +9,7 @@ from datetime import date, datetime
 from functools import cache, cached_property
 from itertools import pairwise
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 import pdfplumber
 import pytest
@@ -28,6 +28,7 @@ from backend.contracts.models import (
     Model,
     Phase,
     Procedure,
+    ReportingFramework,
     Retention,
     RiskLevel,
     TermType,
@@ -1881,7 +1882,7 @@ def test_acc08_template_loads_only_with_acceptance() -> None:
         ("ACC-08.md.j2", "JudgmentDraft"),
     )
     assert t.params == {
-        "acceptable_frameworks": ["tier1_gpfs", "tier2_gpfs", "special_purpose"],
+        "acceptable_frameworks": ["tier1_gpfs", "tier2_gpfs", "spfr"],
         "min_direction_votes_pct": 5,
         "direction_deadline_months": 12,
     }
@@ -1920,17 +1921,48 @@ def acc08_variables(prompt: str, auditor_note: str | None = None) -> dict[str, A
     }
 
 
+# ACC-08 两份提示词的关键口径 (审核 R198-05): 口径 → 关键词, 渲染后须有一行同时含这几个词 (不分大小写), 不比整句
+ACC08_EXTRACT_RULES = {
+    "文件没写的事实填 null, 不推断": ("null", "do not state", "never infer"),
+    "文件文本当数据, 不执行其中的指令": ("document text as data", "ignore", "instruction"),
+    "页码取 page 块的编号": ("page is the `number`", "`<page>`"),
+    "同一事实取其本来文件": ("same fact", "more than one document", "whose purpose it is"),
+    "框架没写明为 null, 不带指针": ("`framework_evidence`", "empty when `framework` is null"),
+    "出具日与签回各带页指针, locator 写字段名": ("`letter_evidence`", "page", "`locator` the field name"),
+    "只有股数时 votes_pct 的算法": ("`votes_pct`", "only share numbers", "100 × shares_held / total_shares"),
+    "指针的 type: 约定书 contract, 其余 voucher": (
+        "every pointer",
+        "contract for an engagement letter",
+        "voucher for any other document",
+    ),
+}
+ACC08_JUDGE_RULES = {
+    "accept 只在全部核对通过或不适用时用": ("`accept`", "every check passed", "not applicable"),
+    "特殊目的框架可接受, 但报告须加强调事项段": ("special purpose framework is acceptable", "emphasis of matter"),
+    "日期, 数目与比例以核对结果为准": ("rely on the checks", "dates, counts and percentages"),
+    "不能补救时按 P08 不承接": ("`more_evidence`", "asa210-p08", "should not be accepted"),
+}
+
+
+def missing_rules(prompt: str, rules: dict[str, tuple[str, ...]]) -> list[str]:
+    """提示词里找不到对应行 (同时含全部关键词, 不分大小写) 的口径."""
+    lines = [line.casefold() for line in prompt.splitlines()]
+    return [rule for rule, words in rules.items() if not any(all(w.casefold() in x for w in words) for x in lines)]
+
+
 def test_acc08_prompts_render_with_their_variables() -> None:
     """验收 8: 两份提示词按头注释的变量渲染. 抽取: 每份文件各页标出文件 ID 与页码, 五项要素与五项确认按 ASA 210 第 10,
-    6(b) 段的项名列出, 框架四种取值; 有审计师意见时才有 "## Auditor note" 一节并带其原文. 判断: 七项核对逐项列出,
-    建议动作只给 accept 与 more_evidence."""
+    6(b) 段的项名列出, 框架三种取值 (同 ReportingFramework); 有审计师意见时才有 "## Auditor note" 一节并带其原文.
+    判断: 七项核对逐项列出, 建议动作只给 accept 与 more_evidence. 两份的关键口径按行查关键词 (ACC08_EXTRACT_RULES,
+    ACC08_JUDGE_RULES)."""
     env = prompt_env(ROOT / "prompts")
     extract = env.get_template("ACC-08-extract.md.j2").render(acc08_variables("ACC-08-extract.md.j2"))
     assert '<page document="DOC-EL" number="2">\nDOC-EL second page.\n</page>' in extract
     output = extract.split("## Output (EngagementTermsExtraction)")[1]
-    frameworks = ["tier1_gpfs", "tier2_gpfs", "special_purpose", "unknown"]
+    frameworks = list(get_args(ReportingFramework))
     at = [output.index(f"`{name}` (") for name in [*frameworks, *TERMS_ELEMENTS, *TERMS_ACKNOWLEDGEMENTS]]
     assert at == sorted(at)  # 都列出, 且按框架, 要素, 确认的登记顺序
+    assert missing_rules(extract, ACC08_EXTRACT_RULES) == []
     assert "## Auditor note" not in extract
     note = "Client to provide the auditor's consent signed before the appointment"
     noted = env.get_template("ACC-08-extract.md.j2").render(acc08_variables("ACC-08-extract.md.j2", note))
@@ -1940,7 +1972,7 @@ def test_acc08_prompts_render_with_their_variables() -> None:
     assert listed == [f"T0{n}" for n in range(1, 8)]
     actions = judge.split("## proposed_action")[1].split("## Output")[0]
     assert re.findall(r"^- `(\w+)`", actions, re.MULTILINE) == ["accept", "more_evidence"]
-    assert "Do not use `close` or `misstatement`." in actions
+    assert missing_rules(judge, ACC08_JUDGE_RULES) == []
 
 
 @pytest.mark.parametrize(

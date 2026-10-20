@@ -864,7 +864,6 @@ class AcceptanceScorecard(Versioned):
 # ACC-08 约定条款与委任核验 (功能 acceptance, 需求 R198): A2 从约定书与委任文件抽出事实 (TermsFacts), 按
 # services/engagement_terms.py 的 T01-T07 核对 (R199), 再给出建议判断 (R200); 结果 EngagementTerms 为 ACC-08 闸门的材料
 TERMS_ID = "TERMS"  # EngagementTerms 在每个项目里的固定 ID
-TermsFramework = Literal["tier1_gpfs", "tier2_gpfs", "special_purpose", "unknown"]  # 财务报告框架; 文件没写明为 unknown
 TermsElement = Literal[  # 约定书须写明的五项 (ASA 210 第 10(a)-(e) 段)
     "objective_scope",  # (a) 审计的目标与范围
     "auditor_responsibilities",  # (b) 审计师的责任
@@ -889,7 +888,7 @@ class TermsItem(Model):
 
     item: TermsElement | TermsAcknowledgement  # 哪一项
     present: bool  # 文件是否写明
-    evidence: list[EvidencePointer] = []  # 写明之处的页指针; present 为真时须有 (引用级, 需求 R199)
+    evidence: list[EvidencePointer] = []  # 写明之处的页指针; present 为真时须有 (语义级, 需求 R199)
 
 
 class ShareholderDirection(Model):
@@ -959,13 +958,14 @@ class TermsFacts(Model):
     EngagementTerms 在此之上加核对与关联. elements 只放 TermsElement 的项, acknowledgements 只放 TermsAcknowledgement
     的项; 各项恰好出现一次由 OutputValidator 查 (语义级, 需求 R199)."""
 
-    framework: TermsFramework  # 约定书写明的财务报告框架
+    framework: ReportingFramework | None  # 约定书写明的财务报告框架 (特殊目的为 spfr); 没写明为空
     framework_evidence: list[EvidencePointer] = []  # 写明框架之处的页指针
     elements: list[TermsItem]  # ASA 210 第 10 段的五项要素
     acknowledgements: list[TermsItem]  # ASA 210 第 6(b) 段的五项确认
     letter_dated_on: date | None  # 约定书出具日
     letter_signed_by: str | None  # 代表公司签回约定书的人
     letter_signed_on: date | None  # 签回日期
+    letter_evidence: list[EvidencePointer] = []  # 出具日, 签回人与签回日所在页的指针, locator 写字段名
     direction: ShareholderDirection | None  # 股东指示 (s293); 文件中没有为空
     appointment: AuditorAppointment | None  # 委任审计师的决议 (s325(1)); 没有为空
     consent: AuditorConsent | None  # 审计师的同意书 (s328A); 没有为空
