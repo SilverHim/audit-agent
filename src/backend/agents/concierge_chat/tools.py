@@ -13,7 +13,7 @@
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Literal, Protocol, cast
 
@@ -41,6 +41,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
     UncorrectedSchedule,
+    mask_person_node_ids,
 )
 from backend.contracts.ports import XeroConnections
 from backend.contracts.views import EngagementOverview, GateView
@@ -167,6 +168,7 @@ class TrailArgs(Page):
 # ── 字段整理 ──
 
 MASKED_FIELDS = frozenset({"account_no", "bsb"})  # 只留末三位
+DROPPED_FIELDS = frozenset({"engagement_id", "birth_date"})  # 不外发: 项目号; 个人的出生日期 (关系图节点, 登记摘录)
 # 换成稳定化名的人员字段 (人名或用户 ID). superseded_by, attributed_by 存的是判断 ID, 不在其中
 PERSON_FIELDS = frozenset(
     {"created_by", "approved_by", "signed_by", "performed_by", "reviewed_by", "decided_by", "updated_by", "deferred_by"}
@@ -187,7 +189,8 @@ def pseudonym(name: str) -> str:
 
 def minimize(value: Any) -> Any:
     """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加 *_aud 写法;
-    去掉 engagement_id. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要经过它.
+    去掉 engagement_id 与 birth_date. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要
+    经过它; 个人节点 ID 的出生日期段在 ToolBox.call 出口对整段文本去掉 (mask_person_node_ids).
     *_aud 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
     if isinstance(value, list):
         return [minimize(item) for item in value]
@@ -195,7 +198,7 @@ def minimize(value: Any) -> Any:
         return value
     out: dict[str, Any] = {}
     for key, item in value.items():
-        if key == "engagement_id":
+        if key in DROPPED_FIELDS:
             continue
         if key in MASKED_FIELDS and isinstance(item, str):
             out[key] = "***" + item[-3:]
@@ -816,8 +819,18 @@ class ToolBox:
         return tool.label[lang] if tool is not None else UNKNOWN_LABEL[lang]
 
     async def call(self, env: ToolEnv, call: ToolCall) -> ToolOutcome:
-        """执行一个调用. 参数 JSON 不合法, 不合参数模型, 未知工具, 查不到 (ToolFailed) 与其他异常都转成错误文本.
-        取消 (CancelledError) 照常上抛."""
+        """执行一个调用 (run), 结果文本 (含错误文本) 发给模型前在这一处去掉个人节点 ID 的出生日期段
+        (mask_person_node_ids, 需求 R305; 先遮蔽再截断, 截断处不会留下半截日期), 再按 max_chars 截断. 引用 (cites)
+        给前端, 原样."""
+        outcome = await self.run(env, call)
+        content = mask_person_node_ids(outcome.content)
+        if len(content) > env.max_chars:
+            content = content[: env.max_chars] + "…[结果过长, 已截断; 可用 limit, offset 翻页或换更具体的查询]"
+        return replace(outcome, content=content)
+
+    async def run(self, env: ToolEnv, call: ToolCall) -> ToolOutcome:
+        """执行一个调用, 结果为未遮蔽, 未截断的全文 (只由 call 调用). 参数 JSON 不合法, 不合参数模型, 未知工具, 查不到
+        (ToolFailed) 与其他异常都转成错误文本. 取消 (CancelledError) 照常上抛."""
         tool = self.tools.get(call.name)
         if tool is None:
             return failure(f"没有这个工具; 可用的工具: {', '.join(self.tools)}")
@@ -838,8 +851,6 @@ class ToolBox:
         except Exception as e:  # 工具出错不中断回答; 只给类型与消息, 由模型换个查法或如实说明
             return failure(f"查询出错 ({type(e).__name__}): {e}")
         content = json.dumps(minimize(found.data), ensure_ascii=False, default=str)
-        if len(content) > env.max_chars:
-            content = content[: env.max_chars] + "…[结果过长, 已截断; 可用 limit, offset 翻页或换更具体的查询]"
         return ToolOutcome(content=content, ok=True, cites=found.cites)
 
 

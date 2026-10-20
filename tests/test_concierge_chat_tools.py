@@ -7,7 +7,17 @@ from typing import Any, cast
 import pytest
 
 from backend.agents.concierge_chat.citations import match_citations
-from backend.agents.concierge_chat.tools import NoArgs, ToolBox, ToolEnv, list_open_items, minimize, pseudonym
+from backend.agents.concierge_chat.tools import (
+    TOOLS,
+    Found,
+    NoArgs,
+    Tool,
+    ToolBox,
+    ToolEnv,
+    list_open_items,
+    minimize,
+    pseudonym,
+)
 from backend.contracts.conversation import ConciergeCitation, ToolCall
 from backend.contracts.data import DataRequest, TableKind, XeroProfileCheck, XeroSource
 from backend.contracts.models import (
@@ -31,6 +41,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailEntry,
     TrailKind,
+    mask_person_node_ids,
 )
 from backend.contracts.views import GateView, PlanningMaterial
 from tests.chat_fakes import FixedState, chat_deps, make_overview
@@ -43,6 +54,7 @@ from tests.fakes import (
     FakeOutputStore,
     FakeTrail,
     numbat_contracts,
+    ownership_graph,
 )
 
 EID = ENGAGEMENT.id
@@ -419,3 +431,84 @@ def test_citations_only_from_pool_and_deduplicated() -> None:
     answer = "SI-2026-0612 与 SI-2026-0618 都在期末前后；SI-2026-0612 的发运单晚于期末。"
     assert [c.id for c in match_citations(answer, pool)] == ["SI-2026-0612"]
     assert match_citations("", pool) == [] and match_citations(answer, {}) == []
+
+
+# ── 个人节点 ID 不带出生日期发给模型 (需求 R305) ──
+# 合成的个人节点 ID (tests.fakes.ownership_graph: 姓名与出生日期都是编的); 守卫同时查两种日期写法
+
+MORGAN, WHITFIELD = "PER-MORGAN-ALEX-19790412", "PER-WHITFIELD-SAM-NODOB"
+BIRTH_FORMS = ("19790412", "1979-04-12")
+
+
+@pytest.mark.parametrize(
+    ("text", "masked"),
+    [
+        (MORGAN, "PER-MORGAN-ALEX"),
+        (WHITFIELD, WHITFIELD),  # 没有出生日期的不变
+        ("PER-MADONNA--19580816", "PER-MADONNA-"),  # 单名
+        (f"via {MORGAN}→ACN-900043021; key:{MORGAN}:2", "via PER-MORGAN-ALEX→ACN-900043021; key:PER-MORGAN-ALEX:2"),
+        (f"node_{MORGAN}", "node_PER-MORGAN-ALEX"),  # 前面是下划线也算
+        ("INV-19790412, XPER-A-B-19790412, PER-A-B-197904121", "INV-19790412, XPER-A-B-19790412, PER-A-B-197904121"),
+    ],
+    ids=["dated", "nodob", "single_name", "embedded", "underscore", "not_person_ids"],
+)
+def test_mask_person_node_ids(text: str, masked: str) -> None:
+    assert mask_person_node_ids(text) == masked
+
+
+async def test_person_ids_reach_the_model_without_birth_dates() -> None:
+    """关系图 (整体 model_dump 外发, 节点带 birth_date), 例外 detail 与 source_ids, 留痕摘要, 以及错误文本里的个人
+    节点 ID, 经 ToolBox.call 出口统一处理: 发给模型的文本两种日期写法都没有, 带出生日期的 ID 换成 PER-MORGAN-ALEX,
+    NODOB 的不变; 给前端的引用 (cites) 原样. 防哪个工具漏了遮蔽, 或只遮了 ID 而节点的 birth_date 照发."""
+    graph = ownership_graph()
+
+    async def get_graph(env: ToolEnv, args: NoArgs) -> Found:
+        return Found(graph.model_dump(mode="json"))
+
+    tools = ToolBox([*TOOLS, Tool("get_graph", "关系图", NoArgs, get_graph, {"zh": "查看关系图", "en": "Graph"})])
+    exception = EXCEPTION.model_copy(
+        update={
+            "id": "X-GEN-08-1-R01-1",
+            "procedure_id": "GEN-08",
+            "source_ids": [MORGAN],
+            "detail": {"via": [MORGAN, WHITFIELD]},
+        }
+    )
+    trail = FakeTrail()
+    await trail.record(
+        TrailEntry(
+            engagement_id=EID, kind=TrailKind.transition, actor="A5", procedure_id="GEN-08", summary=f"{MORGAN} 任董事"
+        )
+    )
+    tool_env = env(trail)
+    await tool_env.deps.output_store.put(EID, [exception], actor="A5")
+    calls = [
+        ("get_graph", {}),
+        ("list_exceptions", {"procedure_id": "GEN-08"}),
+        ("search_trail", {"procedure_id": "GEN-08"}),
+        ("get_judgment", {"judgment_id": f"J-GEN-03-1-{MORGAN}"}),  # 查不到: 错误文本回显了编号
+    ]
+    outcomes = [
+        await tools.call(tool_env, ToolCall(id="c", name=name, arguments=json.dumps(args))) for name, args in calls
+    ]
+    for (name, _), outcome in zip(calls, outcomes, strict=True):
+        assert not [form for form in BIRTH_FORMS if form in outcome.content], name
+        assert "PER-MORGAN-ALEX" in outcome.content, name
+    graph_out, exceptions_out, trail_out, _ = (json.loads(o.content) for o in outcomes)
+    assert [n["id"] for n in graph_out["nodes"]] == ["ACN-900043021", "PER-MORGAN-ALEX", WHITFIELD]
+    assert all("birth_date" not in n for n in graph_out["nodes"])
+    assert exceptions_out["exceptions"][0]["detail"] == {"via": ["PER-MORGAN-ALEX", WHITFIELD]}
+    assert trail_out["entries"][0]["summary"] == "PER-MORGAN-ALEX 任董事"
+    assert [c.label for c in outcomes[2].cites.values()] == [f"{MORGAN} 任董事"]  # 前端的引用原样
+
+
+async def test_masking_comes_before_truncation() -> None:
+    """先遮蔽再截断: 截断处落在出生日期中间时也不会留下半截日期 (先截断时 "...-1979" 会留下, 再遮蔽也认不出)."""
+
+    async def get_person(env: ToolEnv, args: NoArgs) -> Found:
+        return Found({"id": MORGAN})
+
+    tools = ToolBox([Tool("get_person", "一个人", NoArgs, get_person, {"zh": "查看", "en": "Person"})])
+    cut = len('{"id": "PER-MORGAN-ALEX-1979')  # 未遮蔽的全文在这里截断会留下 1979
+    outcome = await tools.call(env(max_chars=cut), ToolCall(id="c", name="get_person", arguments="{}"))
+    assert outcome.content == '{"id": "PER-MORGAN-ALEX"}'

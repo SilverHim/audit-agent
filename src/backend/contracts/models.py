@@ -1324,6 +1324,18 @@ def node_name_part(text: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", unicodedata.normalize("NFKD", text).upper())
 
 
+# 带出生日期的个人节点 ID (person_node_id 的写法, 名可为空): 前面不接字母数字 (下划线, 冒号等可以), 8 位日期后不再
+# 接数字 (后面接字母也照样遮, 宁可多遮); 末段为 NODOB 的不匹配
+PERSON_ID_WITH_BIRTH = re.compile(r"(?<![A-Za-z0-9])(PER-[A-Z0-9]+-[A-Z0-9]*)-[0-9]{8}(?![0-9])")
+
+
+def mask_person_node_ids(text: str) -> str:
+    """发给模型的文本里, 个人节点 ID 去掉出生日期一段 (接口文档第 0 节 "个人信息"): PER-MORGAN-ALEX-19790412 →
+    PER-MORGAN-ALEX; 末段为 NODOB 的与其余文本不变. 审计助理的工具结果 (需求 R305) 与 GEN-03, GEN-01 进提示词前
+    (R139, R141) 共用这一个. 同名而出生日期不同的两人遮蔽后相同 (已知局限)."""
+    return PERSON_ID_WITH_BIRTH.sub(r"\1", text)
+
+
 def company_node_id(acn: str) -> str:
     """公司节点的 ID: ACN-{acn}. ACN 先去掉空白 ("900 043 021" 同 "900043021"), 之后不是 9 位数字时抛 ValueError."""
     digits = "".join(acn.split())
