@@ -78,6 +78,7 @@ ROW_EVIDENCE: dict[str, tuple[EvidenceType, Reliability]] = {
     "bank_transaction": (EvidenceType.bank, Reliability.external_copy),
     "bank_account": (EvidenceType.bank, Reliability.external_copy),
     "trial_balance": (EvidenceType.voucher, Reliability.internal_original),
+    "financial_statement_line": (EvidenceType.voucher, Reliability.internal_original),  # 待审财报的行 (需求 R216)
 }
 # 文件指针的证据种类按文件类型 (第 5 节文件指针映射表): 回函与登记摘录属外部来源, 约定书与协议按合同, 对账单按银行,
 # 纪要, 声明书, 函件, 治理层沟通与内部记录按凭证; 待审财报 (判断引报表行) 与 other 不作证据, 不在表中

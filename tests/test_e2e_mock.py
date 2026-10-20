@@ -10,7 +10,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -63,7 +63,8 @@ from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 from backend.persistence import models as m
-from backend.persistence.stores import now
+from backend.persistence.stores import RoutingDatasetLoader, now
+from backend.services.data_service import DataService
 from backend.services.judgment_engine import OutputValidator, PointerResolver
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
@@ -509,12 +510,27 @@ class RealRun:
     eid: str
     owner: str
 
+    def data_service(self) -> DataService:
+        """数据管理服务 (同组装根: 项目锁取 s.runner, 演示数据导入的清单来源为 deps.datasets). 每次新建, 调用方留
+        一个用."""
+        return DataService(self.deps, self.s.runner, demo=cast(RoutingDatasetLoader, self.deps.datasets))
+
 
 @asynccontextmanager
-async def real_storage(tmp_path: Path, *, load_dataset: bool = True, **overrides: Any) -> AsyncIterator[RealRun]:
-    """组装真实依赖 (Postgres 各存储与检查点, 规则 SQL, 数据集载入 data/demo, 证据文件库 tmp_path, mock 函证与登记查询),
-    新建用户 Jordan Ellis (报告签字块取项目负责人姓名, 第 7 节第 17 行) 与项目, 退出时停后台任务并释放连接.
-    load_dataset 为假时不载入数据集 (财务数据由测试自己接入). overrides 覆盖配置 (缺省大模型为 mock).
+async def real_storage(
+    tmp_path: Path,
+    *,
+    load_dataset: bool = True,
+    dataset: str = "demo",
+    period: tuple[date, date] = (date(2025, 7, 1), date(2026, 6, 30)),
+    fresh_profile: bool = True,
+    **overrides: Any,
+) -> AsyncIterator[RealRun]:
+    """组装真实依赖 (Postgres 各存储与检查点, 规则 SQL, 数据集载入 data/ 下的 dataset, 证据文件库 tmp_path, mock 函证与
+    登记查询按数据集读目录), 新建用户 Jordan Ellis (报告签字块取项目负责人姓名, 第 7 节第 17 行) 与项目 (期间 period,
+    缺省为 Numbat 的), 退出时停后台任务并释放连接. load_dataset 为假时不载入数据集 (财务数据由测试自己接入, 如 Xero
+    的演示数据导入). fresh_profile 为真时画像换随机 ID (同库反复建不撞已有的), 为假时取数据集画像原样 (如 Xero 的
+    CLIENT-XERO-3C1332BB-Q1, 需求 R120; 内容相同的已有画像沿用). overrides 覆盖配置 (缺省大模型为 mock).
     未设 TEST_DATABASE_URL 时跳过; 测试库不清理, 每次新建用户与项目."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
@@ -538,13 +554,15 @@ async def real_storage(tmp_path: Path, *, load_dataset: bool = True, **overrides
         )
     await engine.dispose()
     deps = build_deps(settings)
-    profile = deps.datasets.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex})
+    profile = deps.datasets.client_profile(dataset)
+    if fresh_profile:
+        profile = profile.model_copy(update={"id": "CLIENT-" + uuid4().hex})
     engagement = await deps.engagement_store.create(
-        owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
+        owner_id=owner, period_start=period[0], period_end=period[1], dataset=dataset, profile=profile
     )
     # 建项目不载入财务数据 (需求 R10): 同种子脚本的 load 载入数据集, 视同已确认数据已齐, P1 不停下等数据
     if load_dataset:
-        await deps.datasets.load(engagement.id, "demo")
+        await deps.datasets.load(engagement.id, dataset)
     async with AsyncExitStack() as stack:
         saver = await stack.enter_async_context(open_checkpointer(settings))
         runner = GraphRunner(compile_graph(GraphNodes(deps, settings.PARALLEL_CAP), saver), deps, llm_version(settings))

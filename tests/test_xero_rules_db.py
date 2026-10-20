@@ -146,6 +146,7 @@ async def build_xero_project(url: str, snapshot: Path, supplements: Path, tmp: P
         engine,
         deps.evidence_store,
         supplements=supplements.parent,
+        allow_injected=True,  # 副本 (xero_case) 的 manifest 带 injected; 原目录没有, 照常核对
     )
     datasets = RoutingDatasetLoader(deps.datasets.default, {XeroDatasetLoader.PREFIX: xero})  # type: ignore[attr-defined]  # Numbat 照旧
     dataset = f"{XeroDatasetLoader.PREFIX}{snapshot.name}"

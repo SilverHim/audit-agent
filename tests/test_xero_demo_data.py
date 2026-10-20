@@ -11,7 +11,9 @@ from pathlib import Path
 import pdfplumber
 import pytest
 
+from backend.contracts.models import FinancialStatements
 from tests.external import needs, optional, snapshot_dir, snapshot_location, supplements_dir, supplements_path
+from tests.fakes import FS_V1_LINES, XERO_FS_V1
 
 REPO = Path(__file__).resolve().parents[1]
 DOC = REPO / "docs" / "Xero演示数据集设计.md"
@@ -2075,95 +2077,7 @@ def test_expense_claim_matches_xero_entry() -> None:
     assert len(days) == 4 and max(date(2026, 8, d) for d in days) <= claim.posting_date == date(2026, 8, 16)
 
 
-PL_CODES = ["200", "270", "400", "404", "408", "412", "420", "429", "445", "449", "453", "461", "469", "477", "478"]
-PL_CODES += ["489", "493"]  # 17 个损益科目
-EQ_CODES = ["960", *PL_CODES]  # 累计亏损行的科目
-OP_CODES = [*PL_CODES, "610", "620", "800", "801", "860", "820", "825", "804", "805", "826"]  # 经营活动各行的科目
-FS_LINES = [  # 需求清单 R216 的 XERO_FS_V1 (待审财报唯一正本): 代码, 表, 名称, 科目, sign, 小计, 本期, 比较数
-    ("SOFP-CASH", "financial_position", "Cash and cash equivalents", ["091"], 1, False, 1158123, 1508123),
-    ("SOFP-REC", "financial_position", "Trade receivables", ["610"], 1, False, 1019950, 0),
-    ("SOFP-OREC", "financial_position", "Other receivables (accrued interest)", ["620"], 1, False, 4853, 0),
-    ("SOFP-PPE", "financial_position", "Office equipment", ["710", "711"], 1, False, 0, 0),
-    ("SOFP-TA", "financial_position", "Total assets", ["091", "610", "620", "710", "711"], 1, True, 2182926, 1508123),
-    ("SOFP-OD", "financial_position", "Bank overdraft", ["090"], -1, False, 1090044, 457222),
-    ("SOFP-PAY", "financial_position", "Trade and other payables", ["800", "801", "860"], -1, False, 400507, 0),
-    ("SOFP-TAX", "financial_position", "GST and PAYG withholding", ["820", "825"], -1, False, 880197, -79120),
-    ("SOFP-EMP", "financial_position", "Employee benefit liabilities", ["804", "805", "826"], -1, False, 895856, 0),
-    ("SOFP-DLOAN", "financial_position", "Loan from director", ["840"], -1, False, 1921221, 1921221),
-    (
-        "SOFP-TL",
-        "financial_position",
-        "Total liabilities",
-        ["090", "800", "801", "860", "820", "825", "804", "805", "826", "840"],
-        -1,
-        True,
-        5187825,
-        2299323,
-    ),
-    (
-        "SOFP-EQ",
-        "financial_position",
-        "Accumulated losses",
-        ["960", *PL_CODES],
-        -1,
-        False,
-        -3004899,
-        -791200,
-    ),
-    ("PL-REV", "profit_or_loss", "Revenue", ["200"], -1, False, 3243100, 420000),
-    ("PL-OI", "profit_or_loss", "Interest income", ["270"], -1, False, 4853, 0),
-    ("PL-EMP", "profit_or_loss", "Employee benefits expense", ["477", "478"], 1, False, 4245856, 0),
-    ("PL-OCC", "profit_or_loss", "Occupancy expenses", ["408", "445", "469"], 1, False, 635600, 0),
-    (
-        "PL-OTH",
-        "profit_or_loss",
-        "Other expenses",
-        ["400", "404", "412", "420", "429", "449", "453", "461", "489", "493"],
-        1,
-        False,
-        580196,
-        1211200,
-    ),
-    (
-        "PL-NP",
-        "profit_or_loss",
-        "Loss for the period",
-        PL_CODES,
-        -1,
-        True,
-        -2213699,
-        -791200,
-    ),
-    # 权益变动表 (R293): 只有累计亏损一项, 2025-07-01 (过渡日) 为 0
-    ("CE-OPEN", "changes_in_equity", "Balance at the beginning of the period", EQ_CODES, -1, False, -791200, 0),
-    ("CE-NP", "changes_in_equity", "Loss for the period", PL_CODES, -1, False, -2213699, -791200),
-    ("CE-OCI", "changes_in_equity", "Other comprehensive income", [], -1, False, 0, 0),  # 第 61(a) 段, 两期都为 0
-    ("CE-TCI", "changes_in_equity", "Total comprehensive loss for the period", PL_CODES, -1, True, -2213699, -791200),
-    ("CE-CLOSE", "changes_in_equity", "Balance at the end of the period", EQ_CODES, -1, True, -3004899, -791200),
-    # 现金流量表 (R293, 间接法): 各变动行为财务状况表对应行的变动对现金的影响; 透支计入现金及现金等价物
-    ("CF-NP", "cash_flows", "Loss for the period", PL_CODES, 1, False, -2213699, -791200),
-    ("CF-REC", "cash_flows", "Increase in trade receivables", ["610"], 1, False, -1019950, 0),
-    ("CF-OREC", "cash_flows", "Increase in other receivables", ["620"], 1, False, -4853, 0),
-    ("CF-PAY", "cash_flows", "Increase in trade and other payables", ["800", "801", "860"], 1, False, 400507, 0),
-    ("CF-TAX", "cash_flows", "Change in GST and PAYG withholding", ["820", "825"], 1, False, 959317, -79120),
-    ("CF-EMP", "cash_flows", "Increase in employee benefit liabilities", ["804", "805", "826"], 1, False, 895856, 0),
-    ("CF-OP", "cash_flows", "Net cash used in operating activities", OP_CODES, 1, True, -982822, -870320),
-    ("CF-INV", "cash_flows", "Net cash from investing activities", ["710", "711"], 1, False, 0, 0),
-    ("CF-FIN", "cash_flows", "Net cash from financing activities", ["840"], 1, False, 0, 0),
-    (
-        "CF-NET",
-        "cash_flows",
-        "Net decrease in cash and cash equivalents",
-        [*OP_CODES, "710", "711", "840"],
-        1,
-        True,
-        -982822,
-        -870320,
-    ),
-    ("CF-OPEN", "cash_flows", "Cash and cash equivalents at 1 July", ["090", "091"], 1, False, 1050901, 1921221),
-    ("CF-CLOSE", "cash_flows", "Cash and cash equivalents at end of period", ["090", "091"], 1, False, 68079, 1050901),
-]
-TB_LINES = [x for x in FS_LINES if x[1] in ("financial_position", "profit_or_loss")]  # 与试算表勾稽的 18 行
+TB_LINES = [x for x in FS_V1_LINES if x[1] in ("financial_position", "profit_or_loss")]  # 与试算表勾稽的 18 行
 
 
 @needs_supplements
@@ -2187,7 +2101,7 @@ def test_financial_statements_json() -> None:
     assert fs["comparative_restatement_entry_nos"] == ["XJ-397"]  # type: ignore[index]
     keys = ["code", "statement", "name", "account_codes", "sign", "subtotal", "amount_cents", "prior_amount_cents"]
     assert [tuple(line[k] for k in keys) for line in fs["lines"]] == [  # type: ignore[index]
-        (c, st, n, codes, sg, sub, a, p) for c, st, n, codes, sg, sub, a, p in FS_LINES
+        (c, st, n, codes, sg, sub, a, p) for c, st, n, codes, sg, sub, a, p in FS_V1_LINES
     ]
     assert all(
         list(line)
@@ -2196,12 +2110,21 @@ def test_financial_statements_json() -> None:
     )
     docs = {d["path"]: d for d in read("manifest.json")["documents"]}  # type: ignore[index]
     assert fs["document_id"] == docs[generator.FS_PDF]["document_id"]  # type: ignore[index]
-    by = {c: (a, p) for c, *_, a, p in FS_LINES}
+    by = {c: (a, p) for c, *_, a, p in FS_V1_LINES}
     assert by["SOFP-TA"][0] == by["SOFP-TL"][0] + by["SOFP-EQ"][0]  # 21,829.26 = 51,878.25 + (30,048.99)
     assert by["SOFP-EQ"][1] + by["PL-NP"][0] == by["SOFP-EQ"][0]  # 期初 (7,912.00) 加本期 (22,136.99)
     manifest = read("manifest.json")
     item = next(f for f in manifest["files"] if f["path"] == generator.FS_JSON)  # type: ignore[index]
     assert item["xero_refs"] == ["XJ-397"]
+
+
+@needs_supplements
+def test_fs_v1_json_reads_as_contract_model() -> None:
+    """R216: 合约模型 FinancialStatements 能读入库的 fs_v1.json (R217 载入的就是它), 去掉 document_id 后等于
+    tests.fakes.XERO_FS_V1. 待审财报的表只在 fakes 一处 (FS_V1_LINES), 本模块的断言都引用它."""
+    fs = FinancialStatements.model_validate_json((SUPPLEMENTS / generator.FS_JSON).read_text(encoding="utf-8"))
+    assert fs.document_id is not None
+    assert fs.model_copy(update={"document_id": None}) == XERO_FS_V1
 
 
 @needs_supplements

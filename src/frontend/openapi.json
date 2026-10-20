@@ -2154,7 +2154,8 @@
                 "delivery_note",
                 "bank_transaction",
                 "bank_account",
-                "trial_balance"
+                "trial_balance",
+                "financial_statement_line"
               ],
               "type": "string",
               "title": "Source Type"
@@ -8275,7 +8276,8 @@
               "document",
               "standard",
               "trail",
-              "client_profile"
+              "client_profile",
+              "financial_statement_line"
             ],
             "title": "Source Type"
           },

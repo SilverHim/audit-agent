@@ -9,22 +9,28 @@ P0-P4. 第 1 级前的回归里程碑, 长期保留 (同 Numbat 回归 R55, test
 共用. 读快照与补造目录, 标 external.
 """
 
+import json
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from datetime import date
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import pytest_asyncio
 
+from backend.adapters.llm import SwitchableLLMClient
 from backend.agents.base import ProcedureAgent, RunContext
-from backend.contracts.data import DataInput
-from backend.contracts.errors import DecisionRejected
+from backend.agents.ingest import DETAILS
+from backend.contracts.data import XERO_TABLES, DataInput
+from backend.contracts.errors import DecisionRejected, EngagementLocked
 from backend.contracts.models import (
     AuditException,
     AuditReportVersion,
     Confirmation,
     ConfirmationResult,
     DocumentType,
+    EvidencePointer,
     ExceptionDisposition,
     GateDecision,
     Judgment,
@@ -49,15 +55,17 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE
+from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
-from tests.test_e2e_mock import assert_pointers_resolve, run_demo
+from tests.test_e2e_mock import assert_pointers_resolve, real_storage, run_demo
 from tests.xero_fakes import (
     XERO17_CONTRACTS,
     XERO17_FEATURES,
     XERO17_INVOICES,
     XERO_A01_CHANGES,
+    XERO_DATASET,
     XERO_RULES,
     finish_xero17,
     new_xero_deps,
@@ -108,11 +116,15 @@ class Xero17:
     moved: list[str]
 
 
+def xero17_client() -> LayeredMockLLMClient:
+    """本路径的大模型客户端: llm_xero_only17 (RPT-03 两稿) 排在运行副本之前; 运行副本经 tests.external 定位核对."""
+    XERO.ready()
+    return LayeredMockLLMClient([ONLY17, XERO.runtime])
+
+
 async def run_xero17() -> Xero17:
-    """离线跑完整个流程 (见模块说明), 记下每次执行的 Agent; 前后各记一次原目录的逐文件哈希."""
-    before = originals()
-    XERO.ready()  # 运行副本经 tests.external 定位核对
-    client = LayeredMockLLMClient([ONLY17, XERO.runtime])
+    """离线: 空的假存储, 规则引擎 FakeRuleEngine(XERO_RULES), 主模型与复核模型为 xero17_client(); 跑完整个流程."""
+    client = xero17_client()
     deps = new_xero_deps(
         trail=FakeTrail(),
         llm=client,
@@ -121,7 +133,16 @@ async def run_xero17() -> Xero17:
         features=XERO17_FEATURES,
     )
     runner = offline_runner(deps)
-    service = DataService(deps, runner, demo=demo_source())
+    return await drive_xero17(runner, DataService(deps, runner, demo=demo_source()), EID, OWNER, client)
+
+
+async def drive_xero17(
+    runner: GraphRunner, service: DataService, eid: str, owner: str, client: LayeredMockLLMClient
+) -> Xero17:
+    """从新建的项目跑完整个流程 (见模块说明; 假存储与真实库都用这一个), 记下每次执行的 Agent; 前后各记一次原目录的
+    逐文件哈希. client 须已是 runner.deps 的主模型与复核模型."""
+    before = originals()
+    deps = runner.deps
     agents: list[tuple[str, str, bool]] = []
     run_agent = GraphNodes.run_agent
 
@@ -131,20 +152,20 @@ async def run_xero17() -> Xero17:
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(GraphNodes, "run_agent", record_agent)
-        await runner.start(EID)
-        await wait_idle(runner, EID)
-        assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_acc01",), runner.run_error(EID)
-        await import_stage(service, EID, "acceptance", OWNER)
-        await approve_acceptance(runner, EID, OWNER)
-        assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("p1_await_data",)
+        await runner.start(eid)
+        await wait_idle(runner, eid)
+        assert (await runner.app.aget_state(GraphRunner.config(eid))).next == ("gate_acc01",), runner.run_error(eid)
+        await import_stage(service, eid, "acceptance", owner)
+        await approve_acceptance(runner, eid, owner)
+        assert (await runner.app.aget_state(GraphRunner.config(eid))).next == ("p1_await_data",)
         query = GraphStateQuery(runner.app, deps, runner)
-        awaiting = (await query.overview(EID)).awaiting_data
-        await import_stage(service, EID, "fieldwork", OWNER)
-        await confirm_ready(service, EID, OWNER)
-        pln = await query.gate(EID)
-        assert pln is not None, runner.run_error(EID)
-        await finish_xero17(runner, EID, OWNER)
-    return Xero17(runner, EID, OWNER, client, awaiting, pln, agents, changed(before, originals()))
+        awaiting = (await query.overview(eid)).awaiting_data
+        await import_stage(service, eid, "fieldwork", owner)
+        await confirm_ready(service, eid, owner)
+        pln = await query.gate(eid)
+        assert pln is not None, runner.run_error(eid)
+        await finish_xero17(runner, eid, owner)
+    return Xero17(runner, eid, owner, client, awaiting, pln, agents, changed(before, originals()))
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -341,9 +362,15 @@ async def test_trail(xero17: Xero17) -> None:
 
 
 def transitions(entries: list[TrailEntry]) -> Counter[tuple[str, str, str]]:
-    """transition 留痕的 (对象, 原状态, 新状态) 多重集合."""
+    """transition 留痕的 (对象, 原状态, 新状态) 多重集合: 程序按编号, 项目阶段记为 engagement (项目编号随存储而不同)."""
     return Counter(
-        (e.payload["id"], e.payload["from"], e.payload["to"]) for e in entries if e.kind is TrailKind.transition
+        (
+            e.payload["id"] if e.payload["object"] == "procedure" else e.payload["object"],
+            e.payload["from"],
+            e.payload["to"],
+        )
+        for e in entries
+        if e.kind is TrailKind.transition
     )
 
 
@@ -387,11 +414,13 @@ async def test_pointers_fixtures_and_agents(xero17: Xero17) -> None:
     assert Counter(pid for pid, _, _ in xero17.agents) == {pid: 2 if pid == "RPT-03" else 1 for pid in AGENTS}
 
 
-async def assert_pointers_and_reads(x: Xero17) -> None:
-    """判断, 合同与函证的证据指针都能解析; 大模型读取: RPT-03 两次读自 llm_xero_only17 (r1, r2), 其余 36 次读自运行副本
-    (DOC-CLASSIFY 21, DOC-04 3, DOC-06 2, REV-03 3, REV-02 6, CSH-02 1), 每个文件一次, 都是 attempt 1 且没有失败级别."""
+async def assert_pointers_and_reads(x: Xero17, *, everything: bool = False) -> list[EvidencePointer]:
+    """判断, 合同与函证的证据指针都能解析 (everything 时另含例外, 承接评分卡与人工结果; 返回检查过的指针); 大模型
+    读取: RPT-03 两次读自 llm_xero_only17 (r1, r2), 其余 36 次读自运行副本 (DOC-CLASSIFY 21, DOC-04 3, DOC-06 2,
+    REV-03 3, REV-02 6, CSH-02 1), 每个文件一次, 都是 attempt 1 且没有失败级别."""
     deps = x.runner.deps
-    await assert_pointers_resolve(Started(x.runner, deps.output_store, deps.engagement_store), x.eid)  # type: ignore[arg-type]
+    started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
+    pointers = await assert_pointers_resolve(started, x.eid, everything=everything)
     reads = [(r.procedure_id, r.fixture_key, r.root, r.file) for r in x.client.reads]
     assert sorted(r for r in reads if r[0] == "RPT-03") == [
         ("RPT-03", "r1", ONLY17, "RPT-03/r1.json"),
@@ -410,6 +439,7 @@ async def assert_pointers_and_reads(x: Xero17) -> None:
     assert len(set(reads)) == len(reads) == 38
     calls = [e for e in await entries_of(x) if e.kind is TrailKind.llm_call]
     assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
+    return pointers
 
 
 # ── 验收 7: 文件, 数据版本与补交请求 ──
@@ -489,3 +519,83 @@ async def assert_documents(x: Xero17) -> None:
 async def test_originals_unchanged(xero17: Xero17) -> None:
     """流程前后快照目录与补造目录的逐文件哈希相同 (同 R112 验收 11)."""
     assert xero17.moved == []
+
+
+# ── R120: 连库变体 ──
+
+XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.json)
+
+
+@pytest.mark.slow
+async def test_real_storage_variant(tmp_path: Path) -> None:
+    """需求 R120: 同 R119 的步骤与决定, 换用真实 Postgres 存储与检查点, 规则 SQL, 组装根的数据集载入 (快照与补造目录),
+    函证与登记 mock 读补造目录, 真实 DataService 做演示数据导入与确认数据已齐; 大模型仍为 xero17_client()
+    (SwitchableLLMClient 换内部客户端). 项目为 xero/20261017-q1, 期间 07-01 至 09-30, 画像 CLIENT-XERO-3C1332BB-Q1
+    (不换 ID). 结果与留痕同 R119 验收 2-7; 全部证据指针 (含例外, 承接评分卡与人工结果) 经真实存储解析, document
+    指针都指向补造 manifest 中的文件; 签字后 put 抛 EngagementLocked; 账表版本行 11 张表次 (快照七张在 v2, 补造四张
+    v3 至 v6), 确认人为负责人, 抽取版本表中文件补登记 42 行, 合同 3 行; 同库随后用 xero/20261017-mock 建项目不报
+    VersionConflict."""
+    snapshot_dir("20261017-q1")  # 先核对数据: 跟踪了却找不到时失败, 不因没配库而跳过
+    snapshot_dir("20261017-mock")
+    supplements = supplements_dir("20261017-q1")
+    features = ",".join(sorted(XERO17_FEATURES))
+    async with real_storage(
+        tmp_path, dataset=XERO_DATASET, period=XERO_PERIOD, load_dataset=False, fresh_profile=False, FEATURES=features
+    ) as run:
+        deps = run.deps
+        client = xero17_client()
+        for switchable in (deps.llm, deps.review_llm):
+            cast(SwitchableLLMClient, switchable).reload(client, "mock")
+        x = await drive_xero17(run.s.runner, run.data_service(), run.eid, run.owner, client)
+        engagement = await deps.engagement_store.get(run.eid)
+        assert engagement is not None
+        assert (engagement.client_id, engagement.dataset, engagement.period_start, engagement.period_end) == (
+            "CLIENT-XERO-3C1332BB-Q1",
+            XERO_DATASET,
+            *XERO_PERIOD,
+        )
+        await assert_steps(x)
+        await assert_results(x)
+        await assert_materiality(x)
+        await assert_report(x)
+        numbat = await run_demo()
+        assert_trail(await entries_of(x), numbat.runner.deps.trail.entries)  # type: ignore[attr-defined]
+        pointers = await assert_pointers_and_reads(x, everything=True)
+        assert [(pid, name) for pid, name, script in x.agents if script] == []
+        assert {pid: name for pid, name, _ in x.agents} == AGENTS
+        await assert_documents(x)
+        assert x.moved == []
+        manifest = json.loads((supplements / "manifest.json").read_text(encoding="utf-8"))
+        listed = {d["document_id"] for d in manifest["documents"]}
+        assert {p.source_id for p in pointers if p.source_type == "document"} <= listed
+        assert {d.id for d in await deps.financial_store.documents(run.eid)} <= listed
+
+        judgment = (await deps.output_store.latest(run.eid, Judgment))[0]
+        with pytest.raises(EngagementLocked):
+            newer = judgment.model_copy(update={"version": judgment.version + 1})
+            await deps.output_store.put(run.eid, [newer], actor=run.owner)
+
+        versions = await deps.data.versions(run.eid)
+        assert sorted((v.data_version, v.kind.value, v.source, v.file_name) for v in versions) == sorted(
+            [(2, k.value, "xero", None) for k in XERO_TABLES]
+            + [
+                (3, "sales_invoices", "import", "contract_links.csv"),
+                (4, "bank_accounts", "import", "bank_accounts.csv"),
+                (5, "delivery_notes", "import", "delivery_notes.csv"),
+                (6, "employees", "import", "payroll/employees.csv"),
+            ]
+        )
+        assert (await deps.data.readiness(run.eid)).ready_by == run.owner
+        records = Counter(r.target_type for r in await deps.data.extraction_versions(run.eid))
+        assert (records[DETAILS], records["contract"]) == (42, 3)
+
+        mock = deps.datasets.client_profile("xero/20261017-mock")
+        other = await deps.engagement_store.create(  # type: ignore[attr-defined]
+            owner_id=run.owner,
+            period_start=XERO_PERIOD[0],
+            period_end=XERO_PERIOD[1],
+            dataset="xero/20261017-mock",
+            profile=mock,
+        )
+        assert (other.client_id, other.dataset) == (mock.id, "xero/20261017-mock")
+        assert mock.id != engagement.client_id

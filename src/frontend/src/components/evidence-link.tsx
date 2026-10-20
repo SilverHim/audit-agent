@@ -28,6 +28,7 @@ export const ROW_SOURCES = [
   'bank_transaction',
   'bank_account',
   'trial_balance',
+  'financial_statement_line', // 待审财报的行 (需求 R216); 后端取行由 R217 实现, 之前点开为查不到
 ] as const
 
 type RowSource = (typeof ROW_SOURCES)[number]

@@ -35,6 +35,7 @@ class SqlRuleEngine:
             "delivery_note": "delivery",
             "bank_transaction": "bank",
             "bank_account": "bank",
+            "financial_statement_line": "voucher",  # 待审财报的行 (需求 R216), 同 judgment_engine.ROW_EVIDENCE
         }
         for rule in template.rules:
             try:
