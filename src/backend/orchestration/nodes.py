@@ -13,10 +13,10 @@ from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
+from backend.agents.base import AgentDeps, ManualHandler, ProcedureAgent, RunContext
 from backend.agents.checkup import DataCheckup, resources
 from backend.agents.client_intel import company_check
-from backend.agents.registry import build_agents
+from backend.agents.registry import build_agents, manual_owners
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -458,6 +458,8 @@ class GraphNodes:
         self.deps = deps  # 外部依赖
         self.parallel_cap = parallel_cap  # fieldwork 实例并行上限
         self.agents: dict[str, ProcedureAgent[Any]] = build_agents(deps)  # 程序编号 -> 负责的 Agent 实例
+        # 人工程序 → 模板 owner 的 ManualHandler, 节点读回 manual_result 后调它的 collect (需求 R93)
+        self.owners: dict[str, ManualHandler] = manual_owners(deps)
         check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
         check_inputs(deps.library, NODE_PROCEDURES["p1_ingest"])  # 模板 inputs 的写法 (需求 R272)
 
@@ -761,6 +763,9 @@ class GraphNodes:
                 if task.procedure_id != procedure_id:
                     raise ValueError(f"{record_id} 处理的任务 {task.id} 不属于正在等待的 {procedure_id}")
                 merge_patch(result, await self.read_review(eid, procedure_id))
+                if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
+                    seen = apply_patch(current, patch)  # 带上派发的执行记录与任务, 整理出的对象可引用它们
+                    merge_patch(result, await self.collect(engagement, seen, procedure_id, record, task))
             else:
                 # 不再等: 这一轮的程序版本当时就不等人 (新执行, 或重放取回的 completed, planned) 时用它; 当时在等
                 # (读回过决定, 或重放时决定都已读回) 时取 Store 最新版本, 即最后一个决定由 DecisionSubmit 重算出的那版.
@@ -777,6 +782,27 @@ class GraphNodes:
                         )
                     pack = [latest if p.id == procedure_id else p for p in pack]
                 return finish(pack)
+
+    async def collect(
+        self, engagement: Engagement, state: EngagementState, procedure_id: str, record: ReviewRecord, task: ReviewTask
+    ) -> StatePatch:
+        """人工程序读回 manual_result 后 (需求 R93): 调模板 owner 的 collect 把结果整理成领域对象, 片段按 owner 与模板
+        outputs 校验 (不带执行记录), 以 owner 为写入者在一个事务内写入 Store, 返回写入后的片段.
+
+        state: 本次执行看到的状态, 带上派发的执行记录与任务; ctx.run 为派发的那次执行 (任务的 run_id). collect 是
+        纯函数, 节点重放时重算得同一对象, 再写 Store 不新增. 片段校验不过抛 MergeRejected (节点错误, 记入
+        run_error), 什么都不写.
+        """
+        template = self.deps.library.load(procedure_id)
+        procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
+        run = next(r for r in state["procedure_runs"] if r.id == task.run_id)
+        ctx = RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
+        patch = self.owners[procedure_id].collect(ctx, record)
+        check_patch(
+            patch, writer=template.owner, procedure_id=procedure_id, run_id=None, state=state, outputs=template.outputs
+        )
+        async with self.deps.output_store.transaction(engagement.id):
+            return await save_outputs(self.deps.output_store, engagement.id, patch, actor=template.owner)
 
     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
         """依次执行该图节点的程序 (见 node_procedures), 后一条在前一条的结果之上执行 (程序包, 执行记录等按状态的

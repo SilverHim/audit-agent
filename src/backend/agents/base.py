@@ -5,10 +5,20 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import Any, ClassVar, Protocol, cast, runtime_checkable
 
 from backend.contracts.knowledge import ProcedureTemplate
-from backend.contracts.models import AgentId, Engagement, Procedure, ProcedureRun, RuleOutcome, RunStatus
+from backend.contracts.models import (
+    AgentId,
+    Engagement,
+    ManualResult,
+    Procedure,
+    ProcedureRun,
+    ReviewRecord,
+    ReviewTask,
+    RuleOutcome,
+    RunStatus,
+)
 from backend.contracts.ports import (
     AbnLookup,
     AuditOutputStore,
@@ -74,6 +84,26 @@ class RunContext:
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
 
 
+@runtime_checkable
+class ManualHandler(Protocol):
+    """人工程序 (engine manual 且不是闸门, 需求 R93) 的模板 owner 为它实现的三步, 由 Agent 声明在 manual_procedures
+    (agents/registry.manual_owners 按模板 owner 找). 派发与写入由编排完成, 三步都不写存储.
+
+    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material).
+    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后; 返回问题,
+      非空即拒绝 (INVALID_VALUE, 消息为问题原文).
+    - collect: 节点读回 manual_result 后调, 把结果整理成领域对象, 返回只含模板 outputs 字段的片段 (不含执行记录),
+      以 owner 为写入者写入. 须为纯函数: 不取当前时间, 不调大模型, 重放时重算得同一结果.
+    ctx 为该程序的执行上下文 (run 为派发的那次执行).
+    """
+
+    def prepare(self, ctx: RunContext) -> dict[str, Any]: ...
+
+    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]: ...
+
+    def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch: ...
+
+
 async def gather_all[T](aws: Iterable[Awaitable[T]]) -> list[T]:
     """并发执行, 全部结束后按输入顺序返回结果; 有出错的, 等其余都结束后抛第一个错误 (按输入顺序).
 
@@ -103,6 +133,8 @@ class ProcedureAgent[F](ABC):
 
     agent_id: ClassVar[AgentId]  # 智能体编号, 子类给值
     procedures: ClassVar[frozenset[str]]  # 负责的程序编号, 子类给值
+    # 作为模板 owner 的人工程序 (需求 R93): 本 Agent 为它们实现 ManualHandler (prepare, check, collect), 由 A10 派发
+    manual_procedures: ClassVar[frozenset[str]] = frozenset()
 
     def __init__(self, deps: AgentDeps) -> None:
         self.deps = deps  # 外部依赖工具箱

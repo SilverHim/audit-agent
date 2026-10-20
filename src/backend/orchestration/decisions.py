@@ -13,7 +13,8 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 from pydantic import ValidationError
 
-from backend.agents.base import AgentDeps
+from backend.agents.base import AgentDeps, ManualHandler, RunContext
+from backend.agents.registry import manual_owners
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
@@ -720,6 +721,8 @@ class GraphDecisionSubmit:
         self.deps = deps  # 外部依赖
         self.runner = runner  # 项目锁与后台执行
         self.now = now  # 当前时刻 (UTC), RPT-01 签字时刻与报告日取它; 测试可注入固定时刻
+        # 人工程序 → 模板 owner 的 ManualHandler, 收 manual_result 时调它的 check (需求 R93)
+        self.owners: dict[str, ManualHandler] = manual_owners(deps)
 
     async def _engagement(self, eid: str) -> Engagement:
         engagement = await self.deps.engagement_store.get(eid)
@@ -836,8 +839,24 @@ class GraphDecisionSubmit:
         manual = task.kind is TaskKind.manual  # 人工程序的结果引用的文件须已在本项目登记
         documents = await self.deps.financial_store.documents(eid) if manual else []
         checked = check_review_values(self.deps, record, task, target, documents)
+        if manual:
+            await self._check_manual_owner(eid, checked, task, target, snapshot)
         await self._check_decision_id(eid, record.id)
         return task, checked
+
+    async def _check_manual_owner(
+        self, eid: str, record: ReviewRecord, task: ReviewTask, target: Versioned | None, snapshot: StateSnapshot
+    ) -> None:
+        """人工程序的按程序核对 (需求 R93): 调模板 owner 的 ManualHandler.check, 返回问题时拒绝 (INVALID_VALUE,
+        消息为问题原文, 多条以分号连接). 上下文为该程序在检查点中的版本与状态, run 为派发的那次执行 (任务目标)."""
+        assert isinstance(target, ProcedureRun) and record.manual_result is not None  # 通用核对已过
+        values = fill_defaults(snapshot.values)
+        procedure = next(p for p in values["procedure_pack"] if p.id == task.procedure_id)
+        template = self.deps.library.load(task.procedure_id)
+        ctx = RunContext(await self._engagement(eid), procedure, template, target, values)
+        problems = self.owners[task.procedure_id].check(ctx, task, record.manual_result)
+        if problems:
+            raise DecisionRejected("INVALID_VALUE", "; ".join(problems))
 
     async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
         """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
