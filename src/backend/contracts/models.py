@@ -460,7 +460,7 @@ class ClauseStatus(StrEnum):
     """声明书中一项声明的状态."""
 
     present = "present"  # 声明书写了
-    refused_accepted = "refused_accepted"  # 管理层不提供, 审计师接受, 写明理由与对意见的影响
+    refused_accepted = "refused_accepted"  # 管理层不提供, 审计师接受, 写明对意见的影响 (理由选填, 需求 R358)
     missing = "missing"  # 声明书没写
 
 
@@ -631,7 +631,7 @@ class MisstatementUpdate(Model):
     kind: MisstatementUpdateKind  # 分类 (FIN-03) 或验证 (FIN-09)
     type: MisstatementType | None = None  # 分类: 错报类型
     fraud_indicative: bool | None = None  # 分类: 是否有舞弊迹象 (ASA 240 第 36 段)
-    fraud_reason: str | None = None  # 分类: 舞弊迹象的理由
+    fraud_reason: str | None = None  # 分类: 舞弊迹象的理由; 人给的载荷选填 (需求 R358), 大模型一路须写
     origin: MisstatementOrigin | None = None  # 分类: 本期或上期未更正结转
     objective_id: str | None = None  # 分类: 所属审计目标
     status: MisstatementStatus | None = None  # 验证: corrected, partially_corrected 或 communicated
@@ -1453,7 +1453,7 @@ class ReviewRecord(Versioned):
     task_id: str  # 处理的任务
     target_version: int  # 从任务复制, 提交时校验
     decision: Decision  # 决定
-    reason: str | None = None  # 理由, confirm 以外必填
+    reason: str | None = None  # 理由, 选填 (需求 R358)
     override_conclusion: str | None = None  # override 时的新结论
     misstatement_draft: MisstatementDraft | None = None  # misstatement 时的错报草稿
     # 人给的错报更新载荷 (需求 R159): 模板 misstatement_update_kind 非空时, 以人工判断取代 AI 判断的决定 (override,
@@ -1483,7 +1483,7 @@ class GateEdit(Model):
     target_version: int  # 被改时的版本, 提交时校验
     field: Literal["level"]  # 只能改等级
     new_value: RiskLevel  # 新等级
-    reason: str  # 修改理由
+    reason: str = ""  # 修改理由, 选填 (需求 R358)
 
 
 class MaterialityChoice(Model):
@@ -1527,7 +1527,7 @@ class GateDecision(Versioned):
     disposition: OpinionType | None = None  # FIN-01 通过时必填, 只能是无保留或保留
     annotations: list[Annotation] = []  # RPT-01 驳回时必填
     plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203; 只有它的登记行允许, 需求 R205)
-    reason: str | None = None  # 理由, 通过以外必填; FIN-01 一律必填
+    reason: str | None = None  # 理由, 选填 (需求 R358)
     decided_by: str  # 决定人的用户 ID
     decided_at: datetime  # 决定时间
 
@@ -1554,7 +1554,7 @@ class CorrectionNotice(Versioned):
     kind: CorrectionNoticeKind  # 通知的种类
     misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
     adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted)
-    reason: str | None = None  # 理由, stop_waiting 必填
+    reason: str | None = None  # 理由, 选填 (需求 R358)
     decided_by: str  # 提交通知的审计师 (用户 ID); 更正分录的写入人
     decided_at: datetime  # 提交时间
 
@@ -1918,14 +1918,14 @@ class RepresentationClause(Model):
     kind: Literal["core", "specific"]  # core: ASA 580 第 10, 11 段要求的; specific: 其他准则或审计师另要的 (第 13 段)
     standard_ref: str  # 要求这项声明的准则段落, 如 ASA 580.10, ASA 450.14
     status: ClauseStatus  # 写了, 不提供而审计师接受, 或没写
-    acceptance_reason: str | None = None  # refused_accepted 时必填: 审计师接受的理由
+    acceptance_reason: str | None = None  # refused_accepted 时审计师接受的理由, 选填 (需求 R358)
     opinion_effect: str | None = None  # refused_accepted 时必填: 对审计意见的影响
 
     @model_validator(mode="after")
     def accepted_refusal(self) -> Self:
-        """refused_accepted 须写明接受的理由与对意见的影响."""
-        if self.status is ClauseStatus.refused_accepted and not (self.acceptance_reason and self.opinion_effect):
-            raise ValueError(f"{self.code}: refused_accepted 须填 acceptance_reason 与 opinion_effect")
+        """refused_accepted 须写明对意见的影响 (接受的理由选填, 需求 R358)."""
+        if self.status is ClauseStatus.refused_accepted and not self.opinion_effect:
+            raise ValueError(f"{self.code}: refused_accepted 须填 opinion_effect")
         return self
 
 

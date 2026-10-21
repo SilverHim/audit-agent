@@ -554,8 +554,9 @@ def test_full_name_split_and_company_node_id() -> None:
 
 
 def test_representation_letter_contract() -> None:
-    """验收 1: REPLETTER 的字段与取值; 一项声明为 refused_accepted 而缺 acceptance_reason 或 opinion_effect (空串同),
-    kind 不是 core 或 specific, 或多给字段, 抛 ValidationError; 状态只收四种; 存储 JSON 往返不变."""
+    """验收 1: REPLETTER 的字段与取值; 一项声明为 refused_accepted 而缺 opinion_effect (空串同), kind 不是 core 或
+    specific, 或多给字段, 抛 ValidationError; acceptance_reason 选填 (需求 R358: 缺或空串都照存); 状态只收四种; 存储
+    JSON 往返不变."""
     letter = representation_letter()
     assert (letter.id, letter.status, letter.period_end, letter.run_id) == (
         "REPLETTER",
@@ -566,8 +567,11 @@ def test_representation_letter_contract() -> None:
     assert letter.schedule_ref == ObjectRef(kind="UncorrectedSchedule", id="SCHEDULE", version=1)
     accepted = letter.representations[2].model_dump()
     assert accepted["status"] is ClauseStatus.refused_accepted
+    for reason in (None, ""):
+        assert (
+            RepresentationClause.model_validate({**accepted, "acceptance_reason": reason}).acceptance_reason == reason
+        )
     for change in (
-        {"acceptance_reason": None},
         {"opinion_effect": None},
         {"opinion_effect": ""},
         {"kind": "other"},

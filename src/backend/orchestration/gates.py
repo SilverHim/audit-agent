@@ -74,13 +74,12 @@ V = TypeVar("V", bound=Versioned)
 
 @dataclass(frozen=True)
 class FieldRule:
-    """某道闸门某种决定的专属字段 (第 7 节必填表): required 必填 (含 reason), allowed 另外只允许在此填的."""
+    """某道闸门某种决定的专属字段 (第 7 节必填表): required 必填, allowed 另外只允许在此填的. 理由 (reason) 各种决定都
+    选填 (需求 R358), 不在其中."""
 
     required: tuple[str, ...] = ()
     allowed: tuple[str, ...] = ()
 
-
-REASON = FieldRule(("reason",))  # 通过以外的决定都须填理由
 
 # 各钩子的签名. deps 为外部依赖, eid 为项目, values 为当前检查点状态 (已补缺省值)
 Check = Callable[[AgentDeps, str, GateDecision, Versioned], Awaitable[None]]  # 专项取值校验, 不过抛 DecisionRejected
@@ -806,7 +805,7 @@ GATES: list[GateSpec] = [
         material_model=AcceptanceScorecard,
         material_id="SCORECARD",
         exits={"approve": "p1_await_data", "reject": "declined", "rerun": "p0_inputs"},
-        fields={GateVerdict.reject: REASON, GateVerdict.insufficient_info: REASON},
+        fields={},
         effects=acc01_apply,
         view=acc01_view,
         before=acc01_rerun,
@@ -821,8 +820,6 @@ GATES: list[GateSpec] = [
         exits={"approve": "assemble_pack", "reject": "p1_analytics"},
         fields={
             GateVerdict.approve: FieldRule(("materiality",), ("edits",)),
-            GateVerdict.reject: REASON,
-            GateVerdict.insufficient_info: REASON,
         },
         effects=pln_apply,
         view=pln_view,
@@ -839,8 +836,6 @@ GATES: list[GateSpec] = [
         exits={"approve": "schedule", "reject": "plan_draft"},
         fields={
             GateVerdict.approve: FieldRule(("plan_confirmation",)),
-            GateVerdict.reject: REASON,
-            GateVerdict.insufficient_info: REASON,
         },
         effects=pln15_apply,
         view=pln15_view,
@@ -858,9 +853,7 @@ GATES: list[GateSpec] = [
         material_id="SCHEDULE",
         exits={"approve": "report_draft", "reject": fin01_reject},
         fields={
-            GateVerdict.approve: FieldRule(("reason", "disposition")),  # FIN-01 通过也须填理由
-            GateVerdict.reject: REASON,
-            GateVerdict.insufficient_info: REASON,
+            GateVerdict.approve: FieldRule(("disposition",)),
         },
         effects=fin01_apply,
         view=fin01_view,
@@ -875,7 +868,7 @@ GATES: list[GateSpec] = [
         material_model=AuditReportVersion,
         pick=latest_report,
         exits={"approve": "archive", "reject": "report_draft"},
-        fields={GateVerdict.reject: FieldRule(("reason", "annotations")), GateVerdict.insufficient_info: REASON},
+        fields={GateVerdict.reject: FieldRule(("annotations",))},
         effects=rpt01_apply,
         view=rpt01_view,
         rebuild=rpt01_rebuild,

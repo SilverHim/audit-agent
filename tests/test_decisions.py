@@ -236,7 +236,6 @@ async def test_submit_insufficient_info_stays_at_gate() -> None:
         (acc01_decision(GateVerdict.approve, gate=GateId.FIN_01), "NOT_AT_GATE"),
         (acc01_decision(GateVerdict.approve, target_version=2), "VERSION_MISMATCH"),
         (acc01_decision(GateVerdict.approve, target_id="ANALYTICS"), "VERSION_MISMATCH"),
-        (acc01_decision(GateVerdict.reject, reason=None), "MISSING_FIELD"),
         (acc01_decision(GateVerdict.approve, disposition=OpinionType.unqualified), "FIELD_NOT_ALLOWED"),
         # 需求 R203: PLN-15 的确认只由 PLN-15 的登记行 (R205) 允许, 其他闸门带它被拒
         (acc01_decision(GateVerdict.approve, plan_confirmation=PLAN_CONFIRMATION), "FIELD_NOT_ALLOWED"),
@@ -816,8 +815,6 @@ async def assert_rejected(
     ("decision", "code", "detail"),
     [
         (pln_decision(GateVerdict.approve, materiality=None), "MISSING_FIELD", "materiality"),
-        (pln_decision(GateVerdict.reject, reason=None), "MISSING_FIELD", "reason"),
-        (pln_decision(GateVerdict.insufficient_info, reason=""), "MISSING_FIELD", "reason"),
         (pln_decision(GateVerdict.reject, materiality=CHOICE), "FIELD_NOT_ALLOWED", "materiality"),
         (pln_decision(GateVerdict.reject, edits=[edit()]), "FIELD_NOT_ALLOWED", "edits"),
         (pln_decision(GateVerdict.approve, disposition=OpinionType.qualified), "FIELD_NOT_ALLOWED", "disposition"),
@@ -856,8 +853,6 @@ async def assert_rejected(
     ],
     ids=[
         "approve_without_materiality",
-        "reject_without_reason",
-        "insufficient_info_empty_reason",
         "reject_with_materiality",
         "reject_with_edits",
         "disposition",
@@ -891,7 +886,13 @@ async def test_pln_decision_rejected(pln_gate: Started, decision: GateDecision, 
             "RISK-CASH-EXI",
         ),
         (pln_decision(GateVerdict.reject, edits=[edit("RISK-XXX", 9)]), "FIELD_NOT_ALLOWED", "edits"),
-        (pln_decision(GateVerdict.reject, reason=None, edits=[edit("RISK-XXX", 9)]), "MISSING_FIELD", "reason"),
+        (
+            pln_decision(
+                GateVerdict.approve, materiality=None, disposition=OpinionType.qualified, edits=[edit("RISK-XXX", 9)]
+            ),
+            "MISSING_FIELD",
+            "materiality",
+        ),
         (pln_decision(GateVerdict.approve, id="D-ACC", materiality=None), "MISSING_FIELD", "materiality"),
         (
             pln_decision(GateVerdict.approve, id="D-ACC", materiality=CHOICE.model_copy(update={"pct": 0.02})),
@@ -971,6 +972,29 @@ async def test_valid_pln_decision_accepted(decision: GateDecision) -> None:
     await s.submit.submit(EID, decision)
 
     assert await s.output_store.get(EID, GateDecision, decision.id) == decision
+
+
+# 需求 R358: 理由选填. 原须填理由的闸门决定 (通过以外; FIN-01 一律), 理由缺省或为空串都能提交
+NO_REASON = pytest.mark.parametrize("reason", [None, ""], ids=["omitted", "empty"])
+
+
+async def assert_accepted_without_reason(s: Started, decision: GateDecision) -> None:
+    """提交成功: 决定照原样存 (理由为空), decision 留痕照记空理由. 调用方先 stop_after_submit, 只看这一步."""
+    await s.submit.submit(EID, decision)
+    assert await s.output_store.get(EID, GateDecision, decision.id) == decision
+    [entry] = [e for e in decision_trail(s) if e.idempotency_key == decision.id]
+    assert entry.payload["reason"] == decision.reason
+
+
+@NO_REASON
+@pytest.mark.parametrize("verdict", [GateVerdict.reject, GateVerdict.insufficient_info])
+@pytest.mark.parametrize("gate", [GateId.ACC_01, GateId.PLN_01_03])
+async def test_non_approve_without_reason_accepted(gate: GateId, verdict: GateVerdict, reason: str | None) -> None:
+    """需求 R358 验收 1: ACC-01 与 PLN-01/03 的驳回与信息不足不填理由也能提交, 不报 MISSING_FIELD."""
+    s = await (started() if gate is GateId.ACC_01 else at_pln_gate())
+    stop_after_submit(s)
+    decide = acc01_decision if gate is GateId.ACC_01 else pln_decision
+    await assert_accepted_without_reason(s, decide(verdict, reason=reason))
 
 
 async def test_reused_acc01_decision_id_rejected() -> None:
@@ -1636,8 +1660,6 @@ async def test_plan_page_at_gate(plan_gate: Started) -> None:
             )
             for b in ("", " \n ")
         ],
-        (plan_decision(GateVerdict.reject, reason=None), "MISSING_FIELD", "reason"),
-        (plan_decision(GateVerdict.insufficient_info, reason=""), "MISSING_FIELD", "reason"),
         *[
             (plan_decision(v, plan_confirmation=PLAN_CONFIRMATION), "FIELD_NOT_ALLOWED", "plan_confirmation")
             for v in (GateVerdict.reject, GateVerdict.insufficient_info)
@@ -1839,6 +1861,34 @@ class LostCheckpoint:
 
     async def aupdate_state(self, *args: Any, **kwargs: Any) -> Any:
         raise RuntimeError("crash before checkpoint")
+
+
+@NO_REASON
+@needs("q1_snapshot", "q1_supplements")
+async def test_plan_info_and_reject_without_reason(reason: str | None) -> None:
+    """需求 R358: PLN-15 的信息不足与驳回不填理由都能提交, 决定与留痕照记空理由; 驳回后 A4 照样起草 PLAN-2
+    (revision_reason 为空), 提示词有 "## Revision 2" 而不列审计师的理由 (发给大模型的输入里理由为空时略去)."""
+    s = await at_plan_gate()
+    asked = plan_decision(GateVerdict.insufficient_info, id="D-P15I", reason=reason)
+    reject = plan_decision(GateVerdict.reject, id=PLAN_REJECT_ID, reason=reason)
+    for decision in (asked, reject):
+        await s.submit.submit(EID, decision)
+        await wait_idle(s.runner, EID)
+        assert s.runner.run_error(EID) is None, s.runner.run_error(EID)
+        assert await s.output_store.get(EID, GateDecision, decision.id) == decision
+        [entry] = [e for e in decision_trail(s) if e.idempotency_key == decision.id]
+        assert entry.payload["reason"] == reason
+
+    assert await plan_gate_view(s) == ("PLAN-2", 1, [PLAN_REJECT_ID])
+    [plan2] = [p for p in stored_plans(s) if p.id == "PLAN-2"]
+    assert (plan2.revision, plan2.addresses_decision_id, plan2.revision_reason) == (2, PLAN_REJECT_ID, reason)
+    *_, prompt = (
+        "\n".join(m["content"] for m in e.payload["messages"])
+        for e in trail_of(s, TrailKind.llm_call)
+        if e.procedure_id == "PLN-15"
+    )
+    assert "## Revision 2" in prompt and "Redraft it from the inputs above." in prompt
+    assert "Reason given by the auditor" not in prompt
 
 
 @needs("q1_snapshot", "q1_supplements")

@@ -29,14 +29,14 @@ from tests.test_review_decisions import record
 from tests.test_review_queue import QUEUE, make_task
 
 EID = ENGAGEMENT.id
-# 改为登记表之前的必填表与只允许字段 (逐条等价的基准)
+# 改为登记表之前的必填表与只允许字段 (逐条等价的基准); 必填表去掉理由: 需求 R358 起各种决定的理由都选填
 OLD_REQUIRED: dict[Decision, list[str]] = {
     Decision.confirm: [],
-    Decision.override: ["reason", "override_conclusion"],
-    Decision.misstatement: ["reason", "misstatement_draft"],
-    Decision.rerun: ["reason"],
-    Decision.manual_result: ["reason", "manual_result"],
-    Decision.dispute_resolution: ["reason", "dispute_resolution"],
+    Decision.override: ["override_conclusion"],
+    Decision.misstatement: ["misstatement_draft"],
+    Decision.rerun: [],
+    Decision.manual_result: ["manual_result"],
+    Decision.dispute_resolution: ["dispute_resolution"],
 }
 OLD_ALLOWED: dict[Decision, set[str]] = {
     Decision.confirm: set(),
@@ -119,13 +119,15 @@ def test_every_allowed_decision_has_field_rules() -> None:
 
 @pytest.mark.parametrize("decision", list(Decision))
 def test_check_fields_same_as_old_tables(decision: Decision) -> None:
-    """每种决定: 只填必填的通过; 缺任一必填报 MISSING_FIELD; 填了不允许的专用字段报 FIELD_NOT_ALLOWED."""
-    required = {name: FILLED.get(name, "复核意见") for name in OLD_REQUIRED[decision]}
+    """每种决定: 只填必填的通过 (理由不填或为空串, 需求 R358); 缺任一必填报 MISSING_FIELD; 填了不允许的专用字段报
+    FIELD_NOT_ALLOWED."""
+    required = {name: FILLED[name] for name in OLD_REQUIRED[decision]}
     if decision is Decision.dispute_resolution:  # 仲裁取 a6_upheld: 不另填 neither 的两项
         required["dispute_resolution"] = DisputeResolution.a6_upheld
     base = record("T-1", decision, **({"reason": None} | required))
     for kind in (k for k in TaskKind if (k, decision) not in KIND_ROWS):  # 按任务类型登记的行另测
         check_review_fields(base, kind)
+        check_review_fields(base.model_copy(update={"reason": ""}), kind)
         for name in OLD_REQUIRED[decision]:
             with pytest.raises(DecisionRejected) as e:
                 check_review_fields(base.model_copy(update={name: None}), kind)
@@ -137,8 +139,8 @@ def test_check_fields_same_as_old_tables(decision: Decision) -> None:
 
 
 def test_registered_row_applies_to_its_kind_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    """临时登记 (manual, manual_result): 只要理由, 可附 rerun_params. 只对 manual 任务生效, failed 任务仍用通用行."""
-    rules = ReviewFields(("reason",), frozenset({"manual_result", "rerun_params"}))
+    """临时登记 (manual, manual_result): 不要结果, 可附 rerun_params. 只对 manual 任务生效, failed 任务仍用通用行."""
+    rules = ReviewFields((), frozenset({"manual_result", "rerun_params"}))
     monkeypatch.setitem(REVIEW_FIELDS, (TaskKind.manual, Decision.manual_result), rules)
     decision: ReviewRecord = record("T-1", Decision.manual_result, rerun_params={"window_days": 25})
     assert review_fields(TaskKind.manual, Decision.manual_result) is rules
@@ -155,7 +157,7 @@ async def test_submit_checks_fields_by_task_kind(monkeypatch: pytest.MonkeyPatch
     s = Started(runner, store, runner.deps.engagement_store)  # type: ignore[arg-type]
     task = await pending_task(store)
     assert task.kind is TaskKind.failed
-    strict = ReviewFields(("reason", "rerun_params"), frozenset({"rerun_params"}))
+    strict = ReviewFields(("rerun_params",), frozenset({"rerun_params"}))
     decision = record(task.id, Decision.rerun, id="D-ACC04")
 
     monkeypatch.setitem(REVIEW_FIELDS, (TaskKind.failed, Decision.rerun), strict)

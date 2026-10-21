@@ -7,7 +7,7 @@ FIN-09 更正验证 → CorrectionVerificationDraft，每条 verifying 错报调
   task.risks                    本程序不按审计目标装配，为空
   data.misstatement             Misstatement：id、version、judgment_id、type、account、account_code、assertion、amount_cents、
                                 direction、status
-  data.source_judgment          错报的来源判断：id、procedure_id、subject_id、conclusion
+  data.source_judgment          错报的来源判断：id、procedure_id、subject_id、conclusion（为空时略去，需求 R358）
   data.matched_line_ids         规则部分匹配的更正分录行 ID（来源对象与科目，没有科目时按金额），没有时为空
   data.entry_lines              匹配行所在凭证的全部行（V01 的列）：source_type、id、entry_no、posting_date、account_code、
                                 account_name、account_type、account_category、debit_cents、credit_cents、description、

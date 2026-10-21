@@ -148,7 +148,7 @@ class CorrectionNoticeIn(Model):
     kind: CorrectionNoticeKind  # 更正分录已入账, 或停止等待
     misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
     adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted; 为空时载入全部未载入的)
-    reason: str | None = None  # 理由, stop_waiting 必填
+    reason: str | None = None  # 理由, 选填 (需求 R358)
 
 
 class AdjustmentEntryView(Model):

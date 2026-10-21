@@ -233,19 +233,19 @@ CHECKED = [  # (人给载荷相对合格载荷的改动, 错误码, 消息含; {
         "classification, 不是 verification",
     ),
     ({"misstatement_id": OTHER}, "INVALID_VALUE", "本任务的错报 {subject}"),
-    # 内容 (第 1 轮审核 R159-02): 分类须有类型与舞弊迹象, 舞弊迹象为真须有理由
+    # 内容 (第 1 轮审核 R159-02): 分类须有类型与舞弊迹象; 舞弊迹象为真时的理由选填 (需求 R358), 见
+    # test_reviewers_fraud_flag_without_reason_accepted
     (
         {"type": None, "fraud_indicative": None},
         "INVALID_VALUE",
         "缺 misstatement_update.type, misstatement_update.fraud_indicative",
     ),
-    ({"fraud_indicative": True, "fraud_reason": " "}, "INVALID_VALUE", "缺 misstatement_update.fraud_reason"),
 ]
 
 
 @pytest.mark.parametrize("decision", [Decision.override, Decision.manual_result])
 @pytest.mark.parametrize(
-    ("changes", "code", "detail"), CHECKED, ids=["base_version", "kind", "other_misstatement", "empty", "fraud_reason"]
+    ("changes", "code", "detail"), CHECKED, ids=["base_version", "kind", "other_misstatement", "empty"]
 )
 async def test_reviewers_update_checked_before_writing(
     decision: Decision, changes: dict[str, Any], code: str, detail: str
@@ -263,6 +263,25 @@ async def test_reviewers_update_checked_before_writing(
     update = MisstatementUpdate(**(base | {k: other if v == OTHER else v for k, v in changes.items()}))
     decided = record(task, decision, id="D-H", misstatement_update=update, **fields)
     await assert_rejected(s, decided, code, detail.format(subject=subject))
+
+
+@pytest.mark.parametrize("fraud_reason", [None, "", " "], ids=["omitted", "empty", "blank"])
+async def test_reviewers_fraud_flag_without_reason_accepted(fraud_reason: str | None) -> None:
+    """需求 R358: 推翻 CSH02 的判断不填理由, 人给的分类载荷舞弊迹象为真而理由留空 (缺省, 空串或空白) 也能提交:
+    M-D-CSH02-091 v2 舞弊迹象为真, 理由照载荷记 (缺省的不改, 仍为空); 决定与 decision 留痕照记空理由. 大模型一路
+    仍须写理由 (judgment_engine 的语义校验)."""
+    waiting = await at_fin03()
+    update = JUDGMENTAL.model_copy(update={"fraud_indicative": True, "fraud_reason": fraud_reason})
+    override = record(
+        CSH02_TASK, Decision.override, id="D-O", reason=None, override_conclusion="x", misstatement_update=update
+    )
+    commit = await submit(waiting, override)
+
+    assert one(commit, ReviewRecord, "D-O").reason is None
+    flagged = one(commit, Misstatement, CSH02)
+    assert (flagged.version, flagged.fraud_indicative, flagged.fraud_reason) == (2, True, fraud_reason)
+    [row] = decision_rows(waiting, "D-O")
+    assert row.payload["reason"] is None
 
 
 async def test_confirm_rejected_when_misstatement_moved_on(waiting: Started) -> None:
@@ -581,17 +600,19 @@ def test_apply_writes_only_given_fields(
     assert apply_misstatement_update(base, update, "J-1") == expected
 
 
+@pytest.mark.parametrize("reason", ["复核意见", None], ids=["reason", "no_reason"])
 @pytest.mark.parametrize("decision", [Decision.override, Decision.misstatement])
-def test_unattributed_v02_takes_reviewers_verification(decision: Decision) -> None:
+def test_unattributed_v02_takes_reviewers_verification(decision: Decision, reason: str | None) -> None:
     """验收 7: FIN-09 的 unattributed 任务 (目标为 V02 例外) 的 override 与 misstatement 须带人给的载荷 (缺了
     MISSING_FIELD); 带了: 人工判断 -H1 带该载荷, 原错报按载荷出新版本 (communicated, 须重新沟通); misstatement 另建
-    M-{决定 ID} identified, 来源为该人工判断."""
+    M-{决定 ID} identified, 来源为该人工判断. 理由选填 (需求 R358): 人工判断的结论 override 取推翻的结论, misstatement
+    取理由, 没填为空串."""
     exception = v02(ExceptionDisposition.unattributed)
     task = fin09_task(exception, TaskKind.unattributed)
     fields: dict[str, Any] = {"override_conclusion": "分录冲回的科目不对"} if decision is Decision.override else {}
     if decision is Decision.misstatement:
         fields["misstatement_draft"] = DUPLICATE.model_copy(update={"amount_cents": 25000})
-    bare = record(task.id, decision, id="D-U", **fields)
+    bare = record(task.id, decision, id="D-U", reason=reason, **fields)
     with pytest.raises(DecisionRejected) as e:
         check_review_fields(bare, task.kind, "verification")
     assert (e.value.code, e.value.message) == ("MISSING_FIELD", "misstatement_update")
@@ -603,6 +624,7 @@ def test_unattributed_v02_takes_reviewers_verification(decision: Decision) -> No
     human_id = f"J-FIN-09-1-{XJ499}-H1"
     [human] = [o for o in effects if isinstance(o, Judgment)]
     assert (human.id, human.misstatement_update) == (human_id, RECOMMUNICATE)
+    assert human.conclusion == fields.get("override_conclusion", reason or "")
     misstatements = {m.id: m for m in effects if isinstance(m, Misstatement)}
     assert misstatements.pop(XJ499) == VERIFYING.model_copy(
         update={"version": 5, "status": "communicated", "needs_recommunication": True}

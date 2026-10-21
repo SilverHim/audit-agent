@@ -185,7 +185,6 @@ async def put(store: FakeOutputStore, *objs: Any) -> None:
             None,
         ),
         (record(decision=Decision.override), "MISSING_FIELD", "override_conclusion"),
-        (record(decision=Decision.misstatement, reason=None, misstatement_draft=DRAFT), "MISSING_FIELD", "reason"),
         (record(misstatement_draft=DRAFT), "FIELD_NOT_ALLOWED", "misstatement_draft"),
         # 需求 R159 验收 5: 模板没有错报更新载荷类别 (REV-03, 同 REV-02) 的任务不收载荷
         (
@@ -233,6 +232,10 @@ async def test_target_updated_after_task_rejected() -> None:
         record(decision=Decision.override, override_conclusion="控制权在验收时转移"),
         record(decision=Decision.misstatement, misstatement_draft=DRAFT),
         record(FAILED, Decision.rerun),
+        # 需求 R358: 理由选填, 不填 (缺省或空串) 也通过
+        record(decision=Decision.override, override_conclusion="控制权在验收时转移", reason=None),
+        record(decision=Decision.misstatement, misstatement_draft=DRAFT, reason=""),
+        record(FAILED, Decision.rerun, reason=None),
     ],
 )
 async def test_valid_review_record_passes(decision: ReviewRecord) -> None:
@@ -726,13 +729,17 @@ async def test_misstatement_takes_reviewer_draft() -> None:
     assert (await s.runner.app.aget_state(CONFIG)).values["misstatements"] == [misstatement]
 
 
-async def test_misstatement_on_unattributed_exception() -> None:
+@pytest.mark.parametrize("reason", ["复核意见", None, ""], ids=["given", "omitted", "empty"])
+async def test_misstatement_on_unattributed_exception(reason: str | None) -> None:
     """R19 验收 2 (R59 联调后改): REV-02 没解释跨期例外, 对以例外为目标的 unattributed 任务认定错报: 同 override 建
     人工判断 -H1 (结论取决定理由, 建议 misstatement, 草稿取决定的, 证据取例外的, 解释该例外, 已确认); 例外出新版本
-    attributed, attributed_by 为该人工判断; 错报记该人工判断 (exception_id 空), 报告据此可引用已确认的判断."""
+    attributed, attributed_by 为该人工判断; 错报记该人工判断 (exception_id 空), 报告据此可引用已确认的判断.
+    需求 R358: 理由选填, 不填也能提交, 决定与留痕照记空理由, 人工判断的结论为空串."""
     s = await waiting_on_cutoff(attributes=False)
     before = len(s.output_store.commits)
-    decision = record(f"T-{CUTOFF}-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT)
+    decision = record(
+        f"T-{CUTOFF}-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT, reason=reason
+    )
 
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
@@ -747,10 +754,14 @@ async def test_misstatement_on_unattributed_exception() -> None:
         ProposedAction.misstatement,
     )
     assert (human.conclusion, human.misstatement_draft, human.exception_ids) == (
-        "复核意见",
+        reason or "",
         NUMBAT_CUTOFF_DRAFT,
         [CUTOFF],
     )
+    stored = await s.output_store.get(EID, ReviewRecord, "D-M")
+    assert stored is not None and stored.reason == reason
+    [entry] = [e for e in decisions_in_trail(s) if e.idempotency_key == "D-M"]
+    assert entry.payload["reason"] == reason
     [misstatement] = [o for o in commit if isinstance(o, Misstatement)]
     assert (misstatement.judgment_id, misstatement.exception_id) == (human_id, None)
     [exception] = [o for o in commit if isinstance(o, AuditException)]

@@ -10023,7 +10023,8 @@
           },
           "reason": {
             "type": "string",
-            "title": "Reason"
+            "title": "Reason",
+            "default": ""
           }
         },
         "additionalProperties": false,
@@ -10032,8 +10033,7 @@
           "target_id",
           "target_version",
           "field",
-          "new_value",
-          "reason"
+          "new_value"
         ],
         "title": "GateEdit",
         "description": "PLN-01/03 闸门中对一个风险项等级的修改."

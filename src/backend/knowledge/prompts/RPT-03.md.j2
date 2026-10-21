@@ -6,10 +6,10 @@ RPT-03 报告文本生成 → ReportDraft，每个 revision 调用一次；只�
   task.params    period_end
   revision       本次起草的 revision，首稿为 1
   opinion_type   FIN-01 确定的意见类型：unqualified 或 qualified
-  fin01_reason   FIN-01 GateDecision.reason
+  fin01_reason   FIN-01 GateDecision.reason（选填，需求 R358；为空时不列）
   schedule       UncorrectedSchedule：items[misstatement_id、amount_cents、direction]、total_cents、materiality_cents
   misstatements  schedule.items 对应的 Misstatement：id、judgment_id、type、account、assertion、amount_cents、direction
-  judgments      上述错报所依据的已确认 Judgment（当前结果）：key（引用键，程序:对象，人工判断另加 :H{n}）、id、version、procedure_id、subject_id、conclusion、evidence
+  judgments      上述错报所依据的已确认 Judgment（当前结果）：key（引用键，程序:对象，人工判断另加 :H{n}）、id、version、procedure_id、subject_id、conclusion（人工判断以审计师理由为结论，为空时不列）、evidence
   previous       上一 revision 的 {opinion, basis_for_opinion}，首稿为 null
   previous_language  上一 revision 的语言（起草它的执行记录的 language）与本次不同时为它（zh 或 en），相同或首稿为 null；
                  不同时要求按工作语言重写全文、保持意思，不再要求措辞不变（R341 审核 01）
@@ -32,8 +32,10 @@ Opinion type: **{{ opinion_type }}**, decided by the auditor at FIN-01. Do not c
 
 ## Inputs
 
+{% if fin01_reason %}
 Auditor's reason at FIN-01: {{ fin01_reason }}
 
+{% endif %}
 {% if qualified %}
 Uncorrected misstatements:
 ```json
@@ -44,7 +46,7 @@ Total uncorrected misstatements: {{ schedule.total_cents }} cents.
 
 Confirmed judgments behind them (cite them by key):
 {% for j in judgments %}
-- key `{{ j.key }}` ({{ j.procedure_id }}, subject {{ j.subject_id }}): {{ j.conclusion }}
+- key `{{ j.key }}` ({{ j.procedure_id }}, subject {{ j.subject_id }}){{ ": " ~ j.conclusion if j.conclusion else "" }}
   Evidence: {% for e in j.evidence %}{{ e.type }} {{ e.source_id }} ({{ e.locator }}{% if e.page %}, p.{{ e.page }}{% endif %}){% if not loop.last %}; {% endif %}{% endfor %}
 {% endfor %}
 {% endif %}

@@ -7,7 +7,7 @@ FIN-03 错报性质分类 → MisstatementClassificationDraft，每条未分类�
   task.risks                    本程序不按审计目标装配，为空
   data.misstatement             Misstatement：id、version、judgment_id、type（认定时草稿给的，可被本次分类改）、account、
                                 account_code、assertion、amount_cents、direction、status
-  data.source_judgment          错报的来源判断：id、procedure_id、subject_id、conclusion、evidence
+  data.source_judgment          错报的来源判断：id、procedure_id、subject_id、conclusion（为空时略去，需求 R358）、evidence
   data.journal_lines            分录行：来源判断的对象为凭证号时该凭证的全部行，加以该对象为原始单据（source_doc）的行，
                                 按 id 去重：source_type、id、entry_no、posting_date、created_by、approved_by、account_code、
                                 debit_cents、credit_cents、description、source_doc；没有时为空

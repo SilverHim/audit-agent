@@ -461,7 +461,6 @@ def written(s: Started, oid: str) -> list[tuple[str, str, int]]:
 
 REJECTED = [  # (说明, 决定, 错误码, 消息含)
     ("缺结果", submitted(manual_result=None), "MISSING_FIELD", "manual_result"),
-    ("缺理由", submitted(reason=None), "MISSING_FIELD", "reason"),
     ("缺执行日期", submitted(manual_result=letter_result(performed_on=None)), "MISSING_FIELD", "performed_on"),
     ("confirm", submitted(Decision.confirm, reason=None), "DECISION_NOT_ALLOWED", "confirm"),
     ("rerun", submitted(Decision.rerun), "DECISION_NOT_ALLOWED", "rerun"),
@@ -501,8 +500,9 @@ REJECTED = [  # (说明, 决定, 错误码, 消息含)
 ]
 
 
-async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) -> None:
-    """R92 验收 3 至 5, 一次运行:
+@pytest.mark.parametrize("reason", ["Letter received from the CFO", None], ids=["reason", "no_reason"])
+async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path, reason: str | None) -> None:
+    """R92 验收 3 至 5, 一次运行 (理由选填, 需求 R358: 带与不带理由各一遍, 照原样存, 留痕照记):
     - 派发: A10 调 owner.prepare 一次, 同一事务写入 RUN-TST-M01-1 succeeded, manual 任务 (带请求与材料) 与 TST-M01
       awaiting_human; 节点内等待, 载荷同其他人工等待;
     - 拒绝: 逐条提交 REJECTED, 错误码与消息对, Store, 留痕与检查点都不变;
@@ -532,7 +532,7 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
         except (AssertionError, DecisionRejected) as e:
             raise AssertionError(f"{name}: {e}") from e
 
-    decision = submitted()
+    decision = submitted(reason=reason)
     await submit_and_wait(s, decision)
     assert written(s, "D-M01") == [("Procedure", TST, 3), ("ReviewRecord", "D-M01", 1), ("ReviewTask", TASK, 2)]
     stored = latest(s, ReviewRecord, "D-M01")
@@ -545,7 +545,8 @@ async def test_manual_task_waits_rejects_and_accepts_the_result(tmp_path: Path) 
         ProcedureStatus.completed,
     )
     assert [j.id for j in s.output_store.rows if isinstance(j, Judgment) and j.procedure_id == TST] == []
-    assert [e.idempotency_key for e in entries(s, TrailKind.decision)].count("D-M01") == 1
+    [entry] = [e for e in entries(s, TrailKind.decision) if e.idempotency_key == "D-M01"]
+    assert entry.payload["reason"] == reason
     assert transitions(s) == [("planned", "awaiting_human"), ("awaiting_human", "completed")]
     assert (await s.next_nodes()) == ("gate_fin",)
     assert [c for c in CALLS if c[0] != "check"] == [("prepare", TST), ("collect", TST)]
@@ -566,7 +567,7 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path, monkeypatc
     - 派发: A10 调 owner.prepare 一次, 不调大模型; 同一事务写入 RUN-TST-M02-1 succeeded, manual 任务 (材料为 owner 给的)
       与 TST-M02 v2 awaiting_human; 载荷同其他人工等待, 总览为等复核, 1 条待决任务;
     - 按程序核对: amount_cents -1 被 owner.check 拒绝 (INVALID_VALUE, 消息为 owner 给的原文), 什么都不写; 同时缺
-      理由时报通用核对的 MISSING_FIELD, owner.check 不调 (在通用核对之后);
+      执行日期时报通用核对的 MISSING_FIELD, owner.check 不调 (在通用核对之后);
     - 整理: 提交 4853 后节点读回决定, 调 owner.collect 一次, 以 A6 写入 X-TST-M02-1-MAN-1 (4853, 派发的那次执行),
       程序取决定写出的 completed 版本, 不再执行一次, 继续执行 FIN-04 停在 FIN-01 闸门;
     - A10 派发, DecisionSubmit 核对与节点整理调的是同一个 owner 实例 (组装时找好的 deps.manual_owners)."""
@@ -590,7 +591,10 @@ async def test_reply_dispatched_checked_and_collected(tmp_path: Path, monkeypatc
     overview = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).overview(EID)
     assert (overview.awaiting_review, overview.pending_tasks) == (True, 1)
 
-    await assert_rejected(s, replied(-1).model_copy(update={"reason": None}), "MISSING_FIELD", "reason")
+    negative = replied(-1)
+    assert negative.manual_result is not None
+    undated = negative.manual_result.model_copy(update={"performed_on": None})
+    await assert_rejected(s, negative.model_copy(update={"manual_result": undated}), "MISSING_FIELD", "performed_on")
     assert CALLS == [("prepare", REPLY)]
     await assert_rejected(s, replied(-1), "INVALID_VALUE", "amount_cents 不得为负")
     assert CALLS[-1] == ("check", REPLY)

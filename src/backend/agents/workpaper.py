@@ -216,6 +216,12 @@ def source_judgment(misstatement: Misstatement, judgments: dict[str, Judgment]) 
     return source
 
 
+def source_data(source: Judgment, fields: set[str]) -> dict[str, Any]:
+    """来源判断给提示词的 JSON (fields 中的字段). 结论为空时略去该项: 对例外认定错报的人工判断以审计师的理由为结论,
+    理由选填 (需求 R358)."""
+    return source.model_dump(mode="json", include=fields if source.conclusion else fields - {"conclusion"})
+
+
 # ── FIN-09 更正验证 (需求 R165): 规则部分在代码中做, 口径见接口文档第 6 节 FIN-09 段 ──
 
 
@@ -341,7 +347,7 @@ def verification_subject(
     residual = misstatement.amount_cents - corrected
     data = {
         "misstatement": misstatement.model_dump(mode="json", include=MISSTATEMENT_FIELDS),
-        "source_judgment": source.model_dump(mode="json", include=VERIFY_SOURCE_FIELDS),
+        "source_judgment": source_data(source, VERIFY_SOURCE_FIELDS),
         "matched_line_ids": [r["id"] for r in lines],
         "entry_lines": JSON_ROWS.dump_python(entry_lines, mode="json"),
         "corrected_cents": corrected,
@@ -554,7 +560,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             }
             data = {
                 "misstatement": misstatement.model_dump(mode="json", include=MISSTATEMENT_FIELDS),
-                "source_judgment": source.model_dump(mode="json", include=SOURCE_FIELDS),
+                "source_judgment": source_data(source, SOURCE_FIELDS),
                 "journal_lines": [
                     {k: v for k, v in row.items() if k in LINE_FIELDS}
                     for row in journal_rows([lines[i] for i in sorted(lines)])

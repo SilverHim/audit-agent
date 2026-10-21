@@ -2800,7 +2800,7 @@ export type GateEdit = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
