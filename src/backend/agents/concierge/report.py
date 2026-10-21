@@ -1,6 +1,7 @@
 """A10 的 RPT-03: 起草审计报告初稿, RPT-01 退回后按批注修订. 返回字段: report_versions, review_tasks, procedure_runs.
 
-模型只写意见段与形成意见的基础段, 其余段落取 templates/report.yaml 中该意见类型的固定文本, 代入占位符. 由
+模型只写意见段与形成意见的基础段, 其余段落取 templates/report.yaml 中该语言 (执行记录的 language, 需求 R341), 该意见
+类型的固定文本, 代入占位符; 两段的标题与日期写法同取这一份. 由
 ConciergeAgent 按程序编号分派到 draft (执行) 与 report_patch (解读), 见 agents/concierge/agent.py.
 """
 
@@ -25,10 +26,7 @@ from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import citation_keys
 from backend.services.staleness import current_results
 
-
-def report_date_text(day: date) -> str:
-    """报告中的日期写法 (RPT-03 提示词: Australian English, 如 "30 June 2026")."""
-    return f"{day.day} {day:%B %Y}"
+DATE_EXAMPLE = date(2025, 7, 1)  # 提示词里日期写法的示例 (按报告语言写出, 如 1 July 2025)
 
 
 async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
@@ -54,6 +52,10 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     owner = await deps.users.get(engagement.owner_id)
     if owner is None:
         raise LookupError(f"项目负责人 {engagement.owner_id} 不存在, 报告签名缺审计师姓名")
+    language = ctx.run.language  # 报告的语言: 执行记录的 (需求 R341), 不读项目当前的值
+    library = deps.library
+    opinion_heading, basis_heading = library.report_headings(language)[opinion]
+    templates = library.report_sections(opinion, language)
     variables = {
         "client_name": profile.legal_name,
         "task": {"params": ctx.run.model_dump(mode="json")["params_snapshot"]},
@@ -63,6 +65,10 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
         "previous": previous,
         "annotations": annotations,
         "standards": deps.judgments.standards(ctx.template),
+        "headings": {"opinion": opinion_heading, "basis_for_opinion": basis_heading},
+        # 审计师责任段的标题 (固定段落首行), 基础段里要指向它; 日期写法的示例
+        "responsibilities_heading": templates[ReportSection.auditor_responsibilities].splitlines()[0],
+        "date_example": library.report_date(DATE_EXAMPLE, language),
         **misstatement_inputs(ctx),
     }
     cited = citable(ctx)
@@ -84,10 +90,10 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     refs = [JudgmentRef(id=keys[key].id, version=keys[key].version) for key in output.judgment_keys]
     values = {
         "entity_name": profile.legal_name,
-        "period_end": report_date_text(engagement.period_end),
+        "period_end": library.report_date(engagement.period_end, language),
         "auditor_name": owner.full_name,
     }
-    fixed = {section: text.format(**values) for section, text in deps.library.report_sections(opinion).items()}
+    fixed = {section: text.format(**values) for section, text in templates.items()}
     return AuditReportVersion(
         id=f"REPORT-{revision}",
         revision=revision,

@@ -3,7 +3,7 @@ import re
 import shutil
 from bisect import bisect_left
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from functools import cache, cached_property
@@ -40,6 +40,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementStatus,
     Model,
+    OpinionType,
     Phase,
     Procedure,
     ReportingFramework,
@@ -58,7 +59,14 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
 from backend.services.features import FEATURES
 from backend.services.judgment_engine import output_model
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, prompt_env, ref_problem, render_text
+from backend.services.procedure_library import (
+    ProcedureLibrary,
+    highest_risk,
+    prompt_env,
+    ref_problem,
+    render_text,
+    report_templates,
+)
 from tests.external import optional, supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
@@ -1814,8 +1822,11 @@ def test_procedure_standards_have_text(procedure_id: str) -> None:
 REPORT_SECTIONS = ["directors_responsibilities", "auditor_responsibilities", "other_legal_and_regulatory", "signature"]
 
 
-def report_template() -> dict[str, Any]:
-    return yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+def report_template(language: str = "en") -> dict[str, Any]:
+    """report.yaml 中该语言的固定段落: 意见类型 → 段落 (需求 R341 起按语言各一份)."""
+    doc = yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+    sections: dict[str, Any] = doc[language]["sections"]
+    return sections
 
 
 @cache
@@ -1830,8 +1841,9 @@ def illustration_1a() -> str:
 
 
 @pytest.mark.parametrize("opinion", ["unqualified", "qualified"])
-def test_report_template_sections(opinion: str) -> None:
-    sections = report_template()[opinion]
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_report_template_sections(opinion: str, language: str) -> None:
+    sections = report_template(language)[opinion]
     assert list(sections) == REPORT_SECTIONS
     for name in ("directors_responsibilities", "auditor_responsibilities", "signature"):
         assert sections[name].strip(), name
@@ -1872,6 +1884,55 @@ def test_report_template_placeholders_and_listed_entity_content() -> None:
         "auasb.gov.au",
     ):
         assert listed_only not in lowered, listed_only
+
+
+def test_chinese_report_template_follows_the_english_one() -> None:
+    """需求 R341: report.yaml 的中文一份与英文逐段对应 (按 ASA 700 Illustration 1A 译出, 不加减内容; 段号对照见确认
+    材料 R341.md): 两种意见类型同一份; 各段的段数, 条目 (•) 数与占位符都与英文相同; 董事责任与审计师责任两段里没有
+    英文字母; 签名块的姓名, 事务所与地址是名称, 不译, 与英文相同. 两段标题为验收写明的中文, 日期写法如 2026年6月30日."""
+    zh, en = report_template("zh"), report_template("en")
+    assert zh["qualified"] == zh["unqualified"]
+
+    def shape(text: str) -> tuple[int, int, list[str]]:
+        return len(text.split("\n\n")), text.count("•"), sorted(re.findall(r"{(\w+)}", text))
+
+    assert {name: shape(text) for name, text in zh["unqualified"].items()} == {
+        name: shape(text) for name, text in en["unqualified"].items()
+    }
+    for name in ("directors_responsibilities", "auditor_responsibilities"):
+        assert not re.search(r"[A-Za-z]", zh["unqualified"][name]), name
+    assert zh["unqualified"]["signature"] == en["unqualified"]["signature"]
+    library = ProcedureLibrary(ROOT)
+    assert library.report_headings("zh") == {
+        OpinionType.unqualified: ("审计意见", "形成审计意见的基础"),
+        OpinionType.qualified: ("保留意见", "形成保留意见的基础"),
+    }
+    assert [library.report_date(date(2026, 6, 30), language) for language in ("zh", "en")] == [
+        "2026年6月30日",
+        "30 June 2026",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda doc: doc.pop("zh"), "须按 zh, en 各给一份"),
+        (lambda doc: doc["zh"]["sections"]["qualified"].pop("signature"), "各语言的意见类型, 段落与标题须相同"),
+        (lambda doc: doc["zh"]["headings"].pop("qualified"), "各语言的意见类型, 段落与标题须相同"),
+    ],
+    ids=["missing_language", "missing_section", "missing_heading"],
+)
+def test_report_template_languages_must_match(
+    tmp_path: Path, change: Callable[[dict[str, Any]], Any], error: str
+) -> None:
+    """report.yaml 缺一种语言, 或两种语言的意见类型, 段落与标题不一致时, 程序库载入即报 ValueError."""
+    doc = yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+    doc["zh"]["sections"]["qualified"] = dict(doc["zh"]["sections"]["qualified"])  # 拆开别名, 只改 qualified
+    change(doc)
+    path = tmp_path / "report.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        report_templates(path)
 
 
 def test_assembly_and_layers() -> None:

@@ -1,7 +1,7 @@
 import type { ReportSection } from '@/client/types.gen'
 
 // 审计报告各段的段名只显示一次 (需求 R352). 意见段与形成意见的基础段的正文首行是段名 (RPT-03 校验首行为该意见类型
-// 的标题, 后端 REPORT_HEADINGS); 报告模板 (knowledge/templates/report.yaml) 的各段按接口文档第 8 节的约定首行为标题,
+// 的标题, 按报告的语言取 report.yaml 的 headings, 需求 R341); 报告模板 (knowledge/templates/report.yaml) 的各段按接口文档第 8 节的约定首行为标题,
 // 签名块除外. 这几段取正文首行作段名, 不另显示界面的段名; 签名块正文不带段名, 用界面的段名. 正文为空的段 (如现在
 // 模板里留空的其他法律法规要求) 也用界面的段名
 

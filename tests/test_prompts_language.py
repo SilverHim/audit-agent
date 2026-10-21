@@ -45,7 +45,7 @@ EXTRACTION = {
     "DOC-CLASSIFY.md.j2": ["reason"],
     "DOC-SHEET.md.j2": ["reason"],
 }
-LATER = {"RPT-03.md.j2": "R341"}  # 暂不带输出语言一节的模板 → 归哪条需求 (到时加上这一节, 从这里去掉)
+LATER: dict[str, str] = {}  # 暂不带输出语言一节的模板 → 归哪条需求 (到时加上这一节, 从这里去掉; RPT-03 已由 R341 加上)
 SECTION = "\n## Output language\n"
 NAMES: dict[WorkingLanguage, str] = {"zh": "Simplified Chinese", "en": "Australian English"}
 # 口径 → 关键词: 输出语言一节须有一行同时含这几个词 (不分大小写), {name} 换成语言名

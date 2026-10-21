@@ -13,7 +13,7 @@
 变量 (with context, 取引入方的):
   output_language  zh 或 en: JudgmentEngine.call_llm 取执行记录的 language (ProcedureRun.language, 需求 R339) 注入, 不读
                    项目当前的值; 各模板头注释不另列. 直接渲染 (测试) 没给时为 en
-RPT-03 暂不引入: 报告的标题, 写法, 固定段落与校验按语言归 R341.
+RPT-03 也引入 (需求 R341); 报告两段的标题, 日期写法与固定段落另按语言取 templates/report.yaml.
 守卫: tests/test_prompts_language.py 逐个渲染程序提示词, 截出本节核对.
 #}
 {% macro language_name() %}{{ "Simplified Chinese" if (output_language | default("en")) == "zh" else "Australian English" }}{% endmacro %}

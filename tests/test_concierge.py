@@ -3,7 +3,7 @@
 import json
 from dataclasses import replace
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -164,15 +164,15 @@ def setup(
     return ConciergeAgent(deps), RunContext(ctx.engagement, ctx.procedure, ctx.template, run, state), trail  # type: ignore[arg-type]
 
 
-def fixed(opinion: OpinionType) -> dict[ReportSection, str]:
-    """report.yaml 中该意见类型的固定段落, 代入 Numbat 的值."""
+def fixed(opinion: OpinionType, language: Literal["zh", "en"] = "en") -> dict[ReportSection, str]:
+    """report.yaml 中该语言, 该意见类型的固定段落, 代入 Numbat 的值."""
     deps = make_deps(FakeRegistry(), FakeTrail())
     values = {
         "entity_name": "Numbat Electronic Components Pty Ltd",
-        "period_end": "30 June 2026",
+        "period_end": deps.library.report_date(date(2026, 6, 30), language),
         "auditor_name": NUMBAT_AUDITOR.full_name,
     }
-    return {s: t.format(**values) for s, t in deps.library.report_sections(opinion).items()}
+    return {s: t.format(**values) for s, t in deps.library.report_sections(opinion, language).items()}
 
 
 # ── 分派 (需求 R91) ─────────────────────────────────────────
@@ -267,6 +267,59 @@ async def test_unqualified_uses_unqualified_template_and_no_misstatements() -> N
     assert report.sections[ReportSection.auditor_responsibilities] == expected[ReportSection.auditor_responsibilities]
     prompt = llm.requests[0].messages[0].content
     assert "Uncorrected misstatements:" not in prompt and CUTOFF.id not in prompt
+
+
+# 中文执行记录下模型写的两段 (需求 R341): 首行为验收写明的中文标题, 正文为中文, 引用键同 r1
+ZH_R1 = ReportDraft(
+    opinion="保留意见\n\n我们审计了 Numbat Electronic Components Pty Ltd (以下简称公司) 的财务报告. 我们认为, "
+    "除形成保留意见的基础部分所述事项的影响外, 后附的财务报告符合《2001年公司法》的规定.",
+    basis_for_opinion="形成保留意见的基础\n\n收入包括公司于2026年6月28日入账的销售发票 SI-2026-0612, 金额 $142,000; "
+    "客户于2026年7月3日签收, 截至2026年6月30日止年度的收入因此高估 $142,000.",
+    judgment_keys=["REV-02:SI-2026-0612"],
+)
+
+
+@pytest.mark.parametrize(
+    ("language", "draft", "passes"),
+    [("zh", ZH_R1, True), ("zh", None, False), ("en", None, True)],
+    ids=["zh", "zh_with_english_output", "en"],
+)
+async def test_report_follows_the_language_of_its_run(
+    language: Literal["zh", "en"], draft: ReportDraft | None, passes: bool
+) -> None:
+    """需求 R341 验收 1, 2, 4: 报告按执行记录的语言出 (draft 为 None 时是 mock 的英文 r1). 提示词写明该语言的两段标题,
+    审计师责任段的标题与日期写法, 末尾的输出语言一节随之; 固定段落取 report.yaml 中该语言的一份 (zh 的签名块同 en:
+    姓名, 事务所与地址不译). 中文执行记录下英文标题的输出判 semantic, 重试用完执行失败; 英文执行记录照旧通过."""
+    raw = draft.model_dump_json() if draft is not None else r1_raw()
+    llm = ScriptedLLM({"r1": [raw] * MAX_ATTEMPTS})
+    agent, ctx, _ = setup(llm=llm)
+    ctx = RunContext(
+        ctx.engagement, ctx.procedure, ctx.template, ctx.run.model_copy(update={"language": language}), ctx.state
+    )
+    library = agent.deps.library
+    opinion_heading, basis_heading = library.report_headings(language)[OpinionType.qualified]
+    responsibilities = library.report_sections(OpinionType.qualified, language)[ReportSection.auditor_responsibilities]
+    if not passes:
+        result = await handed_to_human(agent, ctx)
+        assert (
+            "未通过 semantic 校验" in result["failure_reason"]
+            and f"意见段首行应为 {opinion_heading}" in result["failure_reason"]
+        )
+        return
+    [report] = (await agent.run(ctx))["report_versions"]
+    prompt = llm.requests[0].messages[0].content
+    assert f'the heading "{opinion_heading}"' in prompt and f'the heading "{basis_heading}"' in prompt
+    assert f"described in the {responsibilities.splitlines()[0]} section" in prompt
+    assert f'Dates as "{library.report_date(date(2025, 7, 1), language)}"' in prompt
+    assert f"Working language: {'Simplified Chinese' if language == 'zh' else 'Australian English'}." in prompt
+    expected = fixed(OpinionType.qualified, language)
+    assert {s: report.sections[s] for s in expected} == expected
+    written = draft or ReportDraft.model_validate_json(r1_raw())
+    assert (report.sections[ReportSection.opinion], report.sections[ReportSection.basis_for_opinion]) == (
+        written.opinion,
+        written.basis_for_opinion,
+    )
+    assert report.sections[ReportSection.signature] == fixed(OpinionType.qualified, "en")[ReportSection.signature]
 
 
 async def test_same_state_same_report() -> None:

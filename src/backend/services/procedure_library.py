@@ -10,7 +10,7 @@ import types
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn, TypeGuard, Union, get_args, get_origin
+from typing import Any, NoReturn, TypeGuard, Union, cast, get_args, get_origin
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError, Undefined, meta, nodes
@@ -22,6 +22,7 @@ from backend.contracts.data import DataInput
 from backend.contracts.knowledge import (
     LocalizedText,
     ProcedureTemplate,
+    ReportTemplate,
     RequiredItem,
     StandardFragment,
     StandardRequirement,
@@ -44,6 +45,7 @@ from backend.contracts.models import (
     RiskItem,
     RiskLevel,
     TaskKind,
+    WorkingLanguage,
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
@@ -248,11 +250,7 @@ class ProcedureLibrary:
             for f in doc["fragments"]:
                 self._fragments[f["id"]] = StandardFragment(standard=doc["standard"], **f)
         self.commit = _git_commit(root)  # knowledge 目录当前的 git commit, 有未提交改动时加 -dirty
-        report = yaml.safe_load((root / "templates" / "report.yaml").read_text(encoding="utf-8"))
-        self._report: dict[OpinionType, dict[ReportSection, str]] = {  # 意见类型 -> 报告固定段落 (含占位符)
-            OpinionType(opinion): {ReportSection(name): text for name, text in sections.items()}
-            for opinion, sections in report.items()
-        }
+        self._report = report_templates(root / "templates" / "report.yaml")  # 工作语言 -> 报告的固定部分
 
     def load(self, procedure_id: str) -> ProcedureTemplate:
         """取模板, 含未启用的 (旧项目的程序包与留痕可能引用它们); 启用的取启用视图. 没有该程序抛 KeyError."""
@@ -420,12 +418,20 @@ class ProcedureLibrary:
     def fragment(self, fragment_id: str) -> StandardFragment | None:
         return self._fragments.get(fragment_id)
 
-    def report_sections(self, opinion: OpinionType) -> dict[ReportSection, str]:
-        """templates/report.yaml 中该意见类型的固定段落 (董事责任, 审计师责任, 其他法律法规要求, 签名块).
+    def report_sections(self, opinion: OpinionType, language: WorkingLanguage) -> dict[ReportSection, str]:
+        """templates/report.yaml 中该语言, 该意见类型的固定段落 (董事责任, 审计师责任, 其他法律法规要求, 签名块).
 
         正文含占位符 {entity_name}, {period_end}, {auditor_name}, 由 RPT-03 代入.
         """
-        return dict(self._report[opinion])
+        return dict(self._report[language].sections[opinion])
+
+    def report_headings(self, language: WorkingLanguage) -> dict[OpinionType, tuple[str, str]]:
+        """该语言各意见类型的两段标题: 意见类型 → (意见段, 形成意见的基础段), RPT-03 的提示词与校验共用 (需求 R341)."""
+        return {o: (h.opinion, h.basis_for_opinion) for o, h in self._report[language].headings.items()}
+
+    def report_date(self, day: date, language: WorkingLanguage) -> str:
+        """报告正文里的日期写法 (需求 R341), 如 en 的 30 June 2026."""
+        return self._report[language].date.format(d=day)
 
     def prompts_sha256(self) -> str:
         """prompts/*.j2 按文件名排序后, 各文件内容依次拼接的 sha256. 每次调用重新读文件, 改任一 prompt 即变化."""
@@ -433,6 +439,23 @@ class ProcedureLibrary:
         for p in sorted((self.root / "prompts").glob("*.j2"), key=lambda p: p.name):
             digest.update(p.read_bytes())
         return digest.hexdigest()
+
+
+def report_templates(path: Path) -> dict[WorkingLanguage, ReportTemplate]:
+    """读 templates/report.yaml (需求 R341): 每种工作语言一份 ReportTemplate, 各语言的意见类型与段落须相同 (同一份结构,
+    段落一一对应). 缺语言或结构不一抛 ValueError, 程序库载入时即报."""
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    languages = get_args(WorkingLanguage)
+    if sorted(doc) != sorted(languages):
+        raise ValueError(f"{path.name}: 须按 {', '.join(languages)} 各给一份, 现为 {', '.join(doc)}")
+    templates = {cast(WorkingLanguage, language): ReportTemplate.model_validate(part) for language, part in doc.items()}
+    shapes = {
+        language: ({o: list(t) for o, t in template.sections.items()}, sorted(template.headings))
+        for language, template in templates.items()
+    }
+    if len({repr(shape) for shape in shapes.values()}) != 1:
+        raise ValueError(f"{path.name}: 各语言的意见类型, 段落与标题须相同: {shapes}")
+    return templates
 
 
 def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:

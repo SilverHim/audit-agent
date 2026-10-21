@@ -31,7 +31,6 @@ from pydantic import BaseModel, ValidationError
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, RunContext
-from backend.agents.concierge.report import report_date_text
 from backend.agents.evidence import EvidenceAgent
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import CLASSIFY, IngestAgent
@@ -1024,9 +1023,9 @@ def test_only17_reports_are_unqualified() -> None:
     批注 (基础段写明编制框架): 只在基础段正文开头加 FRAMEWORK 一句, 意见段与其余文字不变 (同 Numbat r2 的写法)."""
     r1, r2 = only17_report(1), only17_report(2)
     ctx = ValidationContext(opinion=OpinionType.unqualified, standards_of=None)
-    assert [report_checks(r, ctx) for r in (r1, r2)] == [(None, [])] * 2
+    assert [report_checks(r, ctx, LIBRARY.report_headings("en")) for r in (r1, r2)] == [(None, [])] * 2
     assert r1.judgment_keys == r2.judgment_keys == []
-    period = report_date_text(xero_engagement().period_end)
+    period = LIBRARY.report_date(xero_engagement().period_end, "en")
     assert f"the financial report of {xero_profile().legal_name} (the Company)" in r1.opinion
     assert r1.opinion.count(f"as at {period}") == 2
     for text in (r1.opinion, r1.basis_for_opinion, r2.basis_for_opinion):

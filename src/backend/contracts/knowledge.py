@@ -16,7 +16,9 @@ from backend.contracts.models import (
     GateId,
     MisstatementUpdateKind,
     Model,
+    OpinionType,
     Phase,
+    ReportSection,
     RiskLevel,
     RuleOutcomeStatus,
 )
@@ -274,3 +276,20 @@ class WorkpaperConfig(Model):
     required: list[RequiredItem]  # 必填项
     standards_note: LocalizedText  # 准则对照的说明一行
     standards: list[StandardRequirement]  # 准则对照, 按准则编号
+
+
+class ReportHeadings(Model):
+    """审计报告意见段与形成意见的基础段首行的标题 (ASA 700 第 23, 28 段; ASA 705 第 16, 20(a) 段)."""
+
+    opinion: str  # 意见段, 如 Opinion, Qualified Opinion
+    basis_for_opinion: str  # 形成意见的基础段, 如 Basis for Opinion
+
+
+class ReportTemplate(Model):
+    """templates/report.yaml 中一种工作语言的一份 (需求 R341; 文件按 WorkingLanguage 各一份, 结构相同, 见
+    ProcedureLibrary). RPT-03 的提示词与校验取 headings, 报告正文的日期按 date 写, 拼在模型写的两段之后的固定段落取
+    sections."""
+
+    headings: dict[OpinionType, ReportHeadings]  # 意见类型 → 两段的标题
+    date: str  # 报告中的日期写法: str.format 的模板, d 为日期, 如 "{d.day} {d:%B %Y}"
+    sections: dict[OpinionType, dict[ReportSection, str]]  # 意见类型 → 固定段落 (每段首行为标题, 签名块除外; 含占位符)

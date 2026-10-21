@@ -3,7 +3,7 @@
 import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -1169,10 +1169,13 @@ def confirmed_judgment(version: int = 2, status: ReviewStatus = ReviewStatus.con
 
 
 async def check_report(
-    draft: ReportDraft, judgments: list[Judgment], opinion: OpinionType | None = OpinionType.qualified
+    draft: ReportDraft,
+    judgments: list[Judgment],
+    opinion: OpinionType | None = OpinionType.qualified,
+    language: Literal["zh", "en"] = "en",
 ) -> Any:
     validator, _ = make_validator()
-    ctx = ValidationContext(judgments=judgments, opinion=opinion, standards_of=None)
+    ctx = ValidationContext(judgments=judgments, opinion=opinion, standards_of=None, language=language)
     return await validator.validate(EID, LIBRARY.load("RPT-03"), respond(draft), ctx)
 
 
@@ -1218,6 +1221,49 @@ async def test_report_reference_failures(judgments: list[Judgment], error: str) 
 async def test_report_semantic_failures(changes: dict[str, Any], opinion: OpinionType, error: str) -> None:
     report = await check_report(QUALIFIED_DRAFT.model_copy(update=changes), [confirmed_judgment()], opinion)
     assert report.level_failed == "semantic" and report.retryable and error in report.errors
+
+
+# 验收原文 (需求 R341 验收 2) 的中文标题: 意见类型 → (意见段, 形成意见的基础段)
+ZH_HEADINGS = {
+    OpinionType.unqualified: ("审计意见", "形成审计意见的基础"),
+    OpinionType.qualified: ("保留意见", "形成保留意见的基础"),
+}
+EN_HEADINGS = {
+    OpinionType.unqualified: ("Opinion", "Basis for Opinion"),
+    OpinionType.qualified: ("Qualified Opinion", "Basis for Qualified Opinion"),
+}
+
+
+@pytest.mark.parametrize("opinion", [OpinionType.unqualified, OpinionType.qualified])
+@pytest.mark.parametrize(
+    ("language", "written", "passes"),
+    [("zh", ZH_HEADINGS, True), ("zh", EN_HEADINGS, False), ("en", EN_HEADINGS, True), ("en", ZH_HEADINGS, False)],
+    ids=["zh", "zh_with_english_headings", "en", "en_with_chinese_headings"],
+)
+async def test_report_headings_follow_the_language(
+    language: Literal["zh", "en"],
+    written: dict[OpinionType, tuple[str, str]],
+    passes: bool,
+    opinion: OpinionType,
+) -> None:
+    """需求 R341 验收 2: 两段首行的标题按校验上下文的语言取 report.yaml 的一份 (call_llm 按执行记录的语言填); zh 为
+    验收写明的中文标题, 英文标题的输出判 semantic, 反之亦然."""
+    opinion_heading, basis_heading = written[opinion]
+    draft = QUALIFIED_DRAFT.model_copy(
+        update={
+            "opinion": f"{opinion_heading}\n\n...",
+            "basis_for_opinion": f"{basis_heading}\n\n...",
+            "judgment_keys": QUALIFIED_DRAFT.judgment_keys if opinion is OpinionType.qualified else [],
+        }
+    )
+    report = await check_report(draft, [confirmed_judgment()], opinion, language)
+    assert LIBRARY.report_headings(language)[opinion] == (ZH_HEADINGS if language == "zh" else EN_HEADINGS)[opinion]
+    if passes:
+        assert (report.level_failed, report.errors) == (None, [])
+    else:
+        expected = (ZH_HEADINGS if language == "zh" else EN_HEADINGS)[opinion]
+        assert report.level_failed == "semantic"
+        assert report.errors == [f"意见段首行应为 {expected[0]}", f"基础段首行应为 {expected[1]}"]
 
 
 async def test_report_needs_opinion_type() -> None:

@@ -355,13 +355,6 @@ def rule_consistency(action: ProposedAction, has_findings: bool) -> float:
     return 1.0 if action in (ProposedAction.accept, ProposedAction.close) else 0.0
 
 
-# 两段首行的标题, 按意见类型 (ASA 700 第 23, 28 段, ASA 705 第 16, 20 段)
-REPORT_HEADINGS = {
-    OpinionType.unqualified: ("Opinion", "Basis for Opinion"),
-    OpinionType.qualified: ("Qualified Opinion", "Basis for Qualified Opinion"),
-}
-
-
 def judgment_key(judgment: Judgment) -> str:
     """判断的引用键 (RPT-03): {程序}:{对象}; 人工判断 (ID 为 AI 判断的 ID 加 -H{n}, 第 0 节) 另加 :H{n}, 与同一对象的
     AI 判断及其他人工判断区分. 不含执行次数, 重跑后同一对象的新判断键不变. ID 不合这两种写法的另加 :{判断 ID}."""
@@ -429,8 +422,11 @@ def plan_checks(
     return ("semantic" if errors else None), errors
 
 
-def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | None, list[str]]:
-    """报告草稿的引用与语义两级. 返回 (未通过的级别, 错误).
+def report_checks(
+    draft: ReportDraft, ctx: ValidationContext, headings: Mapping[OpinionType, tuple[str, str]]
+) -> tuple[Level | None, list[str]]:
+    """报告草稿的引用与语义两级. 返回 (未通过的级别, 错误). headings 为该语言各意见类型的两段标题
+    (ProcedureLibrary.report_headings, 取 templates/report.yaml, 需求 R341).
 
     引用: judgment_keys 的每个键须是可引用的判断 (ctx.judgments 的 citation_keys) 之一, 且该判断已确认.
     语义: 意见段与基础段首行为该意见类型的标题; 保留意见须引用至少一条判断. ctx.opinion 为空时抛 ValueError.
@@ -447,7 +443,7 @@ def report_checks(draft: ReportDraft, ctx: ValidationContext) -> tuple[Level | N
             errors.append(f"引用键 {key} 的判断 {judgment.id} 尚未确认 ({judgment.review_status})")
     if errors:
         return "reference", errors
-    opinion_heading, basis_heading = REPORT_HEADINGS[ctx.opinion]
+    opinion_heading, basis_heading = headings[ctx.opinion]
     if draft.opinion.strip().splitlines()[:1] != [opinion_heading]:
         errors.append(f"意见段首行应为 {opinion_heading}")
     if draft.basis_for_opinion.strip().splitlines()[:1] != [basis_heading]:
@@ -830,8 +826,9 @@ async def check_extraction(
 async def check_report(
     validator: OutputValidator, eid: str, output: ReportDraft, ctx: ValidationContext
 ) -> CheckResult:
-    """报告草稿: 引用的判断须为当前已确认的版本, 两段标题与意见类型相符 (见 report_checks)."""
-    level, errors = report_checks(output, ctx)
+    """报告草稿: 引用的判断须为当前已确认的版本, 两段标题与意见类型相符 (见 report_checks); 标题取程序库里
+    ctx.language (执行记录的语言) 的一份."""
+    level, errors = report_checks(output, ctx, validator.library.report_headings(ctx.language))
     return CheckResult(output, level, errors=errors)
 
 
@@ -975,8 +972,10 @@ class JudgmentEngine:
         # (关系图的端点, 例外的 detail 都可能带它, 需求 R139)
         outbound = mask_person_node_ids(drop_fields(dict(variables), PERSONAL_FIELDS))
         # 输出语言取这次执行记录的 language (需求 R339, R340), 不读项目当前的值: 执行之后改了工作语言, 这次照旧;
-        # 重跑是新的执行记录, 取它建立时的语言. 各提示词末尾的 _output_language.md.j2 一节用它; 调用方给的同名变量不算
+        # 重跑是新的执行记录, 取它建立时的语言. 各提示词末尾的 _output_language.md.j2 一节用它; 调用方给的同名变量不算.
+        # 校验同按这一语言 (如报告两段的标题, 需求 R341), 调用方给的 ctx.language 也不算
         outbound["output_language"] = run.language
+        ctx = ctx.model_copy(update={"language": run.language})
         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
