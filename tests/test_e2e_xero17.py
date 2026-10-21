@@ -14,13 +14,12 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 import pytest_asyncio
 
 from backend.adapters.llm import SwitchableLLMClient
-from backend.agents.base import ProcedureAgent, RunContext
 from backend.agents.ingest import DETAILS
 from backend.contracts.data import XERO_TABLES, DataInput
 from backend.contracts.errors import DecisionRejected, EngagementLocked
@@ -55,7 +54,6 @@ from backend.contracts.models import (
 )
 from backend.contracts.views import GateView, PlanningMaterial
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.orchestration.scheduler import build_schedule
@@ -64,7 +62,7 @@ from backend.services.features import BASELINE
 from backend.services.populations import distinct_items, judged_subjects, total_cents
 from backend.services.procedure_library import render_text
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, no_population, wait_idle
+from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, no_population, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
 from tests.test_e2e_mock import Demo, assert_pointers_resolve, real_storage, trail_of
@@ -88,7 +86,14 @@ from tests.xero_fakes import (
     xero_rev08_populations,
     xero_uploads,
 )
-from tests.xero_flow import approve_acceptance, confirm_ready, demo_source, import_stage, offline_runner
+from tests.xero_flow import (
+    approve_acceptance,
+    confirm_ready,
+    demo_source,
+    import_stage,
+    offline_runner,
+    recorded_agents,
+)
 from tests.xero_harness import LayeredMockLLMClient
 from tests.xero_injection import changed, originals
 
@@ -173,15 +178,7 @@ async def drive_xero17(
     逐文件哈希. client 须已是 runner.deps 的主模型与复核模型; before_review, reviews 与 stop_at_fin 见 finish_xero17."""
     before = originals()
     deps = runner.deps
-    agents: list[tuple[str, str, bool]] = []
-    run_agent = GraphNodes.run_agent
-
-    async def record_agent(self: GraphNodes, agent: ProcedureAgent[Any], ctx: RunContext) -> Any:
-        agents.append((ctx.procedure.id, type(agent).__name__, isinstance(agent, ScriptAgent)))
-        return await run_agent(self, agent, ctx)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(GraphNodes, "run_agent", record_agent)
+    with recorded_agents() as agents:
         await runner.start(eid)
         await wait_idle(runner, eid)
         assert (await runner.app.aget_state(GraphRunner.config(eid))).next == ("gate_acc01",), runner.run_error(eid)

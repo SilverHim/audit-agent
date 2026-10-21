@@ -19,7 +19,7 @@ R146, FIN-01 仍按 R119 的决定); 总体审计计划的增量只在本模块�
 """
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,23 +29,29 @@ import pytest_asyncio
 
 from backend.adapters.llm import DatasetFixtureLLMClient, SwitchableLLMClient, make_llm_client
 from backend.agents.client_intel import check_directors
+from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
     AuditException,
     AuditPlan,
+    CorrectionNotice,
     DocumentType,
     GateDecision,
     GateId,
     GateVerdict,
     PlanStatus,
     ProcedureRun,
+    ReviewTask,
+    RunStatus,
+    TaskKind,
     TrailEntry,
     TrailKind,
     WorkingLanguage,
 )
 from backend.contracts.views import GateView
 from backend.core.config import get_settings
+from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import RoutingDatasetLoader
 from backend.services.abn import abn_problem
@@ -58,9 +64,17 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
+from tests.test_decisions import Started
 from tests.test_demo_default import demo_runner  # 演示默认数据集的离线装配 (R79), 按客户排序的用例用
-from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用)
-from tests.test_e2e_xero17 import Xero17, assert_materiality, assert_report, assert_results  # R119 的计数与断言
+from tests.test_e2e_mock import assert_pointers_resolve, real_storage  # 连库装配 (R56 起多个连库用例共用)
+from tests.test_e2e_xero17 import (  # R119 的计数与断言
+    AGENTS,
+    Xero17,
+    assert_documents,
+    assert_materiality,
+    assert_report,
+    assert_results,
+)
 from tests.xero_fakes import (
     DEMO_FEATURES,
     FIXTURE_READS,
@@ -75,8 +89,9 @@ from tests.xero_fakes import (
     xero17_gates,
     xero_journal_reviews,
 )
-from tests.xero_flow import API, READY_REASON, demo_offline, drain, entered_p2_by, xero_link
+from tests.xero_flow import API, READY_REASON, demo_offline, drain, entered_p2_by, recorded_agents, xero_link
 from tests.xero_harness import LayeredMockLLMClient
+from tests.xero_injection import changed, originals
 
 pytestmark = pytest.mark.external
 shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走通 (walked) 的用例与它同一个事件循环
@@ -121,7 +136,18 @@ async def walk(
     client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any, language: WorkingLanguage = "en"
 ) -> Walk:
     """照页面的做法从新建项目走到归档 (见模块说明), 项目的工作语言为 language; 每步之后等后台作业与图都停下, 后台
-    始终没有错误."""
+    始终没有错误. 另记下每次执行的 Agent 与前后两次原目录 (快照与补造) 的逐文件哈希 (需求 R260)."""
+    before = originals()
+    with recorded_agents() as agents:
+        w = await walk_steps(client, runner, service, llm, language)
+    w.x = replace(w.x, agents=agents, moved=changed(before, originals()))
+    return w
+
+
+async def walk_steps(
+    client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any, language: WorkingLanguage
+) -> Walk:
+    """walk 的各步 (见模块说明)."""
     owner = (await client.get(f"{API}/users/me")).json()["id"]
     clients = (await client.get(f"{API}/clients")).json()
     [dataset] = [d for d in clients[0]["datasets"] if d["default"]]  # 客户下拉默认选中第一行, 期间随数据集带出
@@ -359,21 +385,84 @@ async def test_tables_and_documents_from_the_demo(walked: Walk) -> None:
     assert DocumentType.financial_statements not in {d.type for d in uploaded}
 
 
-# ── 验收 4: 计数为 R119 加 R146 的增量, 走到报告 ──
+# ── 验收 4: 计数为 R119 加 R146 的增量, 走到报告; R260 (并入 R259) 的终态, 计数与留痕 ──
+
+# 闸门决定 7 条, 按决定时间: (闸门, 决定)
+DEMO_GATES = [
+    ("ACC-01", "approve"),
+    ("PLN-01/03", "approve"),
+    ("PLN-15", "reject"),
+    ("PLN-15", "approve"),
+    ("FIN-01", "approve"),
+    ("RPT-01", "reject"),
+    ("RPT-01", "approve"),
+]
+# 执行过的程序 → 执行它的 Agent: R119 的 13 条加 PLN-15 (功能 planning) 与 GEN-05, GEN-02 (功能 journals)
+DEMO_AGENTS = {**AGENTS, "PLN-15": "RiskAssessorAgent", "GEN-05": "FieldworkAgent", "GEN-02": "FieldworkAgent"}
+DEMO_RUNS = {pid: 2 if pid in ("PLN-15", "RPT-03") else 1 for pid in DEMO_AGENTS}  # 计划与报告各两稿 (退回一次)
+# llm_call 留痕: (程序, 是否上传处理 (执行 ID 以 UPLOAD- 开头)) → 行数. 编排内 23 行, 上传处理 24 行; GEN-09 没有
+# (同 R119: REV-03, REV-02 为 L2 跳过, BA-091 的建议不触发主规则, 抽样未中; GEN-02 的 7 条为 L2 同样跳过)
+DEMO_LLM_CALLS = {
+    ("PLN-15", False): 2,
+    ("DOC-06", False): 2,
+    ("REV-03", False): 3,
+    ("REV-02", False): 6,
+    ("CSH-02", False): 1,
+    ("GEN-02", False): 7,
+    ("RPT-03", False): 2,
+    ("DOC-CLASSIFY", True): 21,
+    ("DOC-04", True): 3,
+}
+
+
+async def assert_end_state(w: Walk) -> None:
+    """需求 R260 (并入 R259, 按 Q32 改写为演示配置): 走通的终态, 计数与留痕, 离线与连库 (R261), 重启 (R262) 共用.
+    - 停点同 STOPS; 后台没有错误, 走完没有过期程序, 项目冻结的功能集为演示配置.
+    - 例外 18 条, 判断 18 条, 复核任务 17 条 decided, 函证两户, 错报 2 条 (未更正) 与汇总表, 重要性: R119 加 R146 的
+      增量 (assert_results, assert_materiality, journals); 报告两稿与归档锁定同 R119 (assert_report).
+    - 闸门决定 7 条 (DEMO_GATES); 人工队列, 更正通知与审计更正分录都没有 (错报闭环不在演示配置).
+    - 文件 23 份, 数据版本 10 与补交请求同 R119 (assert_documents).
+    - 每条程序由真实 Agent 执行, 次数 DEMO_RUNS, 执行都成功.
+    - 留痕: llm_call 47 行 (DEMO_LLM_CALLS), decision 24 行 (闸门 7, 复核 17), external_call 4 行 (ACC-04 2, CSH-04 2).
+    - 证据指针 (判断, 合同, 函证, 例外, 承接评分卡) 都能解析; 原目录哈希不变.
+    - 签字后再提交决定报 ENGAGEMENT_LOCKED."""
+    x = w.x
+    deps = x.runner.deps
+    assert w.stops == STOPS
+    assert (w.overview["run_error"], w.overview["stale_procedure_ids"]) == (None, [])
+    assert sorted(w.overview["features"]) == sorted(DEMO_FEATURES)
+    await assert_results(x, journals=True)
+    await assert_materiality(x, journals=True)
+    await assert_report(x, w.reject_id)
+    await assert_documents(x)
+    gates = sorted(await deps.output_store.latest(x.eid, GateDecision), key=lambda d: d.decided_at)
+    assert [(d.gate.value, d.decision.value) for d in gates] == DEMO_GATES
+    assert await deps.output_store.latest(x.eid, CorrectionNotice) == []
+    assert [t for t in await deps.output_store.latest(x.eid, ReviewTask) if t.kind is TaskKind.manual] == []
+    assert {pid: name for pid, name, _ in x.agents} == DEMO_AGENTS
+    assert [(pid, name) for pid, name, script in x.agents if script] == []
+    assert Counter(pid for pid, _, _ in x.agents) == DEMO_RUNS
+    runs = await deps.output_store.latest(x.eid, ProcedureRun)
+    assert Counter(r.procedure_id for r in runs) == DEMO_RUNS and {r.status for r in runs} == {RunStatus.succeeded}
+    trail = await deps.trail.list(x.eid, limit=10_000)
+    calls = [e for e in trail if e.kind is TrailKind.llm_call]
+    assert Counter((e.procedure_id, (e.run_id or "").startswith("UPLOAD-")) for e in calls) == DEMO_LLM_CALLS
+    assert len([e for e in trail if e.kind is TrailKind.decision]) == len(DEMO_GATES) + 17
+    assert Counter(e.procedure_id for e in trail if e.kind is TrailKind.external_call) == {"ACC-04": 2, "CSH-04": 2}
+    started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
+    await assert_pointers_resolve(started, x.eid, everything=True)
+    assert x.moved == []
+    after = xero17_gates(x.owner)["rpt_approve"].model_copy(update={"id": "D-AFTER-SIGNING"})
+    with pytest.raises(DecisionRejected) as rejected:
+        await GraphDecisionSubmit(x.runner.app, deps, x.runner).submit(x.eid, after)
+    assert rejected.value.code == "ENGAGEMENT_LOCKED"
 
 
 @shared_loop
-async def test_counts_and_report(walked: Walk) -> None:
-    """R119 的计数 (例外 11 条, 判断 10 条 v2 confirmed, 复核任务 10 条 decided, 错报 1 条 BA-091 4853, 函证两户,
-    重要性) 加 R146 的增量 (例外多 GEN-05 七条, 判断多 8 条, 任务多 7 条, 错报多 XJ-499 的 75000, 汇总表合计 79853,
-    候选保留意见); REPORT-2 签字归档, 回应接口生成的 RPT-01 退回决定 (同 R119). 走完没有过期程序, 后台没有错误;
-    项目冻结的功能集为演示配置 critic, collab, journals, planning."""
+async def test_end_state(walked: Walk) -> None:
+    """需求 R287 验收 4 与 R260: 见 assert_end_state."""
     assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals", "planning"]
-    await assert_results(walked.x, journals=True)
-    await assert_materiality(walked.x, journals=True)
-    await assert_report(walked.x, walked.reject_id)
-    assert (walked.overview["stale_procedure_ids"], walked.overview["run_error"]) == ([], None)
-    assert sorted(walked.overview["features"]) == sorted(DEMO_FEATURES)
+    await assert_end_state(walked)
 
 
 @shared_loop

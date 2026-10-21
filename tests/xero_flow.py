@@ -9,17 +9,18 @@ start → 停在 ACC-01 闸门 → 演示导入 acceptance → ACC-01 approve �
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterable, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.agents.base import AgentDeps
+from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
 from backend.contracts.data import DemoImportResult, DemoStage
 from backend.contracts.models import GateVerdict, TrailEntry, TrailKind
 from backend.contracts.ports import DatasetLoader, LLMClient
@@ -40,6 +41,7 @@ from tests.fakes import (
     FakeRuleEngine,
     FakeTrail,
     FakeXeroConnectionStore,
+    ScriptAgent,
     acc01_decision,
     api_client,
     wait_idle,
@@ -119,6 +121,22 @@ async def to_ready(service: DataService, eid: str, actor: str) -> None:
     await approve_acceptance(service.runner, eid, actor)
     await import_stage(service, eid, "fieldwork", actor)
     await confirm_ready(service, eid, actor)
+
+
+@contextmanager
+def recorded_agents() -> Iterator[list[tuple[str, str, bool]]]:
+    """块内节点每次调 Agent 时记下 (程序编号, Agent 类名, 是否脚本 Agent), 按调用顺序 (R119, R260 断言 "每条程序由真实
+    Agent 执行" 用)."""
+    agents: list[tuple[str, str, bool]] = []
+    run_agent = GraphNodes.run_agent
+
+    async def record(self: GraphNodes, agent: ProcedureAgent[Any], ctx: RunContext) -> Any:
+        agents.append((ctx.procedure.id, type(agent).__name__, isinstance(agent, ScriptAgent)))
+        return await run_agent(self, agent, ctx)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(GraphNodes, "run_agent", record)
+        yield agents
 
 
 def entered_p2_by(entries: Iterable[TrailEntry]) -> list[str | None]:
