@@ -4,7 +4,7 @@ R122), T2 重复开票未冲销 (需求 R252), T4 银行回函余额差异 (需�
 配置的功能集上跑. 例外按 (规则, 对象 ID) 比, 不按序号. 设 TEST_DATABASE_URL 为已迁移的独立测试库 (没配时跳过);
 要本地快照.
 
-live 组 (需求 R124, 设计稿第 8.1 节): 识别能力只由真实模型证明, 同一判断对象在基线 (T0) 与注入副本上成对断言,
+live 组 (需求 R124, R255, 设计稿第 8.1 节): 识别能力只由真实模型证明, 同一判断对象在基线 (T0) 与注入副本上成对断言,
 两侧都必须通过. 只有被测对象交真实模型, 其余读 fixture; 另标 live (须配 LLM_MODEL 与 LLM_API_KEY, 见
 tests.external.live_llm_settings, 没配时跳过)."""
 
@@ -29,10 +29,12 @@ from tests.test_xero_injections import (
     T1_ORC1026,
     T1_RULES,
     T2_RULES,
+    T2_XJ405,
     T4_TRANSIT,
     T5P_RULES,
     assert_t1_pair,
     assert_t2_judgments,
+    assert_t2_pair,
     assert_t2_rules,
     assert_t4_pair,
     assert_t5,
@@ -340,7 +342,7 @@ async def test_rev08_populations_follow_injections(xero_case: Any, tmp_path: Pat
     assert item.fields["records"] == orc1024
 
 
-# ── live 组: T1, T4 真实大模型成对断言 (需求 R124); 两个用例的调用上限合计 15 次 ──
+# ── live 组: T1, T4 (需求 R124) 与 T2 (需求 R255) 真实大模型成对断言; 三个用例的调用上限合计 25 次 ──
 
 
 def live_client() -> LLMClient:
@@ -402,3 +404,29 @@ async def test_live_t4_pair(xero_case: Any, live_budget: Budget) -> None:
     finally:
         await usage("test_live_t4_pair", built, live_budget)
     assert_t4_pair(base.state, transit.state)
+
+
+async def journals_build(case: XeroCase, llm: LLMClient) -> XeroHarness:
+    return await db_deps(case, llm=llm, features=JOURNAL_FEATURES)
+
+
+@pytest.mark.live(max_calls=10)  # 两侧各至多 2 次执行 x 3 次尝试 = 12, 正常 2 次; 超限即停发并失败
+async def test_live_t2_pair(xero_case: Any, live_budget: Budget) -> None:
+    """R255 验收 1, 2, 4 (只做 T2): 连库测试台, 演示配置的功能集, 只有 GEN-02 对 XJ-405 交真实模型 (其余凭证读运行
+    副本). T0 副本上为 accept 且无错报草稿, T2 副本上为 misstatement (50000, Occurrence, overstated, 科目含 200 或
+    Sales); 判断没出来的一侧重做至多 1 次; 结束时打印用量汇总."""
+    live = live_client()
+    t0, t2 = xero_case("T0", base="t0"), xero_case("T2", base="t2")
+    key, built = ("GEN-02", "XJ-405"), []
+    try:
+        base, runs = await paired_side(
+            journals_build, t0, [t0.supplements / "llm"], live, key, live_budget, ["GEN-02"], T2_XJ405
+        )
+        built += runs
+        duplicate, runs = await paired_side(
+            journals_build, t2, [t2.supplements / "llm"], live, key, live_budget, ["GEN-02"], T2_XJ405
+        )
+        built += runs
+    finally:
+        await usage("test_live_t2_pair", built, live_budget)
+    assert_t2_pair(base.state, duplicate.state)

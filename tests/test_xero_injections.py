@@ -4,8 +4,8 @@
 - T1 收入截止 (需求 R122, 设计稿第 8.3 节), T2 重复开票未冲销 (需求 R252, 第 8.4 节), T4 银行回函余额差异 (需求
   R123, 第 8.6 节), T5 折旧错记与反向对照 T5' (需求 R253, 第 8.7 节): 规则引擎预置该场景的例外与候选行, 大模型输出
   叠在 tests/fixtures/llm_injected/<场景>. T2, T5 在演示配置的功能集 (含分录测试) 上跑, 其余在基线上跑.
-- 真实大模型成对断言 (需求 R124) 的辅助 (paired_side, assert_t1_pair, assert_t4_pair) 写在这里, 连库 live 用例与
-  这里不联网的自测共用.
+- 真实大模型成对断言 (需求 R124, T2 为 R255) 的辅助 (paired_side, assert_t1_pair, assert_t4_pair, assert_t2_pair)
+  写在这里, 连库 live 用例与这里不联网的自测共用.
 离线跑法只检编排与校验链路: 判断结论是预写的 fixture, 不证明系统能识别错报 (第 8.1 节). 副本要本地快照 (没有时跳过),
 标 external. 连库的见 tests/test_xero_injections_db."""
 
@@ -685,6 +685,17 @@ def assert_t4_pair(base: EngagementState, injected: EngagementState) -> None:
     assert transit.misstatement_draft is None
 
 
+def assert_t2_pair(base: EngagementState, injected: EngagementState) -> None:
+    """R255 验收 2: XJ-405 的判断在 T0 副本上为 accept 且无错报草稿; 在 T2 副本上为 misstatement, 草稿金额 50000,
+    Occurrence, overstated, 科目含 200 或 Sales (不分大小写)."""
+    before, after = judgment_of(base, T2_XJ405), judgment_of(injected, T2_XJ405)
+    assert (before.proposed_action, before.misstatement_draft) == (ProposedAction.accept, None)
+    draft = after.misstatement_draft
+    assert after.proposed_action is ProposedAction.misstatement and draft is not None
+    assert (draft.amount_cents, draft.assertion, draft.direction) == (50000, Assertion.Occurrence, Direction.overstated)
+    assert re.search(r"200|sales", draft.account, re.IGNORECASE), draft.account
+
+
 def offline_build(rules: Any, features: frozenset[str] = BASELINE) -> Build:
     """自测用的装配: 离线测试台, 规则预置 rules, 功能集 features (缺省为基线)."""
 
@@ -741,6 +752,43 @@ async def test_paired_assertions_tell_right_from_wrong(xero_case: Any) -> None:
     )
     with pytest.raises(AssertionError):
         assert_t4_pair(base.state, {**transit.state, "judgments": [wrong]})  # type: ignore[typeddict-item]
+
+
+async def test_t2_paired_assertions_tell_right_from_wrong(xero_case: Any) -> None:
+    """R255 自测 (不联网): 演示配置的功能集下, live 换成读 fixture 的假客户端, 基线侧给运行副本的 XJ-405 (accept),
+    注入侧给 llm_injected/T2 的 (misstatement): 断言通过, 两侧各只有 XJ-405 交给 live. 答反的都报错: 两侧都 accept,
+    注入侧的草稿金额取应收的 55000."""
+    t0, t2 = xero_case("T0", base="t0"), xero_case("T2", base="t2")
+    budget = Budget(max_calls=10)
+    key = ("GEN-02", "XJ-405")
+    base, _ = await paired_side(
+        offline_build(XERO_RULES, JOURNAL_FEATURES),
+        t0,
+        [t0.supplements / "llm"],
+        LayeredMockLLMClient([t0.supplements / "llm"]),
+        key,
+        budget,
+        ["GEN-02"],
+        T2_XJ405,
+    )
+    duplicate, _ = await paired_side(
+        offline_build(T2_RULES, JOURNAL_FEATURES),
+        t2,
+        [t2.supplements / "llm"],
+        LayeredMockLLMClient([LLM_INJECTED / "T2"]),
+        key,
+        budget,
+        ["GEN-02"],
+        T2_XJ405,
+    )
+    assert (budget.used.calls, budget.exceeded) == (2, False)
+    assert_t2_pair(base.state, duplicate.state)
+    with pytest.raises(AssertionError):
+        assert_t2_pair(base.state, base.state)
+    draft = T2_DRAFT.model_copy(update={"amount_cents": 55000})
+    wrong = judgment_of(duplicate.state, T2_XJ405).model_copy(update={"misstatement_draft": draft})
+    with pytest.raises(AssertionError):
+        assert_t2_pair(base.state, {**duplicate.state, "judgments": [wrong]})  # type: ignore[typeddict-item]
 
 
 async def test_paired_side_redoes_once_without_the_judgment(xero_case: Any, tmp_path: Path) -> None:
