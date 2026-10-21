@@ -28,6 +28,7 @@ from backend.contracts.models import (
     RunTrigger,
     TaskKind,
     TaskStatus,
+    TrailKind,
 )
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState
@@ -64,6 +65,7 @@ from tests.misstatement_fakes import (
 )
 from tests.test_decisions import Started
 from tests.test_review_decisions import record
+from tests.test_trail import StoreAwareTrail, run_keys, runs_of
 from tests.xero_fakes import registration, xero_engagement
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-09 的 Xero fixture
@@ -119,11 +121,13 @@ def gen05_pack(deps: Any) -> list[Procedure]:
     return [first[0].model_copy(update={"status": ProcedureStatus.completed}), *first[1:]]
 
 
-def scanning_deps(exceptions: Any = None, entries: list[str] = FIRST, llm: Any = None) -> Any:
+def scanning_deps(
+    exceptions: Any = None, entries: list[str] = FIRST, llm: Any = None, trail: FakeTrail | None = None
+) -> Any:
     """fin09_deps 加 GEN-05 的规则结果 (缺省不出例外; exceptions 为按执行生成例外的函数), 功能另开 journals; llm 为空时
-    读 Xero fixture 正本."""
+    读 Xero fixture 正本; trail 为空时用新的假留痕."""
     gen05 = {GEN05: lambda run: RuleResult(exceptions=exceptions(run) if exceptions else [], rows={})}
-    return fin09_deps(FakeTrail(), llm, entries=entries, results=gen05, features=FEATURES)
+    return fin09_deps(trail or FakeTrail(), llm, entries=entries, results=gen05, features=FEATURES)
 
 
 def node_state(deps: Any, **changes: Any) -> EngagementState:
@@ -146,8 +150,18 @@ def x01_hit(run: ProcedureRun) -> list[AuditException]:
 async def test_scan_increment_writes_run_and_exceptions_only() -> None:
     """验收 1: 建 RUN-GEN-05-2 (trigger incremental, 参数 entry_nos 排序后的凭证号, audit_adjustment_start 为首次沟通
     时间), 调 A6, 执行记录, 例外与被测总体 (POP-RUN-GEN-05-2, 需求 R324) 在一个事务内写入; GEN-05 不出新版本; 返回
-    片段即写入的. 再执行一次 (重放) 不调规则引擎, 取回同一片段."""
-    deps = scanning_deps(x01_hit)
+    片段即写入的. 再执行一次 (重放) 不调规则引擎, 取回同一片段.
+    run 留痕 (需求 R325): 开始在调规则引擎之前写 (执行记录还不在 Store), 结束在提交之后写, trigger 为 incremental;
+    重放同键跳过, 两行都没写成 (R325 之前的执行) 的重放时补写, 内容与第一次相同."""
+    trail = StoreAwareTrail()
+    seen: list[list[str | None]] = []
+
+    def hit(run: ProcedureRun) -> list[AuditException]:
+        seen.append(run_keys(trail))
+        return x01_hit(run)
+
+    deps = scanning_deps(hit, trail=trail)
+    trail.store = deps.output_store
     nodes = GraphNodes(deps, 2)
     state = node_state(deps)
     engagement = xero_engagement()
@@ -172,9 +186,20 @@ async def test_scan_increment_writes_run_and_exceptions_only() -> None:
     assert (population.id, population.run_id) == ("POP-RUN-GEN-05-2", run.id)
     assert not any(isinstance(o, Procedure) for o in deps.output_store.rows)
     assert rule_calls(deps) == [("RUN-GEN-05-2", FIRST)]
+    started, ended = (f"{engagement.id}:run:RUN-GEN-05-2:{action}" for action in ("started", "finished"))
+    assert seen == [[started]]
+    assert run_keys(trail) == [started, ended]
+    assert trail.at_write == {started: (False, True), ended: (True, True)}  # 结束: 已提交, 不在事务里
+    first = [e.payload for e in runs_of(trail)]
+    assert [p["trigger"] for p in first] == ["incremental", "incremental"]
+    assert first[1]["result"]["exceptions"] == 1
 
     assert await nodes.scan_increment(state, engagement, GEN05, FIRST) == patch
     assert rule_calls(deps) == [("RUN-GEN-05-2", FIRST)]
+    assert run_keys(trail) == [started, ended]
+    trail.entries[:] = [e for e in trail.entries if e.kind is not TrailKind.run]
+    assert await nodes.scan_increment(state, engagement, GEN05, FIRST) == patch
+    assert [e.payload for e in runs_of(trail)] == first
 
 
 async def test_scan_increment_needs_incremental_template_and_entries() -> None:

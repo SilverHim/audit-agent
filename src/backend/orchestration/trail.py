@@ -13,7 +13,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any, Literal
 
-from jinja2 import UndefinedError
+from jinja2 import TemplateError
 
 from backend.contracts.data import DataReadiness
 from backend.contracts.knowledge import ProcedureTemplate
@@ -127,13 +127,14 @@ def run_entry(
 
 
 def run_scope(template: ProcedureTemplate, run: ProcedureRun) -> dict[str, str] | None:
-    """程序的范围说明按本次的参数快照渲染, {zh, en}; 模板没写为空. 快照里缺占位用的参数 (程序库之后给 scope 加了参数,
-    重放升级前的执行) 时也为空, 记一行 warning (执行 ID 与缺的参数), 不让节点报错 (留痕在终态提交之后写)."""
+    """程序的范围说明按本次的参数快照渲染, {zh, en}; 模板没写为空. 按快照渲染不出 (程序库之后改了 scope, 重放升级前的
+    执行: 快照里缺占位用的参数, 或参数的类型对不上) 时也为空, 记一行 warning (执行 ID 与错误), 不让节点报错 (留痕在
+    终态提交之后写)."""
     if template.scope is None:
         return None
     try:
         return render_text(template.scope, run.params_snapshot).model_dump()
-    except UndefinedError as e:
+    except (TemplateError, TypeError, ValueError) as e:
         logger.warning("执行 %s 的范围说明渲染不出, scope 记为空: %s", run.id, e)
         return None
 

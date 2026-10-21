@@ -679,7 +679,7 @@ class GraphNodes:
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
-        调 Agent 之前写开始的 run 留痕 (需求 R325, 重放时同键跳过, 缺了补写); 结束留痕由提交终态的 attempt, fan_in 写.
+        调 Agent 之前写开始的 run 留痕 (record_started, 需求 R325); 结束留痕由提交终态的 attempt, fan_in 写.
         返回程序编号, 执行记录 ID, 写入者与要写入的片段; 规则程序成功执行时另有被测总体 (见 run_population).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
         取回的执行是失败的, 写入者为 A1. 重放不带被测总体: 已与执行记录终态一起写过.
@@ -690,10 +690,7 @@ class GraphNodes:
         procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
-        # 开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过. 缺了补写时, 执行在 Store
-        # 中已是终态的取 Store 中的那次 (程序库之后改了参数也与结束留痕说的同一范围), 否则取本次建的
-        started = stored_run if stored_run is not None and stored_run.status is not RunStatus.running else procedure_run
-        await record_transitions(self.deps.trail, [run_started(engagement.id, template, started)])
+        await self.record_started(engagement.id, template, procedure_run, stored_run)
         population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
@@ -754,7 +751,8 @@ class GraphNodes:
         """程序的增量实例 (需求 R194; 模板 incremental, 即 GEN-05): 只扫 entry_nos 这些凭证. 建下一次执行记录 (new_run:
         trigger incremental, 参数为模板参数的解析结果, entry_nos 换成排序后的这些凭证号), 调 Agent, 片段经合并校验后
         与执行记录, 被测总体 (run_population, 需求 R324) 在一个事务内写入 Store; 程序不出新版本 (仍 completed), 不建
-        任务. 返回写入后的片段, 由节点并入状态.
+        任务. 返回写入后的片段, 由节点并入状态. run 留痕 (需求 R325) 同 perform 与 attempt: 调 Agent 之前写开始
+        (record_started), 提交之后写结束 (run_finished_entry); 重放时同键跳过, 缺了补写.
         重放: 这次执行已在 Store 中且为终态时不调 Agent, 只取回执行记录与它 run_id 下的例外, 再查一遍外键 (同 perform).
         模板 incremental 为假抛 ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过
         为节点错误, 照常抛出 (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error,
@@ -769,6 +767,7 @@ class GraphNodes:
         overrides = {"entry_nos": sorted(entry_nos)}
         run = await self.new_run(state, engagement, template, procedure, RunTrigger.incremental, overrides)
         stored = await self.deps.output_store.get(eid, ProcedureRun, run.id)
+        await self.record_started(eid, template, run, stored)
         if stored is not None and stored.status is not RunStatus.running:
             # 只取回本次执行自己写入的: 执行记录与它 run_id 下的例外 (最新版本). stored_outputs 另会补齐以这些例外为
             # 目标的别的程序的任务与执行 (如 FIN-09 对增量例外的 unattributed 任务与 RUN-FIN-09-1), 并进状态会让 FIN-09
@@ -781,6 +780,7 @@ class GraphNodes:
             problems = check_refs(own, state)
             if problems:
                 raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
+            await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, own, stored.id)])
             return own
         agent = self.agents[procedure_id]
         writer = writer_of(template, agent)
@@ -797,7 +797,8 @@ class GraphNodes:
             saved = await save_outputs(self.deps.output_store, eid, patch, actor=writer)
             if population is not None:
                 await self.deps.output_store.put(eid, [population], actor=writer)
-            return saved
+        await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, saved, run.id)])
+        return saved
 
     async def attempt(
         self,
@@ -852,6 +853,15 @@ class GraphNodes:
             )
         await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+
+    async def record_started(
+        self, eid: str, template: ProcedureTemplate, run: ProcedureRun, stored: ProcedureRun | None
+    ) -> None:
+        """写一次执行的开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过. 缺了补写时,
+        执行在 Store 中 (stored) 已是终态的取 Store 中的那次 (程序库之后改了参数也与结束留痕说的同一范围), 否则取本次
+        建的 run. perform 与 scan_increment 共用."""
+        started = stored if stored is not None and stored.status is not RunStatus.running else run
+        await record_transitions(self.deps.trail, [run_started(eid, template, started)])
 
     async def run_finished_entry(
         self, eid: str, template: ProcedureTemplate, patch: StatePatch, run_id: str

@@ -530,12 +530,23 @@ async def test_attempt_replay_after_rerun_writes_each_key_once() -> None:
     ]
 
 
-@pytest.mark.parametrize("change", ["window_days", "extra_days"], ids=["param_changed", "scope_param_added"])
-async def test_backfilled_entries_take_the_run_in_store(change: str, caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.parametrize(
+    ("placeholder", "error"),
+    [
+        (None, None),
+        ("{{ extra_days }}", "'extra_days' is undefined"),
+        ("{{ window_days | first }}", "'int' object is not iterable"),
+    ],
+    ids=["param_changed", "scope_param_added", "param_type_mismatch"],
+)
+async def test_backfilled_entries_take_the_run_in_store(
+    placeholder: str | None, error: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
     """验收 3 (审核 R325-05): 开始与结束留痕都没写成而执行在 Store 中已是终态 (如升级前跑过的执行) 时, 重放按 Store 中的
     那次补写. 期间程序库改了参数 (REV-08 的 window_days 各档加 7 天): 补写的与第一次相同, 开始与结束是同一范围.
-    程序库给 scope 加了快照里没有的参数 (extra_days): 渲染不出, 两行的 scope 记为空, 记一行 warning (执行 ID 与缺的
-    参数), 节点不报错, 其余字段同第一次."""
+    程序库给 scope 加了占位 (placeholder) 而按快照渲染不出: 快照里没有的参数 (extra_days), 或快照里参数的类型对不上
+    (window_days 是整数, 审核 R325-15). 两行的 scope 记为空, 记一行 warning (执行 ID 与错误), 节点不报错, 其余字段同
+    第一次."""
     nodes, _, state, trail = await assembled_with_trail()
     state["staged_results"] = (await nodes.fieldwork(dispatch(state, "REV-08")))["staged_results"]
     await nodes.fan_in(state)
@@ -545,12 +556,12 @@ async def test_backfilled_entries_take_the_run_in_store(change: str, caplog: pyt
     original = nodes.deps.library.load
     template = original("REV-08")
     assert template.scope is not None
-    if change == "window_days":
+    if placeholder is None:
         window = {"by_risk": {k: v + 7 for k, v in template.params["window_days"]["by_risk"].items()}}
         update: dict[str, Any] = {"params": {**template.params, "window_days": window}}
     else:
         scope = LocalizedText(
-            zh=template.scope.zh + ", 另加 {{ extra_days }} 天", en=template.scope.en + " + {{ extra_days }}"
+            zh=f"{template.scope.zh}, 另加 {placeholder} 天", en=f"{template.scope.en} + {placeholder}"
         )
         update = {"params": {**template.params, "extra_days": 3}, "scope": scope}
     changed = template.model_copy(update=update)
@@ -560,13 +571,13 @@ async def test_backfilled_entries_take_the_run_in_store(change: str, caplog: pyt
     await nodes.fan_in(state | {"staged_results": replayed["staged_results"]})
 
     again = [next(e for e in trail.entries if e.idempotency_key == key) for key in keys]
-    if change == "window_days":
+    if error is None:
         assert [e.payload for e in again] == [e.payload for e in first]
         assert again[0].payload["scope"] == again[1].payload["scope"]
     else:
         assert [e.payload for e in again] == [e.payload | {"scope": None} for e in first]
         assert [r.getMessage() for r in caplog.records if "RUN-REV-08-1" in r.getMessage()] == [
-            "执行 RUN-REV-08-1 的范围说明渲染不出, scope 记为空: 'extra_days' is undefined"
+            f"执行 RUN-REV-08-1 的范围说明渲染不出, scope 记为空: {error}"
         ] * 2
 
 
