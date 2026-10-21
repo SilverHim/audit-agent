@@ -163,6 +163,8 @@ async def test_scan_increment_writes_run_and_exceptions_only() -> None:
     )
     first_communicated = registration(1, round1_misstatements())[0]["communicated_at"]
     assert run.params_snapshot["audit_adjustment_start"] == first_communicated
+    # 记下扫描时的数据版本: 过期判定把它算作增量已覆盖的版本 (staleness.covered_versions, 审核 R194-08)
+    assert run.data_version == (await deps.data.readiness(state["engagement_id"])).data_version
     assert [x.id for x in patch["exceptions"]] == ["X-GEN-05-2-R02-1"]
     [commit] = [c for c in deps.output_store.commits if any(getattr(o, "id", None) == run.id for o in c)]
     assert {type(o).__name__ for o in commit} == {"ProcedureRun", "AuditException", "RunPopulation"}
