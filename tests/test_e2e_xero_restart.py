@@ -2,14 +2,15 @@
 用同一检查点与存储起新进程 (新的主图, runner, 数据服务与接口客户端, 经组装根的启动恢复 main.recover), 照页面接着走到
 归档; 终态, 计数与留痕同不中断时 (assert_end_state).
 
-三处中断 (仿 R57, 都在演示配置下有; 手法取 tests/interrupts):
+四处中断 (仿 R57, 都在演示配置下有; 手法取 tests/interrupts):
 - P2 发函后: 第 0 层汇合进检查点后 DOC-06 执行中 (BlockingIngest 卡住) 取消后台任务 (kill).
 - 计划闸门: PLN-15 批准写进 Store 后, 越过闸门 (写检查点) 前中断 (CrashingTrail).
 - 复核: BA-091 的认定错报决定写进 Store 后, 交给等待的节点前中断 (CrashingTrail).
+- 更正通知 (需求 R195): 写进 Store 后, 越过等待更正的节点前中断 (CrashingTrail).
 决定写进 Store 后中断时, 检查点没跟上: 恢复前再提交报 RESUME_REQUIRED, 恢复补做 (补写留痕, 越过闸门或交给等待的
-节点). 三种都: 函证只发 2 次, 第 0 层程序都只有 RUN-x-1, llm_call 与 external_call 的行数同不中断时 (含在
-assert_end_state 里). 被杀时 DOC-06 已进入执行而没调大模型, 恢复后重做 (同一执行编号, 允许重跑, R57-01): Agent 多调
-一次, 不计入 assert_end_state 的执行次数.
+节点). 四种都: 函证只发 2 次, 第 0 层程序的全量执行都只有 RUN-x-1, 审计调整分录只载入一次, llm_call 与 external_call
+的行数同不中断时 (含在 assert_end_state 里). 被杀时 DOC-06 已进入执行而没调大模型, 恢复后重做 (同一执行编号, 允许
+重跑, R57-01): Agent 多调一次, 不计入 assert_end_state 的执行次数.
 
 读快照与补造目录, 标 external; 离线 (内存检查点与假存储, 同走通的 walked).
 """
@@ -23,6 +24,7 @@ from typing import Any, cast
 import pytest
 
 from backend.agents.base import AgentDeps, ProcedureAgent
+from backend.contracts.models import RunTrigger
 from backend.main import recover
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
@@ -32,6 +34,7 @@ from tests.fakes import NUMBAT_AUDITOR, FakeConfirmationChannel, api_client
 from tests.fixture_sets import XERO
 from tests.interrupts import CRASH, BlockingIngest, CrashingTrail, kill
 from tests.test_demo_walkthrough import BA091, Session, Walk, assert_end_state, walk
+from tests.xero_fakes import LoadingDatasets
 from tests.xero_flow import API, demo_offline, drain, xero_link
 from tests.xero_harness import LayeredMockLLMClient
 
@@ -123,13 +126,18 @@ async def interrupted_walk(*, block: bool = False, crash: Crash | None = None) -
 
 
 async def assert_recovered(w: Walk, s: Restarting) -> None:
-    """三种中断共同的: 只重启一次; 函证共发 2 次; 检查点中第 0 层程序都只有第 1 次执行; 其余同不中断时
-    (assert_end_state, 含 llm_call 与 external_call 的行数)."""
+    """四种中断共同的: 只重启一次; 函证共发 2 次; 审计调整分录 (AJE-X01, AJE-X05) 只载入一次; 检查点中第 0 层程序的
+    全量执行都只有第 1 次; 其余同不中断时 (assert_end_state, 含 llm_call 与 external_call 的行数, 总账 1022 行)."""
     assert s.restarts == 1
-    channel = s.runner.deps.confirmations
+    deps = s.runner.deps
+    channel = deps.confirmations
     assert isinstance(channel, FakeConfirmationChannel) and len(channel.submits) == 2
+    loader = deps.datasets
+    assert isinstance(loader, LoadingDatasets)
+    assert [entry_nos for _, _, entry_nos in loader.adjustment_loads] == [["AJE-X01", "AJE-X05"]]
     values = (await s.runner.app.aget_state(GraphRunner.config(w.x.eid))).values
-    assert sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0) == [f"RUN-{p}-1" for p in LAYER0]
+    full = [r for r in values["procedure_runs"] if r.trigger is not RunTrigger.incremental]  # 另有 GEN-05 的增量执行
+    assert sorted(r.id for r in full if r.procedure_id in LAYER0) == [f"RUN-{p}-1" for p in LAYER0]
     await assert_end_state(w)
 
 
@@ -154,10 +162,19 @@ def ba091_misstatement(path: str, body: dict[str, Any]) -> bool:
     return path.endswith("/review-records") and body["task_id"] == f"T-{BA091}-v1"
 
 
-@pytest.mark.parametrize("crash", [plan_approval, ba091_misstatement], ids=["plan_approval", "review"])
+def correction_notice(path: str, body: dict[str, Any]) -> bool:
+    return path.endswith("/correction-notices")
+
+
+@pytest.mark.parametrize(
+    "crash",
+    [plan_approval, ba091_misstatement, correction_notice],
+    ids=["plan_approval", "review", "correction_notice"],
+)
 async def test_decision_in_store_only_recovers(crash: Crash) -> None:
-    """计划闸门 PLN-15 的批准, 或 BA-091 的认定错报, 写进 Store 后即中断: 再提交报 RESUME_REQUIRED; 新进程恢复补做
-    (补写留痕, 越过闸门或交给等待的节点) 后接着走到归档, 结果同不中断时."""
+    """计划闸门 PLN-15 的批准, BA-091 的认定错报, 或更正通知 (需求 R195), 写进 Store 后即中断: 再提交报
+    RESUME_REQUIRED; 新进程恢复补做 (补写留痕, 越过闸门或交给等待的节点; 更正通知由等待更正的节点读回后载入审计调整
+    分录, 只载入一次) 后接着走到归档, 结果同不中断时."""
     w, s = await interrupted_walk(crash=crash)
     assert len(s.crashed) == 1
     await assert_recovered(w, s)

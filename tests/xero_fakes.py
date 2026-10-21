@@ -114,8 +114,8 @@ DEMO_FEATURES = parse_features(
     ).split("=", 1)[1]
 )
 # 演示配置走一遍各程序读固定输出 (演示运行副本) 的次数: 上传文件分类 21 份 (承接 2, 外勤 19), 合同 3, 回函 2, REV-03
-# 三份合同, REV-02 六张发票, CSH-02 一户, GEN-02 七笔凭证 (需求 R146), RPT-03 两稿, PLN-15 两个修订 (需求 R317); 每次都
-# 一次通过
+# 三份合同, REV-02 六张发票, CSH-02 一户, GEN-02 七笔凭证 (需求 R146), RPT-03 两稿, PLN-15 两个修订 (需求 R317),
+# FIN-03 与 FIN-09 对第 1 轮两条错报各一次 (需求 R195); 每次都一次通过
 FIXTURE_READS = {
     "DOC-CLASSIFY": 21,
     "DOC-04": 3,
@@ -126,6 +126,8 @@ FIXTURE_READS = {
     "GEN-02": 7,
     "RPT-03": 2,
     "PLN-15": 2,
+    "FIN-03": 2,
+    "FIN-09": 2,
 }
 FIXED_CALLS = sum(FIXTURE_READS.values())  # 固定输出走一遍的大模型调用数
 # 演示的两次 PLN-15 决定的请求体: 先退回 (要求写明银行函证的时间), 再批准 (确认同 R205; 需求 R317)
@@ -900,10 +902,13 @@ def xero_gen05_result(run: ProcedureRun) -> RuleResult:
     """GEN-05 对 Xero 演示的结果 (需求 R131 验收 5, 7 与 R132 验收 7, 取自连库跑一次的结果): 新规则 R09-R12 的 7 条
     例外 (xero_gen05_exceptions), 原有规则 0 条; 录入时间不可靠, 看录入时间的 R01, R06, R08, R13 不执行 (理由为数据集
     声明的说明); 分录都没有审批人, R04 不可执行; 录入人只有一个, R07 不可执行. R02, R03 (审批限额 500000), R05 执行
-    而没有命中."""
+    而没有命中. 增量实例 (需求 R194, 参数 entry_nos 为要扫的凭证) 只留这些凭证上的例外, 同 SQL 按 entry_nos 取分录;
+    第 1 轮更正分录 AJE-X01, AJE-X05 上没有 (需求 R195 验收 5)."""
     note = xero_traits().entry_timestamps_note or ""
+    scanned = run.params_snapshot.get("entry_nos")
+    exceptions = xero_gen05_exceptions(run)
     return RuleResult(
-        exceptions=xero_gen05_exceptions(run),
+        exceptions=[x for x in exceptions if scanned is None or x.detail["entry_no"] in scanned],
         rows={},
         outcomes=[
             RuleOutcome(rule_id="R01", status="skipped", reason=note),
