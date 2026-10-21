@@ -12,7 +12,8 @@
 FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
 
 终验 (需求 R263) 在硬性之上另查 (assert_final): 重要性 32431 / 16216 / 1622, 汇总表为 BA-091 与 XJ-499 两笔, 签字报告的
-意见类型与汇总表候选一致; 各大模型程序 (判断, 合同与回函抽取, 上传分类) 的结果只在人给了结论的对象上偏离固定输出;
+意见类型与汇总表候选一致; 各大模型程序 (判断, 合同与回函抽取, 上传分类) 的结果只在人给了结论的对象上偏离固定输出
+(判断只看是否认定错报, accept 与 more_evidence 之间的不同只告警, 同 R251);
 签字后再提交决定报 ENGAGEMENT_LOCKED; 留痕的 token 都大于 0.
 
 断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed, unattributed
@@ -70,6 +71,7 @@ from tests.live_walk import (
     language_problem,
     review_body,
     translated_quote,
+    verdict,
     warn_soft,
 )
 from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用, 搬它不在需求 R353)
@@ -331,6 +333,21 @@ def test_language_problem(text: str, problem: str | None, run: bool) -> None:
 def test_translated_quote(text: str, translated: bool) -> None:
     """审核 R343-03: 引号里出现中文的引文告警 (Xero 的合同与回函原文都是英文, 多半是把原文译掉了)."""
     assert (translated_quote(text) is not None) == translated
+
+
+@pytest.mark.parametrize(
+    ("actual", "fixture", "deviates"),
+    [
+        ("more_evidence", "accept", False),  # 真实模型 en 一次的 GEN-02 XJ-397, 449, 601: 只告警
+        ("accept", "more_evidence", False),
+        ("misstatement", "accept", True),
+        ("accept", "misstatement", True),
+        ("misstatement", "misstatement", False),
+    ],
+)
+def test_judgment_deviates_only_on_misstatement(actual: str, fixture: str, deviates: bool) -> None:
+    """R263 验收 4 的判断类口径 (同 R251): 只有是否认定错报不同才算偏离."""
+    assert (verdict(actual) != verdict(fixture)) == deviates
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:

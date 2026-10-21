@@ -9,7 +9,7 @@
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑, 项目与
   各执行的语言, 中文执行写出的文字中不是中文的); assert_hard 与 warn_soft 为两级检查.
 - 终验 (需求 R263): evaluate 另记重要性, 汇总表与各大模型程序的结果和固定输出 (演示运行副本, 即设计稿的预期) 的偏离;
-  assert_final 要求意见类型与汇总表候选一致, 偏离只出现在人给了结论的对象 (deviations).
+  assert_final 要求意见类型与汇总表候选一致, 偏离只出现在人给了结论的对象 (deviations; 判断类只看是否认定错报).
 - 工作语言 (需求 R343): drive 按 language 建项目 (缺省 en). 中文执行 (ProcedureRun.language zh) 写出的判断, 计划叙述与
   报告两段须有中文 (language_problem, 硬性); 疑似整段英文与引号内含中文只告警 (english_run, translated_quote); mock
   下执行都记 en, 这几项为空.
@@ -35,6 +35,7 @@ from backend.contracts.models import (
     Judgment,
     OpinionType,
     ProcedureRun,
+    ProposedAction,
     ReportSection,
     ReportStatus,
     ReviewRecord,
@@ -335,6 +336,12 @@ CONFIRMATION_FIELDS = ("confirmed_balance_cents", "accrued_interest_cents")  # D
 HUMAN_DECISIONS = {Decision.misstatement}  # 对模型判断下了这些决定的, 结论由审计师给出 (认定错报带审计师的草稿)
 
 
+def verdict(action: str) -> str:
+    """判断类程序比对固定输出的口径 (需求 R263 验收 4, 同 R251; 协调者 10-21 定): 只看是否认定错报, accept 与
+    more_evidence 之间的不同不算偏离 (warn_soft 照旧逐条告警)."""
+    return "misstatement" if action == ProposedAction.misstatement.value else "not misstatement"
+
+
 async def human_concluded(runner: GraphRunner, eid: str, judgments: Sequence[Judgment]) -> set[tuple[str, str]]:
     """人给了结论的判断对象 (程序, 对象): 有人工判断 (-H: 推翻, 仲裁两者都不采用, 人工结果, 对例外认定错报), 或审计师
     对模型判断认定错报 (带审计师写的草稿)."""
@@ -356,9 +363,9 @@ async def deviations(
 ) -> tuple[list[str], dict[str, int]]:
     """各大模型程序的结果与演示运行副本的固定输出 (设计稿的预期) 不同, 且不是人给的结论的 (需求 R263 验收 4), 每条
     "程序 对象: 实际 != 固定输出"; 另返回各程序比对了几个对象 (没有固定输出的不比), 防比对空跑.
-    判断 (JUDGING) 为模型最后一次的建议动作, 人给了结论的对象 (human_concluded) 不算; DOC-04 为合同的对方, 金额与签署日
-    (CONTRACT_FIELDS); DOC-06 为各函证当前版本的回函余额与应计利息 (BA-090 的余额符号抽错时在这里报出, 不能悄悄进
-    CSH-02 的差额); DOC-CLASSIFY 为审计师上传的文件的类型."""
+    判断 (JUDGING) 为模型最后一次的建议动作是否认定错报 (verdict), 人给了结论的对象 (human_concluded) 不算; DOC-04 为
+    合同的对方, 金额与签署日 (CONTRACT_FIELDS); DOC-06 为各函证当前版本的回函余额与应计利息 (BA-090 的余额符号抽错时
+    在这里报出, 不能悄悄进 CSH-02 的差额); DOC-CLASSIFY 为审计师上传的文件的类型; 后三者严格比对."""
     deps = runner.deps
     store = deps.output_store
     human = await human_concluded(runner, eid, await store.latest(eid, Judgment))
@@ -373,7 +380,7 @@ async def deviations(
     for (pid, subject), j in sorted(judged.items()):
         expected = fixture_action(pid, subject)
         if expected is not None and (pid, subject) not in human:
-            compare(pid, subject, j.proposed_action.value, expected)
+            compare(pid, subject, verdict(j.proposed_action.value), verdict(expected))
     for contract in sorted(await deps.financial_store.contracts(eid), key=lambda c: c.id):
         if (fixture := fixture_of("DOC-04", contract.id)) is not None:
             actual = contract.model_dump(mode="json", include=set(CONTRACT_FIELDS))
