@@ -10,7 +10,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, useDeferrals } from '@/lib/new-api'
-import { isJudgment, procedureName, rankTasks, splitManual } from '@/lib/review'
+import { isJudgment, manualInstructions, procedureName, rankTasks, splitManual } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/decisions')({
@@ -177,8 +177,8 @@ function Decisions() {
                       >
                         <span className="flex min-w-0 flex-col">
                           <span className="font-semibold text-[13.5px]">{t.taskKinds.manual}</span>
-                          <span className="truncate text-[12.5px] text-[#4a5262]" lang="en">
-                            {view.task.manual_request?.instructions}
+                          <span className="truncate text-[12.5px] text-[#4a5262]">
+                            {manualInstructions(t, view.task.procedure_id, view.task.manual_request?.instructions)}
                           </span>
                         </span>
                         <span className="text-[13px]">

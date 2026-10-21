@@ -5,15 +5,18 @@ start → 停在 ACC-01 闸门 → 演示导入 acceptance → ACC-01 approve �
 确认数据已齐 → 图继续 (DOC-04 沿用上传时抽出的合同).
 
 经 HTTP 走的演示 (走通用例 R287 与真实模型变体 R311 的不联网自测) 另用 demo_offline 装离线依赖与客户端, xero_link
-给数据接口的 Xero 连接服务 (需求 R353).
+给数据接口的 Xero 连接服务 (需求 R353); 错报闭环第 1 轮的 FIN-08 登记与更正通知 (fin08_record, correction_notice,
+需求 R195) 也由两者共用.
 """
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -52,12 +55,20 @@ from tests.xero_fakes import (
     SNAPSHOT_NAME,
     SNAPSHOT_REPO,
     XERO_RULES,
+    LoadingDatasets,
+    XeroFakeDataStore,
     new_xero_deps,
+    round_file,
     snapshot_root,
+    xero_fin09_result,
 )
 
 API = "/api/v1"  # 接口前缀
 READY_REASON = "演示数据已导入"  # 确认数据已齐时的理由 (Xero 录入人为连接器占位值, 审批日志一项待补交)
+SYDNEY = ZoneInfo("Australia/Sydney")
+# FIN-08 登记的结论与理由 (需求 R195; 回复原文取补造的第 1 轮沟通记录 manual/fin08_round1.json)
+FIN08_CONCLUSION = "Both misstatements were communicated to management in writing; management agreed to correct both."
+FIN08_REASON = "Management's written response recorded as received."
 
 
 def demo_source(supplements: Path | None = None) -> RoutingDatasetLoader:
@@ -151,6 +162,42 @@ def entered_p2_by(entries: Iterable[TrailEntry]) -> list[str | None]:
     ]
 
 
+def fin08_record(view: dict[str, Any]) -> dict[str, Any]:
+    """FIN-08 人工任务 (GET manual-tasks 的一项) 的登记 (需求 R195), 照页面的登记表: 材料列出的每条错报一行, 沟通与
+    回复取补造的第 1 轮沟通记录, 都同意更正; 执行日为回复当天 (悉尼). 演示走通与真实模型的驱动共用."""
+    data = round_file(1)
+    rows = [
+        {
+            "misstatement_id": m["id"],
+            "base_version": m["version"],
+            "communicated_at": data["communicated_at"],
+            "communicated_to": data["recipient"],
+            "responded_at": data["responded_at"],
+            "response": data["response"],
+            "agrees_to_correct": True,
+        }
+        for m in view["request"]["material"]["misstatements"]
+    ]
+    performed_on = datetime.fromisoformat(data["responded_at"]).astimezone(SYDNEY).date().isoformat()
+    result = {"conclusion": FIN08_CONCLUSION, "performed_on": performed_on, "details": {"responses": rows}}
+    task = view["task"]
+    return {
+        "task_id": task["id"],
+        "target_version": task["target_version"],
+        "decision": "manual_result",
+        "reason": FIN08_REASON,
+        "manual_result": result,
+    }
+
+
+def correction_notice(overview: dict[str, Any]) -> dict[str, Any]:
+    """等更正时 (总览 awaiting_correction) 的更正通知 (需求 R195): 等更正的错报都已更正, 更正分录取补造的第 1 轮沟通
+    记录 (AJE-X01, AJE-X05), 同页面 "客户已过账调整分录". 演示走通与真实模型的驱动共用."""
+    entries = round_file(1)["adjustment_entry_nos"]
+    ids = overview["awaiting_correction_ids"]
+    return {"kind": "adjustments_posted", "misstatement_ids": ids, "adjustment_entry_nos": entries}
+
+
 def xero_link(deps: AgentDeps, service: DataService) -> XeroLink:
     """数据接口用的 Xero 连接服务 (假连接存储, 一律未连接; Xero 应用与主密钥置空, 同 tests.fakes.api_client)."""
     blank = get_settings().model_copy(
@@ -166,8 +213,9 @@ async def demo_offline(
     trail: FakeTrail | None = None,
     agents: Callable[[AgentDeps], Mapping[str, ProcedureAgent[Any]]] | None = None,
 ) -> AsyncIterator[tuple[GraphRunner, DataService, httpx.AsyncClient]]:
-    """离线的演示项目: 能建项目的假项目存储, 空的 Xero 假存储, 规则引擎 FakeRuleEngine(XERO_RULES), 登记 mock 按
-    数据集定位, 功能集为演示配置; llm 同时作复核模型. 给出 (runner, 数据服务, 以项目负责人登录的接口客户端). 走通用例
+    """离线的演示项目: 能建项目的假项目存储, 空的 Xero 假存储, 规则引擎 FakeRuleEngine(XERO_RULES, 另加 FIN-09 的
+    V01 跟着已载入的更正分录走), 更正分录载入时记进假财务存储 (LoadingDatasets), 登记 mock 按数据集定位, 功能集为
+    演示配置; llm 同时作复核模型. 给出 (runner, 数据服务, 以项目负责人登录的接口客户端). 走通用例
     的 walked 与真实模型变体的 offline_walk 共用 (需求 R353). 重启变体 (需求 R262) 另给留痕 (缺省 FakeTrail) 与按
     依赖换掉的 Agent (offline_runner)."""
     store = CreatingEngagementStore()
@@ -180,7 +228,9 @@ async def demo_offline(
         features=DEMO_FEATURES,
         engagement_store=store,
     )
-    deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
+    cast(FakeRuleEngine, deps.rules).results["FIN-09"] = xero_fin09_result(deps.financial_store)
+    registry = DatasetRegistrySource(store, datasets.supplement_dir)
+    deps = replace(deps, registry=registry, datasets=LoadingDatasets(cast(XeroFakeDataStore, deps.data)))
     runner = offline_runner(deps, agents(deps) if agents is not None else None)
     service = DataService(deps, runner, demo=datasets)
     async with api_client(runner, NUMBAT_AUDITOR.id, xero=xero_link(deps, service)) as client:

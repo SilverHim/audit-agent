@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { ManualTaskView } from '../src/client/types.gen'
 import { emptyManualDraft, manualRecordBody, parseDetails, resultFields } from '../src/lib/manual-api'
+import { en } from '../src/locales/en'
 import { zh } from '../src/locales/zh'
 import fixture from './fixtures/manual-tst-m01.json'
 
@@ -146,5 +147,15 @@ describe('manualRecordBody', () => {
   test('列出的文件没有证据种类时报错, 不兜底成别的种类', () => {
     const { [CONTRACT]: _, ...types } = VIEW.evidence_types
     expect(() => manualRecordBody({ ...VIEW, evidence_types: types }, draft, zh)).toThrow(`${CONTRACT} 没有证据种类`)
+  })
+})
+
+describe('证据要求的提示', () => {
+  test('至少要几页时写出页数; 不要求证据 (min_evidence 为 0, 如 FIN-08) 时写证据可不附, 不写 "至少 0 页"', () => {
+    for (const t of [en, zh]) {
+      expect(t.manualPage.minEvidence(2)).toContain('2')
+      expect(t.manualPage.minEvidence(0)).not.toContain('0')
+    }
+    expect(en.manualPage.minEvidence(1)).toBe('Choose at least 1 page from registered documents.')
   })
 })

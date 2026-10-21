@@ -5,7 +5,8 @@
   建议动作; failed 与 unattributed 任务 (判断失败, 后者为带规则例外的对象, 需求 R347) 每个对象至多重跑一次, 计划与
   报告整条失败按修订计 (REVISED_BY); unattributed 重跑后仍失败才按决定表推翻或认定错报. 一轮失败算一组: 对一条
   rerun 时同程序其余待决的可重跑任务随之重跑, 一并计数.
-- drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk.
+- drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk; 错报闭环 (需求 R195) 的 FIN-08 人工任务按
+  补造的第 1 轮沟通记录登记, 等更正时提交两笔都已更正的更正通知 (同演示走通, tests/xero_flow).
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑, 项目与
   各执行的语言, 中文执行写出的文字中不是中文的); assert_hard 与 warn_soft 为两级检查.
 - 终验 (需求 R263): evaluate 另记重要性, 汇总表与各大模型程序的结果和固定输出 (演示运行副本, 即设计稿的预期) 的偏离;
@@ -33,6 +34,7 @@ from backend.contracts.models import (
     Confirmation,
     Decision,
     Judgment,
+    Misstatement,
     OpinionType,
     ProcedureRun,
     ProposedAction,
@@ -63,7 +65,7 @@ from tests.xero_fakes import (
     XERO17_MATERIALITY,
     xero_journal_reviews,
 )
-from tests.xero_flow import API, READY_REASON, drain, entered_p2_by
+from tests.xero_flow import API, READY_REASON, correction_notice, drain, entered_p2_by, fin08_record
 
 JUDGING = ("REV-03", "REV-02", "CSH-02", "GEN-02")  # 演示配置下出判断的大模型程序, 各对象的固定输出在运行副本里
 JUDGED = sum(FIXTURE_READS[pid] for pid in JUDGING)  # 判断对象数 (17)
@@ -257,10 +259,20 @@ async def drive(
         if overview["engagement"]["phase"] == "Archived":
             return walk
         pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
+        if any(v["task"]["kind"] == "manual" for v in pending):  # FIN-08 登记管理层回复 (需求 R195)
+            manual = [v for v in (await client.get(f"{base}/manual-tasks")).json() if v["task"]["status"] == "pending"]
+            assert [v["task"]["procedure_id"] for v in manual] == ["FIN-08"], manual
+            body = fin08_record(manual[0])
+            walk.decisions.append((body["task_id"], body["decision"]))
+            await post("review-records", body)
+            continue
         if pending:
             body = review_body(pending[0], table, walk, pending)
             walk.decisions.append((body["task_id"], body["decision"]))
             await post("review-records", body)
+            continue
+        if overview["awaiting_correction"]:  # 客户已过账两笔调整分录 (需求 R195)
+            await post("correction-notices", correction_notice(overview))
             continue
         suggested = (await client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
         if suggested is not None:
@@ -517,9 +529,11 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
         values[k] for k in ("materiality_cents", "performance_materiality_cents", "clearly_trivial_cents")
     ]
     schedule = await store.get(eid, UncorrectedSchedule, "SCHEDULE")
+    amounts = {m.id: m.amount_cents for m in await store.latest(eid, Misstatement)}
     out["schedule"] = (
         {
             "amounts": sorted(i.amount_cents for i in schedule.items),
+            "corrected": sorted(amounts[mid] for mid in schedule.corrected_ids),
             "total_cents": schedule.total_cents,
             "candidate_opinion": schedule.candidate_opinion.value,
         }
@@ -569,18 +583,20 @@ def assert_hard(data: dict[str, Any]) -> None:
 
 
 # 演示配置下的终态 (需求 R263 验收 3, 同 R287 的计数): 重要性按 PLN-01/03 闸门的决定 (收入 1%, 执行 50%, 明显微小 5%);
-# 汇总表为 BA-091 与 XJ-499 两笔 (审计师按决定表认定, 错报闭环不开, 按未更正累计), 合计超过重要性
+# 汇总表没有未更正项, 已更正的为 BA-091 与 XJ-499 两笔 (审计师按决定表认定, 错报闭环第 1 轮管理层都更正, 需求 R195)
 MATERIALITY = [32431, 16216, 1622]
-SCHEDULE_AMOUNTS = [4853, 75000]
+SCHEDULE_AMOUNTS: list[int] = []
+CORRECTED_AMOUNTS = [4853, 75000]
 
 
 def assert_final(data: dict[str, Any]) -> None:
-    """终验 (需求 R263): 重要性与汇总表同演示配置的终态 (MATERIALITY, SCHEDULE_AMOUNTS); 签字报告的意见类型与汇总表的
-    候选一致 (FIN-01 按候选决定); 各大模型程序的结果只在人给了结论的对象上偏离固定输出 (deviations 为空). 走到归档与
-    run_error 为空由驱动保证, 意见段标题等见 assert_hard."""
+    """终验 (需求 R263): 重要性与汇总表同演示配置的终态 (MATERIALITY, SCHEDULE_AMOUNTS, CORRECTED_AMOUNTS); 签字报告的
+    意见类型与汇总表的候选一致 (FIN-01 按候选决定); 各大模型程序的结果只在人给了结论的对象上偏离固定输出 (deviations
+    为空). 走到归档与 run_error 为空由驱动保证, 意见段标题等见 assert_hard."""
     assert data["materiality"] == MATERIALITY, data["materiality"]
     schedule = data["schedule"]
     assert schedule is not None and schedule["amounts"] == SCHEDULE_AMOUNTS, schedule
+    assert schedule["corrected"] == CORRECTED_AMOUNTS, schedule
     assert schedule["total_cents"] == sum(SCHEDULE_AMOUNTS)
     assert data["report_opinion"] == [schedule["candidate_opinion"]] == [data["candidate_opinion"]], data
     assert data["deviations"] == [], data["deviations"]

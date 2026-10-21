@@ -4,7 +4,7 @@ import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { QueryState } from '@/components/query-state'
 import { useI18n } from '@/lib/i18n'
 import { useManualTasks } from '@/lib/manual-api'
-import { procedureName } from '@/lib/review'
+import { manualInstructions, procedureName } from '@/lib/review'
 
 export const Route = createFileRoute('/engagements/$eid/manual/')({ component: ManualQueue })
 
@@ -54,8 +54,8 @@ function ManualQueue() {
                           {procedureName(t, view.task.procedure_id, view.procedure_name)}
                         </span>
                       </Link>
-                      <span className="line-clamp-2 text-[13px]" lang="en">
-                        {view.request.instructions}
+                      <span className="line-clamp-2 text-[13px]">
+                        {manualInstructions(t, view.task.procedure_id, view.request.instructions)}
                       </span>
                       <span>
                         <StatusPill tone={pending ? 'warn' : 'ok'}>

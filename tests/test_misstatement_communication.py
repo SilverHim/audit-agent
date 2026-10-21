@@ -9,6 +9,7 @@ await_correction 与 verify_correction 之前停下 (本文件只看沟通; 等�
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -32,6 +33,7 @@ from backend.contracts.models import (
     ReviewTask,
     TaskKind,
     TrailKind,
+    WorkingLanguage,
 )
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.features import BASELINE, MISSTATEMENT
@@ -50,11 +52,13 @@ from tests.fakes import (
     submit_and_wait,
     wait_idle,
 )
+from tests.live_walk import CJK
 from tests.misstatement_fakes import (
     CSH02,
     ROUND2,
     XJ499,
     communicated_fields,
+    fin03_context,
     fin03_deps,
     fin03_state,
     round1_communicated,
@@ -148,7 +152,7 @@ async def test_round1_dispatched_registered_and_collected(monkeypatch: pytest.Mo
     task = latest(s, ReviewTask, task_of(1))
     assert (task.kind, task.subject_id, task.target_id) == (TaskKind.manual, "RESULT", "RUN-FIN-08-1")
     assert task.manual_request.material == {
-        "request": CORRECTION_REQUEST,
+        "request": CORRECTION_REQUEST["en"],  # mock 的执行记 en (需求 R343)
         "misstatements": [listed(m, sources[m.judgment_id]) for m in (xj499, csh02)],
     }
     assert [(row["amount_cents"], row["direction"]) for row in task.manual_request.material["misstatements"]] == [
@@ -227,6 +231,17 @@ def test_to_communicate(status: MisstatementStatus, changes: dict[str, Any], lis
     state = fin03_state(misstatements=[xj499, csh02.model_copy(update={"status": status, **changes})])
     assert [x.id for x in to_communicate(state)] == [XJ499, *([CSH02] if listed else [])]
     assert [x.id for x in to_communicate(state | superseded_source())] == [XJ499]
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_request_in_run_language(language: WorkingLanguage) -> None:
+    """需求 R357: 材料里的更正请求取本次执行的生成语言 (run.language, 即 AgentDeps.run_language); en 的没有中文."""
+    deps = fin03_deps(FakeTrail(), features=FEATURES)
+    ctx = fin03_context(deps, fin03_state(misstatements=round1_misstatements()), FIN08)
+    material = deps.manual_owners[FIN08].prepare(replace(ctx, run=ctx.run.model_copy(update={"language": language})))
+    assert material is not None
+    request = material["request"]
+    assert (request, CJK.search(request) is not None) == (CORRECTION_REQUEST[language], language == "zh")
 
 
 def test_response_on_stale_version_conflicts() -> None:

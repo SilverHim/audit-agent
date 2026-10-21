@@ -21,7 +21,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -52,7 +52,6 @@ from backend.contracts.models import (
     UncorrectedSchedule,
 )
 from backend.contracts.ports import LLMRequest, LLMResponse
-from backend.contracts.services import RuleResult
 from backend.contracts.state import StatePatch
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.graph import P3_NODES
@@ -63,7 +62,6 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     EngagementWrite,
-    FakeFinancialStore,
     FakeOutputStore,
     FakeRuleEngine,
     FakeTrail,
@@ -82,12 +80,13 @@ from tests.test_misstatement_communication import DECIDED_1, DECIDED_2, register
 from tests.test_p3_flow import stub_library
 from tests.test_review_decisions import record
 from tests.xero_fakes import (
-    XeroFakeDatasetLoader,
+    LoadingDatasets,
+    XeroFakeDataStore,
     registration,
     round_file,
     xero_engagement,
+    xero_fin09_result,
     xero_financial_store,
-    xero_v01_rows,
 )
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 Xero fixture
@@ -140,28 +139,6 @@ class Replies:
         except ValidationError as e:
             output, error = None, str(e)
         return LLMResponse(output=output, raw=raw, model="scripted", input_tokens=1, output_tokens=1, error=error)
-
-
-class LoadingDatasets(XeroFakeDatasetLoader):
-    """载入更正分录时同时记进假财务存储 (同真实载入写总账): FIN-09 的 V01 与指针解析都看得到它们."""
-
-    async def load_adjustments(
-        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
-    ) -> Any:
-        lines = await super().load_adjustments(eid, dataset, entry_nos, actor=actor)
-        self.financial_store.records |= {("journal_entry", line.id): line.model_dump() for line in lines}
-        return lines
-
-
-def loaded(store: FakeFinancialStore) -> list[str]:
-    """假财务存储中已载入的审计更正分录的凭证号."""
-    return sorted(
-        {
-            str(r["entry_no"])
-            for (kind, _), r in store.records.items()
-            if kind == "journal_entry" and str(r["entry_no"]).startswith("AJE-")
-        }
-    )
 
 
 @dataclass
@@ -279,9 +256,7 @@ def killable(
 async def start(tmp_path: Path, llm: Replies | None = None) -> Loop:
     """见模块 docstring: 推进到第一次停下 (misstatement_triage 等 FIN-03 的复核)."""
     financial = xero_financial_store()
-    rules = FakeRuleEngine(
-        {FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": xero_v01_rows(loaded(financial))})}
-    )
+    rules = FakeRuleEngine({FIN09: xero_fin09_result(financial)})
     client = llm if llm is not None else Replies()
     deps = fin03_deps(
         CrashingTrail(),
@@ -291,7 +266,7 @@ async def start(tmp_path: Path, llm: Replies | None = None) -> Loop:
         library=stub_library(tmp_path / "knowledge", ["FIN-15"]),
         features=FEATURES,
     )
-    deps = replace(deps, datasets=LoadingDatasets(financial))
+    deps = replace(deps, datasets=LoadingDatasets(cast(XeroFakeDataStore, deps.data)))
     loop_ref: list[Loop] = []
 
     def propose(ctx: RunContext) -> StatePatch:

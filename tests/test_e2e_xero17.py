@@ -47,6 +47,7 @@ from backend.contracts.models import (
     ReviewStatus,
     ReviewTask,
     RunPopulation,
+    TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -271,24 +272,22 @@ JOURNAL_JUDGMENTS = {
     "J-GEN-02-1-XJ-575": (2, ReviewStatus.overridden, ProposedAction.more_evidence),
     "J-GEN-02-1-XJ-575-H1": (1, ReviewStatus.confirmed, ProposedAction.accept),
 }
-# 多出的错报 (来源判断, 类型, 科目, 认定, 金额, 方向, 状态): 错报闭环未接入, 按未更正累计
-JOURNAL_MISSTATEMENT = (
-    "J-GEN-02-1-XJ-499",
-    "factual",
-    "Office equipment (710)",
-    "Existence",
-    75000,
-    "overstated",
-    "uncorrected",
-)
+# 多出的错报 (来源判断, 类型, 科目, 认定, 金额, 方向); 状态按错报闭环是否接入 (assert_results 的 loop)
+JOURNAL_MISSTATEMENT = ("J-GEN-02-1-XJ-499", "factual", "Office equipment (710)", "Existence", 75000, "overstated")
 
 
-async def assert_results(x: Xero17, journals: bool = False) -> None:
+async def assert_results(x: Xero17, journals: bool = False, loop: bool = False) -> None:
     """例外 11 条 (PLN-07 A01 九条 open, 科目与变动额同 R112; R03-1 与 D04-1 attributed); 判断 10 条最新为 v2
     confirmed (REV-03 三条与 REV-02 六条 accept, BA-091 misstatement); 任务 10 条 decided; 两户函证 agreed; 错报
     1 条. journals 为真时 (需求 R146 验收 3) 只多本组增量: 例外多 GEN-05 的 7 条 (都 attributed, R11-1 归因于人工判断),
-    判断多 8 条 (JOURNAL_JUDGMENTS), 任务多 GEN-02 的 7 条 decided, 错报多 XJ-499 的 1 条; 其余不变."""
+    判断多 8 条 (JOURNAL_JUDGMENTS), 任务多 GEN-02 的 7 条 decided, 错报多 XJ-499 的 1 条; 其余不变 (错报 uncorrected).
+    loop 为真时 (功能 misstatement, 需求 R195) 另多第 1 轮错报闭环: 判断多 FIN-03, FIN-09 对每条错报各 1 条 (v2
+    confirmed accept), 任务多这几条与 FIN-08 的人工任务 T-RUN-FIN-08-1-v1 (都 decided), 错报都 corrected; 例外不变
+    (GEN-05 的增量扫描没有命中)."""
     store = x.runner.deps.output_store
+    misstatements = await store.latest(x.eid, Misstatement)
+    loop_judgments = [f"J-{pid}-1-{m.id}" for m in misstatements for pid in ("FIN-03", "FIN-09")] if loop else []
+    accepted = dict.fromkeys(loop_judgments, (2, ReviewStatus.confirmed, ProposedAction.accept))
     exceptions = {e.id: e for e in await store.latest(x.eid, AuditException)}
     a01 = {
         f"X-PLN-07-1-A01-{n}": ([code], int(current) - int(opening), ExceptionDisposition.open)
@@ -309,7 +308,7 @@ async def assert_results(x: Xero17, journals: bool = False) -> None:
     }
     assert {i: (j.version, j.review_status, j.proposed_action) for i, j in judgments.items()} == {
         i: (2, ReviewStatus.confirmed, action) for i, action in expected.items()
-    } | (JOURNAL_JUDGMENTS if journals else {})
+    } | (JOURNAL_JUDGMENTS if journals else {}) | accepted
     assert exceptions["X-REV-08-1-R03-1"].attributed_by == f"J-REV-02-1-{ORC1026}"
     assert exceptions["X-CSH-02-1-D04-1"].attributed_by == "J-CSH-02-1-BA-091"
     if journals:
@@ -318,8 +317,9 @@ async def assert_results(x: Xero17, journals: bool = False) -> None:
         }
         assert judgments["J-GEN-02-1-XJ-575"].superseded_by == "J-GEN-02-1-XJ-575-H1"
     tasks = await store.latest(x.eid, ReviewTask)
-    reviewed = [*expected, *(f"J-GEN-02-1-{v}" for v in XERO_JOURNAL_VOUCHERS if journals)]
-    assert sorted(t.target_id for t in tasks) == sorted(reviewed)
+    reviewed = [*expected, *(f"J-GEN-02-1-{v}" for v in XERO_JOURNAL_VOUCHERS if journals), *loop_judgments]
+    assert sorted(t.target_id for t in tasks if t.kind is not TaskKind.manual) == sorted(reviewed)
+    assert [t.id for t in tasks if t.kind is TaskKind.manual] == (["T-RUN-FIN-08-1-v1"] if loop else [])
     assert {t.status for t in tasks} == {TaskStatus.decided}
     confirmations = {c.id: c for c in await store.latest(x.eid, Confirmation)}
     assert {
@@ -329,12 +329,12 @@ async def assert_results(x: Xero17, journals: bool = False) -> None:
         "C-BA-090": (ConfirmationResult.agreed, -1090044, -1090044, 0, 0),
         "C-BA-091": (ConfirmationResult.agreed, 1158123, 1158123, 0, 4853),
     }
-    misstatements = await store.latest(x.eid, Misstatement)
+    status = "corrected" if loop else "uncorrected"
     assert sorted(
         (m.judgment_id, m.type, m.account, m.assertion, m.amount_cents, m.direction, m.status) for m in misstatements
     ) == [
-        ("J-CSH-02-1-BA-091", "factual", "Interest income (270)", "Completeness", 4853, "understated", "uncorrected"),
-        *([JOURNAL_MISSTATEMENT] if journals else []),
+        ("J-CSH-02-1-BA-091", "factual", "Interest income (270)", "Completeness", 4853, "understated", status),
+        *([(*JOURNAL_MISSTATEMENT, status)] if journals else []),
     ]
 
 
@@ -343,10 +343,11 @@ async def test_materiality_and_schedule(xero17: Xero17) -> None:
     await assert_materiality(xero17)
 
 
-async def assert_materiality(x: Xero17, journals: bool = False) -> None:
+async def assert_materiality(x: Xero17, journals: bool = False, loop: bool = False) -> None:
     """重要性 32431 / 16216 / 1622; 候选的三个基准 (收入, 总资产, 税前亏损); PLN-01/03 闸门材料没有未覆盖的目标;
     汇总表只有 BA-091 的错报 (4853), 未超过重要性, 候选无保留意见. journals 为真时 (需求 R146 验收 4) 汇总表多 XJ-499
-    的错报 (75000): 错报闭环未接入, 按未更正累计, 合计 79853 超过重要性, 候选为保留意见."""
+    的错报 (75000): 错报闭环未接入, 按未更正累计, 合计 79853 超过重要性, 候选为保留意见. loop 为真时 (需求 R195 验收 6)
+    错报都已更正: 汇总表 v1 没有未更正项与琐碎项, corrected_ids 为这两条, 合计 0, 候选无保留意见."""
     store = x.runner.deps.output_store
     values = (await x.runner.app.aget_state(GraphRunner.config(x.eid))).values
     assert (values["materiality_cents"], values["performance_materiality_cents"], values["clearly_trivial_cents"]) == (
@@ -368,6 +369,15 @@ async def assert_materiality(x: Xero17, journals: bool = False) -> None:
     expected = [(misstatements["J-CSH-02-1-BA-091"], 4853)]
     if journals:
         expected.append((misstatements["J-GEN-02-1-XJ-499"], 75000))
+    if loop:
+        assert (schedule.version, schedule.items, schedule.excluded_trivial_ids) == (1, [], [])
+        assert sorted(schedule.corrected_ids) == sorted(mid for mid, _ in expected)
+        assert (schedule.total_cents, schedule.materiality_cents, schedule.candidate_opinion) == (
+            0,
+            32431,
+            OpinionType.unqualified,
+        )
+        return
     assert sorted((i.misstatement_id, i.amount_cents) for i in schedule.items) == sorted(expected)
     assert (schedule.total_cents, schedule.materiality_cents, schedule.candidate_opinion) == (
         (79853, 32431, OpinionType.qualified) if journals else (4853, 32431, OpinionType.unqualified)
@@ -526,11 +536,11 @@ async def test_documents_versions_and_requests(xero17: Xero17) -> None:
     await assert_documents(xero17)
 
 
-async def assert_documents(x: Xero17) -> None:
+async def assert_documents(x: Xero17, loop: bool = False) -> None:
     """文件 23 份: 审计师上传 21 份 (负责人上传, 类型, 可靠性, 文件日期与关联对象同补造清单; 合同 3 份 extracted, 其余
     18 份 classified), 银行直达回函 2 份 (external_original, extracted). 数据版本 10 (方案取舍见确认材料 R119): 承接
-    文件 1, 快照七张 2, 补造四张 3 至 6, 上传后抽取的三份合同 7 至 9, 补登记 10. 补交请求中审批日志仍 open, 其余
-    received."""
+    文件 1, 快照七张 2, 补造四张 3 至 6, 上传后抽取的三份合同 7 至 9, 补登记 10; loop 为真时 (需求 R195) 另有更正通知
+    载入审计调整分录的 11 (总账). 补交请求中审批日志仍 open, 其余 received."""
     deps = x.runner.deps
     documents = {d.id: d for d in await deps.financial_store.documents(x.eid)}
     planned = {u.document_id: u for u in xero_uploads() if u.stage in ("acceptance", "fieldwork")}
@@ -576,8 +586,9 @@ async def assert_documents(x: Xero17) -> None:
         8: ["contracts"],
         9: ["contracts"],
         10: ["documents"],
+        **({11: ["journal_entries"]} if loop else {}),
     }
-    assert (await deps.data.readiness(x.eid)).data_version == 10
+    assert (await deps.data.readiness(x.eid)).data_version == (11 if loop else 10)
     assert {r.id: r.status for r in await deps.data.requests(x.eid)} == {
         "REQ-accounts": "received",
         "REQ-trial_balance": "received",

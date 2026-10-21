@@ -143,6 +143,9 @@ export const zh: Messages = {
     'GEN-08': '股权穿透与关联方关系图',
     'GEN-09': '判断独立复核',
   },
+  manualInstructions: {
+    'FIN-08': '请求管理层更正已累计的错报并登记回复（ASA 450 第 8 段）',
+  },
   engines: { rule: '规则', llm: '模型', hybrid: '规则 + 模型', manual: '人工决定' },
   levels: { L1: '逐条决定', L2: '逐条复核', L3: '仅复核异常', L4: '事后抽查' },
   agents: {
@@ -666,7 +669,7 @@ export const zh: Messages = {
     material: '材料',
     noMaterial: '没有材料。',
     evidence: '证据',
-    minEvidence: (n) => `从已登记的文件中至少选 ${n} 页。`,
+    minEvidence: (n) => (n > 0 ? `从已登记的文件中至少选 ${n} 页。` : '证据可不附；需要时从已登记的文件中选页。'),
     upload: '上传文件',
     uploading: '正在上传…',
     classifying: '正在分类，分为可作证据的类型后即可选用。',

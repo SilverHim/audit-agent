@@ -279,3 +279,8 @@ export function misstatementDraft(input: ReviewDraft, t: Messages): Misstatement
 export function procedureName(t: Messages, id: string, fallback?: string): string {
   return t.procedureNames[id] ?? fallback ?? id
 }
+
+// 人工程序的说明 (需求 R357): 界面语言的 manualInstructions, 没有时为后端给的 manual.instructions
+export function manualInstructions(t: Messages, procedureId: string, fallback?: string): string {
+  return t.manualInstructions[procedureId] ?? fallback ?? ''
+}

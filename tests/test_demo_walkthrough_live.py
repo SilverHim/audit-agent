@@ -9,11 +9,12 @@
 不看模型的建议动作 (decision_table): BA-091 与 XJ-499 认定错报 (草稿同 R287), XJ-575 推翻为接受, 其余确认; 争议任务能
 维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 与 unattributed
 任务 (判断失败, 后者带规则例外, 需求 R347) 重跑, 每个对象至多一次, unattributed 重跑后仍失败才按决定表处理.
-FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
+FIN-01 按汇总表的候选意见决定 (错报闭环第 1 轮两笔都更正后为无保留意见, 需求 R195), RPT-03 由模型按所选意见起草;
+FIN-08 的人工任务按补造的第 1 轮沟通记录登记, 等更正时提交两笔都已更正的更正通知.
 
-终验 (需求 R263) 在硬性之上另查 (assert_final): 重要性 32431 / 16216 / 1622, 汇总表为 BA-091 与 XJ-499 两笔, 签字报告的
-意见类型与汇总表候选一致; 各大模型程序 (判断, 合同与回函抽取, 上传分类) 的结果只在人给了结论的对象上偏离固定输出
-(判断只看是否认定错报, accept 与 more_evidence 之间的不同只告警, 同 R251);
+终验 (需求 R263) 在硬性之上另查 (assert_final): 重要性 32431 / 16216 / 1622, 汇总表没有未更正项, 已更正的为 BA-091 与
+XJ-499 两笔, 签字报告的意见类型与汇总表候选一致; 各大模型程序 (判断, 合同与回函抽取, 上传分类) 的结果只在人给了
+结论的对象上偏离固定输出 (判断只看是否认定错报, accept 与 more_evidence 之间的不同只告警, 同 R251);
 签字后再提交决定报 ENGAGEMENT_LOCKED; 留痕的 token 都大于 0.
 
 断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed, unattributed
@@ -157,7 +158,7 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
 @pytest.mark.external
 async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
     """连库自测: 真实模型用例的同一条路径 (real_walk), 大模型换成组装根的 mock (按项目数据集读演示运行副本); FIN-01 按
-    汇总表的候选意见 (保留) 决定, 报告读保留意见的两稿 (需求 R260). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用
+    汇总表的候选意见 (无保留) 决定, 报告读无保留意见的两稿 (需求 R195). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用
     FIXED_CALLS 次 (同 R287 的离线走法)."""
     XERO.ready()
     budget = Budget(max_calls=MAX_CALLS)
@@ -178,8 +179,8 @@ async def offline_walk(
     tmp_path: Path, failing: dict[tuple[str, str], int]
 ) -> tuple[LiveWalk, dict[str, Any], list[AuditException], GraphRunner]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
-    离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 按汇总表的候选意见 (保留) 决定, 报告
-    读保留意见的两稿 (需求 R260; 真实模型同样按所选意见起草). 汇总写在临时目录.
+    离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 按汇总表的候选意见 (无保留) 决定, 报告
+    读无保留意见的两稿 (需求 R195; 真实模型同样按所选意见起草). 汇总写在临时目录.
     返回走法记录, 汇总, 走到归档时存储中各例外的最新版本与 runner (存储照常可读)."""
     XERO.ready()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
@@ -214,19 +215,27 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     checks = await chinese_checks(runner, eid, as_zh)
     assert checks["chinese_checked"] > 50 and len(checks["not_in_language"]) == checks["chinese_checked"]
     assert {line.rsplit(": ", 1)[1] for line in checks["not_in_language"]} == {"没有中文"}
-    assert_final(data)  # 终验的各项 (需求 R263) 在固定输出上成立: 候选与签字报告都是保留意见
-    assert (data["schedule"]["candidate_opinion"], data["report_opinion"]) == ("qualified", ["qualified"])
+    # 终验的各项 (需求 R263) 在固定输出上成立: 错报都已更正 (需求 R195), 候选与签字报告都是无保留意见
+    assert_final(data)
+    assert (data["schedule"]["candidate_opinion"], data["report_opinion"]) == ("unqualified", ["unqualified"])
     # 比对了的对象: CSH-02 只有 BA-091 一条判断, 它与 GEN-02 的 XJ-499 由审计师认定错报, XJ-575 推翻, 都不比
     expected = {"DOC-04": 3, "DOC-06": 2, "DOC-CLASSIFY": 21, "GEN-02": 5, "REV-02": 6, "REV-03": 3}
     assert data["compared"] == expected
     assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
-    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
+    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "unqualified", FIXED_CALLS)
     actions = {(r["procedure_id"], r["subject_id"]): r["proposed_action"] for r in data["judgments"]}
-    assert (
-        len(actions) == JUDGED and (actions["CSH-02", "BA-091"], actions["GEN-02", "XJ-499"]) == ("misstatement",) * 2
-    )
-    assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}
+    judged = {key: action for key, action in actions.items() if key[0] in JUDGING}
+    assert len(judged) == JUDGED and (judged["CSH-02", "BA-091"], judged["GEN-02", "XJ-499"]) == ("misstatement",) * 2
+    # FIN-03 分类与 FIN-09 验证对两条错报各一条, 都建议接受 (需求 R195)
+    assert sorted((pid, action) for (pid, _), action in actions.items() if pid not in JUDGING) == [
+        ("FIN-03", "accept"),
+        ("FIN-03", "accept"),
+        ("FIN-09", "accept"),
+        ("FIN-09", "accept"),
+    ]
+    # 错报闭环 (需求 R195): FIN-03, FIN-09 各确认两条, FIN-08 登记一次
+    assert data["decisions"] == {"confirm": 18, "misstatement": 2, "override": 1, "manual_result": 1}
     assert len(list(tmp_path.glob("demo-live-selftest-*.json"))) == 1
 
 
@@ -245,7 +254,7 @@ D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 各组都只有第 1 次执行�
         # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
         ([("CSH-02", "BA-091")], "unattributed"),
         # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
-        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "qualified-r1"), ("RPT-03", "qualified-r2")], "failed"),
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "unqualified-r1"), ("RPT-03", "unqualified-r2")], "failed"),
     ],
     ids=["rev02", "rev02_findings", "csh02", "revisions"],
 )
@@ -261,7 +270,7 @@ async def test_live_driver_reruns_a_failed_object_once(
     _, data, exceptions, _ = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
     # 失败按 (程序, fixture_key) 注入; 驱动对整条失败的报告按修订计重跑 (rerun_key 的 r1, r2), 不带意见类型
-    counted = [(pid, key.removeprefix("qualified-")) for pid, key in failing]
+    counted = [(pid, key.removeprefix("unqualified-")) for pid, key in failing]
     assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in counted}
     assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in counted)
     assert data["missing_subjects"] == []
