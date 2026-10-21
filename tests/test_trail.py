@@ -6,6 +6,7 @@ from datetime import date
 from typing import Any, cast
 
 import pytest
+from langgraph.types import Command
 
 from backend.agents.base import RunContext
 from backend.contracts.models import (
@@ -48,6 +49,7 @@ from tests.fakes import (
     make_procedure,
     make_run,
     make_runner,
+    preset_rerun,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision, started, stop_after_submit
@@ -63,6 +65,7 @@ from tests.test_flow import (
 )
 from tests.test_merge import exception, judgment, task
 from tests.test_procedure_inputs import runs, short_of_data
+from tests.test_rerun import failed_at_p0, pending_task
 from tests.test_rerun_decision import at_review, flaky_rev08, rerun
 
 EID = ENGAGEMENT.id
@@ -222,7 +225,8 @@ async def test_rerun_decision_transitions() -> None:
 
 async def test_m2_flow_transitions() -> None:
     """验收 5: Numbat 全流程到归档 (Q6 选不写派发版本): 项目阶段 5 行, 程序 20 行 (固定集 10 条各 1 行;
-    REV-08, CSH-04, CSH-05, DOC-06 各 1 行 planned→completed; REV-03, REV-02, CSH-02 各 2 行, 经 awaiting_human)."""
+    REV-08, CSH-04, CSH-05, DOC-06 各 1 行 planned→completed; REV-03, REV-02, CSH-02 各 2 行, 经 awaiting_human).
+    同一次走通另核 run 留痕 (需求 R325, 审核 R325-06: 不另跑一遍全流程)."""
     s = await start_numbat()
     await approve_materiality(s)
     await wait_idle(s.runner, EID)
@@ -257,6 +261,14 @@ async def test_m2_flow_transitions() -> None:
     assert isinstance(trail, FakeTrail)
     keys = [e.idempotency_key for e in trail.entries if e.kind is TrailKind.transition]
     assert len(keys) == len(set(keys)) == 25
+    # 需求 R325 验收 3, 7: Store 中每次执行恰有开始与结束各一行 run 留痕, 开始在前, 结束的 status 同执行记录, 键不重复
+    entries = runs_of(trail)
+    stored = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun)}
+    assert len(entries) == 2 * len(stored) and len({e.idempotency_key for e in entries}) == len(entries)
+    for run_id, run in stored.items():
+        actions = [e.payload for e in entries if e.run_id == run_id]
+        assert [p["action"] for p in actions] == ["started", "finished"], run_id
+        assert actions[1]["status"] == run.status.value, run_id
 
 
 # ── 需求 R325: 执行进度留痕 (每次执行开始, 结束各一行 run 留痕) ──
@@ -311,8 +323,11 @@ def test_run_entries_carry_scope_status_and_result(
     summary: str,
 ) -> None:
     """验收 1, 2: 开始与结束各一行, actor A1, 键 {eid}:run:{run_id}:started 与 :finished; payload 带程序, 执行, 第几次,
-    起因, 程序所属阶段与按参数快照渲染的范围; 结束另带执行状态 (run_status), 失败原因 (同执行记录) 与结果摘要."""
+    起因, 程序所属阶段与按参数快照渲染的范围; 结束另带执行状态 (status, 同 ProcedureRun), 失败原因 (同执行记录) 与
+    结果摘要."""
     template = LIBRARY.load(procedure_id)
+    if scope is None:  # 现有程序都写了 scope (需求 R327), 没写的情形把模板的 scope 去掉来构造
+        template = template.model_copy(update={"scope": None})
     run = make_run(procedure_id, run_no, params)
     started = run_started(EID, template, run)
     assert (started.kind, started.actor, started.procedure_id, started.run_id) == (
@@ -330,7 +345,7 @@ def test_run_entries_carry_scope_status_and_result(
     entry = run_finished(EID, template, ended, result)
     assert (entry.idempotency_key, entry.summary) == (f"{EID}:run:{run.id}:finished", summary)
     assert entry.payload == base_payload("finished", run, "P2_Executing", scope) | {
-        "run_status": status.value,
+        "status": status.value,
         "failure_reason": failure,
         "result": result,
     }
@@ -429,17 +444,19 @@ def test_failed_run_has_no_result() -> None:
 
 
 class StoreAwareTrail(FakeTrail):
-    """假留痕, 另记下每行 run 留痕写入时其执行记录是否已在 Store 中 (判断结束留痕是不是在终态提交之后写的)."""
+    """假留痕, 另记下每行 run 留痕写入时: 其执行记录在不在 Store 中, 有没有进行中的 Store 事务. 假存储在同一任务里
+    看得到事务内未提交的写入, 所以 "已在 Store" 区分不了事务内与提交后, 另看事务 (审核 R325-02)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.store: FakeOutputStore | None = None
-        self.stored_at_write: dict[str, bool] = {}  # 防重复键 -> 写入时执行记录已提交
+        # 防重复键 -> (写入时执行记录已在 Store, 写入时不在事务里)
+        self.at_write: dict[str, tuple[bool, bool]] = {}
 
     async def record(self, entry: TrailEntry) -> str:
         if entry.kind is TrailKind.run and self.store is not None and entry.run_id is not None:
-            committed = await self.store.get(EID, ProcedureRun, entry.run_id) is not None
-            self.stored_at_write[cast(str, entry.idempotency_key)] = committed
+            stored = await self.store.get(EID, ProcedureRun, entry.run_id) is not None
+            self.at_write[cast(str, entry.idempotency_key)] = (stored, self.store.active_txn() is None)
         return await super().record(entry)
 
 
@@ -471,7 +488,7 @@ async def test_attempt_writes_started_before_the_agent_and_finished_after_commit
     started, ended = f"{EID}:run:RUN-PLN-07-1:started", f"{EID}:run:RUN-PLN-07-1:finished"
     assert seen == [[started]]
     assert run_keys(trail) == [started, ended]
-    assert trail.stored_at_write == {started: False, ended: True}
+    assert trail.at_write == {started: (False, True), ended: (True, True)}
     # PLN-07 planned → completed 的 transition 在结束留痕之后
     order = [(e.kind, e.payload.get("id")) for e in trail.entries]
     assert order == [(TrailKind.run, None), (TrailKind.run, None), (TrailKind.transition, "PLN-07")]
@@ -487,7 +504,8 @@ async def test_fieldwork_writes_started_and_fan_in_finished_once() -> None:
     assert run_keys(trail) == [keys[0], keys[2]]
     await nodes.fan_in(state)
     assert run_keys(trail) == [keys[0], keys[2], keys[1], keys[3]]
-    assert trail.stored_at_write == {keys[0]: False, keys[2]: False, keys[1]: True, keys[3]: True}
+    before, after = (False, True), (True, True)  # 开始: 还不在 Store; 结束: 已提交, 不在事务里
+    assert trail.at_write == {keys[0]: before, keys[2]: before, keys[1]: after, keys[3]: after}
     first = runs_of(trail)
 
     await nodes.fan_in(state)  # Store 已写, 检查点没跟上, 带着原暂存项重做
@@ -500,9 +518,42 @@ async def test_fieldwork_writes_started_and_fan_in_finished_once() -> None:
     assert len(runs_of(trail)) == 4
 
 
+async def test_attempt_replay_after_rerun_writes_each_key_once() -> None:
+    """验收 3 (P2 以外, 审核 R325-01): ACC-04 第 1 次失败, 节点内等待; rerun 决定恢复后节点从头执行, 第 1 次按重放取
+    Store (attempt 再走一遍, 两行同键跳过), 再执行第 2 次: run 留痕的键恰为两次执行的开始与结束各一行."""
+    runner, store, _ = await failed_at_p0()
+    await preset_rerun(store, await pending_task(store))
+    await runner.app.ainvoke(Command(resume="D-1"), GraphRunner.config(EID))
+    assert run_keys(runner.deps.trail) == [
+        f"{EID}:run:RUN-ACC-04-{n}:{action}" for n in (1, 2) for action in ("started", "finished")
+    ]
+
+
+async def test_backfilled_start_takes_the_run_in_store() -> None:
+    """验收 3 (审核 R325-05): 开始留痕没写成而执行在 Store 中已是终态 (如升级前跑过的执行) 时, 重放按 Store 中的那次
+    补写: 期间程序库改了参数 (REV-08 的 window_days 各档加 7 天), 补写的仍与第一次相同, 与结束留痕说的是同一范围."""
+    nodes, _, state, trail = await assembled_with_trail()
+    state["staged_results"] = (await nodes.fieldwork(dispatch(state, "REV-08")))["staged_results"]
+    await nodes.fan_in(state)
+    started_key, finished_key = (f"{EID}:run:RUN-REV-08-1:{a}" for a in ("started", "finished"))
+    [first] = [e for e in trail.entries if e.idempotency_key == started_key]
+    trail.entries[:] = [e for e in trail.entries if e.idempotency_key != started_key]
+    original = nodes.deps.library.load
+    template = original("REV-08")
+    window = {"by_risk": {k: v + 7 for k, v in template.params["window_days"]["by_risk"].items()}}
+    changed = template.model_copy(update={"params": {**template.params, "window_days": window}})
+    nodes.deps.library.load = lambda pid: changed if pid == "REV-08" else original(pid)  # type: ignore[method-assign]
+
+    await nodes.fieldwork(dispatch(state, "REV-08"))
+
+    [again] = [e for e in trail.entries if e.idempotency_key == started_key]
+    [end] = [e for e in trail.entries if e.idempotency_key == finished_key]
+    assert again.payload == first.payload and again.payload["scope"] == end.payload["scope"]
+
+
 async def test_failed_run_finishes_once_with_its_reason() -> None:
-    """验收 2, 3: REV-08 抛 RuleError: 结束留痕 run_status 为 failed, failure_reason 同执行记录, 没有结果; fan_in 重做
-    不重复写 (payload 不带 status: failed, find_success 照认)."""
+    """验收 2, 3: REV-08 抛 RuleError: 结束留痕 status 为 failed, failure_reason 同执行记录, 没有结果; fan_in 重做
+    不重复写 (find_success 不看 payload 的 status, 失败执行的结束留痕照样算写成了)."""
     nodes, store, state, trail = await assembled_with_trail(fail_rev08)
     state["staged_results"] = (await nodes.fieldwork(dispatch(state, "REV-08")))["staged_results"]
     await nodes.fan_in(state)
@@ -511,7 +562,7 @@ async def test_failed_run_finishes_once_with_its_reason() -> None:
     assert run is not None and run.status is RunStatus.failed
     [_, end] = runs_of(trail)
     assert end.summary == f"REV-08 凭证三单匹配 执行失败: {run.failure_reason}"
-    assert (end.payload["run_status"], end.payload["failure_reason"], end.payload["result"]) == (
+    assert (end.payload["status"], end.payload["failure_reason"], end.payload["result"]) == (
         "failed",
         run.failure_reason,
         None,
@@ -525,23 +576,3 @@ async def test_programs_waiting_for_data_write_no_run_entries() -> None:
     assert sorted((e.run_id, e.payload["action"]) for e in entries) == sorted(
         (run, action) for run in runs(s) for action in ("started", "finished")
     )
-
-
-async def test_m2_flow_pairs_every_run() -> None:
-    """验收 3, 7: Numbat 全流程到归档: Store 中每次执行恰有开始与结束各一行, 开始在前, 结束的 run_status 同执行记录;
-    run 留痕的键不重复."""
-    s = await start_numbat()
-    await approve_materiality(s)
-    await wait_idle(s.runner, EID)
-    await review_all(s)
-    await submit_gate(s, FIN_APPROVE, ("gate_rpt01",))
-    await submit_gate(s, RPT_REJECT, ("gate_rpt01",))
-    await submit_gate(s, RPT_APPROVE, ())
-
-    entries = runs_of(s.runner.deps.trail)
-    stored = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun)}
-    assert len(entries) == 2 * len(stored) and len({e.idempotency_key for e in entries}) == len(entries)
-    for run_id, run in stored.items():
-        actions = [e.payload for e in entries if e.run_id == run_id]
-        assert [p["action"] for p in actions] == ["started", "finished"], run_id
-        assert actions[1]["run_status"] == run.status.value, run_id

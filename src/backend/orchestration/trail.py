@@ -128,15 +128,14 @@ def run_started(eid: str, template: ProcedureTemplate, run: ProcedureRun) -> Tra
 
 
 def run_finished(eid: str, template: ProcedureTemplate, run: ProcedureRun, result: dict[str, Any] | None) -> TrailEntry:
-    """执行结束的留痕: 执行记录终态提交之后写. payload 另带 run_status (succeeded 或 failed), failure_reason (同执行
-    记录) 与 result (结果摘要, services.run_summary.run_result; 失败时为空). 执行状态不叫 status: 留痕的 payload.status
-    为 failed 表示这次动作本身没做成 (AuditTrail.find_success 不认它), 失败执行的结束留痕会被当成没写过而重复写."""
+    """执行结束的留痕: 执行记录终态提交之后写. payload 另带 status (执行状态 succeeded 或 failed, 同 ProcedureRun),
+    failure_reason (同执行记录) 与 result (结果摘要, services.run_summary.run_result; 失败时为空)."""
     if run.status is RunStatus.failed:
         summary = f"{run.procedure_id} {template.name} 执行失败: {run.failure_reason}"
     else:
         summary = f"{run.procedure_id} {template.name} 完成"
     entry = run_entry(eid, template, run, "finished", summary)
-    payload = {**entry.payload, "run_status": run.status.value, "failure_reason": run.failure_reason, "result": result}
+    payload = {**entry.payload, "status": run.status.value, "failure_reason": run.failure_reason, "result": result}
     return entry.model_copy(update={"payload": payload})
 
 

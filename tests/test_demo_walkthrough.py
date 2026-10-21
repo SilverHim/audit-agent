@@ -405,7 +405,7 @@ async def test_run_entries_pair_every_run_and_progress(walked: Walk) -> None:
     finished = {e.run_id: e.payload for e in rows if e.payload["action"] == "finished"}
     rev08 = finished["RUN-REV-08-1"]
     assert rev08["scope"]["zh"] == "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票"
-    assert rev08["run_status"] == "succeeded"
+    assert rev08["status"] == "succeeded"
     assert {k: rev08["result"][k] for k in ("items", "amount_cents", "exceptions")} == {
         "items": 6,
         "amount_cents": 990000,

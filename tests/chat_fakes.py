@@ -105,7 +105,7 @@ def procedure_summary(pid: str, status: str = "completed", pending: int = 0) -> 
 
 def make_overview(engagement: Engagement = ENGAGEMENT, **changes: Any) -> EngagementOverview:
     """项目总览: 缺省为执行阶段, 3 条程序完成 2 条 (本阶段进度 2/3, 没有正在运行的), 1 项待复核, 重要性已定, 不在
-    阶段决定处."""
+    阶段决定处. changes 改其中的字段, 合成后按 EngagementOverview 校验 (拼错的键, 改了名的旧参数报错)."""
     base = EngagementOverview(
         engagement=engagement.model_copy(update={"phase": Phase.P2_Executing}),
         client_name="Numbat Electronics Pty Ltd",
@@ -127,7 +127,7 @@ def make_overview(engagement: Engagement = ENGAGEMENT, **changes: Any) -> Engage
         clearly_trivial_cents=600_000,
         opinion_route=None,
     )
-    return base.model_copy(update=changes)
+    return EngagementOverview.model_validate(base.model_dump() | changes)  # 经校验: 不认识的键报错 (审核 R325-07)
 
 
 @dataclass

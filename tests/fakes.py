@@ -770,8 +770,7 @@ class FakeTrail:
         return next((e for e in self.entries if e.engagement_id == eid and e.id == id), None)
 
     async def find_success(self, eid: str, idempotency_key: str) -> TrailEntry | None:
-        """同 PostgresAuditTrail: 按写入顺序取该键的第一条成功留痕; payload 带 error, success 为假或 status 为
-        failed, error 的不算成功."""
+        """同 PostgresAuditTrail: 按写入顺序取该键的第一条成功留痕; payload 带 error 或 success 为假的不算成功."""
         return next(
             (
                 e
@@ -780,7 +779,6 @@ class FakeTrail:
                 and e.idempotency_key == idempotency_key
                 and not e.payload.get("error")
                 and e.payload.get("success") is not False
-                and e.payload.get("status") not in {"failed", "error"}
             ),
             None,
         )

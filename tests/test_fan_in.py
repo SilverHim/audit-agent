@@ -47,6 +47,7 @@ from tests.fakes import (
     DocumentWrite,
     FakeEngagementStore,
     FakeOutputStore,
+    FakeTrail,
     ScriptA3,
     ScriptA6,
     ScriptAgent,
@@ -191,7 +192,9 @@ async def test_new_version_of_earlier_exception_goes_in_same_commit() -> None:
             "attributed_by": "J-REV-02-1-SI-2026-0612",
         }
     )
-    run = finished(make_run("REV-02"))
+    # 参数快照带 REV-02 的参数: fan_in 提交后写结束留痕, 按快照渲染 scope (需求 R325, R327)
+    params = {"window_days": 20, "threshold_cents": 6000000, "period_end": ENGAGEMENT.period_end}
+    run = finished(make_run("REV-02", params=params))
     state["staged_results"] = [
         StagedResult(
             procedure_id="REV-02",
@@ -444,6 +447,15 @@ async def test_item_stale_after_earlier_item_becomes_failure() -> None:
     assert await store.get(EID, ProcedureRun, "RUN-DOC-06-1") in commit
     assert await store.get(EID, ReviewTask, "T-RUN-REV-08-2-v1") in commit
     assert by_id(patch["procedure_pack"])["REV-08"].status is AWAITING
+    # 需求 R325 (审核 R325-03): 改为失败的项, 结束留痕按改后的失败执行写: 状态 failed, 原因同执行记录, 没有结果
+    trail = nodes.deps.trail
+    assert isinstance(trail, FakeTrail)
+    [end] = [e for e in trail.entries if e.idempotency_key == f"{EID}:run:RUN-REV-08-2:finished"]
+    assert (end.payload["status"], end.payload["failure_reason"], end.payload["result"]) == (
+        "failed",
+        rejected.failure_reason,
+        None,
+    )
 
 
 async def test_task_on_target_updated_by_earlier_item_becomes_failure() -> None:

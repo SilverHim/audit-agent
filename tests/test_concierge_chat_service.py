@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from backend.adapters.chat_llm import ContextOverflow, SecretEcho
 from backend.adapters.llm import LLMTransportError
@@ -335,6 +336,15 @@ async def test_rule_model_names_the_gate(gate: GateId, zh: str, en: str) -> None
 RUNNING = PhaseProgress(phase=Phase.P2_Executing, done=3, total=9, running=["REV-08", "CSH-05"])
 
 
+def test_make_overview_rejects_unknown_fields() -> None:
+    """测试辅助 make_overview 合成后经 EngagementOverview 校验: 拼错的键, 改了名的旧参数报错, 不悄悄收下 (审核 R325-07:
+    之前 rule_ask 传的 state= 被丢掉, 用例照过而没测到想测的)."""
+    planning = PhaseProgress(phase=Phase.P1_Planning, done=0, total=4, running=[])
+    assert make_overview(progress=planning).progress == planning
+    with pytest.raises(ValidationError):
+        make_overview(progres=planning)
+
+
 @pytest.mark.parametrize(
     ("progress", "question", "lang", "answer"),
     [
@@ -342,20 +352,20 @@ RUNNING = PhaseProgress(phase=Phase.P2_Executing, done=3, total=9, running=["REV
             RUNNING,
             "现在在做什么？",
             "zh",
-            "项目目前处于执行阶段，本阶段 3/9 个审计程序已完成。正在执行：REV-08 凭证三单匹配、CSH-05 流水账面核对。",
+            "项目目前处于执行阶段，本阶段 3/9 个审计程序已结清。正在执行：REV-08 凭证三单匹配、CSH-05 流水账面核对。",
         ),
         (
             RUNNING,
             "What are you doing now?",
             "en",
-            "The engagement is in the fieldwork phase: 3 of 9 procedures in this phase are complete."
+            "The engagement is in the fieldwork phase: 3 of 9 procedures in this phase are settled."
             " Running now: REV-08 凭证三单匹配, CSH-05 流水账面核对.",
         ),
         (
             RUNNING.model_copy(update={"running": []}),
             "现在在做什么",
             "zh",
-            "项目目前处于执行阶段，本阶段 3/9 个审计程序已完成。现在没有正在执行的程序。",
+            "项目目前处于执行阶段，本阶段 3/9 个审计程序已结清。现在没有正在执行的程序。",
         ),
     ],
     ids=["zh", "en", "zh-idle"],

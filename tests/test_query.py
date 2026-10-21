@@ -582,8 +582,8 @@ def run_entry(action: str, run_id: str, eid: str = EID) -> TrailEntry:
 
 async def test_running_pairs_starts_and_ends_by_run_id() -> None:
     """验收 4: 开始与结束按执行 ID 配对, 与写入先后无关: REV-08 第 2 次已开始, 第 1 次的结束补写在它之后, 仍算在运行
-    (按程序编号配对会误抵); CSH-05 一对已结束不算, 开始补写在结束之后的 CSH-02 也不算; 别的项目的留痕不读. 后台不在
-    执行时总览不给 (残留的开始不算)."""
+    (按程序编号配对会误抵); CSH-05 一对已结束不算, 开始补写在结束之后的 CSH-02 也不算; 别的项目的留痕不读. 按开始的
+    先后排: CSH-04 编号靠前而开始在后, 排在 REV-08 之后 (审核 R325-08). 后台不在执行时总览不给 (残留的开始不算)."""
     runner, query, _ = await started()
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
@@ -596,10 +596,11 @@ async def test_running_pairs_starts_and_ends_by_run_id() -> None:
         ("finished", "RUN-CSH-02-1", EID),
         ("started", "RUN-CSH-02-1", EID),
         ("started", "RUN-REV-02-1", "ENG-OTHER"),
+        ("started", "RUN-CSH-04-1", EID),
     ]:
         await trail.record(run_entry(action, run_id, eid))
 
-    assert await query.running_procedures(EID) == ["REV-08"]
+    assert await query.running_procedures(EID) == ["REV-08", "CSH-04"]
     overview = await query.overview(EID)
     assert overview.running is False and overview.progress.running == []
     assert (overview.progress.phase, overview.progress.total) == (Phase.P0_Acceptance, 2)  # ACC-01 与 ACC-04
@@ -607,10 +608,17 @@ async def test_running_pairs_starts_and_ends_by_run_id() -> None:
 
 @pytest.mark.parametrize(
     ("status", "done"),
-    [(ProcedureStatus.completed, 1), (ProcedureStatus.no_data, 1), (ProcedureStatus.awaiting_human, 0)],
+    [
+        (ProcedureStatus.completed, 1),
+        (ProcedureStatus.no_data, 1),
+        (ProcedureStatus.awaiting_human, 0),
+        (ProcedureStatus.executing, 0),  # rerun 决定写出, 还没重跑 (审核 R325-04)
+        (ProcedureStatus.in_dispute, 0),
+    ],
 )
 async def test_progress_counts_settled_procedures(status: ProcedureStatus, done: int) -> None:
-    """验收 4: done 为本阶段已结清的程序, completed 与 no_data (未执行, 无数据; 同 graph.SETTLED) 都算, 等人的不算.
+    """验收 4: done 为本阶段已结清的程序, completed 与 no_data (未执行, 无数据; 同 graph.SETTLED) 都算; 等人, 待重跑
+    与争议中的不算.
     停在 ACC-01 闸门前, 把 ACC-04 的最新版本换成给定状态 (ACC-01 待决, 不算)."""
     _, query, store = await started()
     [acc04] = [p for p in await store.latest(EID, Procedure) if p.id == "ACC-04"]

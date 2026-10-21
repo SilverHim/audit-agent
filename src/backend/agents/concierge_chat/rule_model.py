@@ -103,15 +103,16 @@ def progress(data: dict[str, Any], lang: Lang) -> str:
 
 
 def activity(data: dict[str, Any], lang: Lang) -> str:
-    """现在在做什么: 当前阶段, 本阶段已结清的程序数/总数, 正在运行的程序 (编号与名称)."""
+    """现在在做什么: 当前阶段, 本阶段已结清的程序数/总数 (已完成与未执行 (无数据) 都算结清, 不说 "已完成"),
+    正在运行的程序 (编号与名称)."""
     progress = data["progress"]
     phase = PHASES.get(progress["phase"], {"zh": progress["phase"], "en": progress["phase"]})[lang]
     done, total = progress["done"], progress["total"]
     names = [f"{p['id']} {p['name']}" for p in progress["running"]]
     if lang == "zh":
-        text = f"项目目前处于{phase}阶段，本阶段 {done}/{total} 个审计程序已完成。"
+        text = f"项目目前处于{phase}阶段，本阶段 {done}/{total} 个审计程序已结清。"
         return text + (f"正在执行：{'、'.join(names)}。" if names else "现在没有正在执行的程序。")
-    text = f"The engagement is in the {phase} phase: {done} of {total} procedures in this phase are complete."
+    text = f"The engagement is in the {phase} phase: {done} of {total} procedures in this phase are settled."
     return text + (f" Running now: {', '.join(names)}." if names else " No procedure is running right now.")
 
 

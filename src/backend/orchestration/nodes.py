@@ -690,9 +690,10 @@ class GraphNodes:
         procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
-        # 开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过 (缺了补写: 重建的执行记录
-        # 与 Store 中的同号同参数, 第 3 节重放规则)
-        await record_transitions(self.deps.trail, [run_started(engagement.id, template, procedure_run)])
+        # 开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过. 缺了补写时, 执行在 Store
+        # 中已是终态的取 Store 中的那次 (程序库之后改了参数也与结束留痕说的同一范围), 否则取本次建的
+        started = stored_run if stored_run is not None and stored_run.status is not RunStatus.running else procedure_run
+        await record_transitions(self.deps.trail, [run_started(engagement.id, template, started)])
         population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
