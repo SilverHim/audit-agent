@@ -37,6 +37,7 @@ from backend.contracts.ports import (
 )
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, StatePatch
+from backend.services.activities import ActivityBoard
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
@@ -80,6 +81,9 @@ class AgentDeps:
     # 大模型固定输出的语言 (需求 R343): LLM_MODE=mock 时组装根填 en (固定输出都是英文, 不另备中文), 执行记录照实记它;
     # live 为空, 记建执行时项目的工作语言 (需求 R339). 见 run_language
     fixed_language: WorkingLanguage | None = None
+    # 系统正在做的事 (需求 R361): 数据作业 (DataService) 与程序执行 (节点) 都登记在这里, 项目总览只读它; 进程内一个,
+    # dataclasses.replace 换端口时沿用同一个
+    activities: ActivityBoard = field(default_factory=ActivityBoard)
 
     def run_language(self, engagement: Engagement) -> WorkingLanguage:
         """建执行记录时记的生成语言 (ProcedureRun.language): fixed_language, 为空时为项目当时的工作语言. 图里的执行

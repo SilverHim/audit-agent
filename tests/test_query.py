@@ -541,7 +541,8 @@ async def at_pln_approved(agents: Agents) -> Started:
 
 async def test_progress_while_p2_runs_and_after() -> None:
     """验收 4: 执行阶段第 0 层派出后 REV-08 停住: 本阶段 0/7, 正在运行的为本轮开始了而还没有结束 (fan_in 才写结束)
-    的四条, 按开始的先后; 放行后不在执行, running 为空, done 为已完成的 (REV-03 等复核, 不算)."""
+    的四条, 按开始的先后; 放行后不在执行, running 为空, done 为已完成的 (REV-03 等复核, 不算). 需求 R361: 总览的
+    活动同为这四条程序执行 (执行者为模板 owner, 本阶段 0/7, 描述含程序名), 放行后为空."""
     entered, release = asyncio.Event(), asyncio.Event()
     s = await at_pln_approved(held_rev08(entered, release))
     await entered.wait()
@@ -555,12 +556,17 @@ async def test_progress_while_p2_runs_and_after() -> None:
     assert held.running is True
     assert (held.progress.phase, held.progress.done, held.progress.total) == (Phase.P2_Executing, 0, 7)
     assert held.progress.running == ["CSH-04", "CSH-05", "REV-03", "REV-08"] == starts[-4:]  # 开始的先后
+    library = s.runner.deps.library
+    assert [(a.kind, a.current, a.actor, a.done, a.total, a.description) for a in held.activities] == [
+        ("procedure", pid, library.load(pid).owner, 0, 7, f"执行 {pid} {library.load(pid).name} (本阶段已完成 0/7)")
+        for pid in held.progress.running
+    ]
     release.set()
     await wait_idle(s.runner, EID)
 
     after = await query.overview(EID)
 
-    assert after.running is False and after.progress.running == []
+    assert after.running is False and after.progress.running == [] and after.activities == []
     status = {p.id: p.status for p in after.procedures if p.phase is Phase.P2_Executing}
     settled = [pid for pid, st in status.items() if st in (ProcedureStatus.completed, ProcedureStatus.no_data)]
     assert (after.progress.done, after.progress.total) == (len(settled), 7) and "REV-03" not in settled
@@ -580,29 +586,29 @@ def run_entry(action: str, run_id: str, eid: str = EID) -> TrailEntry:
     )
 
 
-async def test_running_pairs_starts_and_ends_by_run_id() -> None:
-    """验收 4: 开始与结束按执行 ID 配对, 与写入先后无关: REV-08 第 2 次已开始, 第 1 次的结束补写在它之后, 仍算在运行
-    (按程序编号配对会误抵); CSH-05 一对已结束不算, 开始补写在结束之后的 CSH-02 也不算; 别的项目的留痕不读. 按开始的
-    先后排: CSH-04 编号靠前而开始在后, 排在 REV-08 之后 (审核 R325-08). 后台不在执行时总览不给 (残留的开始不算)."""
+async def test_running_comes_from_the_activity_board() -> None:
+    """验收 4 (需求 R361 起与总览活动同一来源): 正在运行的程序取活动中的程序执行, 按开始的先后, 去重; 键为执行 ID:
+    REV-08 重跑是新的执行, 第 1 次结束不抵第 2 次. run 留痕里残留的开始 (进程重启前写的) 不算, 别的项目的与数据作业
+    不算; 数据作业照样列在活动里."""
     runner, query, _ = await started()
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    for action, run_id, eid in [
-        ("started", "RUN-REV-08-1", EID),
-        ("started", "RUN-REV-08-2", EID),
-        ("finished", "RUN-REV-08-1", EID),
-        ("started", "RUN-CSH-05-1", EID),
-        ("finished", "RUN-CSH-05-1", EID),
-        ("finished", "RUN-CSH-02-1", EID),
-        ("started", "RUN-CSH-02-1", EID),
-        ("started", "RUN-REV-02-1", "ENG-OTHER"),
-        ("started", "RUN-CSH-04-1", EID),
-    ]:
-        await trail.record(run_entry(action, run_id, eid))
+    await trail.record(run_entry("started", "RUN-CSH-02-1"))
+    board = runner.deps.activities
+    for run_id in ("RUN-REV-08-1", "RUN-REV-08-2", "RUN-CSH-04-1"):
+        board.start(EID, run_id, "procedure", current=run_id.removeprefix("RUN-").rsplit("-", 1)[0])
+    board.finish(EID, "RUN-REV-08-1")
+    board.start("ENG-OTHER", "RUN-REV-02-1", "procedure", current="REV-02")
+    board.start(EID, "job", "document_intake")
 
-    assert await query.running_procedures(EID) == ["REV-08", "CSH-04"]
     overview = await query.overview(EID)
-    assert overview.running is False and overview.progress.running == []
+
+    assert overview.progress.running == ["REV-08", "CSH-04"]
+    assert [(a.kind, a.current) for a in overview.activities] == [
+        ("procedure", "REV-08"),
+        ("procedure", "CSH-04"),
+        ("document_intake", None),
+    ]
     assert (overview.progress.phase, overview.progress.total) == (Phase.P0_Acceptance, 2)  # ACC-01 与 ACC-04
 
 

@@ -68,6 +68,7 @@ from backend.contracts.data import (
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.models import ClientProfile, GateId, Phase, ProfileSource, TrailEntry, TrailKind
 from backend.contracts.ports import AuditTrail, EngagementStore, XeroConnectionStore
+from backend.contracts.views import ActivityKind
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
 from backend.services.abn import abn_problem, dataset_profiles
@@ -99,7 +100,7 @@ CALLBACK_REASONS = (
 # 银行这一对: 没取到银行对账单时一起不写 (见模块说明)
 BANK_TABLES = (TableKind.bank_accounts, TableKind.bank_transactions)
 PAID_RESOURCES = frozenset({"journals", "bank_statements"})  # 付费接口的资源名: 401, 403 时退回 (单据反推, 不写银行)
-SYNC_JOB = "xero_sync"  # 同步作业在 DataService 登记的种类 (概览的 syncing 按它)
+SYNC_JOB: ActivityKind = "xero_sync"  # 同步作业在 DataService 登记的种类 (概览的 syncing 与总览的活动按它)
 # 概览的 last_sync 取这几种 data 留痕中最近的一条: 同步结束时写的两种, 加上断开 (最近一条是断开时为空: 上次结果属于
 # 当前连接, 与连接行的最近同步, 接入范围同口径, 断开再连为空, 失效重连保留)
 SYNC_ACTIONS = ("xero_synced", "xero_sync_failed", "xero_disconnect")
@@ -648,10 +649,13 @@ class XeroLink:
     async def sync_failed(
         self, eid: str, actor: str, reason: XeroSyncFailure, status: int | None, *, resources: list[str] | None = None
     ) -> None:
-        """同步失败的 data 留痕: 原因代码与状态码, forbidden 另带取不到的资源名."""
+        """同步失败的 data 留痕: 原因代码与状态码, forbidden 另带取不到的资源名; 同时记为总览的最近一次失败 (需求 R361,
+        原因为代码与状态码, 重试入口为再同步)."""
         payload: dict[str, object] = {"action": "xero_sync_failed", "reason": reason, "status": status}
         if resources:
             payload["resources"] = resources
+        detail = reason if status is None else f"{reason} (HTTP {status})"
+        self.deps.activities.fail(eid, SYNC_JOB, detail + (f": {', '.join(resources)}" if resources else ""))
         await self.record(eid, actor, f"Xero 同步失败 ({reason})", payload)
 
     # ── 组织信息与客户画像的核对 (需求 R291) ──

@@ -766,7 +766,7 @@ async def test_syncing_only_for_the_xero_job(tmp_path: Path) -> None:
         c.advance(timedelta(minutes=29, seconds=30))
         c.fake.refresh_error = "invalid_grant"
         assert (await http.post(API.format(eid=c.eid) + "/sync")).status_code == 409
-        assert (await xero_source(http, c))["syncing"] is False and c.xero.data.kinds == {}
+        assert (await xero_source(http, c))["syncing"] is False and c.xero.data.deps.activities.activities(c.eid) == []
 
 
 @pytest.mark.external
@@ -774,7 +774,7 @@ async def test_unexpected_errors_in_sync_are_recorded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """后台同步中的意外错误也写 xero_sync_failed: 转换时出了别的异常记 mapping (不写数据); 取数时主密钥不可用记
-    settings_key; 写库失败记 write, 再交给后台任务记日志. 各情形锁都放了."""
+    settings_key; 写库失败记 write, 再交给后台任务记日志, 总览的最近一次失败为异常原文 (需求 R361). 各情形锁都放了."""
     c = case(tmp_path)
 
     def broken(snapshot: Any) -> Any:
@@ -807,11 +807,14 @@ async def test_unexpected_errors_in_sync_are_recorded(
     assert any("AttributeError" in m for m in logged)  # 转换兜底只记异常类型, 消息可能含往来名称
     assert not any("synthetic conversion bug" in m for m in logged)
     assert not c.xero.data.runner.is_running(c.eid)
+    failure = c.xero.data.deps.activities.last_failure(c.eid)
+    assert failure is not None and (failure.kind, failure.reason) == ("xero_sync", "OSError: synthetic write failure")
 
 
 @pytest.mark.external
 async def test_sync_failure_writes_nothing_and_records_trail(tmp_path: Path) -> None:
-    """Xero 一直报 5xx: 重试耗尽后不写数据, 写 data 留痕 xero_sync_failed (只有原因代码与状态码), 锁随之释放."""
+    """Xero 一直报 5xx: 重试耗尽后不写数据, 写 data 留痕 xero_sync_failed (只有原因代码与状态码), 锁随之释放; 总览的
+    最近一次失败为 Xero 同步 (原因代码, 重试入口为再同步, 需求 R361)."""
     c = case(tmp_path)
     async with client(c) as http:
         await connect(http, c)
@@ -821,6 +824,12 @@ async def test_sync_failure_writes_nothing_and_records_trail(tmp_path: Path) -> 
     assert c.data.written == [] and not c.xero.data.runner.is_running(c.eid)
     [failed] = [e for e in c.trail.entries if e.payload.get("action") == "xero_sync_failed"]
     assert failed.payload == {"action": "xero_sync_failed", "reason": "xero_error", "status": None}
+    failure = c.xero.data.deps.activities.last_failure(c.eid)
+    assert failure is not None and (failure.kind, failure.reason, failure.retry) == (
+        "xero_sync",
+        "xero_error",
+        "xero_sync",
+    )
 
 
 # ── 验收 2.4: 刷新令牌失效 ──

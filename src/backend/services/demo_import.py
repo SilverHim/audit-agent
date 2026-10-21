@@ -28,13 +28,14 @@ from backend.adapters.xero_supplements import DemoPlan, DemoUpload
 from backend.agents.ingest import DETAILS, HELD, DocumentIntake
 from backend.contracts.data import DemoImportResult, DemoStage, DocumentDetailsEdit, TableKind
 from backend.contracts.models import AgentId, DocumentRef, Engagement, TrailEntry, TrailKind
+from backend.contracts.views import ActivityKind
 from backend.services.trail_pages import all_of_kind
 
 if TYPE_CHECKING:
     from backend.services.data_service import DataService
 
 logger = logging.getLogger(__name__)
-DEMO_JOB = "demo_import"  # 演示数据导入作业在 DataService 登记的种类
+DEMO_JOB: ActivityKind = "demo_import"  # 演示数据导入作业在 DataService 登记的种类 (总览的活动种类同此)
 NO_DEMO = "该数据集没有演示资料"
 RETYPE_REASON = "演示数据导入: 按补造清单指定类型"
 DETAILS_REASON = "演示数据导入: 按补造清单补登记"

@@ -210,9 +210,11 @@ class GraphRunner:
         task.add_done_callback(lambda t: self._forget(eid, t))
 
     def _forget(self, eid: str, task: asyncio.Task[None]) -> None:
-        """后台任务结束后清理项目锁与任务引用. 只在登记的仍是这个任务时清理, 不误删之后为同一项目新建的任务."""
+        """后台任务结束后清理项目锁与任务引用, 清掉总览里该项目残留的程序执行 (节点出错或暂停, 没走到结束留痕, 需求
+        R361). 只在登记的仍是这个任务时清理, 不误删之后为同一项目新建的任务."""
         if self.tasks.get(eid) is task:
             del self.tasks[eid]
+            self.deps.activities.clear(eid, "procedure")
             self.release(eid)
 
     async def _advance(self, eid: str, graph_input: EngagementState | Command[Any] | None) -> None:

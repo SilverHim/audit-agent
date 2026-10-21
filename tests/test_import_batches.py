@@ -878,8 +878,9 @@ async def test_commit_failure_writes_nothing_then_retry_completes(monkeypatch: p
 
 
 async def test_recognition_failure_marks_batch_failed_and_retry_resumes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """识别作业在逐文件之外出错 (画像查不到): 批次置 failed 并记原因, 锁已释放, 不能确认; 重新识别从没做完的文件接着
-    做 (与启动补做同一段代码), 做完置 ready; 已识别完的不能再重新识别."""
+    """识别作业在逐文件之外出错 (画像查不到): 批次置 failed 并记原因, 锁已释放, 不能确认; 总览的最近一次失败同此原因
+    (需求 R361, 作业对象为批次, 重试入口为重新识别). 重新识别从没做完的文件接着做 (与启动补做同一段代码), 失败随之
+    清除, 做完置 ready; 已识别完的不能再重新识别."""
     env = Batch()
     real = BatchIntake.context
 
@@ -892,6 +893,15 @@ async def test_recognition_failure_marks_batch_failed_and_retry_resumes(monkeypa
     failed = await env.service.batch(EID, batch.id)
     assert (failed.status, failed.error, failed.items) == ("failed", "LookupError: profile missing", [])
     assert not env.runner.is_running(EID) and env.service.jobs.get(EID) is None
+    activities = env.service.deps.activities
+    failure = activities.last_failure(EID)
+    assert failure is not None and failure.model_dump(exclude={"failed_at"}) == {
+        "kind": "import_batch",
+        "actor": "A3",
+        "reason": "LookupError: profile missing",
+        "subject_id": batch.id,
+        "retry": "import_batch",
+    }
     with pytest.raises(DataRejected) as e:
         await env.service.confirm_batch(EID, batch.id, "U-1")
     assert e.value.code == "INVALID_VALUE"
@@ -901,7 +911,7 @@ async def test_recognition_failure_marks_batch_failed_and_retry_resumes(monkeypa
     assert (await env.service.batch(EID, batch.id)).status == "failed"
 
     retried = await env.service.retry_batch(EID, batch.id)
-    assert (retried.status, retried.error) == ("processing", None)
+    assert (retried.status, retried.error, activities.last_failure(EID)) == ("processing", None, None)
     await asyncio.gather(*list(env.service.tasks))
     done = await env.service.batch(EID, batch.id)
     assert done.status == "ready" and [i.records for i in done.items] == [23]

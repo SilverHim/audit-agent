@@ -1,5 +1,6 @@
 """StateQuery 与判断呈递 (services/presentation) 返回的视图模型, 定义见 开发接口文档.md 第 7 节."""
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
@@ -66,11 +67,55 @@ class PhaseProgress(Model):
     """当前阶段的进度 (需求 R325): 工作区顶部 "正在执行 n/m" 与审计助理 "现在在做什么" 用."""
 
     phase: Phase  # 当前阶段 (项目的 phase)
-    done: int  # 本阶段已结清的程序数: completed 或 no_data (未执行, 无数据), 同 P2 结清的口径 (graph.SETTLED)
+    done: int  # 本阶段已结清的程序数: completed 或 no_data (未执行, 无数据), 同 P2 结清的口径 (nodes.SETTLED)
     total: int  # 程序包中本阶段的程序数
-    # 正在运行的程序: 本项目 run 留痕中有开始而没有结束的执行 (按执行 ID 配对) 所属的程序, 按开始的先后; 只在后台正为
-    # 本项目推进时给, 否则为空 (进程中断后残留的开始不算)
+    # 正在运行的程序: 总览活动 (EngagementOverview.activities) 中程序执行所属的程序, 即开始的 run 留痕写出之后, 结束的
+    # 写出之前的执行 (P2 的结束在 fan_in 写), 按开始的先后, 去重 (需求 R361 起与活动同一来源); 后台推进结束时清掉,
+    # 进程重启后为空 (残留的开始不算)
     running: list[str]
+
+
+# 系统正在做的事的种类 (需求 R361): 数据作业 (DataService 登记的后台或持锁作业) 与程序执行
+ActivityKind = Literal[
+    "demo_import",  # 载入演示资料 (逐份处理补造文件)
+    "document_intake",  # 上传文件的识别与抽取 (含改类型后重抽, 启动时补做)
+    "import_batch",  # 智能导入批次的逐个文件识别
+    "table_import",  # 导入账表 (提交导入会话, 确认导入批次)
+    "xero_sync",  # 从 Xero 同步账表
+    "data_edit",  # 其余持项目锁的数据修改 (改科目分类, 标客户无此类资料等), 很快结束
+    "procedure",  # 程序执行 (含计划起草 PLN-15, 报告生成 RPT-03)
+]
+ActivityActor = AgentId | Literal["system"]  # 执行者: 智能体, 或系统 (不经智能体的转换与写入)
+# 失败的作业现成的重试入口: demo_import 为 POST /data/demo-import (阶段取 subject_id), import_batch 为
+# POST /data/batches/{subject_id}/retry, xero_sync 为 POST /data/xero/sync
+RetryKind = Literal["demo_import", "import_batch", "xero_sync"]
+
+
+class Activity(Model):
+    """系统正在做的一件事 (需求 R361): 登记在 services.activities.ActivityBoard, 总览只读它. 前端按 kind 与 actor
+    拼文案, 认不出的 kind 显示 description."""
+
+    kind: ActivityKind
+    actor: ActivityActor
+    description: str  # 中文描述; 程序执行含程序编号, 名称与本阶段进度
+    done: int | None = None  # 已完成数: 逐份处理的作业为处理完的文件数, 程序执行为本阶段已结清的程序数; 没有为空
+    total: int | None = None  # 总数, 同 done 的口径; 没有为空
+    current: str | None = None  # 当前对象: 逐份处理时为在处理的文件名, 程序执行为程序编号; 没有为空
+    subject_id: str | None = None  # 作业对象: 载入演示资料为阶段, 智能导入为批次 ID; 其余为空
+    started_at: datetime  # 开始时刻
+    updated_at: datetime  # 最近一次进度变化 (done, total 或 current 变了) 的时刻, 没变过同 started_at
+
+
+class ActivityFailure(Model):
+    """最近一次失败的数据作业 (需求 R361): 后台作业漏出异常, 智能导入批次识别出错, Xero 同步失败. 只在内存中, 同种
+    作业再开始时清除, 进程重启后没有. 程序执行的失败另见执行记录与 failed 任务, 后台推进的异常见 run_error."""
+
+    kind: ActivityKind
+    actor: ActivityActor
+    reason: str  # 原因原文: 异常类型与消息 (截断到 300 字); Xero 同步为原因代码与状态码
+    subject_id: str | None = None  # 同 Activity.subject_id
+    retry: RetryKind | None = None  # 现成的重试入口, 没有为空 (见 RetryKind)
+    failed_at: datetime
 
 
 class EngagementOverview(Model):
@@ -103,6 +148,9 @@ class EngagementOverview(Model):
     # 生成语言与当前工作语言 (engagement.working_language) 不同的执行 (执行 ID → ProcedureRun.language, 需求 R339):
     # 判断, 计划与报告按其 run_id 取, 取到即标注 "以英文生成" 或 "以中文生成"; 查不到 (语言相同, 没有 run_id) 不标
     run_languages: dict[str, WorkingLanguage] = {}
+    # 系统正在做的事 (需求 R361): 数据作业与程序执行, 按开始的先后; 空闲为空. 取 ActivityBoard, 见 Activity
+    activities: list[Activity] = []
+    last_failure: ActivityFailure | None = None  # 最近一次失败的数据作业, 没有为空
 
 
 class AcceptanceMaterial(Model):

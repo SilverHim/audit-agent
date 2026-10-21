@@ -197,6 +197,7 @@ def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datet
 
 # 等人处理的程序状态: 有待决复核任务 (awaiting_human), 其中有待决的争议任务 (in_dispute, 功能 collab)
 WAITING = (ProcedureStatus.awaiting_human, ProcedureStatus.in_dispute)
+SETTLED = (ProcedureStatus.completed, ProcedureStatus.no_data)  # 结清: 已完成, 或未执行 (无数据, 需求 R280)
 
 
 def waiting_status(pending: Iterable[ReviewTask], collab: bool) -> ProcedureStatus | None:
@@ -693,6 +694,7 @@ class GraphNodes:
         await self.record_started(engagement.id, template, procedure_run, stored_run)
         population = None
         if stored_run is None or stored_run.status is RunStatus.running:
+            self.start_activity(state, engagement.id, template, procedure_run)
             ctx = RunContext(
                 engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
             )
@@ -782,6 +784,7 @@ class GraphNodes:
                 raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
             await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, own, stored.id)])
             return own
+        self.start_activity(state, eid, template, run)
         agent = self.agents[procedure_id]
         writer = writer_of(template, agent)
         output = await agent.outcome(
@@ -863,11 +866,29 @@ class GraphNodes:
         started = stored if stored is not None and stored.status is not RunStatus.running else run
         await record_transitions(self.deps.trail, [run_started(eid, template, started)])
 
+    def start_activity(self, state: EngagementState, eid: str, template: ProcedureTemplate, run: ProcedureRun) -> None:
+        """总览的一项程序执行 (需求 R361, ActivityBoard 的键为执行 ID): 真正调 Agent 之前开始 (重放不算), 结束的 run
+        留痕写出时结束 (run_finished_entry; 没走到时由后台推进结束时清掉). 执行者为模板 owner, 当前对象为程序编号,
+        done 与 total 为开始时 (state 中) 本阶段已结清的程序数与程序数, 描述含程序名与这一进度."""
+        same = [p for p in state["procedure_pack"] if p.phase is template.phase]
+        done = sum(1 for p in same if p.status in SETTLED)
+        self.deps.activities.start(
+            eid,
+            run.id,
+            "procedure",
+            actor=template.owner,
+            description=f"执行 {run.procedure_id} {template.name} (本阶段已完成 {done}/{len(same)})",
+            done=done,
+            total=len(same),
+            current=run.procedure_id,
+        )
+
     async def run_finished_entry(
         self, eid: str, template: ProcedureTemplate, patch: StatePatch, run_id: str
     ) -> TrailEntry:
         """一次执行的结束留痕 (需求 R325): 终态取写入后的片段, 结果摘要按片段与 Store 中的被测总体 (与终态同一事务写入,
-        重放时也在) 算 (services.run_summary). 在终态提交之后调用."""
+        重放时也在) 算 (services.run_summary). 在终态提交之后调用; 总览里这次执行的活动随之结束 (需求 R361)."""
+        self.deps.activities.finish(eid, run_id)
         run = next(r for r in patch["procedure_runs"] if r.id == run_id)
         population = await self.deps.output_store.get(eid, RunPopulation, population_id(run_id))
         return run_finished(eid, template, run, run_result(template, run, patch, population))
