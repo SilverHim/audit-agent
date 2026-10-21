@@ -19,6 +19,7 @@ from backend.api.routes import (
     settings,
     standards,
     users,
+    workpapers,
 )
 
 api_router = APIRouter()
@@ -41,6 +42,7 @@ for module in (
     standards,
     settings,
     integrations,
+    workpapers,
 ):
     api_router.include_router(module.router)
 api_router.include_router(data.schemas_router)

@@ -35,11 +35,11 @@ async def test_completion_writes_schedule_and_phase_in_one_commit() -> None:
     与阶段 P3_Completion 在同一次提交; 状态阶段为 P3_Completion."""
     nodes, store, engagements, state = after_pln_approve()
     state["misstatements"] = [misstatement(1, 14200000)]
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.completion(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     [run] = [o for o in commit if isinstance(o, ProcedureRun)]
     assert (run.id, run.status, run.params_snapshot) == (
         "RUN-FIN-04-1",

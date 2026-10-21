@@ -48,6 +48,31 @@ def bound_stores() -> tuple[FakeEngagementStore, FakeOutputStore]:
     return engagement_store, output_store
 
 
+async def test_workflow_commits_exclude_only_independent_workpaper_refreshes() -> None:
+    """主流程原子性视图只排除纯底稿事务, 混合事务须保留完整内容; 原始日志仍包含每次快照刷新."""
+    from backend.contracts.models import Workpaper
+
+    store = FakeOutputStore()
+    paper = Workpaper(id="WP-D-3", ref="D-3", area="D", procedure_id="REV-08", basis=[])
+    procedure = make_procedure("REV-08")
+    await store.put(EID, [paper], actor="A6")
+    await store.put(EID, [procedure], actor="A1")
+    changed = paper.model_copy(update={"version": 2})
+    async with store.transaction(EID):
+        await store.put(EID, [changed], actor="A6")
+        await store.put(EID, [procedure.model_copy(update={"version": 2})], actor="A1")
+    assert len(store.commits) == 3
+    assert store.commits[0] == [paper]
+    assert store.workflow_commits == store.commits[1:]
+    assert store.workflow_commits[-1][0] == changed
+    expected = [procedure, procedure.model_copy(update={"version": 2})]
+    assert store.workflow_rows == store.workflow_rows_of(EID) == expected
+    assert store.rows == [paper, procedure, changed, expected[-1]]
+    store.workflow_rows.clear()
+    assert store.workflow_rows == expected
+    assert store.workflow_rows_of("other-project") == []
+
+
 async def test_engagement_writes_staged_then_rolled_back() -> None:
     """事务块内改项目与存画像: 块内读得到, 块内抛错后项目, 画像与提交日志都恢复原样."""
     engagement_store, output_store = bound_stores()

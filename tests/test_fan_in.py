@@ -92,11 +92,11 @@ def by_id(objs: list[Any]) -> dict[str, Any]:
 async def test_fan_in_writes_round_in_one_commit() -> None:
     """验收 1: 4 个暂存项一次提交; 回函在该事务内写文件状态; 状态各字段等于 Store 返回的对象; 暂存区清空."""
     nodes, store, state = await after_layer_zero()
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     assert kinds(commit) == {
         "ProcedureRun": 4,
         "AuditException": 2,
@@ -203,11 +203,11 @@ async def test_new_version_of_earlier_exception_goes_in_same_commit() -> None:
             patch={"procedure_runs": [run], "exceptions": [attributed]},
         )
     ]
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     assert run in commit and attributed in commit
     assert [(type(o).__name__, o.id) for o in commit if isinstance(o, Procedure)] == [("Procedure", "REV-02")]
     assert by_id(apply_patch(state, patch)["exceptions"])[exception.id] == attributed
@@ -223,11 +223,11 @@ async def test_failed_item_written_with_others() -> None:
 
     nodes.agents["REV-08"] = ScriptA6(nodes.deps, broken)
     state = await stage_layer_zero(nodes, state)
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     run = await store.get(EID, ProcedureRun, "RUN-REV-08-1")
     task = await store.get(EID, ReviewTask, "T-RUN-REV-08-1-v1")
     assert run is not None and task is not None
@@ -267,10 +267,10 @@ async def test_program_versions_taken_from_store() -> None:
 async def test_fan_in_without_staged_results_only_clears() -> None:
     """验收 6: 暂存区为空 (await_events 之后回到 fan_in): 只清空, 不提交."""
     nodes, store, state = await assembled()
-    commits = list(store.commits)
+    commits = list(store.workflow_commits)
 
     assert await nodes.fan_in(state) == {"staged_results": None}
-    assert store.commits == commits
+    assert store.workflow_commits == commits
 
 
 async def test_graph_merges_layer_zero_and_waits_for_review() -> None:
@@ -343,11 +343,11 @@ async def test_rejected_patch_written_as_failure_with_others(
     script = agent.script
     agent.script = lambda ctx: corrupt(script(ctx))
     state = await stage_layer_zero(nodes, state)
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     run_id = f"RUN-{procedure_id}-1"
     run = await store.get(EID, ProcedureRun, run_id)
     task = await store.get(EID, ReviewTask, f"T-{run_id}-v1")
@@ -433,11 +433,11 @@ async def test_item_stale_after_earlier_item_becomes_failure() -> None:
     nodes.agents["REV-03"] = ScriptA6(nodes.deps, writes_exception(changed))
     nodes.agents["REV-08"] = ScriptA6(nodes.deps, writes_exception(old))
     state = await dispatch_round(nodes, state)
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     assert changed in commit
     good = await store.get(EID, ProcedureRun, "RUN-REV-03-2")
     rejected = await store.get(EID, ProcedureRun, "RUN-REV-08-2")

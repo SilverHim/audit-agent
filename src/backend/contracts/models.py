@@ -32,6 +32,21 @@ def not_blank(text: str) -> str:
 NonBlank = Annotated[str, AfterValidator(not_blank)]  # 必填文字: 去首尾空白后非空
 
 
+class LocalizedText(Model):
+    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)
+    与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."""
+
+    zh: str  # 中文
+    en: str  # 英文
+
+    @field_validator("zh", "en")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("不能为空或只有空白")
+        return value
+
+
 # ── 2.1 枚举 ──────────────────────────────────────────────
 
 
@@ -448,6 +463,23 @@ class ReportStatus(StrEnum):
 
     draft = "draft"  # 草稿
     signed = "signed"  # 已签字
+
+
+class WorkpaperStatus(StrEnum):
+    """底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01."""
+
+    draft = "draft"  # 未签署
+    signed = "signed"  # 已签署, 依据与内容在签署后没变
+    needs_rereview = "needs_rereview"  # 签署后依据或内容变了 (重跑, 新的决定, 改了结论或补充说明), 须重新复核
+    final = "final"  # 归档定稿 (需求 R337)
+
+
+class ReviewScope(StrEnum):
+    """底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330)."""
+
+    full = "full"  # 全部明细
+    sample = "sample"  # 抽查
+    conclusion_only = "conclusion_only"  # 只看结论
 
 
 class RepresentationStatus(StrEnum):
@@ -2050,6 +2082,48 @@ class IndependenceDeclaration(Versioned):
         if self.form is DeclarationForm.no_contraventions and listed:
             raise ValueError("form 为 no_contraventions 时不能列明违规")
         return self
+
+
+class WorkpaperNote(Model):
+    """底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,
+    底稿配置 supplementable), 只是补充时为空."""
+
+    text: str  # 说明
+    item: str | None = None  # 补齐的必填项代号, 如 materiality_factors
+    added_by: str  # 用户 ID
+    added_at: datetime  # 时间
+
+
+class WorkpaperSignoff(Model):
+    """底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."""
+
+    signed_by: str  # 签署人的用户 ID
+    signed_at: datetime  # 签署时间
+    scope: ReviewScope  # 复核范围
+    opinion: str = ""  # 复核意见, 选填 (Issue #61 的口径), 没写为空串
+
+
+class Workpaper(Versioned):
+    """一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
+    services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
+    只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."""
+
+    ref: str  # 索引号, 如 D-3 (程序 YAML 的 workpaper)
+    area: str  # 所属区, 如 D
+    procedure_id: str  # 所属程序
+    status: WorkpaperStatus = WorkpaperStatus.draft  # 状态
+    # 所依据的对象及其版本 (执行记录, 被测总体, 例外, 判断, 闸门决定与程序产出的材料; services.workpapers.basis_of),
+    # 按类名与 ID 排序; 刷新时与上一版比, 变了即内容变了
+    basis: list[ObjectRef]
+    # 结论草稿 (中英两种, 下载时按工作语言取): 规则与判断程序按模板拼出 (Q27), 其余为空 (R332, R333 补)
+    conclusion_draft: LocalizedText | None = None
+    conclusion: str | None = None  # 审计师改写的结论, 没改为空 (草稿照留)
+    conclusion_by: str | None = None  # 改写人的用户 ID
+    conclusion_at: datetime | None = None  # 改写时间
+    notes: list[WorkpaperNote] = []  # 补充说明, 按时间顺序
+    signoff: WorkpaperSignoff | None = None  # 当前有效的签署, 未签署或须重新复核时为空
+    last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署 (须重新复核时可见原签署), 没有为空
+    missing: list[str] = []  # 缺的必填项代号 (底稿配置的 required, 按配置顺序), 空为齐全
 
 
 # ── 2.7 其他 ───────────────────────────────────────────────

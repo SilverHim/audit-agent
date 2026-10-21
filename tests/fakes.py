@@ -1229,6 +1229,16 @@ class FakeOutputStore:
         self.engagement_store: FakeEngagementStore | None = None  # 共用事务的项目存储
 
     @property
+    def workflow_commits(self) -> list[list[Versioned | EngagementWrite]]:
+        """主流程提交的只读视图: 排除仅刷新底稿快照的事务, 原子性断言仍核对其余每笔事务的全部写入.
+        原始 commits 保留全部事务, 底稿与假存储自身的用例直接核对它."""
+        from backend.contracts.models import Workpaper
+
+        return [
+            commit for commit in self.commits if not commit or any(not isinstance(obj, Workpaper) for obj in commit)
+        ]
+
+    @property
     def rows(self) -> list[Versioned]:
         """默认项目的已提交对象."""
         return self.rows_of(self.default_eid)
@@ -1236,6 +1246,17 @@ class FakeOutputStore:
     def rows_of(self, eid: str) -> list[Versioned]:
         """某个项目的已提交对象."""
         return self.by_eid.setdefault(eid, [])
+
+    @property
+    def workflow_rows(self) -> list[Versioned]:
+        """默认项目的主流程记录; 派生底稿可在恢复时补齐, 不影响执行与决定的幂等性."""
+        return self.workflow_rows_of(self.default_eid)
+
+    def workflow_rows_of(self, eid: str) -> list[Versioned]:
+        """某个项目的主流程记录的只读视图; rows_of 保留含底稿的完整历史."""
+        from backend.contracts.models import Workpaper
+
+        return [row for row in self.rows_of(eid) if not isinstance(row, Workpaper)]
 
     def active_txn(self) -> FakeTxn | None:
         """当前任务自己开的, 尚未结束的事务; 不在事务中为 None.

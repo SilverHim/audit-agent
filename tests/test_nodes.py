@@ -484,8 +484,8 @@ async def test_p0_intel_saves_outputs_in_one_transaction() -> None:
 
     await nodes.p0_intel(p0_state())
 
-    assert len(store.commits) == 1  # 评分卡, 例外, 执行记录与程序新版本在同一次提交里
-    assert {(type(o).__name__, o.id, o.version) for o in store.commits[0]} == {
+    assert len(store.workflow_commits) == 1  # 评分卡, 例外, 执行记录与程序新版本在同一次提交里
+    assert {(type(o).__name__, o.id, o.version) for o in store.workflow_commits[0]} == {
         ("AcceptanceScorecard", "SCORECARD", 1),
         ("AuditException", "X-ACC-04-1-name_match-1", 1),
         ("ProcedureRun", "RUN-ACC-04-1", 1),
@@ -592,8 +592,8 @@ async def test_failure_writes_failed_run_task_and_waits(script: Any, reason: str
     assert [i.value for i in result["__interrupt__"]] == [
         {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-1", "records": []}
     ]
-    assert len(store.commits) == 1
-    run, task, procedure = store.commits[0]
+    assert len(store.workflow_commits) == 1
+    run, task, procedure = store.workflow_commits[0]
     assert isinstance(run, ProcedureRun)
     assert (run.id, run.status, run.failure_reason, run.ended_at is not None) == (
         "RUN-ACC-04-1",
@@ -637,7 +637,7 @@ async def test_agent_patch_with_pending_failed_task_is_written_then_waits() -> N
     result = await app.ainvoke(initial_state(ENGAGEMENT, pack, 1), GraphRunner.config(EID))
 
     assert "__interrupt__" in result
-    run, task, procedure = store.commits[0]
+    run, task, procedure = store.workflow_commits[0]
     assert (run.id, run.status) == ("RUN-DOC-04-1", RunStatus.succeeded)
     assert (task.id, task.subject_id, task.status) == ("T-RUN-DOC-04-1-CON-002-v1", "CON-002", TaskStatus.pending)
     assert (procedure.id, procedure.version, procedure.status) == ("DOC-04", 2, ProcedureStatus.awaiting_human)
@@ -709,7 +709,7 @@ async def test_resume_keeps_waiting_when_failed_task_would_disappear() -> None:
         await app.ainvoke(Command(resume="D-1"), config)
 
     assert agent.calls == 1
-    assert [(type(r).__name__, r.id, r.version) for r in store.rows] == [
+    assert [(type(r).__name__, r.id, r.version) for r in store.workflow_rows] == [
         ("Procedure", "DOC-04", 1),
         ("ProcedureRun", "RUN-DOC-04-1", 1),
         ("ReviewTask", "T-RUN-DOC-04-1-CON-002-v1", 1),
@@ -733,19 +733,20 @@ async def test_failure_written_by_a1_agent_patch_by_agent() -> None:
     nodes = make_nodes(output_store=failing)
     nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, boom)
     await single_node(nodes, "ACC-04").ainvoke(p0_state(), GraphRunner.config(EID))
-    run, task, _ = failing.commits[0]
+    run, task, _ = failing.workflow_commits[0]
     assert run.ended_at == task.created_at
     assert failing.actors == [
         (["RUN-ACC-04-1"], AgentId.A1),
         (["T-RUN-ACC-04-1-v1"], AgentId.A1),
         (["ACC-04"], AgentId.A1),
+        (["WP-B-2"], AgentId.A2),
     ]
 
     passing = ActorStore(p0_pack())
     nodes = make_nodes(output_store=passing)
     nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)]})
     await nodes.execute(p0_state(), "ACC-04")
-    assert passing.actors == [(["RUN-ACC-04-1"], AgentId.A2), (["ACC-04"], AgentId.A1)]
+    assert passing.actors == [(["RUN-ACC-04-1"], AgentId.A2), (["ACC-04"], AgentId.A1), (["WP-B-2"], AgentId.A2)]
 
 
 async def test_cancelled_agent_writes_nothing() -> None:
@@ -760,7 +761,7 @@ async def test_cancelled_agent_writes_nothing() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await nodes.execute(p0_state(), "ACC-04")
-    assert store.commits == []
+    assert store.workflow_commits == []
 
 
 async def test_graph_interrupt_from_agent_is_not_a_failure() -> None:

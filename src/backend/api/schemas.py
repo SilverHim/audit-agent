@@ -54,6 +54,7 @@ from backend.contracts.models import (
     ReportingFramework,
     Retention,
     ReviewRecord,
+    ReviewScope,
     ReviewTask,
     ReviewTier,
     ServiceOrganisation,
@@ -489,6 +490,26 @@ class XeroDisconnected(Model):
     """断开 Xero (DELETE /data/xero)."""
 
     revoked: bool  # Xero 侧是否已撤销授权; 为 false 时本地令牌已删, 须到 Xero 后台的 Connected apps 手动移除
+
+
+class WorkpaperConclusionIn(Model):
+    """审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330)."""
+
+    text: str  # 结论, 去首尾空白后不能为空 (MISSING_FIELD)
+
+
+class WorkpaperNoteIn(Model):
+    """审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330)."""
+
+    text: str  # 说明, 去首尾空白后不能为空 (MISSING_FIELD)
+    item: str | None = None  # 补齐的必填项代号 (须是该底稿可由补充说明补齐的), 只是补充时不给
+
+
+class WorkpaperSignoffIn(Model):
+    """审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."""
+
+    scope: ReviewScope  # 复核范围: full 全部明细, sample 抽查, conclusion_only 只看结论
+    opinion: str = ""  # 复核意见, 选填 (Issue #61)
 
 
 class XeroProfileCheckIn(Model):

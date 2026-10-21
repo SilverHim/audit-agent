@@ -705,6 +705,39 @@ async def test_run_population_on_postgres(storage) -> None:  # type: ignore[no-u
     assert await store.get("ENG-OTHER", RunPopulation, "POP-RUN-REV-08-1") is None
 
 
+async def test_workpaper_versions_share_the_procedure_table(storage) -> None:
+    """底稿与执行记录, 被测总体同表但互不混淆; 回滚, 版本留存与项目隔离均由真实存储保证."""
+    from backend.contracts.models import ObjectRef, Workpaper
+
+    engine, e, _, _ = storage
+    store = PostgresAuditOutputStore(engine)
+    run = finished(make_run("REV-08"))
+    population = RunPopulation(
+        id="POP-RUN-REV-08-1", run_id=run.id, procedure_id="REV-08", rules=numbat_rev08_populations()
+    )
+    paper = Workpaper(
+        id="WP-D-3",
+        ref="D-3",
+        area="D",
+        procedure_id="REV-08",
+        basis=[ObjectRef(kind=type(obj).__name__, id=obj.id, version=obj.version) for obj in (run, population)],
+    )
+    async with store.transaction(e.id):
+        await store.put(e.id, [run, population, paper], actor="A6")
+    revised = paper.model_copy(update={"version": 2, "conclusion": "Reviewed against the supporting records."})
+    with pytest.raises(RuntimeError, match="rollback"):
+        async with store.transaction(e.id):
+            await store.put(e.id, [revised], actor=e.owner_id)
+            raise RuntimeError("rollback")
+    assert await store.get(e.id, Workpaper, paper.id) == paper
+    await store.put(e.id, [revised], actor=e.owner_id)
+    assert await store.history(e.id, Workpaper, paper.id) == [paper, revised]
+    assert await store.latest(e.id, ProcedureRun) == [run]
+    assert await store.latest(e.id, RunPopulation) == [population]
+    assert await store.latest(e.id, Workpaper) == [revised]
+    assert await store.get("ENG-OTHER", Workpaper, paper.id) is None
+
+
 @pytest.mark.parametrize(
     ("v1", "change"),
     [

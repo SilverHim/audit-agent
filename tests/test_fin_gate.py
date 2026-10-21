@@ -100,12 +100,12 @@ async def test_approve_qualified_moves_to_reporting() -> None:
     检查点 opinion_route 为保留, 阶段 P4_Reporting, 下一步 report_draft."""
     s = await at_fin_gate()
     stop_after_submit(s)
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
     decision = fin_decision(GateVerdict.approve)
 
     await s.submit.submit(EID, decision)
 
-    [commit] = s.output_store.commits[commits:]
+    [commit] = s.output_store.workflow_commits[commits:]
     assert decision in commit
     [fin01] = [o for o in commit if isinstance(o, Procedure)]
     assert (fin01.id, fin01.status) == ("FIN-01", ProcedureStatus.completed)
@@ -207,13 +207,13 @@ async def test_reject_redoes_schedule() -> None:
 async def test_insufficient_info_stays_at_gate() -> None:
     """验收 6: 信息不足只写决定, 仍停在 FIN-01 闸门."""
     s = await at_fin_gate()
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
     decision = fin_decision(GateVerdict.insufficient_info)
 
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
 
-    assert s.output_store.commits[commits:] == [[decision]]
+    assert s.output_store.workflow_commits[commits:] == [[decision]]
     assert await s.next_nodes() == ("gate_fin",)
 
 

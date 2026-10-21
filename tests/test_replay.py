@@ -106,7 +106,7 @@ async def test_replay_acc04_takes_store_objects_without_calling_agent() -> None:
     first_nodes, first_registry, _ = counted_nodes(store)
     first = await first_nodes.p0_intel(p0_state())
     assert first_registry.abn_calls == 1
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     nodes, registry, trail = counted_nodes(store)
     second = await nodes.p0_intel(p0_state())
@@ -120,7 +120,7 @@ async def test_replay_acc04_takes_store_objects_without_calling_agent() -> None:
     assert [x.id for x in second["exceptions"]] == ["X-ACC-04-1-name_match-1"]
     assert second["procedure_runs"][0] is next(r for r in rows if r.id == "RUN-ACC-04-1")
     assert "review_tasks" not in second  # A2 不写任务, 也没有 A1 代写的失败任务
-    assert store.rows == rows
+    assert store.workflow_rows == rows
 
 
 async def test_rewind_checkpoint_replays_p0_intel_from_store() -> None:
@@ -131,14 +131,14 @@ async def test_rewind_checkpoint_replays_p0_intel_from_store() -> None:
     await runner.start(EID)
     await wait_idle(runner, EID)
     first = (await runner.app.aget_state(config)).values
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
     before = [s async for s in runner.app.aget_state_history(config) if s.next == ("p0_intel",)]
 
     await runner.app.ainvoke(None, before[0].config)
 
     after = await runner.app.aget_state(config)
     assert registry.abn_calls == 1
-    assert store.rows == rows
+    assert store.workflow_rows == rows
     assert after.next == ("gate_acc01",)
     for key in ("acceptance_scorecard", "exceptions", "procedure_runs", "procedure_pack"):
         assert after.values[key] == first[key]
@@ -156,13 +156,13 @@ async def test_replay_failed_run_waits_without_calling_agent() -> None:
     nodes, _, _ = counted_nodes(store)
     agent = ScriptAgent(nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)]})  # 若被调用会成功
     nodes.agents["ACC-04"] = agent
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     result = await single_node(nodes, "ACC-04").ainvoke(p0_state(), GraphRunner.config(EID))
 
     assert agent.calls == 0
     assert [i.value["run_id"] for i in result["__interrupt__"]] == ["RUN-ACC-04-1"]
-    assert store.rows == rows
+    assert store.workflow_rows == rows
 
 
 async def test_replay_waits_even_after_task_decided() -> None:
@@ -201,7 +201,7 @@ async def test_replay_with_task_decided_but_no_decision_is_a_node_error() -> Non
     decided = task.model_copy(update={"version": 2, "status": TaskStatus.decided})
     waiting = update_procedure(p0_pack(), "ACC-04", status=ProcedureStatus.awaiting_human)[0]
     store = FakeOutputStore([*p0_pack(), *failure["procedure_runs"], task, decided, waiting])
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
     nodes, registry, _ = counted_nodes(store)
     app = single_node(nodes, "ACC-04")
 
@@ -209,7 +209,7 @@ async def test_replay_with_task_decided_but_no_decision_is_a_node_error() -> Non
     with pytest.raises(RuntimeError, match=mismatch):
         await app.ainvoke(p0_state(), GraphRunner.config(EID))
     assert registry.abn_calls == 0  # 重放取回失败执行, 不再调 Agent
-    assert store.rows == rows
+    assert store.workflow_rows == rows
 
 
 async def test_replay_with_dispute_version_but_no_task_is_a_node_error() -> None:
@@ -476,12 +476,12 @@ async def test_rewind_before_first_of_two_runs_keeps_gate_material_consistent() 
     )
     await wait_idle(runner, EID)
     assert registry.abn_calls == 2
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     await runner.app.ainvoke(None, before_first.config)
 
     assert registry.abn_calls == 2
-    assert store.rows == rows
+    assert store.workflow_rows == rows
     gate = await GraphStateQuery(runner.app, runner.deps, runner).gate(EID)
     assert gate is not None and gate.target_version == 2
     assert [x.id for x in gate.material.exceptions] == ["X-ACC-04-2-name_match-1"]
@@ -547,7 +547,7 @@ async def test_replay_takes_decided_task_of_older_run_with_new_exception() -> No
     attributed = exception(1, version=2)
     async with store.transaction(EID):
         await store.put(EID, [attributed, decided], actor="A1")
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     output = await nodes.fieldwork(dispatch(state, "REV-02", instance="fw-1-1"))
 
@@ -557,7 +557,7 @@ async def test_replay_takes_decided_task_of_older_run_with_new_exception() -> No
     staged = apply_patch(state, output)
     patch = await nodes.fan_in(staged)
     final = apply_patch(staged, patch)
-    assert store.rows == rows
+    assert store.workflow_rows == rows
     assert next(t for t in final["review_tasks"] if t.id == pending.id) == decided
     assert check_refs(patch, final) == []
     assert await store.get(EID, ProcedureRun, "RUN-REV-02-2") in final["procedure_runs"]

@@ -164,7 +164,7 @@ class CrashAfterCommit(FakeOutputStore):
     async def transaction(self, eid: str) -> AsyncIterator[None]:
         async with super().transaction(eid):
             yield
-        if not self.crashed and any(getattr(o, "id", None) == self.crash_run for o in self.commits[-1]):
+        if not self.crashed and any(getattr(o, "id", None) == self.crash_run for o in self.workflow_commits[-1]):
             self.crashed = True
             raise RuntimeError("进程在写检查点前被杀")
 
@@ -181,14 +181,14 @@ async def test_crash_after_rerun_committed_replays_both_runs_from_store() -> Non
     with pytest.raises(RuntimeError, match="被杀"):
         await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
     assert await store.get(EID, ProcedureRun, "RUN-ACC-04-2") is not None
-    rows, calls = list(store.rows), registry.calls
+    rows, calls = list(store.workflow_rows), registry.calls
 
     await runner.app.ainvoke(None, CONFIG)
 
     snapshot = await runner.app.aget_state(CONFIG)
     assert snapshot.next == ("gate_acc01",)
     assert registry.calls == calls == 2
-    assert store.rows == rows
+    assert store.workflow_rows == rows
     assert [r.id for r in snapshot.values["review_records"]] == ["D-1"]
     await assert_pack_synced(snapshot.values["procedure_pack"], store)
 
@@ -349,9 +349,9 @@ async def test_two_contracts_failed_rerun_together() -> None:
     store, app, seen = doc04_node({1: ["CON-001", "CON-002"]})
     await app.ainvoke(initial_state(ENGAGEMENT, [make_procedure("DOC-04", Phase.P1_Planning)], 1), CONFIG)
     first, _ = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
     await preset_rerun(store, first, "D-1")
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     assert sorted((o.id, o.status) for o in commit if isinstance(o, ReviewTask)) == [
         ("T-RUN-DOC-04-1-CON-001-v1", TaskStatus.decided),
         ("T-RUN-DOC-04-1-CON-002-v1", TaskStatus.decided),
@@ -436,7 +436,7 @@ async def test_reused_decision_at_second_wait_is_skipped() -> None:
     runner, store, registry = await failed_at_p0(failures=2)
     await preset_rerun(store, await pending_task(store), "D-1")
     await runner.app.ainvoke(Command(resume="D-1"), CONFIG)
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     await runner.app.ainvoke(None, CONFIG)
 
@@ -444,7 +444,7 @@ async def test_reused_decision_at_second_wait_is_skipped() -> None:
     assert [i.value for t in snapshot.tasks for i in t.interrupts] == [
         {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-2", "records": ["D-1"]}
     ]
-    assert registry.calls == 2 and store.rows == rows
+    assert registry.calls == 2 and store.workflow_rows == rows
     await preset_rerun(store, await pending_task(store), "D-2")
     await runner.app.ainvoke(Command(resume="D-2"), CONFIG)
     assert (await runner.app.aget_state(CONFIG)).next == ("gate_acc01",) and registry.calls == 3

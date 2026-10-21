@@ -4608,6 +4608,259 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/workpapers": {
+      "get": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "List Workpapers",
+        "description": "项目的底稿记录 (各最新版本), 按档案顺序; 程序还没执行 (闸门还没决定) 的没有记录.",
+        "operationId": "workpapers-list_workpapers",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Workpaper"
+                  },
+                  "title": "Response Workpapers-List Workpapers"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/conclusion": {
+      "post": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Conclude Workpaper",
+        "description": "改写底稿结论, 返回新版本 (草稿照留; 已签署的改为须重新复核), 写 decision 留痕. 文字为空 422 MISSING_FIELD;\n底稿没有记录 404; 锁定 423; 忙 409.",
+        "operationId": "workpapers-conclude_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkpaperConclusionIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workpaper"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/notes": {
+      "post": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Note Workpaper",
+        "description": "补充底稿说明, 返回新版本; item 补齐该底稿可由补充说明补齐的必填项 (之后不再列在 missing). 文字为空 422\nMISSING_FIELD; item 不是可补齐的 422 INVALID_VALUE; 底稿没有记录 404; 锁定 423; 忙 409.",
+        "operationId": "workpapers-note_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkpaperNoteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workpaper"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/signoff": {
+      "post": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Sign Workpaper",
+        "description": "签署底稿, 返回新版本 (status signed, 记签署人, 时间, 复核范围与意见), 写 decision 留痕. 不阻塞 FIN-01 与\nRPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409.",
+        "operationId": "workpapers-sign_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkpaperSignoffIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workpaper"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/data/schemas": {
       "get": {
         "tags": [
@@ -11279,6 +11532,26 @@
         "title": "LlmTestResult",
         "description": "测试连接的结果. message 已脱敏."
       },
+      "LocalizedText": {
+        "properties": {
+          "zh": {
+            "type": "string",
+            "title": "Zh"
+          },
+          "en": {
+            "type": "string",
+            "title": "En"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "zh",
+          "en"
+        ],
+        "title": "LocalizedText",
+        "description": "中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)\n与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."
+      },
       "ManualRequest": {
         "properties": {
           "instructions": {
@@ -12181,6 +12454,32 @@
         ],
         "title": "NotExecuted",
         "description": "因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."
+      },
+      "ObjectRef": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "version"
+        ],
+        "title": "ObjectRef",
+        "description": "对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查."
       },
       "Officeholder": {
         "properties": {
@@ -14114,6 +14413,16 @@
         "title": "ReviewRecordIn",
         "description": "复核决定请求体: 去掉 id, version, reviewed_by, decided_at, 以及服务端算的 dwell_seconds, presentation_id\n(需求 R153)."
       },
+      "ReviewScope": {
+        "type": "string",
+        "enum": [
+          "full",
+          "sample",
+          "conclusion_only"
+        ],
+        "title": "ReviewScope",
+        "description": "底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330)."
+      },
       "ReviewStatus": {
         "type": "string",
         "enum": [
@@ -15898,6 +16207,271 @@
         ],
         "title": "WorkingLanguageIn",
         "description": "改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查\n(engagements.parse_language)."
+      },
+      "Workpaper": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkpaperStatus",
+            "default": "draft"
+          },
+          "basis": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectRef"
+            },
+            "type": "array",
+            "title": "Basis"
+          },
+          "conclusion_draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalizedText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "conclusion_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion By"
+          },
+          "conclusion_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion At"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/WorkpaperNote"
+            },
+            "type": "array",
+            "title": "Notes",
+            "default": []
+          },
+          "signoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkpaperSignoff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_signoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkpaperSignoff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "ref",
+          "area",
+          "procedure_id",
+          "basis"
+        ],
+        "title": "Workpaper",
+        "description": "一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由\nservices.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.\n只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."
+      },
+      "WorkpaperConclusionIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "WorkpaperConclusionIn",
+        "description": "审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330)."
+      },
+      "WorkpaperNote": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item"
+          },
+          "added_by": {
+            "type": "string",
+            "title": "Added By"
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Added At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "added_by",
+          "added_at"
+        ],
+        "title": "WorkpaperNote",
+        "description": "底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,\n底稿配置 supplementable), 只是补充时为空."
+      },
+      "WorkpaperNoteIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Item"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "WorkpaperNoteIn",
+        "description": "审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330)."
+      },
+      "WorkpaperSignoff": {
+        "properties": {
+          "signed_by": {
+            "type": "string",
+            "title": "Signed By"
+          },
+          "signed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Signed At"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ReviewScope"
+          },
+          "opinion": {
+            "type": "string",
+            "title": "Opinion",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "signed_by",
+          "signed_at",
+          "scope"
+        ],
+        "title": "WorkpaperSignoff",
+        "description": "底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."
+      },
+      "WorkpaperSignoffIn": {
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/ReviewScope"
+          },
+          "opinion": {
+            "type": "string",
+            "title": "Opinion",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "title": "WorkpaperSignoffIn",
+        "description": "审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."
+      },
+      "WorkpaperStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "signed",
+          "needs_rereview",
+          "final"
+        ],
+        "title": "WorkpaperStatus",
+        "description": "底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01."
       },
       "XeroAuthorize": {
         "properties": {

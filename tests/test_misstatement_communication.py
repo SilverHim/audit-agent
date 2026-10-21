@@ -471,11 +471,11 @@ async def test_collect_replayed_after_crash(monkeypatch: pytest.MonkeyPatch) -> 
     await s.submit.submit(EID, round1())
     await wait_idle(s.runner, EID)
     assert "被杀" in (s.runner.run_error(EID) or "")
-    rows = list(store.rows_of(EID))
+    rows = list(store.workflow_rows_of(EID))
 
     await s.runner.app.ainvoke(None, CONFIG)
 
     assert prepared == []
-    assert store.rows_of(EID) == rows
+    assert store.workflow_rows_of(EID) == rows
     assert [latest(s, Misstatement, m).version for m in (XJ499, CSH02)] == [3, 3]
     assert (await s.runner.app.aget_state(CONFIG)).next == ("await_correction",)

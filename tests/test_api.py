@@ -332,8 +332,9 @@ def test_missing_token(api: SimpleNamespace) -> None:
         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
     ],
 )
-def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
-    response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
+@pytest.mark.parametrize("suffix", ["", "/workpapers"])  # 底稿记录 (需求 R330) 同样经 owned_engagement
+def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str, suffix: str) -> None:
+    response = api.client.get(f"/api/v1/engagements/{path}{suffix}", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == code
 

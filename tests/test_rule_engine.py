@@ -376,11 +376,11 @@ async def test_p2_population_rides_the_staged_item_into_fan_in() -> None:
     [back] = serde.loads_typed(serde.dumps_typed({"staged_results": [staged]}))["staged_results"]
     assert back == staged and isinstance(back["population"], RunPopulation)
     assert isinstance(back["population"].rules[0].items[0], PopulationItem)
-    commits, writers = len(store.commits), population_writers(store)
+    commits, writers = len(store.workflow_commits), population_writers(store)
 
     patch = await nodes.fan_in(state)
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     assert [o for o in commit if isinstance(o, RunPopulation)] == [numbat_population()]
     assert writers == [("POP-RUN-REV-08-1", AgentId.A6)]
     assert [o.id for o in commit if isinstance(o, ProcedureRun)] == ["RUN-REV-08-1"]
@@ -396,9 +396,9 @@ async def test_replay_does_not_write_population_again() -> None:
     again = await nodes.fieldwork(dispatch(state, "REV-08", instance="fw-0-0"))
     [replayed] = again["staged_results"]
     assert "population" not in replayed
-    commits = len(store.commits)
+    commits = len(store.workflow_commits)
     await nodes.fan_in(state)  # 带着原暂存项重做
-    assert all(not isinstance(o, RunPopulation) for c in store.commits[commits:] for o in c)
+    assert all(not isinstance(o, RunPopulation) for c in store.workflow_commits[commits:] for o in c)
     assert await store.history(EID, RunPopulation, "POP-RUN-REV-08-1") == [numbat_population()]
 
 
@@ -431,11 +431,11 @@ async def test_attempt_writes_population_with_the_terminal_run() -> None:
     nodes, store, state = await assembled()
     nodes.agents["PLN-07"] = RiskAssessorAgent(nodes.deps)
     engagement = ENGAGEMENT.model_copy(update={"client_profile_version": NUMBAT_PROFILE.version})
-    commits, writers = len(store.commits), population_writers(store)
+    commits, writers = len(store.workflow_commits), population_writers(store)
 
     patch, _ = await nodes.attempt(state, engagement, "PLN-07")
 
-    [commit] = store.commits[commits:]
+    [commit] = store.workflow_commits[commits:]
     [population] = [o for o in commit if isinstance(o, RunPopulation)]
     assert (population.id, population.run_id) == ("POP-RUN-PLN-07-1", "RUN-PLN-07-1")
     assert writers == [("POP-RUN-PLN-07-1", AgentId.A4)]

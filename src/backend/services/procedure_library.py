@@ -21,7 +21,6 @@ from pydantic_core import to_jsonable_python
 from backend.contracts import llm_outputs
 from backend.contracts.data import DataInput
 from backend.contracts.knowledge import (
-    LocalizedText,
     ProcedureTemplate,
     ReportTemplate,
     RequiredItem,
@@ -39,6 +38,7 @@ from backend.contracts.models import (
     DocumentType,
     Engagement,
     Engine,
+    LocalizedText,
     OpinionType,
     Phase,
     Procedure,

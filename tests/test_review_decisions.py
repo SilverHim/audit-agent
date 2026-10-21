@@ -423,7 +423,7 @@ async def waiting_on_revenue() -> Started:
 
 
 def commit_after(s: Started, before: int) -> list[Any]:
-    [commit] = s.output_store.commits[before:]
+    [commit] = s.output_store.workflow_commits[before:]
     return commit
 
 
@@ -438,7 +438,7 @@ async def test_confirm_writes_in_one_commit_and_resumes() -> None:
     REV-03 仍有待决任务, 不出新版本; 1 行 decision 留痕; 后台结束后图停回 await_events, 状态含该决定."""
     s = await waiting_on_revenue()
     trail_before = len(decisions_in_trail(s))
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
     decision = record(id="D-1")
 
     await s.submit.submit(EID, decision)
@@ -467,12 +467,14 @@ async def test_last_confirm_completes_program_in_same_commit() -> None:
     for n in (1, 2):
         await s.submit.submit(EID, record(f"T-J-REV-03-1-CON-00{n}-v1", id=f"D-{n}"))
         await wait_idle(s.runner, EID)
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, record("T-J-REV-03-1-CON-003-v1", id="D-3"))
     await wait_idle(s.runner, EID)
 
-    rev03 = next(o for o in s.output_store.commits[before] if isinstance(o, Procedure))  # 决定那一次提交; 之后图继续跑
+    rev03 = next(
+        o for o in s.output_store.workflow_commits[before] if isinstance(o, Procedure)
+    )  # 决定那一次提交; 之后图继续跑
     assert (rev03.id, rev03.status) == ("REV-03", ProcedureStatus.completed)
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert s.runner.run_error(EID) is None
@@ -496,7 +498,7 @@ async def test_confirm_attributes_exceptions_in_same_commit() -> None:
     await s.submit.submit(EID, pln_decision(GateVerdict.approve))
     await wait_idle(runner, EID)
     assert await s.next_nodes() == ("await_events",)
-    before = len(store.commits)
+    before = len(store.workflow_commits)
 
     await s.submit.submit(EID, record("T-J-CSH-02-1-BA-01-v1", id="D-CSH"))
     await wait_idle(runner, EID)
@@ -654,7 +656,7 @@ async def test_misstatement_on_judgment() -> None:
     """R19 验收 1, 3: 对 SI-2026-0612 的判断认定错报: 同一提交建 M-{决定 ID} (来源为判断), 判断 v2 confirmed,
     跨期例外出新版本 attributed (由该判断解释); REV-02 另有待决任务, 不出新版本. 恢复后状态含该错报."""
     s = await waiting_on_cutoff()
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
     decision = record(
         "T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT
     )
@@ -662,7 +664,7 @@ async def test_misstatement_on_judgment() -> None:
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
 
-    commit = s.output_store.commits[before]
+    commit = s.output_store.workflow_commits[before]
     [misstatement] = [o for o in commit if isinstance(o, Misstatement)]
     assert misstatement == Misstatement(
         id="M-D-M",
@@ -717,14 +719,14 @@ async def test_misstatement_takes_reviewer_draft() -> None:
     """审计师改了草稿 (金额与类型) 再认定: 错报取决定里的草稿, 不取判断里 AI 给的; 提交与恢复后都是."""
     s = await waiting_on_cutoff()
     revised = NUMBAT_CUTOFF_DRAFT.model_copy(update={"type": MisstatementType.judgmental, "amount_cents": 13000000})
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(
         EID, record("T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=revised)
     )
     await wait_idle(s.runner, EID)
 
-    [misstatement] = [o for o in s.output_store.commits[before] if isinstance(o, Misstatement)]
+    [misstatement] = [o for o in s.output_store.workflow_commits[before] if isinstance(o, Misstatement)]
     assert (misstatement.type, misstatement.amount_cents) == (MisstatementType.judgmental, 13000000)
     assert (await s.runner.app.aget_state(CONFIG)).values["misstatements"] == [misstatement]
 
@@ -736,7 +738,7 @@ async def test_misstatement_on_unattributed_exception(reason: str | None) -> Non
     attributed, attributed_by 为该人工判断; 错报记该人工判断 (exception_id 空), 报告据此可引用已确认的判断.
     需求 R358: 理由选填, 不填也能提交, 决定与留痕照记空理由, 人工判断的结论为空串."""
     s = await waiting_on_cutoff(attributes=False)
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
     decision = record(
         f"T-{CUTOFF}-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT, reason=reason
     )
@@ -744,7 +746,7 @@ async def test_misstatement_on_unattributed_exception(reason: str | None) -> Non
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
 
-    commit = s.output_store.commits[before]
+    commit = s.output_store.workflow_commits[before]
     human_id = "J-REV-02-1-SI-2026-0612-H1"
     [human] = [o for o in commit if isinstance(o, Judgment)]
     assert (human.id, human.subject_id, human.review_status, human.proposed_action) == (
@@ -782,12 +784,12 @@ async def test_program_completes_after_last_cutoff_decision() -> None:
         record("T-J-REV-02-1-SI-2026-0612-v1", Decision.misstatement, id="D-M", misstatement_draft=NUMBAT_CUTOFF_DRAFT),
     )
     await wait_idle(s.runner, EID)
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, record("T-J-REV-02-1-SI-2026-0618-v1", id="D-OK"))
     await wait_idle(s.runner, EID)
 
-    [rev02] = [o for o in s.output_store.commits[before] if isinstance(o, Procedure)]
+    [rev02] = [o for o in s.output_store.workflow_commits[before] if isinstance(o, Procedure)]
     assert (rev02.id, rev02.status) == ("REV-02", ProcedureStatus.completed)
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert [m.id for m in snapshot.values["misstatements"]] == ["M-D-M"]
@@ -806,7 +808,7 @@ async def test_override_judgment_creates_human_judgment() -> None:
     original = await s.output_store.get(EID, Judgment, "J-REV-02-1-SI-2026-0612")
     assert original is not None
     trail_before = len(decisions_in_trail(s))
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
     decided_at = NOW + timedelta(days=1)  # 与原判断的生成时间不同: 人工判断的时间取决定时间
     decision = record(
         "T-J-REV-02-1-SI-2026-0612-v1",
@@ -819,7 +821,7 @@ async def test_override_judgment_creates_human_judgment() -> None:
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
 
-    commit = s.output_store.commits[before]
+    commit = s.output_store.workflow_commits[before]
     judgments = {o.id: o for o in commit if isinstance(o, Judgment)}
     hid = "J-REV-02-1-SI-2026-0612-H1"
     old = judgments[original.id]
@@ -858,14 +860,14 @@ async def test_override_unattributed_exception() -> None:
     s = await waiting_on_cutoff(attributes=False)
     exception = await s.output_store.get(EID, AuditException, CUTOFF)
     assert exception is not None
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(
         EID, record(f"T-{CUTOFF}-v1", Decision.override, id="D-O", override_conclusion="跨期发票, 已与客户确认")
     )
     await wait_idle(s.runner, EID)
 
-    commit = s.output_store.commits[before]
+    commit = s.output_store.workflow_commits[before]
     [human] = [o for o in commit if isinstance(o, Judgment)]
     assert (human.id, human.run_id, human.subject_id, human.exception_ids, human.evidence) == (
         "J-REV-02-1-SI-2026-0612-H1",
@@ -910,14 +912,14 @@ async def test_manual_result_for_failed_subject() -> None:
         type="contract", source_type="document", source_id=NUMBAT_CONTRACTS[2].id, locator="T2", page=2
     )
     result = ManualResult(conclusion="配送中心收货员签收时控制权转移", evidence=[pointer])
-    before = len(store.commits)
+    before = len(store.workflow_commits)
 
     await s.submit.submit(
         EID, record("T-RUN-REV-03-1-CON-003-v1", Decision.manual_result, id="D-H", manual_result=result)
     )
     await wait_idle(runner, EID)
 
-    [human] = [o for o in store.commits[before] if isinstance(o, Judgment)]
+    [human] = [o for o in store.workflow_commits[before] if isinstance(o, Judgment)]
     assert (human.id, human.conclusion, human.evidence, human.exception_ids, human.review_status) == (
         "J-REV-03-1-CON-003-H1",
         result.conclusion,
@@ -951,13 +953,13 @@ async def test_human_judgment_numbered_from_checkpoint() -> None:
     )
     task = await s.output_store.get(EID, ReviewTask, "T-J-REV-02-1-SI-2026-0618-v1")
     assert task is not None
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit._apply_review(
         EID, record(task.id, Decision.override, id="D-O2", override_conclusion="另有依据"), task, earlier
     )
 
-    created = {o.id for o in s.output_store.commits[before] if isinstance(o, Judgment)}
+    created = {o.id for o in s.output_store.workflow_commits[before] if isinstance(o, Judgment)}
     assert "J-REV-02-1-SI-2026-0618-H2" in created
 
 

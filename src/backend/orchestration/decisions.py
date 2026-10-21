@@ -3,6 +3,7 @@
 校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
 """
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -100,6 +101,9 @@ from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import RERUNNABLE, attribute_exceptions, draft_rule, misstatement_updates
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 from backend.services.trail_pages import all_of_kind
+from backend.services.workpapers import refresh as refresh_workpapers
+
+logger = logging.getLogger(__name__)
 
 LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
 # 效果中会出新版本的对象列表
@@ -1012,7 +1016,8 @@ class GraphDecisionSubmit:
 
         进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 查功能集 (FEATURES_MISMATCH), 读检查点, 查 RESUME_REQUIRED.
         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
-        块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放. resume 为复核决定 ID 时以
+        块正常结束: 刷新底稿记录 (需求 R330, 出错只记日志), 再交给 runner 从检查点在后台继续执行, 锁由后台任务结束时
+        释放. resume 为复核决定 ID 时以
         Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定, 更新客户资料与过期重跑为 None (已越过闸门
         或已以 fan_in 身份写入).
         """
@@ -1031,6 +1036,10 @@ class GraphDecisionSubmit:
             snapshot = await self.app.aget_state(GraphRunner.config(eid))
             await self._check_resume_required(engagement, snapshot)
             yield engagement, snapshot
+            try:  # 决定已提交, 仍持项目锁; 快照失败不影响决定, 取消请求时仍由外层释放锁.
+                await refresh_workpapers(self.deps, eid)
+            except Exception:
+                logger.exception("刷新底稿记录失败: %s", eid)
         except VersionConflict as e:
             self.runner.release(eid)
             raise DecisionRejected("VERSION_MISMATCH", str(e)) from e
