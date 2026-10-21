@@ -11,6 +11,10 @@
 任务 (判断失败, 后者带规则例外, 需求 R347) 重跑, 每个对象至多一次, unattributed 重跑后仍失败才按决定表处理.
 FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
 
+终验 (需求 R263) 在硬性之上另查 (assert_final): 重要性 32431 / 16216 / 1622, 汇总表为 BA-091 与 XJ-499 两笔, 签字报告的
+意见类型与汇总表候选一致; 各大模型程序 (判断, 合同与回函抽取, 上传分类) 的结果只在人给了结论的对象上偏离固定输出;
+签字后再提交决定报 ENGAGEMENT_LOCKED; 留痕的 token 都大于 0.
+
 断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed, unattributed
 后重跑一次; 重跑后仍是 unattributed 的, 驱动按决定表推翻后照常走完, 但该对象缺模型结论, 硬性检查不过); 全部证据
 指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
@@ -54,7 +58,9 @@ from tests.live_walk import (
     MAX_CALLS,
     FinPolicy,
     LiveWalk,
+    assert_final,
     assert_hard,
+    assert_locked,
     candidate_opinion,
     chinese_checks,
     decision_table,
@@ -112,6 +118,7 @@ async def real_walk(
         try:
             async with api_client(runner, run.owner, deps=run.deps, xero=xero_link(run.deps, service)) as client:
                 await drive(client, runner, service, walk, fin=fin, budget=budget, language=language)
+                await assert_locked(client, walk)
         finally:
             data = await evaluate(runner, walk, budget)
             budget.reported = True
@@ -136,10 +143,12 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
     walk, data, calls = await real_walk(tmp_path, live_budget, name, language=language, LLM_MODE="live", **llm)
     warn_soft(data)
     assert_hard(data)
+    assert_final(data)  # 需求 R263: 重要性, 汇总表, 意见与候选一致, 只在人给了结论的对象上偏离
     assert walk.gates == GATES
     assert (data["language"], list(data["run_languages"])) == (language, [language])  # live 照项目的工作语言记
     assert (data["chinese_checked"] > 0) == (language == "zh")  # 中文项目确有要查的中文执行, 不空转
     assert calls and all(e.model and e.model.startswith(configured.LLM_MODEL) for e in calls)
+    assert all(e.input_tokens and e.output_tokens for e in calls)  # 需求 R263 验收 5
 
 
 @pytest.mark.slow
@@ -158,6 +167,7 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
         LLM_MODE="mock",
     )
     assert_hard(data)
+    assert_final(data)
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
     assert (data["usage"]["calls"], len(calls), walk.gates) == (FIXED_CALLS, FIXED_CALLS, GATES)
 
@@ -176,6 +186,7 @@ async def offline_walk(
     async with demo_offline(llm) as (runner, service, client):
         install_budget(runner.deps, budget)
         await drive(client, runner, service, walk, budget=budget)
+        await assert_locked(client, walk)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
     return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException), runner
@@ -201,6 +212,11 @@ async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     checks = await chinese_checks(runner, eid, as_zh)
     assert checks["chinese_checked"] > 50 and len(checks["not_in_language"]) == checks["chinese_checked"]
     assert {line.rsplit(": ", 1)[1] for line in checks["not_in_language"]} == {"没有中文"}
+    assert_final(data)  # 终验的各项 (需求 R263) 在固定输出上成立: 候选与签字报告都是保留意见
+    assert (data["schedule"]["candidate_opinion"], data["report_opinion"]) == ("qualified", ["qualified"])
+    # 比对了的对象: CSH-02 只有 BA-091 一条判断, 它与 GEN-02 的 XJ-499 由审计师认定错报, XJ-575 推翻, 都不比
+    expected = {"DOC-04": 3, "DOC-06": 2, "DOC-CLASSIFY": 21, "GEN-02": 5, "REV-02": 6, "REV-03": 3}
+    assert data["compared"] == expected
     assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
     assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)

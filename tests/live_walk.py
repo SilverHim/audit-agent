@@ -8,6 +8,8 @@
 - drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk.
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑, 项目与
   各执行的语言, 中文执行写出的文字中不是中文的); assert_hard 与 warn_soft 为两级检查.
+- 终验 (需求 R263): evaluate 另记重要性, 汇总表与各大模型程序的结果和固定输出 (演示运行副本, 即设计稿的预期) 的偏离;
+  assert_final 要求意见类型与汇总表候选一致, 偏离只出现在人给了结论的对象 (deviations).
 - 工作语言 (需求 R343): drive 按 language 建项目 (缺省 en). 中文执行 (ProcedureRun.language zh) 写出的判断, 计划叙述与
   报告两段须有中文 (language_problem, 硬性); 疑似整段英文与引号内含中文只告警 (english_run, translated_quote); mock
   下执行都记 en, 这几项为空.
@@ -29,12 +31,17 @@ from backend.contracts.models import (
     AuditPlan,
     AuditReportVersion,
     Confirmation,
+    Decision,
     Judgment,
     OpinionType,
     ProcedureRun,
     ReportSection,
     ReportStatus,
+    ReviewRecord,
+    ReviewTask,
+    TargetType,
     TrailKind,
+    UncorrectedSchedule,
     WorkingLanguage,
 )
 from backend.core.config import get_settings
@@ -288,6 +295,20 @@ async def drive(
     pytest.fail(f"{MAX_STEPS} 步内未到归档")
 
 
+async def assert_locked(client: httpx.AsyncClient, walk: LiveWalk) -> None:
+    """签字归档之后再提交决定都报 423 ENGAGEMENT_LOCKED (需求 R263 验收 6): 闸门决定一次 (RPT-01 再批准), 复核决定一次
+    (最后决定过的那条任务再确认); 锁定先于其余校验 (第 7 节校验顺序)."""
+    assert walk.eid is not None and walk.decisions, "还没走到归档"
+    base = f"{API}/engagements/{walk.eid}"
+    attempts = {
+        "gate-decisions": {"gate": "RPT-01", "target_id": "REPORT-2", "target_version": 2, "decision": "approve"},
+        "review-records": {"task_id": walk.decisions[-1][0], "target_version": 1, "decision": "confirm"},
+    }
+    for path, body in attempts.items():
+        posted = await client.post(f"{base}/{path}", json=body)
+        assert (posted.status_code, posted.json()["detail"]["code"]) == (423, "ENGAGEMENT_LOCKED"), (path, posted.text)
+
+
 def latest_model_judgments(judgments: list[Judgment]) -> dict[tuple[str, str], Judgment]:
     """模型自己给出的判断 (人工判断 -H 不算), 每个 (程序, 对象) 取最后一次执行的."""
     latest: dict[tuple[str, str], Judgment] = {}
@@ -297,10 +318,75 @@ def latest_model_judgments(judgments: list[Judgment]) -> dict[tuple[str, str], J
     return latest
 
 
+def fixture_of(procedure_id: str, key: str) -> dict[str, Any] | None:
+    """演示运行副本里该程序该键的固定输出 (JSON); 没有为空."""
+    path = XERO.runtime / procedure_id / f"{key}.json"
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8"))) if path.is_file() else None
+
+
 def fixture_action(procedure_id: str, subject_id: str) -> str | None:
     """演示运行副本里该对象固定输出的建议动作; 没有固定输出为空."""
-    path = XERO.runtime / procedure_id / f"{subject_id}.json"
-    return json.loads(path.read_text(encoding="utf-8"))["proposed_action"] if path.is_file() else None
+    found = fixture_of(procedure_id, subject_id)
+    return cast(str, found["proposed_action"]) if found is not None else None
+
+
+CONTRACT_FIELDS = ("counterparty", "amount_cents", "sign_date")  # DOC-04 比对固定输出的要素 (下游 REV-03, REV-02 用的)
+CONFIRMATION_FIELDS = ("confirmed_balance_cents", "accrued_interest_cents")  # DOC-06 比对的要素 (CSH-02 用的)
+HUMAN_DECISIONS = {Decision.misstatement}  # 对模型判断下了这些决定的, 结论由审计师给出 (认定错报带审计师的草稿)
+
+
+async def human_concluded(runner: GraphRunner, eid: str, judgments: Sequence[Judgment]) -> set[tuple[str, str]]:
+    """人给了结论的判断对象 (程序, 对象): 有人工判断 (-H: 推翻, 仲裁两者都不采用, 人工结果, 对例外认定错报), 或审计师
+    对模型判断认定错报 (带审计师写的草稿)."""
+    store = runner.deps.output_store
+    found = {(j.procedure_id, j.subject_id) for j in judgments if "-H" in j.id}
+    by_id = {j.id: j for j in judgments}
+    tasks = {t.id: t for t in await store.latest(eid, ReviewTask)}
+    for record in await store.latest(eid, ReviewRecord):
+        task = tasks.get(record.task_id)
+        if record.decision in HUMAN_DECISIONS and task is not None and task.target_type is TargetType.Judgment:
+            target = by_id.get(task.target_id)
+            if target is not None:
+                found.add((target.procedure_id, target.subject_id))
+    return found
+
+
+async def deviations(
+    runner: GraphRunner, eid: str, judged: dict[tuple[str, str], Judgment]
+) -> tuple[list[str], dict[str, int]]:
+    """各大模型程序的结果与演示运行副本的固定输出 (设计稿的预期) 不同, 且不是人给的结论的 (需求 R263 验收 4), 每条
+    "程序 对象: 实际 != 固定输出"; 另返回各程序比对了几个对象 (没有固定输出的不比), 防比对空跑.
+    判断 (JUDGING) 为模型最后一次的建议动作, 人给了结论的对象 (human_concluded) 不算; DOC-04 为合同的对方, 金额与签署日
+    (CONTRACT_FIELDS); DOC-06 为各函证当前版本的回函余额与应计利息 (BA-090 的余额符号抽错时在这里报出, 不能悄悄进
+    CSH-02 的差额); DOC-CLASSIFY 为审计师上传的文件的类型."""
+    deps = runner.deps
+    store = deps.output_store
+    human = await human_concluded(runner, eid, await store.latest(eid, Judgment))
+    found: list[str] = []
+    compared: Counter[str] = Counter()
+
+    def compare(pid: str, subject: str, actual: Any, expected: Any) -> None:
+        compared[pid] += 1
+        if actual != expected:
+            found.append(f"{pid} {subject}: {actual} != {expected}")
+
+    for (pid, subject), j in sorted(judged.items()):
+        expected = fixture_action(pid, subject)
+        if expected is not None and (pid, subject) not in human:
+            compare(pid, subject, j.proposed_action.value, expected)
+    for contract in sorted(await deps.financial_store.contracts(eid), key=lambda c: c.id):
+        if (fixture := fixture_of("DOC-04", contract.id)) is not None:
+            actual = contract.model_dump(mode="json", include=set(CONTRACT_FIELDS))
+            compare("DOC-04", contract.id, actual, {k: fixture[k] for k in CONTRACT_FIELDS})
+    for confirmation in sorted(await store.latest(eid, Confirmation), key=lambda c: c.id):
+        if (fixture := fixture_of("DOC-06", confirmation.bank_account_id)) is not None:
+            actual = confirmation.model_dump(mode="json", include=set(CONFIRMATION_FIELDS))
+            compare("DOC-06", confirmation.bank_account_id, actual, {k: fixture[k] for k in CONFIRMATION_FIELDS})
+    for document in sorted(await deps.financial_store.documents(eid), key=lambda d: d.file_name):
+        fixture = fixture_of("DOC-CLASSIFY", document.file_name.rsplit(".", 1)[0])
+        if document.channel == "auditor_upload" and fixture is not None:
+            compare("DOC-CLASSIFY", document.file_name, document.type.value, fixture["document_type"])
+    return found, dict(sorted(compared.items()))
 
 
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")  # 中日韩统一表意文字
@@ -419,6 +505,21 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
     out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
     plans = await store.latest(eid, AuditPlan)
     out["plans"] = sorted([p.id, p.status.value] for p in plans)
+    values = (await runner.app.aget_state(GraphRunner.config(eid))).values
+    out["materiality"] = [
+        values[k] for k in ("materiality_cents", "performance_materiality_cents", "clearly_trivial_cents")
+    ]
+    schedule = await store.get(eid, UncorrectedSchedule, "SCHEDULE")
+    out["schedule"] = (
+        {
+            "amounts": sorted(i.amount_cents for i in schedule.items),
+            "total_cents": schedule.total_cents,
+            "candidate_opinion": schedule.candidate_opinion.value,
+        }
+        if schedule is not None
+        else None
+    )
+    out["deviations"], out["compared"] = await deviations(runner, eid, judged)
     out |= await chinese_checks(runner, eid, runs)
     out["entered_p2_by"] = entered_p2_by(await deps.trail.list(eid, TrailKind.transition, limit=10_000))
     return out
@@ -458,6 +559,24 @@ def assert_hard(data: dict[str, Any]) -> None:
     assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
     assert data["plans"] == [["PLAN-1", "superseded"], ["PLAN-2", "approved"]], data["plans"]
     assert data["entered_p2_by"] == ["PLN-15"], data["entered_p2_by"]
+
+
+# 演示配置下的终态 (需求 R263 验收 3, 同 R287 的计数): 重要性按 PLN-01/03 闸门的决定 (收入 1%, 执行 50%, 明显微小 5%);
+# 汇总表为 BA-091 与 XJ-499 两笔 (审计师按决定表认定, 错报闭环不开, 按未更正累计), 合计超过重要性
+MATERIALITY = [32431, 16216, 1622]
+SCHEDULE_AMOUNTS = [4853, 75000]
+
+
+def assert_final(data: dict[str, Any]) -> None:
+    """终验 (需求 R263): 重要性与汇总表同演示配置的终态 (MATERIALITY, SCHEDULE_AMOUNTS); 签字报告的意见类型与汇总表的
+    候选一致 (FIN-01 按候选决定); 各大模型程序的结果只在人给了结论的对象上偏离固定输出 (deviations 为空). 走到归档与
+    run_error 为空由驱动保证, 意见段标题等见 assert_hard."""
+    assert data["materiality"] == MATERIALITY, data["materiality"]
+    schedule = data["schedule"]
+    assert schedule is not None and schedule["amounts"] == SCHEDULE_AMOUNTS, schedule
+    assert schedule["total_cents"] == sum(SCHEDULE_AMOUNTS)
+    assert data["report_opinion"] == [schedule["candidate_opinion"]] == [data["candidate_opinion"]], data
+    assert data["deviations"] == [], data["deviations"]
 
 
 def warn_soft(data: dict[str, Any]) -> None:
