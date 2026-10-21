@@ -4,8 +4,10 @@
 
 决定同 R311 (tests/test_demo_walkthrough_live.py 的 decision_table: BA-091 与 XJ-499 认定错报, XJ-575 推翻为接受,
 其余确认; 争议能维持原判断就维持, 否则 "两者都不采用"; failed 与 unattributed 任务每个对象至多重跑一次, 后者重跑后
-仍失败才按决定表处理, 需求 R347, R355), RPT-01 先退回一次再签字,
-打开 planning 时 PLN-15 先退回一次再批准 (同 R317). 功能集取 .env.example 的 FEATURES. 后端连测试库
+仍失败才按决定表处理, 需求 R347, R355), PLN-15 先退回一次再批准 (同 R317), RPT-01 先退回一次再签字. 错报闭环
+(需求 R356, Q34): 在人工任务页登记 FIN-08 第 1 轮管理层回复 (补造的 manual/fin08_round1.json: 两条都同意更正), 等更正时
+在总览的更正卡片上提交更正通知 (该轮的更正分录 AJE-X01, AJE-X05), FIN-01 按候选意见为无保留. 功能集取 .env.example 的
+FEATURES (演示配置). 后端连测试库
 (TEST_DATABASE_URL), 存储与检查点都是真实的; mock 模式读演示运行副本的固定输出, live 模式调真实模型 (配置同 R311,
 经 tests.external.live_llm_settings 取, 没配时跳过). 两个用例都标 slow, 默认测试不跑.
 """
@@ -26,6 +28,7 @@ from tests.fakes import PLAN_REJECT_REASON
 from tests.fixture_sets import XERO
 from tests.live_walk import (
     CONFIRM_CONCLUSION,
+    CORRECTED_AMOUNTS,
     MAX_CALLS,
     RERUN_REASON,
     RERUNNABLE,
@@ -37,8 +40,8 @@ from tests.live_walk import (
     warn_soft,
 )
 from tests.tools.live_budget import Budget, install_budget
-from tests.xero_fakes import DEMO_FEATURES, ORC1026, REPO, XERO17_ANNOTATION, XERO17_MATERIALITY
-from tests.xero_flow import READY_REASON
+from tests.xero_fakes import DEMO_FEATURES, ORC1026, REPO, XERO17_ANNOTATION, XERO17_MATERIALITY, round_file
+from tests.xero_flow import FIN08_CONCLUSION, FIN08_REASON, READY_REASON, SYDNEY
 from tests.xero_harness import FlakyLLM
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
@@ -67,17 +70,55 @@ LABELS = {
     "comment": "Comment",
     "noExpert": "No auditor's expert is needed",
     "signed": "Signed and archived",
+    "manual": {  # 人工任务页与 FIN-08 登记表
+        "submit": "Record result",
+        "communicatedAt": "Communicated at",
+        "communicatedTo": "Communicated to",
+        "respondedAt": "Responded at",
+        "response": "Response (verbatim)",
+        "agrees": "Agrees",
+        "disagrees": "Does not agree",
+        "performedOn": "Date performed",
+        "conclusion": "Conclusion",
+        "reason": "Reason",
+    },
+    "correction": {  # 总览的更正卡片
+        "title": "Waiting for client correction",
+        "posted": "Client has posted adjustments",
+        "submit": "Submit",
+    },
 }
 
 
-def gates_expected() -> list[str]:
-    """依次决定的闸门: 打开 planning 时 PLN-01/03 之后多两次 PLN-15 (先退回再批准)."""
-    plan = ["PLN-15", "PLN-15"] if "planning" in DEMO_FEATURES else []
-    return ["ACC-01", "PLN-01/03", *plan, "FIN-01", "RPT-01", "RPT-01"]
+# 依次决定的闸门: PLN-15 先退回再批准, RPT-01 先退回再签字
+GATES = ["ACC-01", "PLN-01/03", "PLN-15", "PLN-15", "FIN-01", "RPT-01", "RPT-01"]
+# 复核与人工任务的决定计数: 演示决定表的 17 条 (BA-091, XJ-499 认定错报, XJ-575 推翻, 其余确认), FIN-03 与 FIN-09 各两条
+# 确认, FIN-08 人工结果一条
+DECISIONS = {"confirm": 18, "manual_result": 1, "misstatement": 2, "override": 1}
+
+
+def manual_config() -> dict[str, Any]:
+    """人工任务的做法 (只有 FIN-08 第 1 轮, 同 tests.xero_flow.fin08_record 的登记): 沟通与回复的时刻, 对象与原文取
+    补造的沟通记录, 两条错报都同意更正, 执行日为回复当天 (悉尼), 结论与理由同 HTTP 驱动."""
+    record = round_file(1)
+    return {
+        "FIN-08": {
+            "rows": len(record["misstatement_sources"]),
+            "communicated_at": record["communicated_at"],
+            "communicated_to": record["recipient"],
+            "responded_at": record["responded_at"],
+            "response": record["response"],
+            "agrees": True,
+            "performed_on": datetime.fromisoformat(record["responded_at"]).astimezone(SYDNEY).date().isoformat(),
+            "conclusion": FIN08_CONCLUSION,
+            "reason": FIN08_REASON,
+        }
+    }
 
 
 def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, Any]:
-    """驱动的配置: 页面地址, 注册用的账号 (随机用户名与口令; 姓名同报告签字块), 决定表与各闸门的决定, 超时."""
+    """驱动的配置: 页面地址, 注册用的账号 (随机用户名与口令; 姓名同报告签字块), 决定表与各闸门的决定, 人工任务与更正
+    通知的做法, 超时."""
     table = {
         subject: {"decision": e.decision, "reason": e.reason, "draft": e.draft, "conclusion": e.conclusion}
         for subject, e in decision_table("").items()
@@ -105,6 +146,8 @@ def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, A
         "rerunnable": sorted(RERUNNABLE),
         "revised_by": REVISED_BY,
         "confirm_conclusion": CONFIRM_CONCLUSION,
+        "manual": manual_config(),
+        "correction": {"entries": round_file(1)["adjustment_entry_nos"]},
         "timeouts": TIMEOUTS[mode],
         "max_steps": 200,
     }
@@ -164,16 +207,27 @@ async def browser_walk(
     return results, data, write_report(out, mode, results, data)
 
 
+def assert_correction_path(results: dict[str, Any], data: dict[str, Any]) -> None:
+    """错报闭环 (需求 R356): 等更正处提交了一次更正通知 (两条错报, 更正分录 AJE-X01, AJE-X05), 两条都已更正, 汇总表
+    为空, FIN-01 按候选为无保留意见."""
+    [(kind, ids, entries)] = results["corrections"]
+    assert (kind, len(ids), entries) == ("adjustments_posted", 2, round_file(1)["adjustment_entry_nos"])
+    expected = {"amounts": [], "corrected": CORRECTED_AMOUNTS, "total_cents": 0, "candidate_opinion": "unqualified"}
+    assert data["schedule"] == expected
+    assert results["fin"] == "unqualified"
+
+
 async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """mock 模式在本机走一遍: 走到归档, 没有问题; 闸门序列同 R287 (打开 planning 时多两次 PLN-15); R311 的硬性检查
-    都过 (每个判断对象有结论, 指针都能解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; FIN-01 按汇总表的
-    候选意见 (保留) 决定, 报告读保留意见的两稿 (需求 R260)."""
+    """mock 模式在本机走一遍: 走到归档, 没有问题; 闸门序列为 GATES; R311 的硬性检查都过 (每个判断对象有结论, 指针都能
+    解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; 走 FIN-08 登记与更正通知两步, FIN-01 按汇总表的候选意见
+    为无保留 (需求 R356)."""
     results, data, report = await browser_walk(tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate")
     assert results["issues"] == [], report
-    assert results["reached_archive"] and results["gates"] == gates_expected(), report
+    assert results["reached_archive"] and results["gates"] == GATES, report
     assert_hard(data)
     assert (data["reruns"], data["troubled_tasks"]) == ({}, []), report
-    assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}, report
+    assert data["decisions"] == DECISIONS, report
+    assert_correction_path(results, data)
 
 
 async def test_browser_walk_mock_reruns_unattributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -185,10 +239,11 @@ async def test_browser_walk_mock_reruns_unattributed(tmp_path: Path, monkeypatch
         tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", failing
     )
     assert results["issues"] == [], report
-    assert results["reached_archive"] and results["gates"] == gates_expected(), report
+    assert results["reached_archive"] and results["gates"] == GATES, report
     assert_hard(data)
     assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1026}": 1}, [["REV-02", ORC1026, "unattributed"]])
-    assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1, "rerun": 1}, report
+    assert data["decisions"] == DECISIONS | {"rerun": 1}, report
+    assert_correction_path(results, data)
 
 
 @pytest.mark.live(max_calls=MAX_CALLS)

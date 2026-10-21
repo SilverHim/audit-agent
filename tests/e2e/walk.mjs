@@ -2,7 +2,8 @@
 // 只经页面操作推进 (点击, 填表); 读数 (停在哪, 有哪些待决任务) 经接口核对. 每步截图, 记浏览器控制台的报错与失败的
 // 网络请求; 每步有超时, 超时记 "卡住". 页面上出现驱动不认得的状态时记为问题并截图, 不硬闯.
 // 审计师的决定取 R311 的演示决定表 (由 tests/e2e/test_browser_walk.py 写进配置), 按状态走的做法同
-// tests/test_demo_walkthrough_live.py 的 drive.
+// tests/test_demo_walkthrough_live.py 的 drive. 错报闭环另有两步 (需求 R356): FIN-08 人工任务在人工任务页填管理层回复
+// 登记表, 等更正时在总览的更正卡片上提交更正通知 (勾选待更正的错报与配置的更正分录).
 //
 // 用法: node tests/e2e/walk.mjs <配置 JSON 的路径>; 结果写到配置的 out_dir/results.json. Playwright 取
 // E2E_NODE_MODULES (缺省 /opt/node-tools/node_modules), 浏览器取 PLAYWRIGHT_BROWSERS_PATH.
@@ -28,6 +29,7 @@ const result = {
   failures: [], // [程序, 对象, 次数]
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
+  corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
   steps: [], // {no, name, url, shot, console, failed, ms}
   issues: [], // {step, page, symptom, shot, expected}
 }
@@ -394,6 +396,81 @@ async function decideTask(view, pending) {
   )
 }
 
+// ── 人工程序 (人工任务页): FIN-08 管理层回复登记 (需求 R163) ──
+
+// ISO 时刻 → 浏览器本地时区的 datetime-local 值 (页面提交时按本机时区换回带时区的时刻)
+async function localDateTime(iso) {
+  return page.evaluate((value) => {
+    const d = new Date(value)
+    const p = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+  }, iso)
+}
+
+async function doManual(view) {
+  const { task } = view
+  const plan = config.manual[task.procedure_id]
+  if (!plan) {
+    issue(`驱动没有 ${task.procedure_id} 人工任务的做法`, '人工任务都在配置的范围内')
+    throw new Stuck(`没有 ${task.procedure_id} 的人工结果`)
+  }
+  const labels = config.labels.manual
+  result.decisions.push([task.id, 'manual_result'])
+  await goto(`${base}/engagements/${result.eid}/manual/${encodeURIComponent(task.id)}`)
+  const submit = page.getByRole('button', { name: labels.submit, exact: true })
+  await submit.waitFor()
+  // 登记表每条错报一组 (fieldset, 以错报编号为名); 组内的回复原文框把它与 "是否同意更正" 那一小组区分开
+  const rows = page.getByRole('group').filter({ has: page.getByLabel(labels.response) })
+  const count = await rows.count()
+  if (count !== plan.rows) issue(`登记表有 ${count} 行`, `材料里待沟通的错报 ${plan.rows} 条各一行`)
+  for (let i = 0; i < count; i += 1) {
+    const row = rows.nth(i)
+    await row.getByLabel(labels.communicatedAt).fill(await localDateTime(plan.communicated_at))
+    await row.getByLabel(labels.communicatedTo).fill(plan.communicated_to)
+    await row.getByLabel(labels.respondedAt).fill(await localDateTime(plan.responded_at))
+    await row.getByLabel(labels.response).fill(plan.response)
+    await row.getByRole('radio', { name: plan.agrees ? labels.agrees : labels.disagrees, exact: true }).check()
+  }
+  await page.getByLabel(labels.performedOn).fill(plan.performed_on)
+  await page.getByLabel(labels.conclusion, { exact: true }).fill(plan.conclusion)
+  await page.getByLabel(labels.reason, { exact: true }).fill(plan.reason)
+  await snap('form')
+  if (await submit.isDisabled()) throw new Error(`${task.id} 的提交按钮不可点`)
+  await click(submit)
+  await waitFor(
+    async () => {
+      const pending = (await api(`/engagements/${result.eid}/review-tasks?status=pending`)).body ?? []
+      return !pending.some((item) => item.task.id === task.id)
+    },
+    timeouts.action_ms,
+    `${task.id} 的人工结果`,
+  )
+}
+
+// ── 等客户更正 (总览的更正卡片, 需求 R163): 勾选待更正的错报与配置的更正分录, 提交 "客户已过账调整分录" ──
+
+async function postCorrection(view) {
+  const labels = config.labels.correction
+  const ids = view.awaiting_correction_ids ?? []
+  await goto(`${base}/engagements/${result.eid}`)
+  const heading = page.getByRole('heading', { name: labels.title, exact: true })
+  await heading.waitFor()
+  const card = page.locator('section').filter({ has: heading })
+  for (const id of ids) await card.getByRole('checkbox', { name: new RegExp(`^${id}\\b`) }).check()
+  await card.getByRole('radio', { name: new RegExp(`^${labels.posted}`) }).check()
+  for (const entry of config.correction.entries) {
+    const box = card.getByRole('checkbox', { name: new RegExp(`^${entry}\\b`) })
+    await box.waitFor()
+    await box.check()
+  }
+  await snap('form')
+  const submit = card.getByRole('button', { name: labels.submit, exact: true })
+  if (await submit.isDisabled()) throw new Error('更正通知的提交按钮不可点')
+  await click(submit)
+  result.corrections.push(['adjustments_posted', ids, config.correction.entries])
+  await waitFor(async () => !(await overview()).awaiting_correction, timeouts.action_ms, '更正通知')
+}
+
 // ── 主循环: 每次停下按当时的状态办 (同 R311 的 drive) ──
 
 async function main() {
@@ -421,7 +498,11 @@ async function main() {
     const suggested = (await summary())?.demo?.suggested ?? null
     let name
     let action
-    if (pending.length) {
+    if (pending.length && pending[0].task.kind === 'manual') {
+      const task = pending[0]
+      name = `人工程序 ${task.task.procedure_id}`
+      action = () => doManual(task)
+    } else if (pending.length) {
       const task = pending[0]
       name = `复核 ${task.task.procedure_id} ${subjectOf(task)}`
       action = () => decideTask(task, pending)
@@ -439,6 +520,9 @@ async function main() {
     } else if (view.current_gate) {
       name = `闸门 ${view.current_gate}`
       action = () => decideGate(view.current_gate)
+    } else if (view.awaiting_correction) {
+      name = '提交更正通知'
+      action = () => postCorrection(view)
     } else {
       await step('流程停住', async () => goto(`${base}/engagements/${result.eid}`))
       issue('没有待决任务, 不等数据也不在闸门, 流程停住', '页面给出下一步')
