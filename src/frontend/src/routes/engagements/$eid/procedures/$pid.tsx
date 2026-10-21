@@ -5,6 +5,7 @@ import { reviewsGetProcedureOptions, reviewsListReviewTasksOptions } from '@/cli
 import type { RuleOutcome } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { PointerList, standardLabel } from '@/components/evidence-link'
+import { ProcedureIntroView } from '@/components/procedure-intro'
 import { QueryState } from '@/components/query-state'
 import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
@@ -76,6 +77,9 @@ function ProcedurePage() {
                   />
                 </section>
               ) : null}
+              <Block title={t.proceduresPage.intro.title}>
+                <ProcedureIntroView procedureId={pid} runs={data.runs} />
+              </Block>
               <Block title={t.procedureDetail.runs}>
                 {data.runs.length ? (
                   data.runs.map((run) => {

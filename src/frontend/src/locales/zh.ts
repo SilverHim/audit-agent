@@ -849,6 +849,16 @@ export const zh: Messages = {
     noneValue: '无',
     workOnIt: '在对话中处理',
     openDetail: '查看执行记录',
+    intro: {
+      title: '程序介绍',
+      purpose: '做什么',
+      when: '什么时候执行',
+      thisEngagement: '本项目：',
+      inputs: '需要的资料',
+      logic: '怎么判断',
+      result: '结果与你的工作',
+      missing: '这条程序还没有介绍。',
+    },
   },
   clientPage: {
     title: '客户资料',

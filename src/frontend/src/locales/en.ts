@@ -944,6 +944,16 @@ export const en = {
     noneValue: 'None',
     workOnIt: 'Work on it with Concierge',
     openDetail: 'Open run record',
+    intro: {
+      title: 'About this procedure',
+      purpose: 'What it does',
+      when: 'When it runs',
+      thisEngagement: 'This engagement: ',
+      inputs: 'Data needed',
+      logic: 'How it decides',
+      result: 'Results and your part',
+      missing: 'No description for this procedure yet.',
+    },
   },
   clientPage: {
     title: 'Client profile',
