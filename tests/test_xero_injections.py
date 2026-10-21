@@ -686,10 +686,11 @@ def assert_t4_pair(base: EngagementState, injected: EngagementState) -> None:
 
 
 def assert_t2_pair(base: EngagementState, injected: EngagementState) -> None:
-    """R255 验收 2: XJ-405 的判断在 T0 副本上为 accept 且无错报草稿; 在 T2 副本上为 misstatement, 草稿金额 50000,
-    Occurrence, overstated, 科目含 200 或 Sales (不分大小写)."""
+    """R255 验收 2: XJ-405 的判断在 T0 副本上不认定错报 (accept 与 more_evidence 都算: 判断类只比是否认定错报, 同
+    R263) 且无错报草稿; 在 T2 副本上为 misstatement, 草稿金额 50000, Occurrence, overstated, 科目含 200 或 Sales (不分
+    大小写)."""
     before, after = judgment_of(base, T2_XJ405), judgment_of(injected, T2_XJ405)
-    assert (before.proposed_action, before.misstatement_draft) == (ProposedAction.accept, None)
+    assert before.proposed_action is not ProposedAction.misstatement and before.misstatement_draft is None
     draft = after.misstatement_draft
     assert after.proposed_action is ProposedAction.misstatement and draft is not None
     assert (draft.amount_cents, draft.assertion, draft.direction) == (50000, Assertion.Occurrence, Direction.overstated)
@@ -789,6 +790,10 @@ async def test_t2_paired_assertions_tell_right_from_wrong(xero_case: Any) -> Non
     wrong = judgment_of(duplicate.state, T2_XJ405).model_copy(update={"misstatement_draft": draft})
     with pytest.raises(AssertionError):
         assert_t2_pair(base.state, {**duplicate.state, "judgments": [wrong]})  # type: ignore[typeddict-item]
+    cautious = judgment_of(base.state, T2_XJ405).model_copy(update={"proposed_action": ProposedAction.more_evidence})
+    assert_t2_pair({**base.state, "judgments": [cautious]}, duplicate.state)  # type: ignore[typeddict-item]
+    with pytest.raises(AssertionError):  # 基线侧也认定错报: 两侧结论不再相反
+        assert_t2_pair(duplicate.state, duplicate.state)
 
 
 async def test_paired_side_redoes_once_without_the_judgment(xero_case: Any, tmp_path: Path) -> None:

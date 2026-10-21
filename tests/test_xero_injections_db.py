@@ -413,8 +413,8 @@ async def journals_build(case: XeroCase, llm: LLMClient) -> XeroHarness:
 @pytest.mark.live(max_calls=10)  # 两侧各至多 2 次执行 x 3 次尝试 = 12, 正常 2 次; 超限即停发并失败
 async def test_live_t2_pair(xero_case: Any, live_budget: Budget) -> None:
     """R255 验收 1, 2, 4 (只做 T2): 连库测试台, 演示配置的功能集, 只有 GEN-02 对 XJ-405 交真实模型 (其余凭证读运行
-    副本). T0 副本上为 accept 且无错报草稿, T2 副本上为 misstatement (50000, Occurrence, overstated, 科目含 200 或
-    Sales); 判断没出来的一侧重做至多 1 次; 结束时打印用量汇总."""
+    副本). T0 副本上不认定错报 (accept 或 more_evidence) 且无错报草稿, T2 副本上为 misstatement (50000, Occurrence,
+    overstated, 科目含 200 或 Sales); 判断没出来的一侧重做至多 1 次; 结束时打印用量汇总."""
     live = live_client()
     t0, t2 = xero_case("T0", base="t0"), xero_case("T2", base="t2")
     key, built = ("GEN-02", "XJ-405"), []
