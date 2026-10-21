@@ -9,7 +9,7 @@ start → 停在 ACC-01 闸门 → 演示导入 acceptance → ACC-01 approve �
 """
 
 import asyncio
-from collections.abc import AsyncIterator, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -69,10 +69,12 @@ def demo_source(supplements: Path | None = None) -> RoutingDatasetLoader:
     return RoutingDatasetLoader(cast(DatasetLoader, object()), {XeroDatasetLoader.PREFIX: xero})
 
 
-def offline_runner(deps: AgentDeps) -> GraphRunner:
+def offline_runner(deps: AgentDeps, agents: Mapping[str, ProcedureAgent[Any]] | None = None) -> GraphRunner:
     """deps 上的主图: 全用真实的 Agent (不用 tests.fakes 里 Numbat 的 P1 脚本: DOC-04 要沿用上传时抽出的 Xero 合同),
-    内存检查点."""
-    return GraphRunner(compile_graph(GraphNodes(deps, 2), InMemorySaver(serde=checkpoint_serde())), deps)
+    agents 中的程序换成给的 Agent (如重启变体卡住 DOC-06 的, 需求 R262); 内存检查点."""
+    nodes = GraphNodes(deps, 2)
+    nodes.agents.update(agents or {})
+    return GraphRunner(compile_graph(nodes, InMemorySaver(serde=checkpoint_serde())), deps)
 
 
 async def drain(service: DataService) -> None:
@@ -158,14 +160,20 @@ def xero_link(deps: AgentDeps, service: DataService) -> XeroLink:
 
 
 @asynccontextmanager
-async def demo_offline(llm: LLMClient) -> AsyncIterator[tuple[GraphRunner, DataService, httpx.AsyncClient]]:
+async def demo_offline(
+    llm: LLMClient,
+    *,
+    trail: FakeTrail | None = None,
+    agents: Callable[[AgentDeps], Mapping[str, ProcedureAgent[Any]]] | None = None,
+) -> AsyncIterator[tuple[GraphRunner, DataService, httpx.AsyncClient]]:
     """离线的演示项目: 能建项目的假项目存储, 空的 Xero 假存储, 规则引擎 FakeRuleEngine(XERO_RULES), 登记 mock 按
     数据集定位, 功能集为演示配置; llm 同时作复核模型. 给出 (runner, 数据服务, 以项目负责人登录的接口客户端). 走通用例
-    的 walked 与真实模型变体的 offline_walk 共用 (需求 R353)."""
+    的 walked 与真实模型变体的 offline_walk 共用 (需求 R353). 重启变体 (需求 R262) 另给留痕 (缺省 FakeTrail) 与按
+    依赖换掉的 Agent (offline_runner)."""
     store = CreatingEngagementStore()
     datasets = demo_source()
     deps = new_xero_deps(
-        trail=FakeTrail(),
+        trail=trail if trail is not None else FakeTrail(),
         llm=llm,
         review_llm=llm,
         rules=FakeRuleEngine(dict(XERO_RULES)),
@@ -173,7 +181,7 @@ async def demo_offline(llm: LLMClient) -> AsyncIterator[tuple[GraphRunner, DataS
         engagement_store=store,
     )
     deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
-    runner = offline_runner(deps)
+    runner = offline_runner(deps, agents(deps) if agents is not None else None)
     service = DataService(deps, runner, demo=datasets)
     async with api_client(runner, NUMBAT_AUDITOR.id, xero=xero_link(deps, service)) as client:
         yield runner, service, client

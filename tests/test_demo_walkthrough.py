@@ -127,6 +127,26 @@ STOPS = [
 
 
 @dataclass
+class Session:
+    """走通所用的一个应用进程: 接口客户端, runner 与数据服务. walk 每步都从这里取, 重启变体 (需求 R262) 中途换成新
+    进程的, 并改写 settle 与 submit 布置中断."""
+
+    client: httpx.AsyncClient
+    runner: GraphRunner
+    service: DataService
+
+    async def settle(self, eid: str) -> None:
+        """等后台作业 (演示导入, 文件处理) 与图都停下."""
+        await drain(self.service)
+        await wait_idle(self.runner, eid)
+
+    async def submit(self, path: str, body: dict[str, Any]) -> None:
+        """经接口提交一个决定 (闸门决定或复核决定), 须受理 (202)."""
+        posted = await self.client.post(path, json=body)
+        assert posted.status_code == 202, posted.text
+
+
+@dataclass
 class Walk:
     """走完的一次: R119 断言函数用的 Xero17 (x.client 记下了大模型读取), 依次停的位置 (STOPS 的写法), RPT-01 退回决定
     的 ID (接口生成), 最后一次总览, 数据管理页概览与客户列表; 两次停在计划审批时的 GET /gate 与 GET /plan, 归档后的
@@ -145,27 +165,23 @@ class Walk:
     language: WorkingLanguage = "en"  # 建项目时的工作语言
 
 
-async def walk(
-    client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any, language: WorkingLanguage = "en"
-) -> Walk:
+async def walk(session: Session, llm: Any, language: WorkingLanguage = "en") -> Walk:
     """照页面的做法从新建项目走到归档 (见模块说明), 项目的工作语言为 language; 每步之后等后台作业与图都停下, 后台
     始终没有错误. 另记下每次执行的 Agent 与前后两次原目录 (快照与补造) 的逐文件哈希 (需求 R260)."""
     before = originals()
     with recorded_agents() as agents:
-        w = await walk_steps(client, runner, service, llm, language)
+        w = await walk_steps(session, llm, language)
     w.x = replace(w.x, agents=agents, moved=changed(before, originals()))
     return w
 
 
-async def walk_steps(
-    client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any, language: WorkingLanguage
-) -> Walk:
-    """walk 的各步 (见模块说明)."""
-    owner = (await client.get(f"{API}/users/me")).json()["id"]
-    clients = (await client.get(f"{API}/clients")).json()
+async def walk_steps(s: Session, llm: Any, language: WorkingLanguage) -> Walk:
+    """walk 的各步 (见模块说明). 接口客户端, runner 与数据服务每次都取 s 当时的."""
+    owner = (await s.client.get(f"{API}/users/me")).json()["id"]
+    clients = (await s.client.get(f"{API}/clients")).json()
     [dataset] = [d for d in clients[0]["datasets"] if d["default"]]  # 客户下拉默认选中第一行, 期间随数据集带出
     body = {k: dataset[k] for k in ("dataset", "period_start", "period_end")}
-    created = await client.post(f"{API}/engagements", json={**body, "working_language": language})
+    created = await s.client.post(f"{API}/engagements", json={**body, "working_language": language})
     assert created.status_code == 201, created.text
     eid = created.json()["engagement"]["id"]
     base = f"{API}/engagements/{eid}"
@@ -173,20 +189,19 @@ async def walk_steps(
     progress: list[dict[str, Any]] = []
 
     async def settle() -> dict[str, Any]:
-        await drain(service)
-        await wait_idle(runner, eid)
-        overview = (await client.get(base)).json()
+        await s.settle(eid)
+        overview = (await s.client.get(base)).json()
         assert overview["run_error"] is None, overview["run_error"]
         return overview
 
     async def stop() -> dict[str, Any]:
         """记下停的位置; 概览建议了阶段就像点页面按钮一样导入它."""
         overview = await settle()
-        suggested = (await client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
+        suggested = (await s.client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
         stops.append((overview["current_gate"], overview["awaiting_data"], overview["awaiting_review"], suggested))
         progress.append(overview["progress"])
         if suggested is not None:
-            started = await client.post(f"{base}/data/demo-import", json={"stage": suggested})
+            started = await s.client.post(f"{base}/data/demo-import", json={"stage": suggested})
             assert (started.status_code, started.json()["status"]) == (202, "started"), started.text
             overview = await settle()
         return overview
@@ -194,25 +209,24 @@ async def walk_steps(
     async def decide(decision: str, **fields: Any) -> dict[str, Any]:
         """对当前闸门的材料 (GET /gate 给的对象与版本) 提交决定, 返回 GET /gate 的视图. 不在闸门 (如某条程序失败,
         流程停下等人) 时 GET /gate 为 null, 报出来."""
-        got = await client.get(f"{base}/gate")
+        got = await s.client.get(f"{base}/gate")
         assert got.status_code == 200, got.text
         view = got.json()
         assert view is not None, "不在闸门 (GET /gate 为 null)"
         body = {k: view[k] for k in ("gate", "target_id", "target_version")}
-        posted = await client.post(f"{base}/gate-decisions", json={**body, "decision": decision, **fields})
-        assert posted.status_code == 202, posted.text
+        await s.submit(f"{base}/gate-decisions", {**body, "decision": decision, **fields})
         return cast(dict[str, Any], view)
 
     await stop()
     await decide("approve")
     await stop()
-    ready = await client.post(f"{base}/data/ready", json={"reason": READY_REASON})
+    ready = await s.client.post(f"{base}/data/ready", json={"reason": READY_REASON})
     assert ready.status_code == 202, ready.text
     await stop()
     pln = await decide("approve", materiality=XERO17_MATERIALITY.model_dump())
 
     async def plan_page() -> dict[str, Any]:
-        got = await client.get(f"{base}/plan")
+        got = await s.client.get(f"{base}/plan")
         assert got.status_code == 200, got.text
         return cast(dict[str, Any], got.json())
 
@@ -226,7 +240,7 @@ async def walk_steps(
     for _ in range(REVIEW_ROUNDS):
         if not overview["awaiting_review"]:
             break
-        pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
+        pending = (await s.client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
         assert pending, "等复核却没有待复核任务"
         for view in pending:
             task = view["task"]
@@ -240,8 +254,7 @@ async def walk_steps(
                 body |= {"decision": "misstatement", "reason": reason, "misstatement_draft": draft}
             else:
                 body |= {"decision": "confirm"}
-            posted = await client.post(f"{base}/review-records", json=body)
-            assert posted.status_code == 202, posted.text
+            await s.submit(f"{base}/review-records", body)
             overview = await settle()
     assert not overview["awaiting_review"], f"{REVIEW_ROUNDS} 轮之后仍在等复核"
     await stop()
@@ -252,10 +265,10 @@ async def walk_steps(
     await stop()
     await decide("approve")
     overview = await stop()
-    gates = await runner.deps.output_store.latest(eid, GateDecision)
+    gates = await s.runner.deps.output_store.latest(eid, GateDecision)
     [reject_id] = [d.id for d in gates if d.gate is GateId.RPT_01 and d.decision is GateVerdict.reject]
-    x = Xero17(runner, eid, owner, llm, False, GateView.model_validate(pln), [], [])
-    summary = (await client.get(f"{base}/data/summary")).json()
+    x = Xero17(s.runner, eid, owner, llm, False, GateView.model_validate(pln), [], [])
+    summary = (await s.client.get(f"{base}/data/summary")).json()
     final_plan = await plan_page()
     return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan, progress, language)
 
@@ -276,7 +289,7 @@ async def walked(request: pytest.FixtureRequest) -> Walk:
     XERO.ready()
     llm = LayeredMockLLMClient([XERO.runtime])
     async with demo_offline(llm) as (runner, service, client):
-        return await walk(client, runner, service, llm, request.param)
+        return await walk(Session(client, runner, service), llm, request.param)
 
 
 def entries(w: Walk) -> list[TrailEntry]:
@@ -635,7 +648,7 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         assert isinstance(cast(SwitchableLLMClient, deps.llm).inner, DatasetFixtureLLMClient)
         service = run.data_service()
         async with api_client(runner, run.owner, deps=deps, xero=xero_link(deps, service)) as client:
-            w = await walk(client, runner, service, None)
+            w = await walk(Session(client, runner, service), None)
         pointers = await assert_end_state(w)
         listed = {d["document_id"] for d in xero_documents().values()}
         assert {p.source_id for p in pointers if p.source_type == "document"} <= listed

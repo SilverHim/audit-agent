@@ -10,14 +10,14 @@ from typing import Any
 
 import pytest
 
-from backend.agents.base import AgentDeps, ProcedureAgent, RunContext
-from backend.agents.ingest import Extracted, IngestAgent
+from backend.agents.base import AgentDeps, ProcedureAgent
 from backend.contracts.models import TrailEntry, TrailKind
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import ENGAGEMENT, NUMBAT_FEATURES, FakeConfirmationChannel, FakeTrail, make_graph_nodes, wait_idle
+from tests.interrupts import BlockingIngest, kill
 from tests.test_collab_flow import (
     COLLAB,
     PRESENTATION,
@@ -45,13 +45,6 @@ from tests.test_flow import until
 EID = ENGAGEMENT.id
 CONFIG = GraphRunner.config(EID)
 LAYER0 = ["REV-08", "REV-03", "CSH-04", "CSH-05"]
-
-
-async def kill(s: Started) -> None:
-    """模拟进程被杀: 取消后台任务, 不做任何收尾."""
-    task = s.runner.tasks[EID]
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
 
 
 async def restart(s: Started) -> Started:
@@ -85,20 +78,6 @@ def trail_of(s: Started) -> FakeTrail:
 # ── 进程在 DOC-06 执行中被杀 (Q7 选 1: 第 0 层汇合后先派发 DOC-06) ─────────────────────────────────────────
 
 
-class BlockingIngest(IngestAgent):
-    """DOC-06 第一次执行在调大模型之前卡住 (entered 置位), 之后照常; 其余程序照常."""
-
-    def __init__(self, deps: AgentDeps) -> None:
-        super().__init__(deps)
-        self.entered = asyncio.Event()  # 第一次 DOC-06 已进入执行
-
-    async def execute(self, ctx: RunContext) -> list[Extracted]:
-        if ctx.procedure.id == "DOC-06" and not self.entered.is_set():
-            self.entered.set()
-            await asyncio.Event().wait()
-        return await super().execute(ctx)
-
-
 @pytest.mark.parametrize("features", [NUMBAT_FEATURES, COLLAB], ids=["baseline", "collab"])
 async def test_killed_during_doc06_recovers_without_resending(features: frozenset[str]) -> None:
     """验收 1, 2: 第 0 层汇合后 DOC-06 执行中进程被杀; 新 runner recover 后跑到归档, 结果同不中断时,
@@ -119,7 +98,7 @@ async def test_killed_during_doc06_recovers_without_resending(features: frozense
     assert sorted(r.id for r in values["procedure_runs"] if r.procedure_id in LAYER0) == sorted(
         f"RUN-{pid}-1" for pid in LAYER0
     )  # 第 0 层已汇合进检查点
-    await kill(s)
+    await kill(s.runner, EID)
 
     s = await restart(s)
     collab = "collab" in features
@@ -195,7 +174,7 @@ async def test_killed_after_confirmation_sent_does_not_resend() -> None:
         return any(t.name == "fieldwork" and t.result is not None for t in snapshot.tasks)
 
     await until(revenue_instance_saved)
-    await kill(s)
+    await kill(s.runner, EID)
     assert len(channel.submits) == 1
 
     s = await restart(s)

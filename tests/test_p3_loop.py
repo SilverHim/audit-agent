@@ -48,7 +48,6 @@ from backend.contracts.models import (
     ReviewTask,
     TaskKind,
     TaskStatus,
-    TrailEntry,
     TrailKind,
     UncorrectedSchedule,
 )
@@ -74,6 +73,7 @@ from tests.fakes import (
     stopping_graph,
 )
 from tests.fixture_sets import XERO
+from tests.interrupts import CRASH, CrashingTrail
 from tests.misstatement_fakes import CSH02, FIN09, XJ499, fin03_deps, fin03_state, fin09_fixture, notice
 from tests.misstatement_fakes import round2_sources as fin15_proposals
 from tests.test_correction_verification import MISMATCH
@@ -162,24 +162,6 @@ def loaded(store: FakeFinancialStore) -> list[str]:
             if kind == "journal_entry" and str(r["entry_no"]).startswith("AJE-")
         }
     )
-
-
-CRASH = "留痕库断开"  # CrashingTrail 抛出的异常
-
-
-class CrashingTrail(FakeTrail):
-    """fail_next 为真时, 下一条 decision 留痕写入即抛 RuntimeError(CRASH) (只一次): 决定的业务事务已提交, 之后什么
-    都没做 (留痕, 迁移留痕, 交给后台), 模拟进程在此中断."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.fail_next = False
-
-    async def record(self, entry: TrailEntry) -> str:
-        if self.fail_next and entry.kind is TrailKind.decision:
-            self.fail_next = False
-            raise RuntimeError(CRASH)
-        return await super().record(entry)
 
 
 @dataclass
