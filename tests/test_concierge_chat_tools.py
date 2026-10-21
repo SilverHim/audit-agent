@@ -23,6 +23,7 @@ from backend.contracts.data import DataRequest, TableKind, XeroProfileCheck, Xer
 from backend.contracts.models import (
     AnalyticsResult,
     AuditException,
+    AuditReportVersion,
     AutonomyLevel,
     CriticReasonType,
     CriticVerdict,
@@ -30,9 +31,12 @@ from backend.contracts.models import (
     DocumentType,
     EvidencePointer,
     EvidenceType,
+    GateDecision,
     GateId,
+    GateVerdict,
     Judgment,
     MaterialityCandidates,
+    OpinionType,
     ProposedAction,
     ReasoningStep,
     Reliability,
@@ -192,6 +196,33 @@ async def test_judgment_carries_reasoning_counter_argument_and_critic() -> None:
     assert data["critic_reason"] == "发运单显示 7 月 3 日才签收"
     assert set(outcome.cites) == {JUDGMENT.id, "SI-2026-0612", "DN-2026-0612", "AASB15-P38"}
     assert outcome.cites["DN-2026-0612"].pointer == DELIVERY
+
+
+@pytest.mark.parametrize("reason", ["Cite the contract clause.", None, ""], ids=["given", "omitted", "empty"])
+async def test_report_lists_rpt01_reason_only_when_given(reason: str | None) -> None:
+    """get_report 给模型的 RPT-01 决定: 理由填了照列, 没填 (缺省或空串) 不列该项 (需求 R358: 发给大模型的输入里理由
+    为空时略去, 不写占位文字)."""
+    report = AuditReportVersion(
+        id="REPORT-1", revision=1, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
+    )
+    decision = GateDecision(
+        id="D-RPT",
+        gate=GateId.RPT_01,
+        target_id="REPORT-1",
+        target_version=1,
+        decision=GateVerdict.insufficient_info,
+        reason=reason,
+        decided_by="U-1",
+        decided_at=NOW,
+    )
+    deps = chat_deps(output_store=FakeOutputStore([report, decision]))
+    outcome, data = await call("get_report", tool_env=ToolEnv(EID, deps, FixedState(), 6000))
+    assert outcome.ok
+    [listed] = data["rpt01_decisions"]
+    expected = {"reason": reason} if reason else {}
+    assert {k: v for k, v in listed.items() if k in ("decision", "reason")} == {
+        "decision": "insufficient_info"
+    } | expected
 
 
 async def test_missing_judgment_is_an_error_text_not_an_exception() -> None:

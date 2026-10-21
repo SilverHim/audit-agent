@@ -542,9 +542,11 @@ async def test_document_request_sets_the_type_without_classifying() -> None:
 # ── 调整单项 ──
 
 
-async def test_edit_plan_type_and_selection() -> None:
-    """换方案: 按新方案重算并记调整人, 不再标把握低, 没手动勾选的随问题重定勾选; 改文件类型须写理由, 批次回到识别中,
-    A3 在后台按新类型重新识别 (审计师的 classify 留痕); 手动勾选或取消之后不再随问题变."""
+@pytest.mark.parametrize(("reason", "recorded"), [("董事会记录", "董事会记录"), (None, "")], ids=["given", "none"])
+async def test_edit_plan_type_and_selection(reason: str | None, recorded: str) -> None:
+    """换方案: 按新方案重算并记调整人, 不再标把握低, 没手动勾选的随问题重定勾选; 改文件类型 (理由选填, Issue #61; 没写
+    的记为空串), 批次回到识别中, A3 在后台按改定的类型重新识别 (审计师的 classify 留痕, 没写理由的也不再自己分类);
+    手动勾选或取消之后不再随问题变."""
     env = Batch()
     batch = await env.upload([("ledger-export.csv", demo_csv("accounts")[1]), ("note.pdf", b"%PDF note")])
     table, document = batch.items
@@ -553,13 +555,8 @@ async def test_edit_plan_type_and_selection() -> None:
     table = edited.items[0]
     assert (table.adjusted_by, table.issues, table.selected, table.records) == ("U-2", [], True, 23)
 
-    with pytest.raises(DataRejected) as e:
-        await env.service.edit_batch_item(
-            EID, batch.id, document.id, BatchItemEdit(document_type=DocumentType.minutes), "U-2"
-        )
-    assert e.value.code == "MISSING_FIELD"
     edited = await env.service.edit_batch_item(
-        EID, batch.id, document.id, BatchItemEdit(document_type=DocumentType.minutes, reason="董事会记录"), "U-2"
+        EID, batch.id, document.id, BatchItemEdit(document_type=DocumentType.minutes, reason=reason), "U-2"
     )
     assert edited.status == "processing" and [f.done for f in edited.files] == [True, False]
     assert edited.items[1].document_type is DocumentType.minutes  # 识别中先显示新类型
@@ -567,13 +564,10 @@ async def test_edit_plan_type_and_selection() -> None:
     edited = await env.service.batch(EID, batch.id)
     document = edited.items[1]
     assert edited.status == "ready" and [i.id for i in edited.items] == [table.id, document.id]
-    assert (document.document_type, document.type_reason, document.adjusted_by) == (
-        DocumentType.minutes,
-        "董事会记录",
-        "U-2",
-    )
+    assert (document.document_type, document.type_reason) == (DocumentType.minutes, recorded)
+    assert document.adjusted_by == "U-2"
     trail = next(e for e in env.runner.deps.trail.entries if e.id == document.job)
-    assert (trail.actor, trail.payload["document_type"], trail.payload["reason"]) == ("U-2", "minutes", "董事会记录")
+    assert (trail.actor, trail.payload["document_type"], trail.payload["reason"]) == ("U-2", "minutes", recorded)
     edited = await env.service.edit_batch_item(EID, batch.id, table.id, BatchItemEdit(selected=False), "U-2")
     assert (edited.items[0].selected, edited.items[0].chosen_by) == (False, "U-2")
 

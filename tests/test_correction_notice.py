@@ -151,10 +151,17 @@ async def test_partial_notice_waits_again_for_the_rest(monkeypatch: pytest.Monke
     assert snapshot.next == ("verify_correction",)
 
 
-async def test_stop_waiting_records_uncorrected() -> None:
-    """验收 4: D-STOP 停止等待 CSH02 → v4 uncorrected (stopped_waiting, correction_notice_id D-STOP); 不载入更正分录."""
+@pytest.mark.parametrize("reason", [STOP_REASON, None, ""], ids=["given", "omitted", "empty"])
+async def test_stop_waiting_records_uncorrected(reason: str | None) -> None:
+    """验收 4: D-STOP 停止等待 CSH02 → v4 uncorrected (stopped_waiting, correction_notice_id D-STOP); 不载入更正分录.
+    需求 R358: 理由选填, 不填 (缺省或空串) 也能提交; 通知照原样存, decision 留痕照记理由 (空的记空)."""
     s = await awaiting()
-    await submit_and_wait(s, stop())
+    decided = stop(reason=reason)
+    await submit_and_wait(s, decided)
+
+    assert await s.output_store.get(EID, CorrectionNotice, "D-STOP") == decided
+    [entry] = [e for e in entries(s, TrailKind.decision) if e.idempotency_key == "D-STOP"]
+    assert entry.payload["reason"] == reason
 
     written = latest(s, Misstatement, CSH02)
     assert (written.version, written.status, written.uncorrected_basis, written.correction_notice_id) == (
@@ -180,8 +187,6 @@ REJECTED = [  # (说明, 通知, 错误码, 消息含)
     ("twice", notice(misstatement_ids=[XJ499, XJ499]), "INVALID_VALUE", "不重复的错报"),
     ("not_waiting", notice(misstatement_ids=[XJ499, "M-D-OTHER"]), "INVALID_VALUE", "M-D-OTHER 不在等更正"),
     ("unknown_entry", notice(adjustment_entry_nos=["AJE-X01", "AJE-X09"]), "INVALID_VALUE", "更正分录中没有 AJE-X09"),
-    ("no_reason", stop(reason=None), "MISSING_FIELD", "reason"),
-    ("blank_reason", stop(reason="  "), "MISSING_FIELD", "reason"),
     ("entry_on_stop", stop(adjustment_entry_nos=["AJE-X05"]), "FIELD_NOT_ALLOWED", "adjustment_entry_nos"),
 ]
 
@@ -255,10 +260,11 @@ async def test_notice_rejected_while_busy() -> None:
 
 async def test_notice_rejected_when_not_awaiting_correction() -> None:
     """验收 5, 9: 图不在 await_correction (停在 communicate 等 FIN-08 的登记) → NOT_AWAITING_CORRECTION, 先于字段
-    校验 (没有理由的停止等待也报它); 功能 misstatement 关闭 (基线, 停在 ACC-01 闸门) 时同样."""
+    校验 (带凭证号的停止等待也报它); 功能 misstatement 关闭 (基线, 停在 ACC-01 闸门) 时同样."""
     s = await at_communicate()
     await assert_no_effect(s, lambda: s.submit.submit(EID, notice()), "NOT_AWAITING_CORRECTION")
-    await assert_no_effect(s, lambda: s.submit.submit(EID, stop(reason=None)), "NOT_AWAITING_CORRECTION")
+    entry_on_stop = stop(adjustment_entry_nos=["AJE-X05"])
+    await assert_no_effect(s, lambda: s.submit.submit(EID, entry_on_stop), "NOT_AWAITING_CORRECTION")
     baseline = await started()
     await assert_no_effect(baseline, lambda: baseline.submit.submit(EID, notice()), "NOT_AWAITING_CORRECTION")
 
@@ -361,6 +367,8 @@ def test_awaiting_correction_lists_communicated_only() -> None:
     assert awaiting_correction(fin03_state(misstatements=[verifying, flagged])) == []
 
 
-def test_posted_notice_reason_optional() -> None:
-    """adjustments_posted 的理由可写可不写, 凭证号可为空 (载入全部)."""
-    check_notice_fields(notice(reason=None, adjustment_entry_nos=[]))
+@pytest.mark.parametrize("reason", [None, "", "  "], ids=["omitted", "empty", "blank"])
+@pytest.mark.parametrize("built", [notice, stop], ids=["adjustments_posted", "stop_waiting"])
+def test_notice_reason_optional(built: Any, reason: str | None) -> None:
+    """两种通知的理由都选填 (需求 R358; 缺, 空串与空白都过字段校验); adjustments_posted 的凭证号可为空 (载入全部)."""
+    check_notice_fields(built(reason=reason, adjustment_entry_nos=[]))

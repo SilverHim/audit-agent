@@ -135,7 +135,7 @@ REVIEW_SPECIFIC = (
 class ReviewFields:
     """一种复核决定的字段规则 (第 7 节必填表): 必填字段, 与可以填的专用字段 (REVIEW_SPECIFIC 中的)."""
 
-    required: tuple[str, ...] = ()  # 必填字段, 缺了报 MISSING_FIELD
+    required: tuple[str, ...] = ()  # 必填字段, 缺了报 MISSING_FIELD; 理由 (reason) 各种决定都选填 (需求 R358)
     allowed: frozenset[str] = frozenset()  # 可以填的专用字段, 填了别的报 FIELD_NOT_ALLOWED
 
 
@@ -143,17 +143,17 @@ class ReviewFields:
 # 新的任务类型对某个决定另有要求时加一行 (如人工程序的 (manual, manual_result)), 不改通用行
 REVIEW_FIELDS: dict[tuple[TaskKind | None, Decision], ReviewFields] = {
     (None, Decision.confirm): ReviewFields(),
-    (None, Decision.override): ReviewFields(("reason", "override_conclusion"), frozenset({"override_conclusion"})),
-    (None, Decision.misstatement): ReviewFields(("reason", "misstatement_draft"), frozenset({"misstatement_draft"})),
-    (None, Decision.rerun): ReviewFields(("reason",), frozenset({"rerun_params"})),
-    (None, Decision.manual_result): ReviewFields(("reason", "manual_result"), frozenset({"manual_result"})),
+    (None, Decision.override): ReviewFields(("override_conclusion",), frozenset({"override_conclusion"})),
+    (None, Decision.misstatement): ReviewFields(("misstatement_draft",), frozenset({"misstatement_draft"})),
+    (None, Decision.rerun): ReviewFields((), frozenset({"rerun_params"})),
+    (None, Decision.manual_result): ReviewFields(("manual_result",), frozenset({"manual_result"})),
     # manual 任务 (人工程序, 需求 R92) 的结果另须写执行日期; 其余按任务请求的核对见 check_manual_result
     (TaskKind.manual, Decision.manual_result): ReviewFields(
-        ("reason", "manual_result", "manual_result.performed_on"), frozenset({"manual_result"})
+        ("manual_result", "manual_result.performed_on"), frozenset({"manual_result"})
     ),
     # 仲裁可附错报草稿: 采用的结论认定为错报时一并登记; neither_action 与 override_conclusion 只用于 neither
     (None, Decision.dispute_resolution): ReviewFields(
-        ("reason", "dispute_resolution"),
+        ("dispute_resolution",),
         frozenset({"dispute_resolution", "neither_action", "override_conclusion", "misstatement_draft"}),
     ),
 }
@@ -307,14 +307,12 @@ def check_update_payload(
 
 
 def update_problems(update: MisstatementUpdate) -> list[str]:
-    """人给的错报更新载荷缺的实质字段 (点路径): classification 须有 type 与 fraud_indicative, 舞弊迹象为真须有理由
-    (fraud_reason 去首尾空白后非空, 同大模型一路的语义校验); verification 须有 status. origin 与 objective_id 不靠人填,
-    由 with_rule_fields 按规则补. 例: 只有 ID, 版本与类别的分类载荷 → [misstatement_update.type,
-    misstatement_update.fraud_indicative]. 纯函数."""
+    """人给的错报更新载荷缺的实质字段 (点路径): classification 须有 type 与 fraud_indicative (舞弊迹象为真时的理由
+    fraud_reason 选填, 需求 R358; 大模型一路仍须写, 见 judgment_engine); verification 须有 status. origin 与
+    objective_id 不靠人填, 由 with_rule_fields 按规则补. 例: 只有 ID, 版本与类别的分类载荷 →
+    [misstatement_update.type, misstatement_update.fraud_indicative]. 纯函数."""
     if update.kind == "classification":
         missing = [name for name in ("type", "fraud_indicative") if getattr(update, name) is None]
-        if update.fraud_indicative and not (update.fraud_reason or "").strip():
-            missing.append("fraud_reason")
     else:
         missing = ["status"] if update.status is None else []
     return [f"misstatement_update.{name}" for name in missing]
@@ -337,8 +335,8 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
     执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝;
-    不合的只是必填文字为空白 (NonBlank) 时报 MISSING_FIELD, 需求 R161), 没有结果模型时为空. 必填 (reason,
-    manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    不合的只是必填文字为空白 (NonBlank) 时报 MISSING_FIELD, 需求 R161), 没有结果模型时为空. 必填 (manual_result 与
+    其 performed_on) 已由 check_review_fields 查过; 理由选填 (需求 R358). 纯函数.
     返回要存下的结果: 证据指针按文件当前登记改写 type 与 reliability (同判断的文件指针), 其余原样.
     例: 页数 2 的文件引第 3 页 → INVALID_VALUE "DOC-0a1b2c3d4e5f: 页码 3 不在 1-2 之间".
     """
@@ -376,7 +374,7 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
     except ValidationError as e:
         errors = e.errors()
         fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in errors)
-        if all(error["type"] == BLANK for error in errors):  # 必填文字为空白 (NonBlank, 需求 R161), 同理由为空
+        if all(error["type"] == BLANK for error in errors):  # 必填文字为空白 (NonBlank, 需求 R161)
             raise DecisionRejected("MISSING_FIELD", f"manual_result.details 的必填文字为空: {fields}") from e
         detail = f"manual_result.details 不合 {request.result_model}: {fields}"
         raise DecisionRejected("INVALID_VALUE", detail) from e
@@ -484,14 +482,13 @@ def misstatement_effects(
         source = target.id
     else:
         assert isinstance(target, AuditException) and task.subject_id is not None  # unattributed 任务带判断对象
-        assert record.reason is not None  # 校验时已查必填
         source = human_judgment_id(task, task.subject_id, taken)
         human = human_judgment(
             record,
             task,
             source,
             subject_id=task.subject_id,
-            conclusion=record.reason,
+            conclusion=record.reason or "",  # 理由选填 (需求 R358), 没填时结论为空串
             evidence=target.evidence,
             exception_ids=[target.id],
             proposed_action=ProposedAction.misstatement,
@@ -799,14 +796,10 @@ def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[Revi
 
 
 def check_notice_fields(notice: CorrectionNotice) -> None:
-    """更正通知的字段 (需求 R162), 不过抛 DecisionRejected: stop_waiting 须有理由 (去首尾空白后非空, 否则
-    MISSING_FIELD), 不能带凭证号 (FIELD_NOT_ALLOWED); adjustments_posted 的理由可写可不写, 凭证号为空表示载入全部未
-    载入的更正分录. 纯函数."""
-    if notice.kind == "stop_waiting":
-        if not (notice.reason or "").strip():
-            raise DecisionRejected("MISSING_FIELD", "reason")
-        if notice.adjustment_entry_nos:
-            raise DecisionRejected("FIELD_NOT_ALLOWED", "adjustment_entry_nos")
+    """更正通知的字段 (需求 R162), 不过抛 DecisionRejected: stop_waiting 不能带凭证号 (FIELD_NOT_ALLOWED);
+    adjustments_posted 的凭证号为空表示载入全部未载入的更正分录. 理由两种都选填 (需求 R358). 纯函数."""
+    if notice.kind == "stop_waiting" and notice.adjustment_entry_nos:
+        raise DecisionRejected("FIELD_NOT_ALLOWED", "adjustment_entry_nos")
 
 
 def notice_trail(eid: str, notice: CorrectionNotice) -> TrailEntry:

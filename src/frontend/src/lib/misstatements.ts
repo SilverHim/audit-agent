@@ -43,12 +43,11 @@ export type NoticeDraft = {
   reason: string
 }
 
-// 更正通知的请求体; 漏选或缺理由时返回错误文案. 客户已过账须勾选错报与凭证号, 理由可空; 停止等待须写理由, 不带凭证号
+// 更正通知的请求体; 漏选时返回错误文案. 客户已过账须勾选错报与凭证号; 停止等待不带凭证号. 理由都选填 (需求 R360)
 export function correctionNoticeBody(draft: NoticeDraft, t: Messages): CorrectionNoticeIn | string {
   if (!draft.misstatementIds.length) return t.correction.errors.misstatements
   const reason = draft.reason.trim()
   if (draft.kind === 'stop_waiting') {
-    if (!reason) return t.errors.reasonRequired
     return { kind: 'stop_waiting', misstatement_ids: draft.misstatementIds, adjustment_entry_nos: [], reason }
   }
   if (!draft.entryNos.length) return t.correction.errors.entries
@@ -56,7 +55,7 @@ export function correctionNoticeBody(draft: NoticeDraft, t: Messages): Correctio
     kind: 'adjustments_posted',
     misstatement_ids: draft.misstatementIds,
     adjustment_entry_nos: draft.entryNos,
-    reason: reason || null,
+    reason,
   }
 }
 
@@ -218,7 +217,7 @@ export function updateBase(
   return found ? { misstatement_id: found.id, base_version: found.version ?? 1 } : null
 }
 
-// 表单 → 载荷; 缺依据或必填, 金额写不对时返回错误文案. 分类: 类型与是否舞弊迹象, 有舞弊迹象须写理由 (来源与审计目标
+// 表单 → 载荷; 缺依据或必填, 金额写不对时返回错误文案. 分类: 类型与是否舞弊迹象, 舞弊迹象的理由选填 (来源与审计目标
 // 由后端按规则补); 验证: 状态, 凭证号, 已更正与剩余金额. 没写的可选字段为 null (表示不改): 凭证号为空不发 [];
 // 是否须重新沟通不由人填, 恒为 null, 由后端按状态推出
 export function misstatementUpdate(
@@ -230,7 +229,6 @@ export function misstatementUpdate(
   if (!base) return t.updateForm.errors.base
   if (kind === 'classification') {
     const reason = draft.fraudReason.trim()
-    if (draft.fraud && !reason) return t.updateForm.errors.fraudReason
     return { ...base, kind, type: draft.type, fraud_indicative: draft.fraud, fraud_reason: draft.fraud ? reason : null }
   }
   const amount = (text: string) => (text.trim() ? audToCents(text) : null)

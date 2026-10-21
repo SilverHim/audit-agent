@@ -4,6 +4,7 @@ import { useActorName } from '@/lib/actor'
 import { useI18n } from '@/lib/i18n'
 import { remainingCents, separateCode, verifiedEntries } from '@/lib/misstatements'
 import { formatAud } from '@/lib/money'
+import { reasonText } from '@/lib/reason'
 
 // 错报的生命周期 (需求 R163): 错报页与 FIN-01 闸门材料共用. 每条显示状态, 类型, 科目代码, 管理层回复原文, 已更正额与
 // 剩余额, 已验证的更正凭证号; 有舞弊迹象的加醒目标记与理由; 未更正的写依据 (拒绝或停止等待)
@@ -41,10 +42,10 @@ function MisstatementItem({ item }: { item: Misstatement }) {
         <Code>{formatAud(item.amount_cents)}</Code>
       </div>
       <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[13px]">
-        {item.fraud_indicative && item.fraud_reason ? (
+        {item.fraud_indicative ? (
           <>
             <dt className="font-semibold text-risk">{labels.fraud}</dt>
-            <dd className="m-0 text-risk">{item.fraud_reason}</dd>
+            <dd className="m-0 text-risk">{reasonText(item.fraud_reason, t)}</dd>
           </>
         ) : null}
         {item.management_response ? (
@@ -113,7 +114,7 @@ export function CorrectionNotices({ notices }: { notices: CorrectionNotice[] }) 
               {[actorName(notice.decided_by), formatDateTime(notice.decided_at)].filter(Boolean).join(' · ')}
             </span>
           </span>
-          {notice.reason ? <span className="text-secondary-foreground">{notice.reason}</span> : null}
+          <span className="text-secondary-foreground">{reasonText(notice.reason, t)}</span>
         </li>
       ))}
     </ul>

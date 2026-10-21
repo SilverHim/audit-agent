@@ -134,8 +134,8 @@ def test_four_gates_registered_as_before() -> None:
 def test_pln15_gate_row() -> None:
     """需求 R205 验收 1: PLN-15 的登记行. 节点 gate_p1_plan, 留痕程序 PLN-15, 材料为 audit_plans 中的当前计划 (pick:
     status 不是 superseded 的修订中 revision 最大的), 出口 approve → schedule, reject → plan_draft (represent 回自身),
-    通过须带 plan_confirmation, 驳回与信息不足须带理由; 登记了 "通过时材料出新版本仍放行" (passed, 同 RPT-01 签字);
-    功能 planning. 基线下不在主图中."""
+    通过须带 plan_confirmation, 驳回与信息不足没有必填 (理由选填, 需求 R358); 登记了 "通过时材料出新版本仍放行"
+    (passed, 同 RPT-01 签字); 功能 planning. 基线下不在主图中."""
     spec = spec_of(GateId.PLN_15)
     assert (spec.node, spec.procedure_id, spec.material_field, spec.material_model, spec.feature) == (
         "gate_p1_plan",
@@ -151,11 +151,7 @@ def test_pln15_gate_row() -> None:
         "approve": "schedule",
         "reject": "plan_draft",
     }
-    assert dict(spec.fields) == {
-        GateVerdict.approve: FieldRule(("plan_confirmation",)),
-        GateVerdict.reject: FieldRule(("reason",)),
-        GateVerdict.insufficient_info: FieldRule(("reason",)),
-    }
+    assert dict(spec.fields) == {GateVerdict.approve: FieldRule(("plan_confirmation",))}
     assert "gate_p1_plan" not in gates.gate_nodes(BASELINE)
     assert gates.gate_nodes(PLANNING_FEATURES) == [
         "gate_acc01",
@@ -270,9 +266,9 @@ def test_combined_node_gets_one_conditional_edge(monkeypatch: pytest.MonkeyPatch
 
 
 def previous_required(gate: GateId, verdict: GateVerdict) -> list[str]:
-    """R86 之前 decisions.required_fields 的规则 (原样抄录)."""
+    """R86 之前 decisions.required_fields 的规则 (原样抄录), 去掉理由: 需求 R358 起各种决定的理由都选填."""
     approve = verdict is GateVerdict.approve
-    required = ["reason"] if not approve or gate is GateId.FIN_01 else []
+    required: list[str] = []
     if approve and gate is GateId.PLN_01_03:
         required.append("materiality")
     if approve and gate is GateId.FIN_01:

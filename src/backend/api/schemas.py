@@ -148,7 +148,7 @@ class CorrectionNoticeIn(Model):
     kind: CorrectionNoticeKind  # 更正分录已入账, 或停止等待
     misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
     adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted; 为空时载入全部未载入的)
-    reason: str | None = None  # 理由, stop_waiting 必填
+    reason: str | None = None  # 理由, 选填 (需求 R358)
 
 
 class AdjustmentEntryView(Model):
@@ -417,7 +417,7 @@ class DocumentTypeIn(Model):
     """人工指定文件类型."""
 
     type: DocumentType  # 文件类型
-    reason: str  # 理由, 必填
+    reason: str = ""  # 理由, 选填 (Issue #61)
 
 
 class DocumentDetailsIn(DocumentDetailsEdit):
@@ -428,7 +428,7 @@ class AccountCategoryIn(Model):
     """审计师修改科目的标准分类."""
 
     category: AccountCategory  # 新的标准分类, 须属于该科目的类别
-    reason: str  # 理由, 必填
+    reason: str = ""  # 理由, 选填 (Issue #61)
 
 
 class DemoImportIn(Model):
@@ -441,13 +441,13 @@ class DemoImportIn(Model):
 class DataReadyIn(Model):
     """确认数据已齐 (POST /data/ready) 的请求体, 可不带."""
 
-    reason: str | None = None  # 理由; 最近一次体检有不通过的项时必填
+    reason: str | None = None  # 理由, 选填 (Issue #61; 体检有不通过的项时也可不写)
 
 
 class RequestUnavailableIn(Model):
     """补交请求标 "客户无此类资料" (需求 R280)."""
 
-    reason: str  # 理由, 必填 (去首尾空白后不能为空)
+    reason: str = ""  # 理由, 选填 (Issue #61)
 
 
 class ImportSheet(Model):
@@ -487,7 +487,7 @@ class XeroProfileCheckIn(Model):
 
     key: str  # 看到的核对的 key (sources.xero.profile_check.key); 已不是当前的报 409 PROFILE_CHECK_STALE
     decision: XeroProfileDecision  # keep 保持原样, update 按 Xero 更新画像
-    reason: str | None = None  # 保持原样的理由, keep 时必填
+    reason: str | None = None  # 保持原样的理由, 选填 (Issue #61)
 
 
 class LlmSlotView(Model):

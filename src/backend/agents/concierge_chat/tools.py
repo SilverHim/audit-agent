@@ -666,7 +666,7 @@ async def get_report(env: ToolEnv, args: NoArgs) -> Found:
         "rpt01_decisions": [
             {
                 "decision": d.decision.value,
-                "reason": d.reason,
+                **({"reason": d.reason} if d.reason else {}),  # 理由选填 (需求 R358), 没填时不列
                 "annotations": [a.model_dump(mode="json") for a in d.annotations],
                 "decided_at": d.decided_at.isoformat(),
             }

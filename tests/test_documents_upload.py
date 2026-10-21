@@ -250,17 +250,18 @@ async def test_upload_runs_take_the_project_language(fixed: Literal["en"] | None
     ]
 
 
-async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:
+@pytest.mark.parametrize(
+    ("reason", "recorded"), [("董事会纪要扫描件", "董事会纪要扫描件"), (" ", "")], ids=["given", "blank"]
+)
+async def test_unknown_type_needs_manual_then_type_set_by_auditor(reason: str, recorded: str) -> None:
+    """认不出类型的转人工, 审计师指定类型; 理由选填 (Issue #61), 只有空白的记为空串, 留痕照记."""
     runner, service, financial, _, _ = setup()
     await service.upload_documents(EID, [("scan-0042.png", b"\x89PNG fake")], actor="U-1")
     await drain(service)
     scan = document(financial, "scan-0042.png")
     assert (scan.status, scan.failed_step, scan.media_type) == ("needs_manual", "classify", "image/png")
 
-    with pytest.raises(DataRejected) as missing:
-        await service.set_document_type(EID, scan.id, DocumentType.minutes, " ", "U-1")
-    assert missing.value.code == "MISSING_FIELD"
-    updated = await service.set_document_type(EID, scan.id, DocumentType.minutes, "董事会纪要扫描件", "U-1")
+    updated = await service.set_document_type(EID, scan.id, DocumentType.minutes, reason, "U-1")
     await drain(service)
 
     assert (updated.type, updated.status, updated.failed_step) == (DocumentType.minutes, "classified", None)
@@ -269,7 +270,7 @@ async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:
         "action": "classify",
         "document_id": scan.id,
         "document_type": "minutes",
-        "reason": "董事会纪要扫描件",
+        "reason": recorded,
     }
 
 
@@ -532,7 +533,8 @@ async def test_edit_contract_rejects_bad_fields_and_values(field: str, value: st
 
 
 async def test_edit_contract_other_fields_and_same_value() -> None:
-    _, service, financial, _ = await extracted_contract()
+    """其余字段的修改, 与当前相同 INVALID_VALUE; 理由选填 (Issue #61): 不带的照常出新版本, 版本与留痕记为空串."""
+    runner, service, financial, _ = await extracted_contract()
     contract = financial.saved_contracts["CON-001"]
     v2 = await service.edit_contract(
         EID, "CON-001", ExtractionEdit(field="amount_cents", value=None, reason="r"), "U-1"
@@ -554,9 +556,10 @@ async def test_edit_contract_other_fields_and_same_value() -> None:
             EID, "CON-001", ExtractionEdit(field="sign_date", value="2025-07-02", reason="r"), "U-1"
         )
     assert same.value.code == "INVALID_VALUE"
-    with pytest.raises(DataRejected) as no_reason:
-        await service.edit_contract(EID, "CON-001", ExtractionEdit(field="counterparty", value="X", reason=""), "U-1")
-    assert no_reason.value.code == "MISSING_FIELD"
+    v5 = await service.edit_contract(EID, "CON-001", ExtractionEdit(field="counterparty", value="X"), "U-1")
+    history = await financial.contract_history(EID, "CON-001")
+    assert (v5.counterparty, v5.version, history[-1].reason) == ("X", 5, "")
+    assert (data_trail(runner)[-1]["field"], data_trail(runner)[-1]["reason"]) == ("counterparty", "")
     with pytest.raises(LookupError):
         await service.edit_contract(EID, "CON-404", ExtractionEdit(field="counterparty", value="X", reason="r"), "U-1")
     assert contract.version == 1

@@ -14,6 +14,7 @@ import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { currentPlan, extentLabel, methodLabel, planTable, revisionHistory } from '@/lib/plan'
+import { reasonText } from '@/lib/reason'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 import { contentLanguage, type WorkingLanguage } from '@/lib/working-language'
@@ -122,10 +123,11 @@ function Revisions({ view }: { view: PlanView }) {
               ) : null}
             </span>
             {decisions
-              .filter((decision) => decision.decision !== 'approve' && decision.reason)
+              .filter((decision) => decision.decision !== 'approve')
               .map((decision) => (
                 <span key={decision.id} className="text-[13px] text-[#4a5262]">
-                  {t.verdicts['PLN-15'][decision.decision]}: <span lang="en">{decision.reason}</span>
+                  {t.verdicts['PLN-15'][decision.decision]}:{' '}
+                  <span lang={decision.reason?.trim() ? 'en' : undefined}>{reasonText(decision.reason, t)}</span>
                 </span>
               ))}
           </li>

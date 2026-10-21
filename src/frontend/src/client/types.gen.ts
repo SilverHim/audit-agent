@@ -112,7 +112,7 @@ export type AccountCategoryIn = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
@@ -2085,7 +2085,7 @@ export type DocumentDetailsIn = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
@@ -2163,7 +2163,7 @@ export type DocumentTypeIn = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
@@ -2536,7 +2536,7 @@ export type ExtractionEdit = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
@@ -2800,7 +2800,7 @@ export type GateEdit = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**
@@ -4724,7 +4724,7 @@ export type RequestUnavailableIn = {
     /**
      * Reason
      */
-    reason: string;
+    reason?: string;
 };
 
 /**

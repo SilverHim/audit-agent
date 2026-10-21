@@ -170,7 +170,7 @@ def drafted_in(ctx: RunContext, report: AuditReportVersion) -> WorkingLanguage:
 
 
 def fin01_reason(ctx: RunContext) -> str:
-    """最后一条 FIN-01 通过决定的理由 (FIN-01 理由必填)."""
+    """最后一条 FIN-01 通过决定的理由; 理由选填 (需求 R358), 没填为空串, 提示词里不列."""
     approvals = [
         d for d in ctx.state["gate_decisions"] if d.gate is GateId.FIN_01 and d.decision is GateVerdict.approve
     ]

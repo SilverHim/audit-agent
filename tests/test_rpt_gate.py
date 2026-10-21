@@ -32,7 +32,15 @@ from backend.orchestration.gates import rpt01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import NOW, NUMBAT_PROFILE, EngagementWrite, FakeTrail, make_procedure, profile_update, wait_idle
-from tests.test_decisions import CHOICE, Started, assert_rejected, edit, stop_after_submit
+from tests.test_decisions import (
+    CHOICE,
+    NO_REASON,
+    Started,
+    assert_accepted_without_reason,
+    assert_rejected,
+    edit,
+    stop_after_submit,
+)
 from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import EID
 
@@ -151,8 +159,6 @@ async def test_gate_view_before_and_after_reject() -> None:
     ("decision", "code", "detail"),
     [
         (rpt_decision(GateVerdict.reject, annotations=[]), "MISSING_FIELD", "annotations"),
-        (rpt_decision(GateVerdict.reject, reason=None), "MISSING_FIELD", "reason"),
-        (rpt_decision(GateVerdict.insufficient_info, reason=None), "MISSING_FIELD", "reason"),
         (rpt_decision(GateVerdict.approve, annotations=[ANNOTATION]), "FIELD_NOT_ALLOWED", "annotations"),
         (rpt_decision(GateVerdict.approve, disposition=OpinionType.qualified), "FIELD_NOT_ALLOWED", "disposition"),
         (rpt_decision(GateVerdict.reject, materiality=CHOICE), "FIELD_NOT_ALLOWED", "materiality"),
@@ -165,6 +171,15 @@ async def test_invalid_rpt01_decision_rejected(
 ) -> None:
     """验收 3: 不合规的 RPT-01 决定被拒, Store 与检查点不变, 锁释放."""
     await assert_rejected(rpt_gate, decision, code, detail)
+
+
+@NO_REASON
+@pytest.mark.parametrize("verdict", [GateVerdict.reject, GateVerdict.insufficient_info])
+async def test_rpt01_without_reason_accepted(verdict: GateVerdict, reason: str | None) -> None:
+    """需求 R358 验收 1: RPT-01 的驳回 (照样须带批注) 与信息不足不填理由也能提交, 不报 MISSING_FIELD."""
+    s = await at_rpt_gate()
+    stop_after_submit(s)
+    await assert_accepted_without_reason(s, rpt_decision(verdict, reason=reason))
 
 
 async def test_decision_on_superseded_report_rejected() -> None:

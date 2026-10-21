@@ -67,7 +67,6 @@ import {
   procedureName,
   type RankedTask,
   type ReviewDraft,
-  reasonRequired,
   type SideProposal,
   sideProposal,
 } from '@/lib/review'
@@ -583,25 +582,13 @@ export function DecisionFrame({
   )
 }
 
-export function ReasonField({
-  id,
-  value,
-  onChange,
-  required,
-}: {
-  id: string
-  value: string
-  onChange: (value: string) => void
-  required: boolean
-}) {
+// 决定的理由一律选填 (需求 R360)
+export function ReasonField({ id, value, onChange }: { id: string; value: string; onChange: (value: string) => void }) {
   const { t } = useI18n()
   return (
     <div className="flex flex-col gap-1.5">
       <label htmlFor={id} className="font-semibold text-[13px]">
-        {t.card.reason}{' '}
-        <span className="font-normal text-muted-foreground">
-          {required ? t.card.reasonRequired : t.card.reasonOptional}
-        </span>
+        {t.reason.label}
       </label>
       <Textarea
         id={id}
@@ -761,7 +748,6 @@ export function ReviewDecisionCard({
     decision === 'override' || decision === 'manual_result' || (isDispute && dispute === 'neither')
   const ready =
     Boolean(decision) &&
-    (!reasonRequired(decision) || draft.reason.trim().length > 0) &&
     (!isDispute || dispute != null) &&
     (!needsConclusion || draft.conclusion.trim().length > 0) &&
     (!showsMisstatement || (draft.account.trim().length > 0 && draft.amount.trim().length > 0)) &&
@@ -1020,12 +1006,7 @@ export function ReviewDecisionCard({
         </div>
       ) : null}
 
-      <ReasonField
-        id={`reason-${view.task.id}`}
-        value={draft.reason}
-        onChange={(reason) => set({ reason })}
-        required={reasonRequired(decision) || isDispute}
-      />
+      <ReasonField id={`reason-${view.task.id}`} value={draft.reason} onChange={(reason) => set({ reason })} />
     </DecisionFrame>
   )
 }

@@ -711,11 +711,9 @@ class DataService:
         """审计师修改科目的标准分类 (PUT /data/accounts/{code}): 存储规则见 DataStore.set_category (新的一版, 科目表
         改为它, 数据版本 +1, 一个事务); 提交后写 data 留痕 (category_entry; 没写成的下次取锁时补写), 再由 A3 体检
         (分类影响科目映射与留存收益结转). 之后重新导入科目表时保留审计师的分类.
-        持项目锁 (锁定 423, 忙 409); 科目不存在 404; 理由为空 MISSING_FIELD; 分类不属于该科目的类别或与当前相同
-        INVALID_VALUE. 同一修改的重试 (当前分类正是同一人以同一理由改出的) 返回那一版, 不再写."""
+        理由选填 (Issue #61), 去首尾空白后照存 (可为空串). 持项目锁 (锁定 423, 忙 409); 科目不存在 404; 分类不属于该
+        科目的类别或与当前相同 INVALID_VALUE. 同一修改的重试 (当前分类正是同一人以同一理由改出的) 返回那一版, 不再写."""
         reason = reason.strip()
-        if not reason:
-            raise DataRejected("MISSING_FIELD", "须填写修改分类的理由")
         async with self.holding(eid, ()):
             account = await self.deps.data.account(eid, code)
             if account is None:
@@ -1002,7 +1000,7 @@ class DataService:
         """调整确认单的一项 (PUT /data/batches/{id}/items/{item_id}), 返回整张确认单.
 
         表格项给 plan: 换方案 (记调整人), 按新方案重算行数, 解析失败与问题 (调整后不再标把握低). 文件项给
-        document_type: 改类型, 须给理由 (MISSING_FIELD); 之前已登记的文件不能改. 改了类型的文件回到识别中: 批次置
+        document_type: 改类型, 理由选填 (Issue #61); 之前已登记的文件不能改. 改了类型的文件回到识别中: 批次置
         processing, 该文件记没做完, 由 A3 在后台按新类型重新识别与抽取 (process_batch; 写审计师的 classify 留痕, 是新的
         作业), 抽取要素随之出现在确认单上, 做完置 ready. 给 selected: 手动勾选或取消 (记勾选人, 之后不再随问题变).
         没有改类型时整张确认单收尾 (重复的表等问题跨项重算). 先取项目锁再读批次: 锁定 423; 忙 409 (识别中的批次由识别
@@ -1058,8 +1056,6 @@ class DataService:
             if any(i.code == "already_registered" for i in item.issues):
                 raise DataRejected("INVALID_VALUE", f"{item.file_name} 之前已登记, 在文件列表里改类型")
             reason = (edit.reason or "").strip()
-            if not reason:
-                raise DataRejected("MISSING_FIELD", "须填写改文件类型的理由")
             # 新类型的识别结果由 process_batch 填回; 在那之前确认单上显示新类型, 没有抽取要素
             item = item.model_copy(
                 update={
@@ -1315,9 +1311,9 @@ class DataService:
         """审计师确认数据已齐 (POST /data/ready): 越过 P1 开始前的等待, 后台继续 DOC-04 及后续节点.
 
         按顺序校验, 第一条不过即拒绝 (DataRejected): 项目锁定 ENGAGEMENT_LOCKED; 取项目锁失败 ENGAGEMENT_BUSY;
-        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables); 最近一次体检有不通过
-        (failed) 的项而理由为空 (去首尾空白后) DATA_CHECKS_FAILED (附 failed_checks, 需求 R273). 判断体检前先补做
-        已不对应当前数据的体检 (checkup_if_stale; 补做出错只记日志, 按已有的最近一次结果判断).
+        图不在等数据就绪 NOT_AWAITING_DATA; 就绪条件不满足 DATA_NOT_READY (附 missing_tables). 理由选填, 最近一次体检
+        有不通过 (failed) 的项时也不要求 (Issue #61; 需求 R273 原为必填), 去首尾空白后为空记为空. 记未通过项前先补做
+        已不对应当前数据的体检 (checkup_if_stale; 补做出错只记日志, 按已有的最近一次结果记).
         通过后记确认, 连同理由与这些未通过项 (规则见 DataStore.confirm_ready: 人与时间保留第一次的, 第一次没有未通过项
         而本次有时补记本次的), 写 data 留痕 (action ready, 同键已有的跳过), 以 Command(resume=DATA_READY) 在后台恢复;
         项目锁交给后台任务. 确认已记而图仍在等 (上次留痕或恢复没成) 时再确认一次照常校验, 补写留痕并恢复; recover 与
@@ -1341,12 +1337,6 @@ class DataService:
             await self.checkup_if_stale(eid)  # 写入后的体检出错时, data_checks 还是上一版数据的结果
             failed = [check.id for check in await self.deps.data.checks(eid) if check.status == "failed"]
             reason = (reason or "").strip() or None
-            if failed and reason is None:
-                raise DataRejected(
-                    "DATA_CHECKS_FAILED",
-                    f"体检不通过: {', '.join(failed)}; 须写明理由才能确认",
-                    failed_checks=[c.value for c in failed],
-                )
             readiness = await self.deps.data.confirm_ready(eid, actor, reason=reason, failed_checks=failed)
             await record_transitions(self.deps.trail, [data_ready_entry(eid, readiness)])
         except BaseException:
@@ -1357,19 +1347,18 @@ class DataService:
 
     async def mark_unavailable(self, eid: str, request_id: str, reason: str, actor: str) -> DataRequest:
         """审计师在补交卡片上标 "客户无此类资料" (POST /data/requests/{id}/unavailable, 需求 R280): 请求转 unavailable,
-        记理由, 标记人与时间, 写 data 留痕 (action request_unavailable, 带理由与 used_for). 在 holding 内做 (不计进
-        处理中的作业), 结束时图若在等程序要的数据就交锁恢复: await_data 重查, 等这项资料的程序与其下游记 no_data.
+        记理由 (选填, Issue #61; 去首尾空白后照存, 可为空串), 标记人与时间, 写 data 留痕 (action request_unavailable,
+        带理由与 used_for). 在 holding 内做 (不计进处理中的作业), 结束时图若在等程序要的数据就交锁恢复: await_data
+        重查, 等这项资料的程序与其下游记 no_data.
         标记是定论, 之后的体检不重开也不改 (data_quality.reconcile).
 
-        按顺序拒绝: 锁定 423, 忙 409; 请求不存在 404; 理由去首尾空白后为空 MISSING_FIELD; 不是 open
-        REQUEST_NOT_OPEN; 就绪必需的表 (P1 等数据已保证有) INVALID_VALUE."""
+        按顺序拒绝: 锁定 423, 忙 409; 请求不存在 404; 不是 open REQUEST_NOT_OPEN; 就绪必需的表 (P1 等数据已保证有)
+        INVALID_VALUE."""
         async with self.holding(eid, []):
             request = next((r for r in await self.deps.data.requests(eid) if r.id == request_id), None)
             if request is None:
                 raise LookupError(f"补交请求 {request_id} 不存在")
             reason = reason.strip()
-            if not reason:
-                raise DataRejected("MISSING_FIELD", "须写明客户没有这类资料的理由")
             if request.status != "open":
                 raise DataRejected("REQUEST_NOT_OPEN", f"{request_id} 已是 {request.status}")
             if request.table_kind in REQUIRED_TABLES:
@@ -1649,11 +1638,9 @@ class DataService:
         """人工指定文件类型 (PUT /documents/{id}/type): 改类型与可靠性 (补登记过可靠性的保留, 否则取新类型的缺省,
         见 ingest.registered_reliability), 置 classified, 写 data 留痕 (action classify,
         actor 为审计师, 带理由), 返回改后的登记; 合同, 回函与 ASIC 摘录随即由 A3 在后台抽取 (同上传后的处理), 是一次
-        新的作业 (作业号为这条留痕的 ID): 合同与 ASIC 摘录重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由为空
-        MISSING_FIELD; 文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时没勾选而未导入
-        (要导入就重新上传) INVALID_VALUE; 锁定 423; 忙 409."""
-        if not reason.strip():
-            raise DataRejected("MISSING_FIELD", "须填写指定类型的理由")
+        新的作业 (作业号为这条留痕的 ID): 合同与 ASIC 摘录重抽接在已有版本之后, 不覆盖之前的抽取与修改. 理由选填
+        (Issue #61), 去首尾空白后照记; 文件不存在 404; 文件还在智能导入的确认单里 (暂存, 类型在确认单上改), 或确认时
+        没勾选而未导入 (要导入就重新上传) INVALID_VALUE; 锁定 423; 忙 409."""
         document = next((d for d in await self.deps.financial_store.documents(eid) if d.id == document_id), None)
         if document is None:
             raise LookupError(f"文件 {document_id} 不存在")
@@ -1699,8 +1686,9 @@ class DataService:
         self, eid: str, edits: Mapping[str, DocumentDetailsEdit], actor: str
     ) -> list[DocumentRef]:
         """补登记文件的可靠性, 文件日期与关联对象 (PUT /documents/{id}/details, 需求 R90), 返回改后的登记 (按 edits 的
-        顺序). 持项目锁 (锁定 423, 忙 409), 先逐份校验, 有一份不过就都不写: 文件不存在 LookupError (404); 理由去空白后
-        为空, 或三项都没给 MISSING_FIELD; 暂存或未导入的文件, 给出的都与当前相同, 关联对象有空串或重复 INVALID_VALUE.
+        顺序). 理由选填 (Issue #61), 去首尾空白后照记. 持项目锁 (锁定 423, 忙 409), 先逐份校验, 有一份不过就都不写: 文件
+        不存在 LookupError (404); 三项都没给 MISSING_FIELD; 暂存或未导入的文件, 给出的都与当前相同, 关联对象有空串或
+        重复 INVALID_VALUE.
         给出的都与当前相同而当前登记正是同一人以同一理由补登记出的 (重试), 返回当前登记, 不再写.
 
         一个事务内: 各文件改登记 (EvidenceStore.update_details), 抽取版本表记一版 (target_type document, data 为
@@ -1723,8 +1711,6 @@ class DataService:
             if document is None:
                 raise LookupError(f"文件 {document_id} 不存在")
             reason = edit.reason.strip()
-            if not reason:
-                raise DataRejected("MISSING_FIELD", "须填写补登记的理由")
             if document.status in HELD_NOTES:
                 raise DataRejected("INVALID_VALUE", HELD_NOTES[document.status].format(document.file_name))
             given = details_given(edit, document.file_name)
@@ -1825,10 +1811,11 @@ class DataService:
     async def edit_contract(self, eid: str, contract_id: str, edit: ExtractionEdit, actor: str) -> Contract:
         """修改合同抽取结果 (PUT /contracts/{id}): 生成新版本 (version +1), 记修改人, 字段与理由, 数据版本 +1, 三者
         在一个事务内; 提交后写 data 留痕 (action edit, 见 edit_entry; 没写成的下次取锁时补写). 字段见
-        extraction_edits.CONTRACT_FIELDS (条款下标从 0 起). 持项目锁 (锁定 423, 忙 409); 合同不存在 404; 理由为空
-        MISSING_FIELD; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一修改的重试 (当前版本正是同一人
-        以同一理由改同一字段得出的) 返回当前版本, 不再写. 迁移 0004 之前抽取的合同第一次修改时先补记修改前的那一版."""
-        reason = self._reason(edit)
+        extraction_edits.CONTRACT_FIELDS (条款下标从 0 起). 理由选填 (Issue #61), 去首尾空白后照记. 持项目锁 (锁定 423,
+        忙 409); 合同不存在 404; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一修改的重试 (当前版本
+        正是同一人以同一理由改同一字段得出的) 返回当前版本, 不再写. 迁移 0004 之前抽取的合同第一次修改时先补记修改前
+        的那一版."""
+        reason = edit.reason.strip()
         async with self.locked(eid):
             await self.backfill_trails(eid)
             contract = await self._contract(eid, contract_id)
@@ -1872,9 +1859,9 @@ class DataService:
         这一版撞号时节点报错 (nodes.GraphNodes.collect, Store 已有内容不同的同版本), 不静默丢掉. CSH-02 已比对过的
         差额与结果不随之重算, 记数据变动 confirmations 标出过期 (需求 R274), 审计师可在等复核, FIN-01 或 RPT-01
         处重跑它.
-        持项目锁 (锁定 423, 忙 409); 函证不存在 404; 理由为空 MISSING_FIELD; 字段或值不合法, 与当前相同
+        理由选填 (同 edit_contract). 持项目锁 (锁定 423, 忙 409); 函证不存在 404; 字段或值不合法, 与当前相同
         INVALID_VALUE; 同一修改的重试返回当前版本 (同 edit_contract)."""
-        reason = self._reason(edit)
+        reason = edit.reason.strip()
         async with self.locked(eid):
             await self.backfill_trails(eid)
             confirmation = await self.deps.output_store.get(eid, Confirmation, confirmation_id)
@@ -1950,10 +1937,10 @@ class DataService:
         """修改 ASIC 摘录的抽取结果 (PUT /registry-extracts/{document_id}): 抽取版本表记新一版 (修改人, 字段与理由),
         数据版本 +1 记数据变动 registry_extracts, 一个事务内; 提交后写 data 留痕 (同 edit_contract). 已执行的 ACC-04 不
         随之过期 (承接阶段的执行不记数据版本, R274), 评分卡不自动重算; 要重跑经 ACC-01 闸门更新客户资料 (rerun).
-        字段见 extraction_edits.REGISTRY_FIELDS (高管下标从 0 起). 持项目锁 (锁定 423, 忙 409); 文件不是 ASIC 摘录或还
-        没有抽取结果 404; 理由为空 MISSING_FIELD; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一修改的
-        重试 (最新一版正是同一人以同一理由改同一字段得出的) 返回当前版本, 不再写."""
-        reason = self._reason(edit)
+        字段见 extraction_edits.REGISTRY_FIELDS (高管下标从 0 起). 理由选填 (同 edit_contract). 持项目锁 (锁定 423,
+        忙 409); 文件不是 ASIC 摘录或还没有抽取结果 404; 字段不认识, 下标越界, 值不合法或与当前相同 INVALID_VALUE. 同一
+        修改的重试 (最新一版正是同一人以同一理由改同一字段得出的) 返回当前版本, 不再写."""
+        reason = edit.reason.strip()
         async with self.locked(eid):
             await self.backfill_trails(eid)
             records = await self._registry_records(eid, document_id)
@@ -2009,9 +1996,3 @@ class DataService:
         if not records:
             raise LookupError(f"文件 {document_id} 不是已抽取的 ASIC 摘录")
         return records
-
-    @staticmethod
-    def _reason(edit: ExtractionEdit) -> str:
-        if not edit.reason.strip():
-            raise DataRejected("MISSING_FIELD", "须填写修改理由")
-        return edit.reason.strip()

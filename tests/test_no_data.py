@@ -82,23 +82,33 @@ async def without_delivery_notes() -> Started:
 # ── 验收 5 ──
 
 
-async def test_no_delivery_notes_marks_rev08_not_executed_and_lists_it_at_fin01() -> None:
+@pytest.mark.parametrize(
+    ("body", "recorded"),
+    [({"reason": f" {REASON} "}, REASON), ({"reason": "  "}, ""), ({}, "")],
+    ids=["given", "blank", "omitted"],
+)
+async def test_no_delivery_notes_marks_rev08_not_executed_and_lists_it_at_fin01(
+    body: dict[str, str], recorded: str
+) -> None:
+    """理由选填 (Issue #61): 去首尾空白后照存, 只有空白或不带的记为空串, 留痕与 FIN-01 材料照记."""
     s = await without_delivery_notes()
     assert await s.next_nodes() == ("await_data",)
     assert statuses(s)["REV-08"] == (ProcedureStatus.awaiting_data, ["REQ-delivery_notes"])
     assert statuses(s)["REV-02"] == (ProcedureStatus.planned, [])  # 前置 REV-08 未完成
 
     async with api_client(s.runner) as client:
-        blank = await client.post(unavailable_url("REQ-delivery_notes"), json={"reason": "  "})
-        marked = await client.post(unavailable_url("REQ-delivery_notes"), json={"reason": f" {REASON} "})
+        marked = await client.post(unavailable_url("REQ-delivery_notes"), json=body)
         await wait_idle(s.runner, EID)  # 标记结束时交给后台恢复, await_data 重查
         again = await client.post(unavailable_url("REQ-delivery_notes"), json={"reason": REASON})
         gate = (await client.get(f"/api/v1/engagements/{EID}/gate")).json()
 
-    assert (blank.status_code, blank.json()["detail"]["code"]) == (422, "MISSING_FIELD")
-    assert marked.status_code == 200
-    body = marked.json()
-    assert (body["status"], body["unavailable_reason"], body["resolved_by"]) == ("unavailable", REASON, "U-1")
+    assert marked.status_code == 200, marked.text
+    request = marked.json()
+    assert (request["status"], request["unavailable_reason"], request["resolved_by"]) == (
+        "unavailable",
+        recorded,
+        "U-1",
+    )
     assert (again.status_code, again.json()["detail"]["code"]) == (409, "REQUEST_NOT_OPEN")
     current = statuses(s)
     assert current["REV-08"] == (ProcedureStatus.no_data, ["REQ-delivery_notes"])
@@ -114,7 +124,7 @@ async def test_no_delivery_notes_marks_rev08_not_executed_and_lists_it_at_fin01(
         "action": "request_unavailable",
         "request_id": "REQ-delivery_notes",
         "table_kind": "delivery_notes",
-        "reason": REASON,
+        "reason": recorded,
         "used_for": ["REV-08"],
     }
     to_no_data = {
@@ -132,7 +142,7 @@ async def test_no_delivery_notes_marks_rev08_not_executed_and_lists_it_at_fin01(
         ("REV-02", ["REV-08"], ["REQ-delivery_notes"]),
         ("REV-08", [], ["REQ-delivery_notes"]),
     ]
-    assert material["not_executed"][1]["requests"][0]["unavailable_reason"] == REASON
+    assert material["not_executed"][1]["requests"][0]["unavailable_reason"] == recorded
 
 
 async def test_marking_while_waiting_resumes_and_withdraws_unneeded_requests() -> None:
@@ -178,7 +188,6 @@ async def test_required_tables_and_unknown_requests_rejected() -> None:
         required = await client.post(unavailable_url("REQ-accounts"), json={"reason": REASON})
         unknown = await client.post(unavailable_url("REQ-nope"), json={"reason": REASON})
         received = await client.post(unavailable_url("REQ-approval_log"), json={"reason": REASON})
-        blank = await client.post(unavailable_url("REQ-approval_log"), json={"reason": "  "})
         engagements = runner.deps.engagement_store
         assert isinstance(engagements, FakeEngagementStore)
         await engagements.update(EID, locked=True)
@@ -187,7 +196,6 @@ async def test_required_tables_and_unknown_requests_rejected() -> None:
     assert (required.status_code, required.json()["detail"]["code"]) == (422, "INVALID_VALUE")
     assert unknown.status_code == 404
     assert (received.status_code, received.json()["detail"]["code"]) == (409, "REQUEST_NOT_OPEN")
-    assert (blank.status_code, blank.json()["detail"]["code"]) == (422, "MISSING_FIELD")  # 理由先于状态查
     assert (locked.status_code, locked.json()["detail"]["code"]) == (423, "ENGAGEMENT_LOCKED")
     assert {r.id: r.status for r in await data.requests(EID)}["REQ-accounts"] == "open"
     assert not runner.is_running(EID)

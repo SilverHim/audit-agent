@@ -134,9 +134,15 @@ describe('manualRecordBody', () => {
     })
   })
 
-  test('缺结论, 理由, 执行日期, 证据少于 min_evidence (不在可选文件里的不算) 或结构化结果缺字段时报错', () => {
+  test('理由选填: 空时照发空串 (需求 R360)', () => {
+    expect(manualRecordBody(VIEW, { ...draft, reason: ' ' }, zh)).toMatchObject({
+      decision: 'manual_result',
+      reason: '',
+    })
+  })
+
+  test('缺结论, 执行日期, 证据少于 min_evidence (不在可选文件里的不算) 或结构化结果缺字段时报错', () => {
     expect(manualRecordBody(VIEW, { ...draft, conclusion: ' ' }, zh)).toBe(zh.errors.conclusionRequired)
-    expect(manualRecordBody(VIEW, { ...draft, reason: '' }, zh)).toBe(zh.errors.reasonRequired)
     expect(manualRecordBody(VIEW, { ...draft, performedOn: '' }, zh)).toBe(zh.manualPage.errors.performedOn)
     const one = [draft.evidence[0], { documentId: 'DOC-ffffffffffff', page: 1 }]
     expect(manualRecordBody(VIEW, { ...draft, evidence: one }, zh)).toBe(zh.manualPage.errors.evidence(2))

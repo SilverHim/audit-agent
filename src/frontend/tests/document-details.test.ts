@@ -54,7 +54,6 @@ describe('detailsBody', () => {
 
 describe('detailsErrorText', () => {
   test.each([
-    ['MISSING_FIELD', undefined, '请填写补登记的理由。'],
     ['INVALID_VALUE', '文件 x.pdf 的关联对象重复: XJ-1', '取值不合格，未保存（文件 x.pdf 的关联对象重复: XJ-1）'],
     ['ENGAGEMENT_LOCKED', 'ENG-1', '项目已签字，只能查看。'],
     ['ENGAGEMENT_BUSY', 'ENG-1 正在执行', '项目正在处理中，请稍后再试。'],

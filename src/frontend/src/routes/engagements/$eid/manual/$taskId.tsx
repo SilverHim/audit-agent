@@ -212,7 +212,7 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="manual-reason" className="font-semibold text-[13px]">
-                {t.card.reason}
+                {t.reason.label}
               </label>
               <Textarea
                 id="manual-reason"
@@ -571,7 +571,7 @@ function ResultInput({
       {field.title}{' '}
       <span className="font-normal text-muted-foreground">
         {field.kind === 'json' ? t.manualPage.json : null}
-        {field.required ? null : ` ${t.card.reasonOptional}`}
+        {field.required ? null : ` ${t.card.optional}`}
       </span>
     </label>
   )

@@ -55,6 +55,7 @@ import { useI18n } from '@/lib/i18n'
 import { inapplicable, initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
+import { reasonText } from '@/lib/reason'
 import { reportPart } from '@/lib/report-sections'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
@@ -302,7 +303,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
                   ) : null}
                   {item.requests.map((request) => (
                     <span key={request.id} className="text-[13px] text-[#4a5262]">
-                      {requestTitle(request, t)}: {request.unavailable_reason}
+                      {requestTitle(request, t)}: {reasonText(request.unavailable_reason, t)}
                     </span>
                   ))}
                 </li>
@@ -390,7 +391,7 @@ export function ReportPreview({
         <Panel title={t.reportCard.earlier}>
           {decisions.map((decision) => (
             <div key={decision.id} className="flex flex-col gap-1 text-[14px]">
-              <span className="font-medium">{decision.reason}</span>
+              <span className="font-medium">{reasonText(decision.reason, t)}</span>
               {(decision.annotations ?? []).map((note) => (
                 <span key={`${decision.id}-${note.section}-${note.comment}`} className="text-secondary-foreground">
                   {t.reportSections[note.section]}: {note.comment}
@@ -456,7 +457,6 @@ export function GateDecisionCard({
   const gate = view.gate
   const uncovered = view.material.kind === 'PLN-01/03' && view.material.uncovered_objective_ids.length > 0
   const busy = disabled || submit.isPending
-  const required = verdict != null && (verdict !== 'approve' || gate === 'FIN-01')
   const planApproval = view.material.kind === 'PLN-15' && verdict === 'approve'
 
   const send = () => {
@@ -497,7 +497,6 @@ export function GateDecisionCard({
             disabled={
               busy ||
               !verdict ||
-              (required && !reason.trim()) ||
               (verdict === 'approve' && uncovered) ||
               (planApproval && !confirmation.eqr_basis.trim())
             }
@@ -573,7 +572,7 @@ export function GateDecisionCard({
         />
       ) : null}
 
-      <ReasonField id={`gate-reason-${gate}`} value={reason} onChange={setReason} required={required} />
+      <ReasonField id={`gate-reason-${gate}`} value={reason} onChange={setReason} />
     </DecisionFrame>
   )
 }
@@ -754,7 +753,7 @@ function PlanConfirmationFields({
       </fieldset>
       <div className="flex flex-col gap-1.5">
         <label htmlFor="plan-eqr-basis" className="font-semibold text-[13px]">
-          {labels.basis} <span className="font-normal text-muted-foreground">{t.card.reasonRequired}</span>
+          {labels.basis} <span className="font-normal text-muted-foreground">{labels.basisHint}</span>
         </label>
         <Textarea
           id="plan-eqr-basis"
@@ -847,16 +846,10 @@ function buildDecision(
     target_id: view.target_id,
     target_version: view.target_version,
     decision,
-    reason: reason || null,
+    reason,
   }
-  if (decision !== 'approve' && !reason) return t.errors.reasonRequired
-  if (view.material.kind === 'FIN-01' && decision === 'approve' && !reason) return t.errors.reasonRequired
   if (view.material.kind === 'PLN-01/03' && decision === 'approve') {
     if (!input.choice) return t.errors.chooseBasis
-    const missing = view.material.risks.find(
-      (risk) => (input.levels[risk.id] ?? risk.level) !== risk.level && !input.levelReasons[risk.id]?.trim(),
-    )
-    if (missing) return t.planning.giveReason(missing.id)
     const edits: GateEdit[] = view.material.risks.flatMap((risk) => {
       const level = input.levels[risk.id] ?? risk.level
       if (level === risk.level) return []

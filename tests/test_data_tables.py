@@ -126,19 +126,24 @@ async def test_approval_log_page_shows_latest_version() -> None:
 # ── 科目分类修改 ──
 
 
-async def test_freight_reclassified_to_cost_of_sales() -> None:
+@pytest.mark.parametrize(
+    ("reason", "recorded"),
+    [({"reason": REASON}, REASON), ({"reason": "  "}, ""), ({}, "")],
+    ids=["given", "blank", "omitted"],
+)
+async def test_freight_reclassified_to_cost_of_sales(reason: dict[str, str], recorded: str) -> None:
     """验收: 把 6300 Freight outwards 从 operating_expenses 改为 cost_of_sales, 历史为两版, 留痕一条, 数据版本 +1;
-    查看时为已改, 分类依据 auditor."""
+    查看时为已改, 分类依据 auditor. 理由选填 (Issue #61): 只有空白或不带的记为空串, 留痕照记."""
     data = FakeDataStore()
     runner, service, _ = service_for(data)
     before = data.data_version
     async with api_client(runner) as client:
         client._transport.app.state.data_service = service  # type: ignore[attr-defined]
-        changed = await client.put(f"{BASE}/accounts/6300", json={"category": "cost_of_sales", "reason": REASON})
+        changed = await client.put(f"{BASE}/accounts/6300", json={"category": "cost_of_sales", **reason})
         history = (await client.get(f"{BASE}/accounts/6300/history")).json()
         page = (await client.get(f"{BASE}/tables/accounts", params={"q": "6300"})).json()
 
-    assert changed.status_code == 200
+    assert changed.status_code == 200, changed.text
     assert {k: changed.json()[k] for k in ("version", "category", "basis", "changed_by")} == {
         "version": 2,
         "category": "cost_of_sales",
@@ -147,7 +152,7 @@ async def test_freight_reclassified_to_cost_of_sales() -> None:
     }
     assert [(v["version"], v["category"], v["basis"], v["changed_by"], v["reason"]) for v in history] == [
         (1, "operating_expenses", "name", "A3", None),
-        (2, "cost_of_sales", "auditor", "U-1", REASON),
+        (2, "cost_of_sales", "auditor", "U-1", recorded),
     ]
     [entry] = edits(runner)
     assert (entry.actor, entry.idempotency_key) == ("U-1", f"{EID}:data:edit:account:6300:v2")
@@ -157,7 +162,7 @@ async def test_freight_reclassified_to_cost_of_sales() -> None:
         "account_code": "6300",
         "field": "category",
         "category": "cost_of_sales",
-        "reason": REASON,
+        "reason": recorded,
     }
     assert data.data_version == before + 1
     [row] = page["rows"]
@@ -179,10 +184,8 @@ async def test_history_of_untouched_account_is_its_current_category() -> None:
 
 
 async def test_category_edit_validation() -> None:
-    """理由为空 MISSING_FIELD; 分类不属于该科目的类别, 或与当前相同 INVALID_VALUE; 科目不存在 404; 分类不认识 422."""
+    """分类不属于该科目的类别, 或与当前相同 INVALID_VALUE; 科目不存在 404; 分类不认识 422 (理由选填, 见上)."""
     runner, service, _ = service_for(FakeDataStore())
-    with pytest.raises(DataRejected) as empty:
-        await service.set_account_category(EID, "6300", "cost_of_sales", "  ", "U-1")
     with pytest.raises(DataRejected) as wrong_group:
         await service.set_account_category(EID, "6300", "cash", REASON, "U-1")
     with pytest.raises(DataRejected) as same:
@@ -193,11 +196,7 @@ async def test_category_edit_validation() -> None:
         client._transport.app.state.data_service = service  # type: ignore[attr-defined]
         bad = await client.put(f"{BASE}/accounts/6300", json={"category": "freight", "reason": REASON})
 
-    assert (empty.value.code, wrong_group.value.code, same.value.code) == (
-        "MISSING_FIELD",
-        "INVALID_VALUE",
-        "INVALID_VALUE",
-    )
+    assert (wrong_group.value.code, same.value.code) == ("INVALID_VALUE", "INVALID_VALUE")
     assert bad.status_code == 422 and not edits(runner)
 
 

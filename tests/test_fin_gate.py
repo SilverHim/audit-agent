@@ -24,7 +24,16 @@ from backend.orchestration.gates import fin01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from tests.fakes import NOW, EngagementWrite, FakeTrail, make_procedure, wait_idle
-from tests.test_decisions import CHOICE, Started, assert_rejected, at_pln_gate, edit, stop_after_submit
+from tests.test_decisions import (
+    CHOICE,
+    NO_REASON,
+    Started,
+    assert_accepted_without_reason,
+    assert_rejected,
+    at_pln_gate,
+    edit,
+    stop_after_submit,
+)
 from tests.test_flow import EID, approve_materiality, review_all, start_numbat
 
 CONFIG = GraphRunner.config(EID)
@@ -52,7 +61,7 @@ async def fin_gate() -> Started:
 
 
 def fin_decision(verdict: GateVerdict, **changes: Any) -> GateDecision:
-    """绑定 SCHEDULE 第 1 版的 FIN-01 决定, 一律带理由; approve 选保留意见. changes 覆盖任意字段."""
+    """绑定 SCHEDULE 第 1 版的 FIN-01 决定, 带理由 (选填, 需求 R358); approve 选保留意见. changes 覆盖任意字段."""
     decision = GateDecision(
         id="D-FIN",
         gate=GateId.FIN_01,
@@ -129,7 +138,6 @@ ANNOTATION = Annotation(section=ReportSection.basis_for_opinion, comment="x")
     ("decision", "code", "detail"),
     [
         (fin_decision(GateVerdict.approve, disposition=None), "MISSING_FIELD", "disposition"),
-        (fin_decision(GateVerdict.approve, reason=None), "MISSING_FIELD", "reason"),
         # 消息列出可选范围与理由 (services.opinion.allowed_opinions, 需求 R184): SCHEDULE v1 合计 14200000,
         # 重要性 12000000
         (
@@ -157,6 +165,15 @@ async def test_invalid_fin01_decision_rejected(
 ) -> None:
     """验收 4: 不合规的 FIN-01 决定被拒, Store 与检查点不变, 锁释放."""
     await assert_rejected(fin_gate, decision, code, detail)
+
+
+@NO_REASON
+@pytest.mark.parametrize("verdict", list(GateVerdict))
+async def test_fin01_without_reason_accepted(verdict: GateVerdict, reason: str | None) -> None:
+    """需求 R358 验收 1: FIN-01 的三种决定不填理由都能提交 (原先一律必填), 不报 MISSING_FIELD."""
+    s = await at_fin_gate()
+    stop_after_submit(s)
+    await assert_accepted_without_reason(s, fin_decision(verdict, reason=reason))
 
 
 async def test_fin01_decision_not_at_gate_rejected() -> None:

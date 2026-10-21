@@ -190,7 +190,7 @@ export type DisputeInput = {
   collab: boolean // 项目开了 collab: 才有咨询两项
 }
 
-// 仲裁的请求体; 缺必填时返回错误文案. 错报草稿按 attachRule; collab 关闭时不带咨询字段
+// 仲裁的请求体; 缺必填时返回错误文案 (理由选填, 需求 R360). 错报草稿按 attachRule; collab 关闭时不带咨询字段
 export function buildDisputeRecord(
   view: ReviewTaskView,
   input: ReviewDraft,
@@ -199,7 +199,6 @@ export function buildDisputeRecord(
 ): ReviewRecordIn | string {
   const reason = input.reason.trim()
   const conclusion = input.conclusion.trim()
-  if (!reason) return t.errors.reasonRequired
   if (dispute.choice === 'neither' && !conclusion) return t.errors.conclusionRequired
   const rule = attachRule(view, dispute.choice)
   const attached = rule === 'required' || (rule === 'optional' && dispute.attach) ? misstatementDraft(input, t) : null
@@ -220,10 +219,7 @@ export function buildDisputeRecord(
   return { ...body, consulted: dispute.consulted, consultation_record: dispute.consulted ? consultation : null }
 }
 
-export function reasonRequired(decision: Decision | null): boolean {
-  return decision != null && decision !== 'confirm'
-}
-
+// 复核决定的请求体; 缺结论或错报字段, 重跑参数写不对时返回错误文案. 理由选填 (需求 R360), 空也照发空串
 export function buildRecord(
   view: ReviewTaskView,
   decision: Decision,
@@ -235,9 +231,8 @@ export function buildRecord(
     task_id: view.task.id,
     target_version: view.task.target_version,
     decision,
-    reason: reason || null,
+    reason,
   }
-  if (reasonRequired(decision) && !reason) return t.errors.reasonRequired
   if (decision === 'override') {
     if (!input.conclusion.trim()) return t.errors.conclusionRequired
     return { ...base, override_conclusion: input.conclusion.trim() }

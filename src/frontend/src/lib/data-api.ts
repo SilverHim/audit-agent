@@ -150,7 +150,7 @@ export function useDemoImport(eid: string) {
   })
 }
 
-// Xero 组织信息与客户画像核对的选择 (后端 R291): 保持原样 (写理由) 或按 Xero 更新画像; 返回处理后的核对
+// Xero 组织信息与客户画像核对的选择 (后端 R291): 保持原样 (理由选填) 或按 Xero 更新画像; 返回处理后的核对
 export function useXeroProfileCheck(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -338,7 +338,7 @@ export function requestTitle(request: DataRequest, t: Messages): string {
   return request.title
 }
 
-// R280 客户无此类资料 (理由必填)
+// R280 客户无此类资料 (理由选填, 需求 R360)
 export function useMarkUnavailable(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -349,12 +349,13 @@ export function useMarkUnavailable(eid: string) {
   })
 }
 
-// 最近一次体检有不通过的项时须带理由 (否则 409 DATA_CHECKS_FAILED)
+// 最近一次体检有不通过的项时从对话框确认, 带上理由 (选填, 可为空串; 需求 R360); 直接确认时不带
 export function useDataReady(eid: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (reason?: string) =>
-      (await dataReady({ path: { eid }, body: reason ? { reason } : undefined, throwOnError: true })).data,
+      (await dataReady({ path: { eid }, body: reason === undefined ? undefined : { reason }, throwOnError: true }))
+        .data,
     onSettled: () => invalidateEngagement(queryClient, eid),
   })
 }

@@ -14,7 +14,7 @@ PLN-15 总体审计计划 → AuditPlanDraft，每个修订调用一次（需求
   items            计划骨架的程序 PlanItem 列表（按程序编号排序）：procedure_id、objective_ids、params（name 为中文，不渲染）
   trial_balance    本期试算表各科目：code、name、category、balance_cents（借方为正，贷方为负）
   revision         本次起草的修订号，第 1 修订为 1
-  revision_reason  修订的理由（PLN-15 驳回理由，或 PLN-19 修订重要性的理由）；第 1 修订为 null
+  revision_reason  修订的理由（PLN-15 驳回理由，或 PLN-19 修订重要性的理由）；第 1 修订为 null，审计师没填时为空（需求 R358，不列）
   standards        StandardFragment 列表：id、standard、paragraph、text
 #}
 {% set first_service = not entity.engagements %}
@@ -89,9 +89,13 @@ Standards (cite only these IDs):
 {% if revision > 1 %}
 ## Revision {{ revision }}
 
+{% if revision_reason %}
 This replaces revision {{ revision - 1 }} of the plan. Reason given by the auditor: {{ revision_reason }}
 
 Address the reason in the affected sections and procedure notes. Keep the rest consistent with the inputs above.
+{% else %}
+This replaces revision {{ revision - 1 }} of the plan. Redraft it from the inputs above.
+{% endif %}
 
 {% endif %}
 ## Output (AuditPlanDraft)

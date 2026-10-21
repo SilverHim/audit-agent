@@ -74,7 +74,8 @@ async def procedure_transitions(store: AuditOutputStore, eid: str, written: Iter
 
 def data_ready_entry(eid: str, readiness: DataReadiness) -> TrailEntry:
     """确认数据已齐的 data 留痕 (需求 R10): actor 为确认人 (数据集载入为 "dataset"). payload 为 {action: ready},
-    确认记了理由时另带 reason, 有未通过项时另带 failed_checks (需求 R273). 防重复键 {eid}:data:ready, 有未通过项时为
+    确认记了理由时另带 reason, 有未通过项时另带 failed_checks (需求 R273; 理由选填, Issue #61, 有未通过项时摘要
+    写明有没有填). 防重复键 {eid}:data:ready, 有未通过项时为
     {eid}:data:ready:checks_failed: 第一次确认时体检全过, 之后补记了理由与未通过项 (DataStore.confirm_ready) 的,
     补记的另成一条, 不因第一条已写而跳过.
 
@@ -88,7 +89,8 @@ def data_ready_entry(eid: str, readiness: DataReadiness) -> TrailEntry:
     if readiness.ready_by == "dataset":
         summary = "数据集已载入, 视同确认数据已齐"
     elif failed:
-        summary = f"体检 {len(failed)} 项不通过, 写明理由后确认数据已齐, 开始计划阶段分析"
+        how = "写明理由后" if readiness.ready_reason is not None else "未填理由, "
+        summary = f"体检 {len(failed)} 项不通过, {how}确认数据已齐, 开始计划阶段分析"
     else:
         summary = "确认数据已齐, 开始计划阶段分析"
     return TrailEntry(

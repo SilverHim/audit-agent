@@ -30,6 +30,7 @@ import { type DetailsForm, detailsBody, detailsErrorText, detailsForm, historyFi
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { audToCents, formatAud } from '@/lib/money'
+import { reasonText } from '@/lib/reason'
 import type { Messages } from '@/locales/en'
 
 export const Route = createFileRoute('/engagements/$eid/data/documents/$docId')({ component: DocumentView })
@@ -589,7 +590,7 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
     setValue(parts[index]?.raw ?? '')
   }
   const parsed = part.kind === 'amount' ? audToCents(value) : value.trim()
-  const canSave = parsed !== null && parsed !== '' && value.trim() !== part.raw && reason.trim().length > 0
+  const canSave = parsed !== null && parsed !== '' && value.trim() !== part.raw
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="sm:max-w-[520px]">
@@ -649,9 +650,7 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
           )}
         </div>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-          <label htmlFor="extraction-reason">
-            {t.docView.reason} <span className="text-risk">*</span>
-          </label>
+          <label htmlFor="extraction-reason">{t.reason.label}</label>
           <Textarea
             id="extraction-reason"
             rows={2}
@@ -751,7 +750,7 @@ function Registration({ eid, doc }: { eid: string; doc: DocumentRef }) {
                     {[actorName(record.changed_by), formatDateTime(record.changed_at)].filter(Boolean).join(' · ')}
                   </span>
                 </span>
-                {record.reason ? <span className="text-[#2d3443]">{record.reason}</span> : null}
+                {record.field ? <span className="text-[#2d3443]">{reasonText(record.reason, t)}</span> : null}
               </li>
             ))}
           </ol>
@@ -835,9 +834,7 @@ function DetailsDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef; o
           </span>
         </div>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-          <label htmlFor="details-reason">
-            {t.docView.details.reason} <span className="text-risk">*</span>
-          </label>
+          <label htmlFor="details-reason">{t.reason.label}</label>
           <Textarea
             id="details-reason"
             rows={2}

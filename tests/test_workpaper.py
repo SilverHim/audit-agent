@@ -14,7 +14,13 @@ from typing import Any
 import pytest
 
 from backend.agents.base import AgentDeps, RunContext
-from backend.agents.workpaper import WorkpaperAgent, misstatement_objective
+from backend.agents.workpaper import (
+    SOURCE_FIELDS,
+    VERIFY_SOURCE_FIELDS,
+    WorkpaperAgent,
+    misstatement_objective,
+    source_data,
+)
 from backend.contracts.models import (
     AgentId,
     Assertion,
@@ -29,6 +35,7 @@ from backend.contracts.models import (
     MisstatementStatus,
     MisstatementType,
     MisstatementUpdate,
+    ProposedAction,
     ReviewStatus,
     ReviewTask,
     RiskLevel,
@@ -493,3 +500,30 @@ async def test_l3_classification_confirmed_with_misstatement_version() -> None:
         (f"J-FIN-03-1-{m}", 1, ReviewStatus.confirmed) for m in SUBJECTS
     ]
     assert patch["misstatements"] == [classified(m, **FACTUAL) for m in ctx.state["misstatements"]]
+
+
+@pytest.mark.parametrize("conclusion", ["The entry was recorded twice.", ""], ids=["given", "empty"])
+def test_source_data_omits_empty_conclusion(conclusion: str) -> None:
+    """来源判断给 FIN-03 与 FIN-09 提示词的 JSON (两套字段): 结论为空时略去该项 (对例外认定错报而没填理由的人工判断以
+    理由为结论, 需求 R358), 其余字段照给; 有结论时照列."""
+    source = Judgment(
+        id="J-GEN-02-1-XJ-499-H1",
+        procedure_id="GEN-02",
+        run_id="RUN-GEN-02-1",
+        subject_id="XJ-499",
+        conclusion=conclusion,
+        confidence=1.0,
+        confidence_parts={},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="",
+        proposed_action=ProposedAction.misstatement,
+        autonomy_level=AutonomyLevel.L1,
+        review_status=ReviewStatus.confirmed,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    for fields in (SOURCE_FIELDS, VERIFY_SOURCE_FIELDS):
+        data = source_data(source, fields)
+        assert set(data) == (fields if conclusion else fields - {"conclusion"})
+        assert (data["id"], data.get("conclusion")) == (source.id, conclusion or None)

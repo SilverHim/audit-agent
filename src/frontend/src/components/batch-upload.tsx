@@ -777,7 +777,7 @@ function RowRules({
   )
 }
 
-// ── 调整文件项: 改类型, 须写原因 ──
+// ── 调整文件项: 改类型, 理由选填 (需求 R360) ──
 
 function AdjustDocumentDialog({
   eid,
@@ -818,7 +818,7 @@ function AdjustDocumentDialog({
           </select>
         </label>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-          <label htmlFor="batch-type-reason">{t.batch.document.reason}</label>
+          <label htmlFor="batch-type-reason">{t.reason.label}</label>
           <Textarea
             id="batch-type-reason"
             rows={2}
@@ -832,7 +832,7 @@ function AdjustDocumentDialog({
           </Button>
           <Button
             type="button"
-            disabled={!reason.trim() || edit.isPending}
+            disabled={edit.isPending}
             onClick={() =>
               edit.mutate(
                 { itemId: item.id, body: { document_type: type, reason: reason.trim() } },

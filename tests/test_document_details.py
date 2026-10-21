@@ -87,11 +87,9 @@ def current(financial: Any, document_id: str) -> DocumentRef:
 
 
 def test_details_edit_defaults_to_no_change() -> None:
-    """三项缺省为 None (不改), 理由必填; 多给字段报错."""
-    found = DocumentDetailsEdit(reason="r")
-    assert (found.reliability, found.document_date, found.related_ids) == (None, None, None)
-    with pytest.raises(ValidationError):
-        DocumentDetailsEdit.model_validate({})
+    """三项缺省为 None (不改), 理由选填, 缺省为空串 (Issue #61); 多给字段报错."""
+    found = DocumentDetailsEdit.model_validate({})
+    assert (found.reliability, found.document_date, found.related_ids, found.reason) == (None, None, None, "")
     with pytest.raises(ValidationError):
         DocumentDetailsEdit.model_validate({"reason": "r", "type": "contract"})
 
@@ -240,7 +238,6 @@ async def test_failed_write_rolls_back_registration_and_trail_is_backfilled(monk
 @pytest.mark.parametrize(
     ("document_id", "change", "code"),
     [
-        (LEASE.id, edit(reason="  ", reliability="external_original"), "MISSING_FIELD"),
         (LEASE.id, edit(), "MISSING_FIELD"),  # 三项都没给 (审核 R90-03)
         (LEASE.id, edit(reliability="external_copy"), "INVALID_VALUE"),  # 与当前相同
         (LEASE.id, edit(related_ids=["XJ-1", " "]), "INVALID_VALUE"),  # 空串
@@ -295,7 +292,7 @@ async def test_same_values_by_someone_else_are_not_a_retry() -> None:
 
 async def test_details_api_history_and_related_filter() -> None:
     """PUT details 返回改后的登记; GET documents?related_id= 过滤; GET history 按版本升序, 没改过的以当前登记作
-    唯一一版; 错误码: 404, 422, 409 (忙)."""
+    唯一一版; 理由选填 (Issue #61): 只有空白的理由照常补登记, 版本与留痕记为空串; 错误码: 404, 422, 409 (忙)."""
     runner, service, _, _, _ = service_with(LEASE, MEMO)
     async with api_client(runner) as client:
         client._transport.app.state.data_service = service  # type: ignore[attr-defined]
@@ -314,6 +311,8 @@ async def test_details_api_history_and_related_filter() -> None:
         blank = await client.put(
             f"{BASE}/documents/{LEASE.id}/details", json={"document_date": "2026-01-01", "reason": " "}
         )
+        unstated = await client.put(f"{BASE}/documents/{LEASE.id}/details", json={"document_date": "2026-01-02"})
+        after = await client.get(f"{BASE}/documents/{LEASE.id}/history")
         same = await client.put(
             f"{BASE}/documents/{LEASE.id}/details", json={"reliability": "external_original", "reason": "r2"}
         )
@@ -338,7 +337,15 @@ async def test_details_api_history_and_related_filter() -> None:
         "internal_copy",
     )
     assert [r.status_code for r in (missing, no_history)] == [404, 404]
-    assert (blank.status_code, blank.json()["detail"]["code"]) == (422, "MISSING_FIELD")
+    assert [r.status_code for r in (blank, unstated)] == [200, 200], (blank.text, unstated.text)
+    assert [(v["version"], v["field"], v["reason"]) for v in after.json()[-2:]] == [
+        (3, "document_date", ""),
+        (4, "document_date", ""),
+    ]
+    trail = runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    edits = [e.payload for e in trail.entries if e.payload.get("action") == "edit"]
+    assert [p["reason"] for p in edits[-2:]] == ["", ""]
     assert (same.status_code, same.json()["detail"]["code"]) == (422, "INVALID_VALUE")
     assert (busy.status_code, busy.json()["detail"]["code"]) == (409, "ENGAGEMENT_BUSY")
 

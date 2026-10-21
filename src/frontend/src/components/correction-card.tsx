@@ -25,7 +25,7 @@ function toggle(list: string[], value: string, on: boolean): string[] {
 }
 
 // 等待客户更正 (总览 awaiting_correction, 需求 R163): 列待更正的错报, 两个操作 "客户已过账调整分录" (勾选错报与更正
-// 分录; 已载入的照样可勾, 只作标注) 与 "停止等待" (理由必填); 提交更正通知后刷新. 不在等更正 (NOT_AWAITING_CORRECTION)
+// 分录; 已载入的照样可勾, 只作标注) 与 "停止等待" (理由都选填, 需求 R360); 提交更正通知后刷新. 不在等更正 (NOT_AWAITING_CORRECTION)
 // 按文案提示. 待更正的错报变了由调用方换 key 重新挂载, 勾选与理由不带进下一份通知
 export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: string[]; disabled: boolean }) {
   const { t } = useI18n()
@@ -148,7 +148,7 @@ export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: strin
           </QueryState>
         </div>
       ) : null}
-      <ReasonField id="correction-reason" value={reason} onChange={setReason} required={kind === 'stop_waiting'} />
+      <ReasonField id="correction-reason" value={reason} onChange={setReason} />
     </DecisionFrame>
   )
 }

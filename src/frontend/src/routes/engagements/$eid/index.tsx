@@ -39,6 +39,7 @@ import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
+import { reasonText } from '@/lib/reason'
 import { manualInstructions, procedureName, type RankedTask, rankTasks, splitManual } from '@/lib/review'
 import {
   buildTimeline,
@@ -416,7 +417,7 @@ function dataEventText(item: DataItem, t: Messages, lang: 'zh' | 'en'): string |
     case 'xero_disconnect':
       return events.xero_disconnect(item.revoked !== false)
     case 'xero_profile_kept':
-      return events.xero_profile_kept(item.profileVersion ?? 0, item.reason ?? '')
+      return events.xero_profile_kept(item.profileVersion ?? 0, reasonText(item.reason, t))
     case 'xero_profile_updated':
       return events.xero_profile_updated(item.version ?? 0, item.adopted === true)
     case 'upload':
@@ -478,7 +479,7 @@ function HistoryItem({
       <UserBubble title={t.workspace.decisionRecorded(item.target)}>
         <span className="font-semibold">{label}</span>
         <span className="whitespace-pre-wrap text-[14px] text-secondary-foreground">
-          {item.reason ? `“${item.reason}”` : t.workspace.noReason}
+          {reasonText(item.reason, t, true)}
         </span>
       </UserBubble>
     )
@@ -493,7 +494,7 @@ function HistoryItem({
         <span className="font-semibold">{t.lifecycle.noticeKinds[item.notice]}</span>
         {item.entries.length ? <Code className="text-[13px]">{item.entries.join(', ')}</Code> : null}
         <span className="whitespace-pre-wrap text-[14px] text-secondary-foreground">
-          {item.reason ? `“${item.reason}”` : t.workspace.noReason}
+          {reasonText(item.reason, t, true)}
         </span>
       </UserBubble>
     )

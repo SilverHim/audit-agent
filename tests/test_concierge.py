@@ -260,6 +260,20 @@ async def test_request_and_trail() -> None:
     assert [set(m) for m in json.loads(block)] == [R19_MISSTATEMENT_KEYS]
 
 
+@pytest.mark.parametrize("reason", [None, ""], ids=["omitted", "empty"])
+async def test_prompt_omits_empty_auditor_reason(reason: str | None) -> None:
+    """需求 R358: FIN-01 没填理由时提示词不列 "Auditor's reason at FIN-01" 一行; 结论为空的判断 (对例外认定错报而
+    没填理由的人工判断以理由为结论) 只列键与证据, 不留空的冒号. 填了的照列见 test_request_and_trail."""
+    agent, ctx, trail = setup()
+    decision = fin01(OpinionType.qualified).model_copy(update={"reason": reason})
+    state = ctx.state | {"gate_decisions": [decision], "judgments": [CUTOFF.model_copy(update={"conclusion": ""})]}
+    await agent.run(replace(ctx, state=state))
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    prompt = entry.payload["messages"][0]["content"]
+    assert "Auditor's reason at FIN-01" not in prompt and "Opinion type: **qualified**" in prompt
+    assert "- key `REV-02:SI-2026-0612` (REV-02, subject SI-2026-0612)\n  Evidence:" in prompt
+
+
 async def test_unqualified_uses_unqualified_template_and_no_misstatements() -> None:
     draft = ReportDraft(opinion="Opinion\n\nclean.", basis_for_opinion="Basis for Opinion\n\nok.", judgment_keys=[])
     llm = ScriptedLLM({"unqualified-r1": [draft.model_dump_json()]})

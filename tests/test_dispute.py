@@ -24,6 +24,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureStatus,
     ProposedAction,
+    ReviewRecord,
     ReviewStatus,
     ReviewTask,
     TaskKind,
@@ -51,9 +52,9 @@ async def disputed(variant: str = "dispute") -> Started:
 
 
 def resolve(resolution: DisputeResolution, **fields: Any) -> Any:
-    return record(
-        TASK, Decision.dispute_resolution, id="D-ARB", dispute_resolution=resolution, reason="仲裁意见", **fields
-    )
+    """对 BA-01 争议任务的仲裁 D-ARB, 带理由 (选填, 需求 R358); fields 覆盖任意字段."""
+    base = {"id": "D-ARB", "dispute_resolution": resolution, "reason": "仲裁意见"}
+    return record(TASK, Decision.dispute_resolution, **(base | fields))
 
 
 async def submitted(s: Started, decision: Any) -> None:
@@ -87,9 +88,11 @@ async def test_inconsistent_creates_dispute_task_only_resolution_allowed() -> No
     assert e.value.code == "DECISION_NOT_ALLOWED"  # 确认会绕过仲裁
 
 
-async def test_a6_upheld_confirms_original() -> None:
+@pytest.mark.parametrize("reason", ["仲裁意见", None, ""], ids=["given", "omitted", "empty"])
+async def test_a6_upheld_confirms_original(reason: str | None) -> None:
+    """裁决 a6_upheld 同 confirm. 理由选填 (需求 R358): 不填也能提交, 决定与留痕照记空理由."""
     s = await disputed()
-    await submitted(s, resolve(DisputeResolution.a6_upheld))
+    await submitted(s, resolve(DisputeResolution.a6_upheld, reason=reason))
     j = await latest(s, Judgment, JID)
     assert (j.version, j.review_status, j.superseded_by) == (2, ReviewStatus.confirmed, None)
     exceptions = [x for x in await s.output_store.latest(EID, AuditException) if x.attributed_by is not None]
@@ -97,7 +100,8 @@ async def test_a6_upheld_confirms_original() -> None:
     assert (await latest(s, ReviewTask, TASK)).status is TaskStatus.decided
     assert (await latest(s, Procedure, "CSH-02")).status is ProcedureStatus.completed
     trail = [e for e in s.runner.deps.trail.entries if e.kind is TrailKind.decision]  # type: ignore[attr-defined]
-    assert trail[-1].payload["dispute_resolution"] == "a6_upheld"
+    assert (trail[-1].payload["dispute_resolution"], trail[-1].payload["reason"]) == ("a6_upheld", reason)
+    assert (await latest(s, ReviewRecord, "D-ARB")).reason == reason
 
 
 async def test_a7_upheld_builds_new_version_from_critic_and_records_misstatement() -> None:
@@ -177,12 +181,6 @@ async def test_resolution_field_rules() -> None:
     with pytest.raises(DecisionRejected) as e:
         await s.submit.submit(EID, resolve(DisputeResolution.a6_upheld, override_conclusion="x"))
     assert e.value.code == "FIELD_NOT_ALLOWED"
-    with pytest.raises(DecisionRejected) as e:
-        no_reason = record(
-            TASK, Decision.dispute_resolution, id="D-NO-REASON", dispute_resolution=DisputeResolution.a6_upheld
-        )
-        await s.submit.submit(EID, no_reason.model_copy(update={"reason": None}))
-    assert (e.value.code, e.value.message) == ("MISSING_FIELD", "reason")
     other = "T-J-REV-03-1-CON-001-v1"
     with pytest.raises(DecisionRejected) as e:
         await s.submit.submit(EID, record(other, id="D-OTHER", dispute_resolution=DisputeResolution.a6_upheld))

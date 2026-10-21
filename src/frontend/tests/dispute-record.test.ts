@@ -162,7 +162,8 @@ describe('buildDisputeRecord', () => {
     })
   })
 
-  test('理由必填', () => {
-    expect(buildDisputeRecord(DISPUTE, form({ reason: ' ' }), input({}), zh)).toBe(zh.errors.reasonRequired)
+  test('理由选填: 只有空白时照发空串 (需求 R360)', () => {
+    const record = body(buildDisputeRecord(DISPUTE, form({ reason: ' ' }), input({ choice: 'a6_upheld' }), zh))
+    expect(record).toMatchObject({ decision: 'dispute_resolution', dispute_resolution: 'a6_upheld', reason: '' })
   })
 })

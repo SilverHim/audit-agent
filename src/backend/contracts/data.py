@@ -154,7 +154,7 @@ class DataReadiness(Model):
     loaded_at: datetime | None = None  # 第一次接入数据的时间
     ready_at: datetime | None = None  # 审计师确认数据已齐的时间, 未确认为空; 数据集载入视同确认
     ready_by: str | None = None  # 确认人: 用户 ID; 数据集载入为 "dataset"
-    ready_reason: str | None = None  # 确认时写的理由; 最近一次体检有未通过项时必填, 没写为空
+    ready_reason: str | None = None  # 确认时写的理由, 选填 (Issue #61); 没写为空
     ready_failed_checks: list[CheckId] = []  # 确认时最近一次体检不通过 (failed) 的项, 按 CheckId 顺序
 
 
@@ -200,7 +200,7 @@ class DataRequest(Model):
     created_at: datetime  # 提出 (或重新打开) 的时间
     resolved_at: datetime | None = None  # 转为 received, withdrawn 或 unavailable 的时间
     resolved_by: str | None = None  # 标记客户无此类资料的审计师 (用户 ID); A3 自动转的为空
-    unavailable_reason: str | None = None  # 客户无此类资料的理由 (标记时必填)
+    unavailable_reason: str | None = None  # 客户无此类资料的理由, 选填 (Issue #61), 没写为空串; 未标记为空
 
 
 XeroStatus = Literal["connected", "not_connected", "expired"]  # Xero 连接状态: 已连接, 未连接, 授权过期
@@ -250,7 +250,7 @@ class XeroProfileCheck(Model):
     next_version: int  # 按 Xero 更新时写出的画像版本 (该客户最新一版 +1, 可能高于本项目采用的版本 +1)
     stage: XeroProfileStage  # 本项目相对承接决定的位置, 定按 Xero 更新时本项目是否采用新版本
     resolution: XeroProfileResolution | None = None  # 审计师对这一 key 的选择
-    reason: str | None = None  # 保持原样的理由
+    reason: str | None = None  # 保持原样的理由, 选填 (Issue #61)
     resolved_by: str | None = None  # 作出选择的用户 ID
     resolved_at: datetime | None = None
     updated_version: int | None = None  # 更新时写出的画像版本
@@ -723,7 +723,7 @@ class BatchItemEdit(Model):
     selected: bool | None = None  # 勾选或不勾
     plan: TablePlan | None = None  # 表格: 新的规整方案 (前端沿用列对应界面, 预填当前方案)
     document_type: DocumentType | None = None  # 文件: 改为哪类文件
-    reason: str | None = None  # 改文件类型的理由, 改类型时必填
+    reason: str | None = None  # 改文件类型的理由, 选填 (Issue #61)
 
 
 class ApprovalLogRow(Model):
@@ -766,7 +766,7 @@ class ExtractionEdit(Model):
     value: (
         StrictStr | StrictInt | None
     )  # 新值: 文本, 整数分, YYYY-MM-DD 日期; 可空的字段可为 null. 严格类型: true 不当成 1
-    reason: str  # 修改理由, 必填
+    reason: str = ""  # 修改理由, 选填 (Issue #61), 缺省为空串
 
 
 REGISTRY_TARGET = "registry_extract"  # 抽取版本表里 ASIC 摘录抽取结果的 target_type, target_id 为文件 ID (需求 R290)
@@ -797,4 +797,4 @@ class DocumentDetailsEdit(Model):
     reliability: Reliability | None = None  # 可靠性 (原件或副本, 内部或外部)
     document_date: date | None = None  # 文件日期, 如签署或发出日
     related_ids: list[str] | None = None  # 关联对象 ID, 整体替换; 不能有空串或重复
-    reason: str  # 补登记的理由, 必填
+    reason: str = ""  # 补登记的理由, 选填 (Issue #61), 缺省为空串
