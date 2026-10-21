@@ -421,12 +421,9 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             lines = matched_lines(m, source.subject_id, rows)
             corrected = corrected_cents(m, lines)
             updates[m.id] = verification_update(m, lines, corrected)
-            # 该错报有此前未归因的 V02 就沿用 (不看本次比对), 没有才在对不上时新建 (谓词在调用内用完, B023 不适用)
+            # 该错报有此前未归因的 V02 就沿用 (不看本次比对), 没有才在对不上时新建
             findings = earlier_findings(
-                ctx.state,
-                ctx.procedure.id,
-                (V02,),
-                lambda x: x.detail.get("misstatement_id") == m.id,  # noqa: B023
+                ctx.state, ctx.procedure.id, (V02,), m.id, lambda x: [x.detail["misstatement_id"]]
             )
             if not findings and updates[m.id].status is MisstatementStatus.communicated:
                 exceptions.append(mismatch_exception(ctx, m, source.subject_id, lines, corrected, len(exceptions) + 1))

@@ -658,13 +658,8 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             unbooked = accrued_interest_unbooked(
                 confirmation, rules.rows.get("D04", []), params["clearly_trivial_cents"]
             )
-            # 有此前未归因的就沿用, 没有才按本次比对新建 (谓词在调用内用完, B023 不适用)
-            found = earlier_findings(
-                ctx.state,
-                ctx.procedure.id,
-                ("D01", "D04"),
-                lambda x: account.id in x.source_ids,  # noqa: B023
-            )
+            # 有此前未归因的就沿用, 没有才按本次比对新建
+            found = earlier_findings(ctx.state, ctx.procedure.id, ("D01", "D04"), account.id, lambda x: x.source_ids)
             if not found and not difference and not unbooked:
                 continue
             reply = documents.get(cast(str, confirmation.reply_document_id))

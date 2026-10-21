@@ -45,7 +45,7 @@ from tests.external import needs
 from tests.fakes import FakeJudgmentEngine, FakeRegistry, FakeRuleEngine, FakeTrail, failed, make_deps, passed
 from tests.fixture_sets import XERO
 from tests.test_evidence_gen08 import ADVISORY, ALEX, DEMO, SMART, VPA, run_gen08
-from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
+from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context
 from tests.xero_fakes import (
     XERO_RULES,
     make_xero_deps,
@@ -55,6 +55,7 @@ from tests.xero_fakes import (
     xero_gen03_rows,
     xero_profile,
     xero_registry,
+    xero_state,
 )
 
 FEATURES = frozenset({"critic", "related_parties"})

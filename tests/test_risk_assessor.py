@@ -74,13 +74,13 @@ from tests.fixture_sets import XERO
 from tests.test_decisions import Started, acc01_decision, pln_decision
 from tests.test_output_validator import PLAN_PROCEDURES
 from tests.test_p1 import p1_setup
-from tests.test_xero_fixtures import xero_state
 from tests.xero_fakes import (
     DEMO_FEATURES,
     XERO17_MATERIALITY,
     make_xero_deps,
     xero_engagement,
     xero_profile,
+    xero_state,
     xero_traits,
 )
 

@@ -35,6 +35,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.decisions import review_effects
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import after_notice, apply_patch
+from backend.services.review_queue import RERUNNABLE
 from tests.fakes import FakeTrail, ScriptedLLM, finished, make_run
 from tests.fixture_sets import XERO
 from tests.misstatement_fakes import (
@@ -331,12 +332,12 @@ async def rerun(
     subjects: Sequence[str] = (XJ499,),
     later: Sequence[AuditException] = (),
 ) -> StatePatch:
-    """第 1 次的片段并入状态, 其 unattributed 任务已决定 rerun (一组, decided), later 为之后的例外版本; 第 2 次执行
-    只重判 subjects (rerun_subject_ids), V01 按 rows 改."""
+    """第 1 次的片段并入状态, 其可重跑任务 (RERUNNABLE: failed 与 unattributed) 已决定 rerun (一组, decided), later
+    为之后的例外版本; 第 2 次执行只重判 subjects (rerun_subject_ids), V01 按 rows 改."""
     decided = [
         t.model_copy(update={"version": 2, "status": TaskStatus.decided})
         for t in first["review_tasks"]
-        if t.kind is TaskKind.unattributed
+        if t.kind in RERUNNABLE
     ]
     state = apply_patch(apply_patch(state, first), {"review_tasks": decided, "exceptions": list(later)})
     deps = fin09_deps(FakeTrail(), llm, rows=edited(rows))
@@ -396,6 +397,19 @@ async def test_group_rerun_reuses_each_own_v02() -> None:
 
     assert [j.exception_ids for j in second["judgments"]] == [["X-FIN-09-1-V02-1"], ["X-FIN-09-1-V02-2"]]
     assert "exceptions" not in second
+
+
+async def test_new_v02_numbered_without_reused() -> None:
+    """审核 R165-09: 同一次执行里一条沿用, 一条新建. 第 1 次只有 XJ499 对不上, 两条都结构失败 (XJ499 的 V02-1
+    unattributed, CSH02 为 failed 任务); 整组 rerun 后第 2 次 CSH02 也对不上: XJ499 沿用 X-FIN-09-1-V02-1, CSH02
+    新建的是 X-FIN-09-2-V02-1 (编号不计沿用的), 不是 V02-2."""
+    state, first = await failed_with_v02(failing=("XJ-499", "BA-091"))
+    other = {row["id"]: {"source_doc": "OTHER"} for row in xero_v01_rows(FIRST)}
+    llm = ScriptedLLM({key: [fixture(key, **MISMATCH)] for key in ("XJ-499", "BA-091")})
+    second = await rerun(state, first, other, llm, (XJ499, CSH02))
+
+    assert [x.id for x in second["exceptions"]] == ["X-FIN-09-2-V02-1"]
+    assert [j.exception_ids for j in second["judgments"]] == [["X-FIN-09-1-V02-1"], ["X-FIN-09-2-V02-1"]]
 
 
 async def test_nothing_to_verify_runs_empty() -> None:

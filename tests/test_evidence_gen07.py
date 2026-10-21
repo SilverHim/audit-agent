@@ -37,8 +37,8 @@ from tests.fakes import (
     make_deps,
     make_run,
 )
-from tests.test_xero_fixtures import xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_gen07_exceptions
+from tests.test_xero_fixtures import xero_context
+from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_gen07_exceptions, xero_state
 
 GOING_CONCERN = BASELINE | {"going_concern"}  # 基线加持续经营 (GEN-07)
 XERO_PARAMS = {

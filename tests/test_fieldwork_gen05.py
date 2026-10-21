@@ -14,8 +14,8 @@ from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps
 from tests.test_knowledge import design_traits
-from tests.test_xero_fixtures import xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, make_xero_deps
+from tests.test_xero_fixtures import xero_context
+from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_state
 
 
 @pytest.mark.external

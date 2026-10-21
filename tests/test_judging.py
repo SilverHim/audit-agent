@@ -492,5 +492,5 @@ def test_earlier_findings_takes_unattributed_of_procedure_rule_and_subject() -> 
     )
     state = initial_state(ENGAGEMENT, [], 1) | {"exceptions": [d04, *others, d01], "rerun_requests": [rerun]}
 
-    found = earlier_findings(state, "CSH-02", ("D01", "D04"), lambda x: "BA-01" in x.source_ids)  # type: ignore[arg-type]
+    found = earlier_findings(state, "CSH-02", ("D01", "D04"), "BA-01", lambda x: x.source_ids)  # type: ignore[arg-type]
     assert found == [d01, d04]

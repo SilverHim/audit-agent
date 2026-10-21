@@ -45,8 +45,8 @@ from tests.fakes import (
 )
 from tests.fixture_sets import XERO
 from tests.test_fieldwork_judging import pending_task
-from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement
+from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context
+from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement, xero_state
 
 VOUCHERS = ["XJ-397", "XJ-405", "XJ-430", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # 凭证号自然序
 FINDINGS = ["R09-1", "R12-1", "R10-1", "R10-2", "R09-2", "R11-1", "R11-2"]  # 各凭证的 GEN-05 例外, 依次
