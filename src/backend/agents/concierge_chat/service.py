@@ -392,14 +392,15 @@ class ConciergeChat:
         def system(summary: Summary | None) -> str:
             return self.system_prompt(overview, answer_lang, summary.text if summary else "")
 
-        history = await self._fit(eid, model, await load_history(self.deps.trail, eid), system, question, force=False)
+        history = await load_history(self.deps.trail, eid)
+        history = await self._fit(eid, model, history, system, question, answer_lang, force=False)
         turn.history_pool = history.pool()
         try:
             state = await self._converse(turn, eid, model, history, system, question)
         except ContextOverflow:
             if turn.parts:  # 已经输出了一部分, 不能重来
                 raise
-            history = await self._fit(eid, model, history, system, question, force=True)
+            history = await self._fit(eid, model, history, system, question, answer_lang, force=True)
             turn.history_pool = history.pool()
             state = await self._converse(turn, eid, model, history, system, question)
         answer = answer_of(state)
@@ -483,11 +484,12 @@ class ConciergeChat:
         history: History,
         system: Callable[[Summary | None], str],
         question: ConciergeQuestion,
+        answer_lang: Lang,
         *,
         force: bool,
     ) -> History:
-        """历史超预算 (或 force: 上游已报超限) 时压缩: 较早的轮连同上一份摘要写成新摘要, 保留最近几轮原文.
-        force 时保留的轮数减半. 摘要失败只截掉较早的轮 (不写摘要)."""
+        """历史超预算 (或 force: 上游已报超限) 时压缩: 较早的轮连同上一份摘要写成新摘要 (用这一轮的回答语言写),
+        保留最近几轮原文. force 时保留的轮数减半. 摘要失败只截掉较早的轮 (不写摘要)."""
         size = context_tokens(system(history.summary), history.turns, question.question, self.tools.specs)
         if not force and size <= self.limits.context_budget:
             return history
@@ -497,7 +499,7 @@ class ConciergeChat:
             return history
         old, kept = history.turns[:cut], history.turns[cut:]
         try:
-            text = await self._summarize(eid, model, history.summary, old)
+            text = await self._summarize(eid, model, history.summary, old, answer_lang)
         except (asyncio.CancelledError, SecretEcho):  # 密钥回显不是普通的压缩失败: 整轮按安全失败处理
             raise
         except Exception as e:
@@ -524,9 +526,12 @@ class ConciergeChat:
         )
         return History(Summary(trail_id, text, old[-1].trail_id, pool), kept)
 
-    async def _summarize(self, eid: str, model: ChatModel, previous: Summary | None, old: Sequence[Turn]) -> str:
+    async def _summarize(
+        self, eid: str, model: ChatModel, previous: Summary | None, old: Sequence[Turn], answer_lang: Lang
+    ) -> str:
+        """把 old 连同上一份摘要写成新摘要; answer_lang 为摘要的语言 (这一轮的回答语言, 需求 R342)."""
         prompt = self.prompts.get_template("summary.md.j2").render(
-            previous=previous.text if previous else "", turns=summary_material(old)
+            previous=previous.text if previous else "", turns=summary_material(old), answer_lang=answer_lang
         )
         messages = [ChatMessage(role="system", content=SUMMARY_SYSTEM), ChatMessage(role="user", content=prompt)]
         result = await collect(model, messages, self.limits.summary_max_tokens)
@@ -573,8 +578,13 @@ class ConciergeChat:
         )
 
     async def _working_language(self, eid: str) -> Lang:
-        """项目当前的工作语言; 查不到项目为 en (缺省值, 同 Engagement.working_language)."""
-        engagement = await self.deps.engagement_store.get(eid)
+        """项目当前的工作语言; 查不到项目为 en (缺省值, 同 Engagement.working_language). 查项目出错时记日志并取 en:
+        只在还没读到总览就中断的一轮里用到, 不能因为它写不成这一轮的留痕 (问题本身总要留痕)."""
+        try:
+            engagement = await self.deps.engagement_store.get(eid)
+        except Exception as e:
+            log.warning("审计助理留痕时查不到项目 %s 的工作语言, 回答语言记 en: %s", eid, type(e).__name__)
+            return "en"
         return engagement.working_language if engagement is not None else "en"
 
     async def _record_turn(

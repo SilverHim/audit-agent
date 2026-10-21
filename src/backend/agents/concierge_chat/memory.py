@@ -92,16 +92,21 @@ def citations_of(raw: Any) -> list[ConciergeCitation]:
     return found
 
 
+def recorded_language(payload: dict[str, Any]) -> Lang:
+    """一轮问答的回答语言 (需求 R342): 取 answer_lang; 需求 R342 之前的留痕没有, 取当时提问带的 lang (那时回答跟它走);
+    值不是 zh, en 的同没有, 往下一项取. 两项都没有为 en (同 Engagement.working_language 的缺省): 写入时总有其一,
+    只有手写或损坏的留痕会走到这一步."""
+    return next((value for value in (payload.get("answer_lang"), payload.get("lang")) if value in ("zh", "en")), "en")
+
+
 def turn_of(entry: TrailEntry) -> Turn:
-    """一条 conversation 留痕 → 一轮问答. 回答语言取 answer_lang; 需求 R342 之前的留痕没有, 取当时提问带的 lang
-    (那时回答跟它走); 都没有为 zh."""
+    """一条 conversation 留痕 → 一轮问答. 回答语言依次取 answer_lang, lang, en (recorded_language)."""
     payload = entry.payload
-    recorded = payload.get("answer_lang", payload.get("lang"))
     return Turn(
         trail_id=entry.id or "",
         question=str(payload.get("question", entry.summary)),
         answer=str(payload.get("answer", "")),
-        answer_lang=recorded if recorded in ("zh", "en") else "zh",
+        answer_lang=recorded_language(payload),
         citations=citations_of(payload.get("citations")),
         created_at=entry.created_at,
         aborted=payload.get("aborted") is True,
