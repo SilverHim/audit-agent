@@ -11,16 +11,17 @@ import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
 import { GeneratedLanguage } from '@/components/working-language'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
 import { notRunRules, outcomeStatuses, outcomeTone } from '@/lib/rule-outcomes'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 import { contentLanguage } from '@/lib/working-language'
 
 export const Route = createFileRoute('/engagements/$eid/procedures/$pid')({ component: ProcedurePage })
 
 // 程序的执行记录: 每次执行 (及其没有执行的规则), 规则发现, 判断; 过期时给重跑入口, 被重跑取代的执行及其结果标为历史
 function ProcedurePage() {
+  const { formatMoney } = useMoney()
   const { eid, pid } = Route.useParams()
   const { t, lang, formatDateTime } = useI18n()
   const overview = useEngagement(eid).data
@@ -112,7 +113,7 @@ function ProcedurePage() {
                       <span className="flex flex-wrap items-center gap-2">
                         <Code className="font-semibold">{item.id}</Code>
                         <StatusPill tone={item.severity === 'high' ? 'risk' : 'warn'}>{item.severity}</StatusPill>
-                        <Code>{formatAud(item.amount_cents)}</Code>
+                        <Code>{formatMoney(item.amount_cents)}</Code>
                         {superseded.has(item.run_id) ? <StatusPill tone="neutral">{t.rerun.history}</StatusPill> : null}
                       </span>
                       <PointerList eid={eid} pointers={item.evidence} />

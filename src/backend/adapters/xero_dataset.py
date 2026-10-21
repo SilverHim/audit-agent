@@ -726,6 +726,19 @@ def build_tables(snapshot: Snapshot) -> dict[str, list[Any]]:
     }
 
 
+def base_currency(organisation: Mapping[str, Any]) -> str | None:
+    """组织信息的本位币 (BaseCurrency, 需求 R366): 三个大写字母的 ISO 4217 代码, 否则 (没有或写法不对) 为 None.
+    演示数据集建项目与 Xero 同步共用."""
+    code = organisation.get("BaseCurrency")
+    return code if isinstance(code, str) and re.fullmatch(r"[A-Z]{3}", code) else None
+
+
+def snapshot_currency(snapshot: Snapshot) -> str | None:
+    """快照组织信息 (organisation.json 的第一项) 的本位币; 没有组织信息时为 None."""
+    organisations = snapshot.load("organisation")
+    return base_currency(organisations[0]) if organisations else None
+
+
 def client_profile(snapshot: Snapshot) -> ClientProfile:
     """组织信息 → 客户画像. ABN 取 RegistrationNumber (澳洲组织的 ABN); 行业代码与董事 API 不提供, 留空.
 

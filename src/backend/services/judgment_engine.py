@@ -73,6 +73,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
+from backend.services.currency import default_currency
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
@@ -921,9 +922,17 @@ class JudgmentEngine:
     """
 
     def __init__(
-        self, llm: LLMClient, validator: OutputValidator, trail: AuditTrail, library: ProcedureLibrary
+        self,
+        llm: LLMClient,
+        validator: OutputValidator,
+        trail: AuditTrail,
+        library: ProcedureLibrary,
+        *,
+        currency: Callable[[str], Awaitable[str]] | None = None,
     ) -> None:
         self.llm = llm  # 大模型客户端
+        # 项目的记账币种 (需求 R366): 组装根给按项目查的函数 (services.currency.engagement_currency); 不给时为澳元
+        self.currency = currency or default_currency
         self.validator = validator  # 四级校验
         self.trail = trail  # 写 llm_call 留痕
         self.library = library  # 取准则片段
@@ -977,6 +986,8 @@ class JudgmentEngine:
         # 重跑是新的执行记录, 取它建立时的语言. 各提示词末尾的 _output_language.md.j2 一节用它; 调用方给的同名变量不算.
         # 校验同按这一语言 (如报告两段的标题, 需求 R341), 调用方给的 ctx.language 也不算
         outbound["output_language"] = run.language
+        # 记账币种 (需求 R366): 模板过滤器 money 缺省按它写金额; 取项目当前的值, 调用方给的同名变量不算
+        outbound["currency"] = await self.currency(eid)
         ctx = ctx.model_copy(update={"language": run.language})
         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []

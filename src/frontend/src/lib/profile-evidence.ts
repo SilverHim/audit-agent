@@ -2,7 +2,7 @@
 // 内容来自 GET /engagements/{eid}/client-profile 的 history 与 engagement_profile_version (采用版本), 不取最新版:
 // 画像改出新版本后 (如同客户的其他项目更新), 本项目采用的旧版本照旧显示. 纯函数, bun test 覆盖.
 import type { ClientProfileView, EvidencePointer } from '@/client/types.gen'
-import { formatAud, formatPct } from '@/lib/money'
+import { formatMoney, formatPct } from '@/lib/money'
 import { humanize } from '@/lib/presentation'
 
 // 键值对的一项: 字段名 (humanize 后) 与显示文本
@@ -27,7 +27,12 @@ export type ProfileEvidence =
 
 // 显示用的文案与格式 (由组件给, 文案留在组件): 布尔的是否; display 为字段名 → 字符串值的显示, 沿用客户资料页与
 // 新建客户表单的标签与格式 (如 entity_type, applicable_framework 的标签, ABN 分组), 顶层与嵌套的同名字段都用
-export type ProfileWords = { yes: string; no: string; display?: Record<string, (value: string) => string> }
+export type ProfileWords = {
+  yes: string
+  no: string
+  currency?: string
+  display?: Record<string, (value: string) => string>
+}
 
 // 本项目采用的那一版: history 中版本等于 engagement_profile_version 的 (生成的类型里 version 可选, 接口总会给)
 function adoptedProfile(view: Pick<ClientProfileView, 'history' | 'engagement_profile_version'>) {
@@ -84,13 +89,13 @@ function isPercent(key: string): boolean {
   return /(^|_)pct(_|$)/.test(key)
 }
 
-// 一个值的单行文本: 金额为 AUD, 比例为百分比, 布尔为是否, 空为 "—"; 嵌套的列表用分号连接, 嵌套的对象写成
+// 一个值的单行文本: 金额按项目币种, 比例为百分比, 布尔为是否, 空为 "—"; 嵌套的列表用分号连接, 嵌套的对象写成
 // "键: 值" (键为数据的字典, 如各年的收费占比 dependency_pct_by_year, 其值沿用字段名的单位)
 function inline(key: string, value: unknown, words: ProfileWords): string {
   if (value == null || value === '') return '—'
   if (typeof value === 'boolean') return value ? words.yes : words.no
   if (typeof value === 'number') {
-    if (isCents(key)) return formatAud(value)
+    if (isCents(key)) return formatMoney(value, words.currency)
     if (isPercent(key)) return formatPct(value)
     return String(value)
   }

@@ -2253,3 +2253,105 @@ async def test_collab_dispute_variant_real_storage(tmp_path):
             if e.kind is TrailKind.transition and e.payload["id"] == "CSH-02"
         ]
         assert moved == [("planned", "in_dispute"), ("in_dispute", "completed")]
+
+
+async def test_currency_on_postgres(storage) -> None:
+    """币种读写, 同值幂等, 人工确认优先于同步, 锁定保护与新建时的来源在真实库核验."""
+    engine, e, loader, _ = storage
+    engagements = PostgresEngagementStore(engine)
+    assert (e.currency, e.currency_source) == ("AUD", "default")
+    assert await engagements.set_currency(e.id, "NZD", "xero") == e
+    synced = await engagements.get(e.id)
+    assert synced is not None and (synced.currency, synced.currency_source) == ("NZD", "xero")
+    assert await engagements.set_currency(e.id, "NZD", "xero") == synced
+    assert await engagements.get(e.id) == synced
+    await engagements.set_currency(e.id, "USD", "auditor")
+    manual = await engagements.get(e.id)
+    assert await engagements.set_currency(e.id, "NZD", "xero") == manual
+    assert await engagements.get(e.id) == manual
+    await engagements.update(e.id, locked=True)
+    with pytest.raises(EngagementLocked):
+        await engagements.set_currency(e.id, "NZD", "auditor")
+    profile = loader.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex})
+    created = await engagements.create(
+        owner_id=e.owner_id,
+        period_start=e.period_start,
+        period_end=e.period_end,
+        dataset="demo",
+        profile=profile,
+        currency="NZD",
+    )
+    assert (created.currency, created.currency_source) == ("NZD", "xero")
+    assert await engagements.get(created.id) == created
+
+
+async def test_migration_0024_round_trip(storage) -> None:
+    """旧项目升级后以 AUD/default 回填, 重复升级幂等; 降级移除两列, 最后回滚不影响其他连库用例."""
+    engine, e, _, _ = storage
+    await PostgresEngagementStore(engine).set_currency(e.id, "NZD", "auditor")
+    owner_url = os.getenv("TEST_DATABASE_OWNER_URL")
+    if not owner_url:
+        pytest.skip("需设 TEST_DATABASE_OWNER_URL")
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    module = migration_module("0024_engagement_currency")
+
+    def run(step: str) -> Any:
+        def call(sync_conn: Any) -> None:
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                getattr(module, step)()
+
+        return call
+
+    columns = text(
+        "SELECT column_name, column_default, is_nullable FROM information_schema.columns "
+        "WHERE table_name = 'engagements' AND column_name IN ('currency', 'currency_source') ORDER BY column_name"
+    )
+    owner = create_async_engine(owner_url.replace("postgresql://", "postgresql+psycopg://"))
+    try:
+        async with owner.connect() as conn:
+            outer = await conn.begin()
+            try:
+                assert (await conn.execute(columns)).all() == [
+                    ("currency", "'AUD'::text", "NO"),
+                    ("currency_source", "'default'::text", "NO"),
+                ]
+                await conn.run_sync(run("downgrade"))
+                assert (await conn.execute(columns)).all() == []
+                await conn.run_sync(run("upgrade"))
+                await conn.run_sync(run("upgrade"))
+                assert (
+                    await conn.execute(text("SELECT DISTINCT currency, currency_source FROM engagements"))
+                ).all() == [("AUD", "default")]
+            finally:
+                await outer.rollback()
+    finally:
+        await owner.dispose()
+
+
+async def test_currency_and_trail_share_transaction(storage) -> None:
+    """币种确认与对应留痕同提交/回滚; 默认独立留痕的其他调用不受影响."""
+    engine, e, _, _ = storage
+    engagements = PostgresEngagementStore(engine)
+    outputs = PostgresAuditOutputStore(engine)
+    trail = PostgresAuditTrail(engine)
+    entry = TrailEntry(
+        engagement_id=e.id,
+        kind=TrailKind.data,
+        actor=e.owner_id,
+        summary="Synthetic currency confirmation",
+        payload={"action": "currency", "from": "AUD", "to": "NZD", "source": "auditor"},
+    )
+    with pytest.raises(RuntimeError, match="rollback"):
+        async with outputs.transaction(e.id):
+            await engagements.set_currency(e.id, "NZD", "auditor")
+            rolled_back = await trail.record(entry, independent=False)
+            raise RuntimeError("rollback")
+    assert await engagements.get(e.id) == e
+    assert await trail.get(e.id, rolled_back) is None
+    async with outputs.transaction(e.id):
+        await engagements.set_currency(e.id, "NZD", "auditor")
+        committed = await trail.record(entry, independent=False)
+    assert (await engagements.get(e.id)).currency == "NZD"
+    assert (await trail.get(e.id, committed)).payload == entry.payload

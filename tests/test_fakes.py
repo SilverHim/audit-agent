@@ -399,3 +399,24 @@ async def trail_pages_hold(trail: AuditTrail, eid: str, other: str) -> None:
 
 async def test_fake_trail_pages() -> None:
     await trail_pages_hold(FakeTrail(), EID, "ENG-OTHER")
+
+
+async def test_transactional_trail_joins_currency_confirmation() -> None:
+    """选择加入事务的留痕与项目修改同进退, 独立记录仍即刻提交."""
+    from backend.contracts.models import TrailEntry, TrailKind
+    from tests.fakes import FakeTrail
+
+    engagements, outputs = bound_stores()
+    trail = FakeTrail()
+    trail.output_store = outputs
+    entry = TrailEntry(engagement_id=EID, kind=TrailKind.data, actor="U-1", summary="Synthetic currency confirmation")
+    with pytest.raises(RuntimeError, match="rollback"):
+        async with outputs.transaction(EID):
+            await engagements.set_currency(EID, "NZD", "auditor")
+            await trail.record(entry, independent=False)
+            raise RuntimeError("rollback")
+    assert await engagements.get(EID) == ENGAGEMENT and trail.entries == []
+    async with outputs.transaction(EID):
+        await engagements.set_currency(EID, "NZD", "auditor")
+        await trail.record(entry, independent=False)
+    assert (await engagements.get(EID)).currency == "NZD" and len(trail.entries) == 1

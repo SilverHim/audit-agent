@@ -199,6 +199,7 @@ async def browser_walk(
     failing: dict[tuple[str, str], int] | None = None,
     activity: dict[str, Any] | None = None,
     review_withdrawal: bool = False,
+    currency: str | None = None,
     **llm: str,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过.
@@ -229,6 +230,7 @@ async def browser_walk(
         async with frontend(out, api) as base:
             config = walk_config(out, base, mode, fin_policy, activity)
             config["review_withdrawal"] = review_withdrawal
+            config["currency"] = currency
             results = await run_walk(config, out, WALK_TIMEOUT_S[mode])
         data = await evaluate(app.state.runner, walk_of(results), budget) if results["eid"] else {}
     return results, data, write_report(out, mode, results, data)
@@ -248,7 +250,10 @@ async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     """mock 模式在本机走一遍: 走到归档, 没有问题; 闸门序列为 GATES; R311 的硬性检查都过 (每个判断对象有结论, 指针都能
     解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; 走 FIN-08 登记与更正通知两步, FIN-01 按汇总表的候选意见
     为无保留 (需求 R356)."""
-    results, data, report = await browser_walk(tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate")
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", currency="NZD"
+    )
+    assert results["currency"] == "NZD", report
     assert results["issues"] == [], report
     assert results["reached_archive"] and results["gates"] == GATES, report
     assert_hard(data)

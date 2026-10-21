@@ -8,10 +8,10 @@ import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { QueryState } from '@/components/query-state'
 import { buttonVariants } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import { deferralKey, useDeferrals } from '@/lib/new-api'
 import { isJudgment, manualInstructions, procedureName, rankTasks, splitManual } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/decisions')({
   component: Decisions,
@@ -22,6 +22,7 @@ const COLS =
   'grid grid-cols-[minmax(0,2.2fr)_minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1.2fr)_88px] gap-3'
 
 function Decisions() {
+  const { formatMoney } = useMoney()
   const { eid } = Route.useParams()
   const { t } = useI18n()
   const overview = useEngagement(eid).data
@@ -147,7 +148,7 @@ function Decisions() {
                         <Code>{item.view.task.procedure_id}</Code>{' '}
                         {procedureName(t, item.view.task.procedure_id, item.view.procedure_name)}
                       </span>
-                      <Code className="text-right text-[13px]">{formatAud(item.amount)}</Code>
+                      <Code className="text-right text-[13px]">{formatMoney(item.amount)}</Code>
                       <span
                         className={cn(
                           'text-[13px]',

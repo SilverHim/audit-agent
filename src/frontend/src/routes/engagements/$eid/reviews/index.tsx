@@ -15,7 +15,6 @@ import { GeneratedLanguage, useContentLanguage } from '@/components/working-lang
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import {
   isJudgment,
   procedureName,
@@ -26,6 +25,7 @@ import {
   TIER_ORDER,
 } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/reviews/')({
   component: ReviewQueue,
@@ -41,6 +41,7 @@ const TIER_DOT: Record<ReviewTier, string> = {
 }
 
 function ReviewQueue() {
+  const { formatMoney } = useMoney()
   const { eid } = Route.useParams()
   const { t } = useI18n()
   const queryClient = useQueryClient()
@@ -197,7 +198,7 @@ function ReviewQueue() {
                                 {t.taskKinds[item.view.task.kind] ? ` · ${t.taskKinds[item.view.task.kind]}` : ''}
                               </span>
                             </button>
-                            <Code className="text-right text-[13px]">{formatAud(item.amount)}</Code>
+                            <Code className="text-right text-[13px]">{formatMoney(item.amount)}</Code>
                             <span
                               className={cn(
                                 'text-[13px]',
@@ -256,6 +257,7 @@ function ReviewQueue() {
 }
 
 function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const judgment = isJudgment(item.view.target) ? item.view.target : null
   const lang = useContentLanguage(eid, judgment?.run_id)
@@ -268,7 +270,7 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
           <Code>{item.subject}</Code> · {procedureName(t, item.view.task.procedure_id, item.view.procedure_name)}
         </h2>
         <span className="text-[13px] text-[#4a5262]">
-          {t.tiers[item.tier]} · {formatAud(item.amount)}
+          {t.tiers[item.tier]} · {formatMoney(item.amount)}
         </span>
       </div>
       {judgment ? (

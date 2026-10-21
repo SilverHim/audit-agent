@@ -3,8 +3,8 @@ import { Code, StatusPill, type Tone } from '@/components/chrome'
 import { useActorName } from '@/lib/actor'
 import { useI18n } from '@/lib/i18n'
 import { remainingCents, separateCode, verifiedEntries } from '@/lib/misstatements'
-import { formatAud } from '@/lib/money'
 import { reasonText } from '@/lib/reason'
+import { useMoney } from '@/lib/use-money'
 
 // 错报的生命周期 (需求 R163): 错报页与 FIN-01 闸门材料共用. 每条显示状态, 类型, 科目代码, 管理层回复原文, 已更正额与
 // 剩余额, 已验证的更正凭证号; 有舞弊迹象的加醒目标记与理由; 未更正的写依据 (拒绝或停止等待)
@@ -19,6 +19,7 @@ const STATUS_TONES: Partial<Record<MisstatementStatus, Tone>> = {
 }
 
 function MisstatementItem({ item }: { item: Misstatement }) {
+  const { formatMoney } = useMoney()
   const { t, formatDateTime } = useI18n()
   const labels = t.lifecycle
   const status = item.status ?? 'identified'
@@ -39,7 +40,7 @@ function MisstatementItem({ item }: { item: Misstatement }) {
           {t.directions[item.direction]} · {t.misstatementTypes[item.type]}
         </span>
         <span className="flex-1" />
-        <Code>{formatAud(item.amount_cents)}</Code>
+        <Code>{formatMoney(item.amount_cents)}</Code>
       </div>
       <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[13px]">
         {item.fraud_indicative ? (
@@ -61,7 +62,7 @@ function MisstatementItem({ item }: { item: Misstatement }) {
         ) : null}
         <dt className="text-muted-foreground">{labels.corrected}</dt>
         <dd className="m-0 font-mono">
-          {formatAud(item.corrected_cents ?? 0)} · {labels.remaining} {formatAud(remainingCents(item))}
+          {formatMoney(item.corrected_cents ?? 0)} · {labels.remaining} {formatMoney(remainingCents(item))}
         </dd>
         {verified.length ? (
           <>

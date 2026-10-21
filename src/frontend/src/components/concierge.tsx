@@ -44,7 +44,6 @@ import {
   updateFromPayload,
   updateKindFor,
 } from '@/lib/misstatements'
-import { formatAud } from '@/lib/money'
 import {
   cardLayout,
   failureParts,
@@ -77,6 +76,7 @@ import {
   sideProposal,
 } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 import type { WorkingLanguage } from '@/lib/working-language'
 
 // 对话流的组成部件: 消息, 判断卡片, 人工决定卡片
@@ -289,6 +289,7 @@ function SideColumn({
   proposals: boolean
   lang: WorkingLanguage
 }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const p = t.judgment.presentation
   const draft = side.misstatement_draft
@@ -309,7 +310,7 @@ function SideColumn({
           </span>
           {draft ? (
             <Code className="text-[12.5px] text-secondary-foreground">
-              {draft.account} · {t.assertions[draft.assertion]} · {formatAud(draft.amount_cents)} ·{' '}
+              {draft.account} · {t.assertions[draft.assertion]} · {formatMoney(draft.amount_cents)} ·{' '}
               {t.directions[draft.direction]}
             </Code>
           ) : null}
@@ -388,6 +389,7 @@ function DisputeBody({
 }
 
 export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const { view, amount, tier, subject } = ranked
   const presentation = usePresentation(eid, view.task.id)
@@ -432,7 +434,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
           ) : isException(target) ? (
             <>
               <span className="font-semibold">
-                {t.judgment.exception} <Code>{target.id}</Code> · {formatAud(target.amount_cents)}
+                {t.judgment.exception} <Code>{target.id}</Code> · {formatMoney(target.amount_cents)}
               </span>
               <PointerList eid={eid} pointers={target.evidence} />
             </>
@@ -451,7 +453,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       </div>
       <div className="flex basis-[170px] flex-col gap-0.5">
         <span className="text-[12px] text-muted-foreground">{t.judgment.amount}</span>
-        <Code className="font-semibold text-[16px]">{formatAud(amount)}</Code>
+        <Code className="font-semibold text-[16px]">{formatMoney(amount)}</Code>
       </div>
     </>
   )
@@ -641,6 +643,7 @@ function copySources(
 
 // 争议卡上一方的建议动作与错报草稿 (功能 collab)
 function SideCard({ side, proposal }: { side: DisputeSide; proposal: SideProposal }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const { action, draft } = proposal
   return (
@@ -651,7 +654,7 @@ function SideCard({ side, proposal }: { side: DisputeSide; proposal: SideProposa
       </span>
       {draft ? (
         <Code className="text-[12.5px] text-secondary-foreground">
-          {draft.account} · {t.assertions[draft.assertion]} · {formatAud(draft.amount_cents)} ·{' '}
+          {draft.account} · {t.assertions[draft.assertion]} · {formatMoney(draft.amount_cents)} ·{' '}
           {t.directions[draft.direction]}
         </Code>
       ) : null}
@@ -674,6 +677,7 @@ export function ReviewDecisionCard({
   onDefer: () => void
   deferring: boolean
 }) {
+  const { currency } = useMoney()
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const view: ReviewTaskView = ranked.view
@@ -973,7 +977,7 @@ export function ReviewDecisionCard({
                 ))}
               </select>
             </Field>
-            <Field id={`ms-amount-${view.task.id}`} label={`${t.judgment.amount} (AUD)`}>
+            <Field id={`ms-amount-${view.task.id}`} label={`${t.judgment.amount} (${currency})`}>
               <Input
                 id={`ms-amount-${view.task.id}`}
                 className="h-10 font-mono"

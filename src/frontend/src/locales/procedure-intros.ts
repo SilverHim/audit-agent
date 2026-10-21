@@ -1,5 +1,5 @@
 import type { Lang } from '@/lib/i18n'
-import { formatAud, formatPct } from '@/lib/money'
+import { formatMoney, formatPct } from '@/lib/money'
 
 // 程序介绍: 做什么, 什么时候执行, 需要的资料, 怎么判断, 结果与审计师的工作; 程序页侧栏与程序详情页用.
 // 内容按程序库 (knowledge/procedures/*.yaml) 与提示词写, 改程序时同步改这里. project 按本项目最近一次执行的参数
@@ -10,7 +10,7 @@ export type ProcedureIntro = {
   inputs?: string // 需要的资料: 缺了会停下来等数据的那些
   logic: { name: string; detail: string }[] // 怎么判断: 规则程序逐条检查, 模型程序逐步, 人工程序要决定的事
   result: string // 结果与你的工作: 产出什么, 什么情况交审计师
-  project?: (params: Params) => string | null // 本项目的取值
+  project?: (params: Params, currency?: string) => string | null // 本项目的取值
 }
 
 type Params = Record<string, unknown>
@@ -34,7 +34,7 @@ const daysBefore = (date: string, days: number): string => {
 
 const daysAfter = (date: string, days: number): string => daysBefore(date, -days)
 
-const money = formatAud
+const money = formatMoney
 const pct = (value: number) => formatPct(value, value * 100 === Math.round(value * 100) ? 0 : 1)
 
 export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
@@ -859,13 +859,13 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         '每个有问题的账户一条判断。函证差异须由人评价，所以每条判断都交给你复核；部分判断（如建议关闭的）会先由另一个模型独立复核，两者结论不一致时改由你裁决分歧。建议认定错报的附错报草稿：余额记账差错按货币资金高估或低估列示，应计利息未入账按利息收入或利息支出低估列示，同一账户只出一份；是否登记为错报由你决定。你确认判断后，该账户上的回函差异、应计利息和流水账面核对（CSH-05）的例外即视为已解释。模型没能给出有效判断时，该账户单独交给你：可以重新执行，也可以自己下结论或直接认定错报。',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const end = str(p, 'period_end')
         const look = num(p, 'lookback_days')
         const after = num(p, 'subsequent_days')
         const trivial = num(p, 'clearly_trivial_cents')
         if (end == null || look == null || after == null || trivial == null) return null
-        return `回函余额与 ${end} 的总账余额比较。候选调节项为期后 ${after} 天（${daysAfter(end, 1)} 至 ${daysAfter(end, after)}）的银行流水和期末前 ${look} 天（${daysBefore(end, look)} 至 ${end}）的银行科目分录。回函应计利息超过 ${money(trivial)}（明显微小错报临界值）才检查是否入账。`
+        return `回函余额与 ${end} 的总账余额比较。候选调节项为期后 ${after} 天（${daysAfter(end, 1)} 至 ${daysAfter(end, after)}）的银行流水和期末前 ${look} 天（${daysBefore(end, look)} 至 ${end}）的银行科目分录。回函应计利息超过 ${money(trivial, currency)}（明显微小错报临界值）才检查是否入账。`
       },
     },
     en: {
@@ -908,13 +908,13 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         'Each account with an issue gets one judgment. Confirmation differences must be evaluated by a person, so every judgment comes to you for review; some, such as those proposing to close, are first reviewed independently by another model, and if the two disagree you resolve the disagreement. A proposed misstatement comes with a draft: a recording error as cash overstated or understated, unbooked accrued interest as interest income or interest expense understated, one draft per account. You decide whether to record it. Once you confirm a judgment, the confirmation difference, accrued interest and Bank statement to ledger (CSH-05) exceptions on that account count as explained. If the model cannot reach a valid judgment, the account comes to you separately: run it again, give your own conclusion or record a misstatement directly.',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const end = str(p, 'period_end')
         const look = num(p, 'lookback_days')
         const after = num(p, 'subsequent_days')
         const trivial = num(p, 'clearly_trivial_cents')
         if (end == null || look == null || after == null || trivial == null) return null
-        return `Compares confirmed balances with the general ledger at ${end}. Candidate reconciling items are bank transactions in the ${after} days after period end (${daysAfter(end, 1)} to ${daysAfter(end, after)}) and bank ledger entries in the ${look} days before it (${daysBefore(end, look)} to ${end}). Accrued interest on a reply is checked only above ${money(trivial)}, the clearly trivial threshold.`
+        return `Compares confirmed balances with the general ledger at ${end}. Candidate reconciling items are bank transactions in the ${after} days after period end (${daysAfter(end, 1)} to ${daysAfter(end, after)}) and bank ledger entries in the ${look} days before it (${daysBefore(end, look)} to ${end}). Accrued interest on a reply is checked only above ${money(trivial, currency)}, the clearly trivial threshold.`
       },
     },
   },
@@ -1013,12 +1013,12 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         '每张发票一条判断，全部交给你逐条复核。建议认定错报的附错报草稿：收入高估，金额取该发票分录中收入科目的金额（不含 GST），没有收入行时取发票金额；是否登记为错报由你决定，登记的错报由错报累计（FIN-04）汇总。你确认判断后，该发票上的三单匹配例外即视为已解释。模型没能对某张发票给出有效判断时，该发票单独交给你：可以重新执行，也可以自己给出结论。',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const days = num(p, 'window_days')
         const end = str(p, 'period_end')
         const threshold = num(p, 'threshold_cents')
         if (days == null || end == null || threshold == null) return null
-        return `检查期末前 ${days} 天，即 ${daysBefore(end, days)} 至 ${end} 入账、金额不低于 ${money(threshold)}（实际执行的重要性）的销售发票，另加三单匹配例外所指的发票。`
+        return `检查期末前 ${days} 天，即 ${daysBefore(end, days)} 至 ${end} 入账、金额不低于 ${money(threshold, currency)}（实际执行的重要性）的销售发票，另加三单匹配例外所指的发票。`
       },
     },
     en: {
@@ -1055,12 +1055,12 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         "Each invoice gets one judgment, and every judgment comes to you for review. A proposed misstatement comes with a draft: revenue overstated, for the amount of the revenue line in the invoice's journal entry excluding GST, or the invoice amount when there is no such line. You decide whether to record it; recorded misstatements are totalled by Misstatement accumulation (FIN-04). Once you confirm a judgment, the three-way match exceptions on that invoice count as explained. If the model cannot reach a valid judgment on an invoice, it comes to you separately: run it again or give your own conclusion.",
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const days = num(p, 'window_days')
         const end = str(p, 'period_end')
         const threshold = num(p, 'threshold_cents')
         if (days == null || end == null || threshold == null) return null
-        return `Tests sales invoices posted in the ${days} days before period end, from ${daysBefore(end, days)} to ${end}, at or above ${money(threshold)} (performance materiality), plus invoices behind three-way match exceptions.`
+        return `Tests sales invoices posted in the ${days} days before period end, from ${daysBefore(end, days)} to ${end}, at or above ${money(threshold, currency)} (performance materiality), plus invoices behind three-way match exceptions.`
       },
     },
   },
@@ -1128,21 +1128,21 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         '每处命中记为一条例外，同一检查每笔凭证只记一条（疑似重复开票按发票记）。例外不直接交给你，先由分录例外归因（GEN-02）按凭证逐笔判断原因，本程序本身不建复核任务。无法执行或不执行的检查会在执行记录里写明原因。',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const start = str(p, 'period_start')
         const end = str(p, 'period_end')
         if (start == null || end == null) return null
         const entries = Array.isArray(p.entry_nos) ? p.entry_nos.length : 0
         const parts = [entries > 0 ? `只扫描更正通知载入的 ${entries} 笔凭证` : `扫描 ${start} 至 ${end} 的分录`]
         const performance = num(p, 'performance_materiality_cents')
-        if (performance != null) parts.push(`实际执行的重要性 ${money(performance)}`)
+        if (performance != null) parts.push(`实际执行的重要性 ${money(performance, currency)}`)
         const trivial = num(p, 'clearly_trivial_cents')
-        if (trivial != null) parts.push(`明显微小错报临界值 ${money(trivial)}`)
+        if (trivial != null) parts.push(`明显微小错报临界值 ${money(trivial, currency)}`)
         const limit = num(p, 'approval_limit_cents')
-        if (limit != null) parts.push(`审批限额 ${money(limit)}`)
+        if (limit != null) parts.push(`审批限额 ${money(limit, currency)}`)
         else if (p.approval_limit_cents === null) parts.push('客户画像没有审批限额')
         const unit = num(p, 'round_unit_cents')
-        if (unit != null) parts.push(`整数金额单位 ${money(unit)}`)
+        if (unit != null) parts.push(`整数金额单位 ${money(unit, currency)}`)
         const hours = p.business_hours
         if (Array.isArray(hours) && typeof hours[0] === 'number' && typeof hours[1] === 'number') {
           const zone = str(p, 'timezone')
@@ -1227,7 +1227,7 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         'Each hit is recorded as an exception, at most one per check per entry (possible duplicate invoices are recorded per invoice). Exceptions do not come to you directly: journal entry exception attribution (GEN-02) first assesses the cause entry by entry, and this procedure creates no review tasks itself. Checks that could not or did not run are recorded in the run record with the reason.',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const start = str(p, 'period_start')
         const end = str(p, 'period_end')
         if (start == null || end == null) return null
@@ -1238,14 +1238,14 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
             : `Scans entries dated ${start} to ${end}`,
         ]
         const performance = num(p, 'performance_materiality_cents')
-        if (performance != null) parts.push(`performance materiality ${money(performance)}`)
+        if (performance != null) parts.push(`performance materiality ${money(performance, currency)}`)
         const trivial = num(p, 'clearly_trivial_cents')
-        if (trivial != null) parts.push(`clearly trivial threshold ${money(trivial)}`)
+        if (trivial != null) parts.push(`clearly trivial threshold ${money(trivial, currency)}`)
         const limit = num(p, 'approval_limit_cents')
-        if (limit != null) parts.push(`approval limit ${money(limit)}`)
+        if (limit != null) parts.push(`approval limit ${money(limit, currency)}`)
         else if (p.approval_limit_cents === null) parts.push('no approval limit in the client profile')
         const unit = num(p, 'round_unit_cents')
-        if (unit != null) parts.push(`round-sum unit ${money(unit)}`)
+        if (unit != null) parts.push(`round-sum unit ${money(unit, currency)}`)
         const hours = p.business_hours
         if (Array.isArray(hours) && typeof hours[0] === 'number' && typeof hours[1] === 'number') {
           const zone = str(p, 'timezone')
@@ -1617,7 +1617,7 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         '每处命中记为一条例外，作废并冲回的分录不计入。例外作为期后事项候选，不直接交给你，先由期后事项研判（GEN-06）逐笔判断；本程序本身不建复核任务。',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const end = str(p, 'period_end')
         const days = num(p, 'subsequent_days')
         if (end == null || days == null) return null
@@ -1627,9 +1627,9 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
         const cut = to === full ? '' : '（截到数据截止日）'
         const parts = [`检查 ${daysAfter(end, 1)} 至 ${to} 的流水与分录${cut}`]
         const materiality = num(p, 'materiality_cents')
-        if (materiality != null) parts.push(`大额流水与资本性支出的门槛为重要性水平 ${money(materiality)}`)
+        if (materiality != null) parts.push(`大额流水与资本性支出的门槛为重要性水平 ${money(materiality, currency)}`)
         const trivial = num(p, 'clearly_trivial_cents')
-        if (trivial != null) parts.push(`非常规分录的门槛为明显微小错报临界值 ${money(trivial)}`)
+        if (trivial != null) parts.push(`非常规分录的门槛为明显微小错报临界值 ${money(trivial, currency)}`)
         const match = num(p, 'match_days')
         if (match != null) parts.push(`在流水日前后 ${match} 天内找同额分录`)
         return `${parts.join('；')}。`
@@ -1658,7 +1658,7 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         'Each hit is recorded as an exception; reversed and reversing pairs are left out. The exceptions are candidate subsequent events and do not come to you directly: subsequent events evaluation (GEN-06) first assesses each one, and this procedure creates no review tasks itself.',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const end = str(p, 'period_end')
         const days = num(p, 'subsequent_days')
         if (end == null || days == null) return null
@@ -1670,11 +1670,12 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
         const materiality = num(p, 'materiality_cents')
         if (materiality != null) {
           parts.push(
-            `large transactions and capital expenditure are tested against overall materiality of ${money(materiality)}`,
+            `large transactions and capital expenditure are tested against overall materiality of ${money(materiality, currency)}`,
           )
         }
         const trivial = num(p, 'clearly_trivial_cents')
-        if (trivial != null) parts.push(`unusual entries against the clearly trivial threshold of ${money(trivial)}`)
+        if (trivial != null)
+          parts.push(`unusual entries against the clearly trivial threshold of ${money(trivial, currency)}`)
         const match = num(p, 'match_days')
         if (match != null) parts.push(`matching ledger lines are sought within ${match} days of the bank date`)
         return `${parts.join('; ')}.`
@@ -1974,11 +1975,11 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         '产出未更正错报汇总表的新一版：计入的错报、剔除的明显微小错报、已更正错报、合计、重要性水平和候选意见，可在“错报与审计意见”页查看。本程序自动完成，不建复核任务；执行失败时复核队列会出现“程序未能完成”的任务，可以重跑。汇总表随后呈报到未更正错报评价（FIN-01）。',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const materiality = num(p, 'materiality_cents')
         const trivial = num(p, 'clearly_trivial_cents')
         if (materiality == null || trivial == null) return null
-        return `重要性水平 ${money(materiality)}，明显微小错报临界值 ${money(trivial)}：未更正金额超过 ${money(trivial)} 的错报计入汇总表，合计达到 ${money(materiality)} 时候选保留意见。`
+        return `重要性水平 ${money(materiality, currency)}，明显微小错报临界值 ${money(trivial, currency)}：未更正金额超过 ${money(trivial, currency)} 的错报计入汇总表，合计达到 ${money(materiality, currency)} 时候选保留意见。`
       },
     },
     en: {
@@ -2014,11 +2015,11 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
       ],
       result:
         'Produces a new version of the schedule: misstatements accumulated, clearly trivial ones left out, corrected ones, the total, overall materiality and the candidate opinion, shown on the Misstatements and opinion page. The procedure closes automatically without review tasks; if it fails, a Procedure did not complete task appears in the review queue and can be run again. The schedule then goes to evaluation of uncorrected misstatements (FIN-01).',
-      project: (p) => {
+      project: (p, currency = 'AUD') => {
         const materiality = num(p, 'materiality_cents')
         const trivial = num(p, 'clearly_trivial_cents')
         if (materiality == null || trivial == null) return null
-        return `Overall materiality ${money(materiality)} and clearly trivial threshold ${money(trivial)}: uncorrected amounts above ${money(trivial)} go on the schedule, and a total of ${money(materiality)} or more gives a candidate qualified opinion.`
+        return `Overall materiality ${money(materiality, currency)} and clearly trivial threshold ${money(trivial, currency)}: uncorrected amounts above ${money(trivial, currency)} go on the schedule, and a total of ${money(materiality, currency)} or more gives a candidate qualified opinion.`
       },
     },
   },

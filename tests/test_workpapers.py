@@ -59,11 +59,11 @@ BASE = f"/api/v1/engagements/{EID}/workpapers"
 REV08_PARAMS = {"window_days": 20, "period_end": date(2026, 9, 30)}  # 特别风险的窗口 (同 tests.xero_fakes)
 # 验收 1: REV-08 第 1 次执行之后的结论草稿 (Xero 演示: 窗口内 6 张发票, 其中 5 张找得到收款, ORC1026 收款不符)
 D3_DRAFT = {
-    "zh": "范围: 期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票. 被测对象 6 项, 合计 9,900.00. "
+    "zh": "范围: 期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票. 被测对象 6 项, 合计 AUD 9,900.00. "
     "入账期间正确: 6 项均符合. 有服务完成记录: 6 项均符合. 收款金额相符: 5 项中 1 项不符, 1 项不作判断. "
     "例外 1 条, 待处理 1 条.",
     "en": "Scope: Sales invoices posted in the 20 days before period end (2026-09-10 to 2026-09-30). "
-    "6 items tested, totalling 9,900.00. Recorded in the correct period: all 6 agree. "
+    "6 items tested, totalling AUD 9,900.00. Recorded in the correct period: all 6 agree. "
     "Service completion record exists: all 6 agree. "
     "Receipts agree to the invoice: 1 of 5 do not agree, 1 not assessed. 1 exception, 1 pending.",
 }
@@ -356,3 +356,18 @@ async def test_latest_judgment_uses_numeric_run_order(walked: tuple[Walk, httpx.
     new = original.model_copy(update={"id": "J-10", "run_id": tenth.id})
     human = new.model_copy(update={"id": "J-10-H", "version": 2})
     assert workpapers.model_judgments([new, human, old], [tenth, ninth]) == [new]
+
+
+async def test_currency_change_requires_rereview_and_preserves_prior_draft() -> None:
+    """币种改后新底稿显示新代码并要求重新复核, 旧版与原始金额不改."""
+    runner, store = await seeded()
+    original = await store.get(EID, Workpaper, "WP-D-3")
+    async with api_client(runner) as client:
+        await client.post(f"{BASE}/D-3/signoff", json={"scope": "full"})
+        response = await client.put(f"/api/v1/engagements/{EID}/currency", json={"currency": "NZD"})
+        assert response.status_code == 200
+    [changed] = [paper for paper in await refresh(runner.deps, EID) if paper.ref == "D-3"]
+    assert changed.status is WorkpaperStatus.needs_rereview and changed.last_signoff is not None
+    assert changed.conclusion_draft is not None and "NZD 9,900.00" in changed.conclusion_draft.zh
+    assert await store.get(EID, Workpaper, "WP-D-3", 1) == original
+    assert await refresh(runner.deps, EID) == []

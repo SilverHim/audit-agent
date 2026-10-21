@@ -1747,6 +1747,19 @@ export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupport
 export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | 'skipped';
 
 /**
+ * CurrencyIn
+ *
+ * 审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),
+ * 写法不对报 422 INVALID_VALUE.
+ */
+export type CurrencyIn = {
+    /**
+     * Currency
+     */
+    currency: string;
+};
+
+/**
  * DataCheck
  *
  * 一项体检的结果.
@@ -2302,6 +2315,14 @@ export type Engagement = {
      * Working Language
      */
     working_language?: 'zh' | 'en';
+    /**
+     * Currency
+     */
+    currency?: string;
+    /**
+     * Currency Source
+     */
+    currency_source?: 'default' | 'xero' | 'auditor';
     /**
      * Created At
      */
@@ -6663,6 +6684,36 @@ export type EngagementsSetWorkingLanguageResponses = {
 };
 
 export type EngagementsSetWorkingLanguageResponse = EngagementsSetWorkingLanguageResponses[keyof EngagementsSetWorkingLanguageResponses];
+
+export type EngagementsSetCurrencyData = {
+    body: CurrencyIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/currency';
+};
+
+export type EngagementsSetCurrencyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsSetCurrencyError = EngagementsSetCurrencyErrors[keyof EngagementsSetCurrencyErrors];
+
+export type EngagementsSetCurrencyResponses = {
+    /**
+     * Successful Response
+     */
+    200: Engagement;
+};
+
+export type EngagementsSetCurrencyResponse = EngagementsSetCurrencyResponses[keyof EngagementsSetCurrencyResponses];
 
 export type EngagementsResumeEngagementData = {
     body?: never;

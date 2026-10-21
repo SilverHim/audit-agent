@@ -31,7 +31,7 @@ const NO_EXTRAS: Extras = { yearEnd: '', limit: '', framework: '', priorAudited:
 
 type Problems = ProfileErrors & { yearEnd?: string; limit?: string }
 
-// 与后端的校验一致: 法定名称不为空, ABN 合格; 财年末为合法的 MM-DD (2 月 29 日也可), 审批限额为非负的澳元金额
+// 与后端的校验一致: 法定名称不为空, ABN 合格; 财年末为合法的 MM-DD (2 月 29 日也可), 审批限额为非负的记账币种金额
 function problems(draft: ProfileDraft, extras: Extras, t: Messages): Problems {
   const found: Problems = {}
   if (!draft.legalName.trim()) found.legalName = t.newClient.errors.legalName
@@ -50,7 +50,7 @@ function problems(draft: ProfileDraft, extras: Extras, t: Messages): Problems {
   return found
 }
 
-// 澳元金额 (至多两位小数, 可带千分位逗号) 换成整数分; 不合格为 null
+// 记账币种金额 (至多两位小数, 可带千分位逗号) 换成整数分; 不合格为 null
 function limitCents(text: string): number | null {
   const value = text.trim().replaceAll(',', '')
   if (!/^\d+(\.\d{1,2})?$/.test(value)) return null

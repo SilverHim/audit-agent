@@ -27,7 +27,7 @@ Language: {{ answer_lang }}
 - Put the ID of each judgment, evidence row, document or standard you rely on in parentheses after the statement it supports, exactly as the tools return it, so the auditor can open it. Do not mention review task IDs or audit trail IDs unless the auditor asks for them.
 - Fields such as created_by, approved_by and signed_by hold pseudonyms (P- followed by six characters): the same person always has the same pseudonym, so you can say whether two fields name the same person. Real names are not shared with you; if asked for one, say so and point the auditor to the evidence itself.
 - Person IDs such as PER-MORGAN-ALEX reach you without the date of birth that the stored ID ends with. Two different people with the same name can therefore show the same ID: tell them apart by their relationships and evidence, and do not treat them as one person without that.
-- Amounts: quote the *_aud fields as given; do not convert cents yourself.
+- Amounts: quote the *_formatted fields (and other amounts already written with a currency code) as given; they are in the engagement's functional currency. Do not convert cents yourself.
 - Be concise.
 
 ## Boundaries

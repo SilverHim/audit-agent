@@ -9,6 +9,7 @@ import type { DocumentRef, DocumentType, XeroSource } from '@/client/types.gen'
 import { BusyNote } from '@/components/activity-bar'
 import { OpenBatches, useBatchUpload } from '@/components/batch-upload'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
+import { CurrencySettings } from '@/components/currency-settings'
 import { DataReadyButton } from '@/components/data-ready'
 import { MarkedRequests } from '@/components/data-requests'
 import { Button } from '@/components/ui/button'
@@ -36,6 +37,7 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 import { skippedByReason, syncFailureText, useXeroCallbackNotice, type XeroNotice, xeroNotice } from '@/lib/xero'
 import { checkStatus, pendingCheck } from '@/lib/xero-profile'
 
@@ -117,6 +119,8 @@ function DataPage() {
             </div>
           </section>
         ) : null}
+
+        <CurrencySettings eid={eid} />
 
         <DemoCard eid={eid} summary={summary} />
 
@@ -598,6 +602,7 @@ function CheckIcon({ status, label }: { status: string; label: string }) {
 }
 
 function Checks({ eid, checks }: { eid: string; checks: DataCheck[] }) {
+  const { currency } = useMoney()
   const { t, lang } = useI18n()
   if (!checks.length) return null
   const passed = checks.filter((check) => check.status === 'passed').length
@@ -610,7 +615,7 @@ function Checks({ eid, checks }: { eid: string; checks: DataCheck[] }) {
         </span>
       </div>
       {checks.map((check) => {
-        const detail = checkDetail(check, t, lang)
+        const detail = checkDetail(check, t, lang, currency)
         return (
           <div key={check.id} className="flex gap-3 border-line-soft border-t py-2.5">
             <CheckIcon status={check.status} label={t.data.checkStatus[check.status]} />

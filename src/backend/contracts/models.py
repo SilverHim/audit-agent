@@ -942,6 +942,22 @@ class ClientEntry(Model):
 # 项目的工作语言 (需求 R339, Issue #51): 底稿与回答用的语言. en 为英文 (缺省, 与之前的输出一致), zh 为中文
 WorkingLanguage = Literal["zh", "en"]
 
+# 记账币种 (需求 R366, Issue #66): ISO 4217 字母代码 (三个大写字母). 金额照旧按该币种的 "分" (×100 的整数) 存, 显示
+# 与提示词输入按它格式化 (services/currency). 没有 Xero 本位币也没由审计师确认时为澳元
+DEFAULT_CURRENCY = "AUD"
+CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+# 记账币种的来源: default 缺省 (还没确认), xero 取自 Xero 组织的本位币 (演示数据集建项目时, 同步时), auditor 审计师
+# 在数据管理页确认或改 (PUT currency)
+CurrencySource = Literal["default", "xero", "auditor"]
+
+
+def initial_currency(code: str | None) -> dict[str, str]:
+    """建项目时的记账币种与来源 (需求 R366): 数据集带本位币 (DatasetLoader.currency) 时取它, 来源 xero; 否则为澳元,
+    来源 default. 存储的 create 共用."""
+    if code:
+        return {"currency": code, "currency_source": "xero"}
+    return {"currency": DEFAULT_CURRENCY, "currency_source": "default"}
+
 
 class Engagement(Model):
     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
@@ -959,8 +975,22 @@ class Engagement(Model):
     # 工作语言 (需求 R339): 建项目时选, 之后可改 (PUT working-language, 留痕); 每次执行记下当时的值
     # (ProcedureRun.language), 已生成的内容不随之改写. 之前建的项目为 en
     working_language: WorkingLanguage = "en"
+    # 记账币种与来源 (需求 R366): 建项目时数据集带本位币的取它 (来源 xero), 否则为澳元 (default); Xero 同步与审计师
+    # 确认时改. 之前建的项目为澳元 (default)
+    currency: CurrencyCode = DEFAULT_CURRENCY
+    currency_source: CurrencySource = "default"
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
+
+
+def with_currency(engagement: Engagement, currency: str, source: CurrencySource) -> Engagement:
+    """改了记账币种与来源的项目 (需求 R366, 存储的 set_currency 共用): 经校验, 代码不是三个大写字母时抛
+    ValidationError; 与原值都相同时为原对象."""
+    if source == "xero" and engagement.currency_source == "auditor":
+        return engagement  # 同步与人工确认并发时, 持存储行锁后仍保护审计师的选择.
+    if (engagement.currency, engagement.currency_source) == (currency, source):
+        return engagement
+    return Engagement.model_validate({**engagement.model_dump(), "currency": currency, "currency_source": source})
 
 
 class AuditObjective(Versioned):

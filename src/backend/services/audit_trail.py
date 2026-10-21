@@ -1,4 +1,4 @@
-"""Append-only audit trail, always committed independently of business writes."""
+"""只追加的审计留痕: 缺省独立提交, 显式 independent=False 时与配置修改一并提交或回滚."""
 
 from collections.abc import Sequence
 from uuid import uuid4
@@ -12,9 +12,9 @@ from backend.persistence.stores import Store, now
 
 
 class PostgresAuditTrail(Store):
-    async def record(self, entry: TrailEntry) -> str:
+    async def record(self, entry: TrailEntry, *, independent: bool = True) -> str:
         item = entry.model_copy(update={"id": entry.id or f"TR-{uuid4()}", "created_at": entry.created_at or now()})
-        async with transaction(self.engine, entry.engagement_id, independent=True) as conn:
+        async with transaction(self.engine, entry.engagement_id, independent=independent) as conn:
             await conn.execute(insert(audit_trail).values(**item.model_dump()))
         assert item.id is not None
         return item.id

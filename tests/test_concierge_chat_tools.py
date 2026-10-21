@@ -1,6 +1,7 @@
 """审计助理的只读工具 (tools.py) 与引用匹配 (citations.py)."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -256,19 +257,19 @@ async def test_evidence_masks_accounts_and_pseudonymises_people() -> None:
     outcome, data = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"})
     assert data["row"]["created_by"] == pseudonym("ar.clerk") != data["row"]["approved_by"]
     assert "ar.clerk" not in outcome.content
-    assert data["row"]["debit_aud"] == "AUD 50,000.00"
+    assert data["row"]["debit_formatted"] == "AUD 50,000.00"
     outcome, data = await call("get_evidence", {"source_type": "delivery_note", "source_id": "DN-2026-0612"})
     assert "Daniel Price" not in outcome.content
     assert outcome.cites["DN-2026-0612"].kind == "evidence"
 
 
 async def test_evidence_reads_a_supplier_bill_row() -> None:
-    """需求 R178: 取证据工具能读应付账单的行, 金额另给 AUD 写法, 引用为发票类的内部原件 (同销售发票)."""
+    """需求 R178: 取证据工具能读应付账单的行, 金额另给按记账币种的写法, 引用为发票类的内部原件 (同销售发票)."""
     tool_env = env()
     bill = {"id": "PB-1", "bill_no": "3395", "supplier": "PowerDirect", "outstanding_cents": 33110}
     cast(FakeFinancialStore, tool_env.deps.financial_store).records[("supplier_bill", "PB-1")] = bill
     outcome, data = await call("get_evidence", {"source_type": "supplier_bill", "source_id": "PB-1"}, tool_env)
-    assert (data["source_type"], data["row"]["outstanding_aud"]) == ("supplier_bill", "AUD 331.10")
+    assert (data["source_type"], data["row"]["outstanding_formatted"]) == ("supplier_bill", "AUD 331.10")
     pointer = outcome.cites["PB-1"].pointer
     assert (pointer.type, pointer.reliability) == (EvidenceType.invoice, Reliability.internal_original)
 
@@ -422,9 +423,17 @@ async def test_same_person_gets_the_same_pseudonym_across_tools() -> None:
 
 
 def test_generated_amount_wins_regardless_of_key_order() -> None:
-    first = minimize({"amount_cents": 12345, "amount_aud": "AUD 999.00"})
-    second = minimize({"amount_aud": "AUD 999.00", "amount_cents": 12345})
-    assert first["amount_aud"] == second["amount_aud"] == "AUD 123.45"
+    first = minimize({"amount_cents": 12345, "amount_formatted": "AUD 999.00"})
+    second = minimize({"amount_formatted": "AUD 999.00", "amount_cents": 12345})
+    assert first["amount_formatted"] == second["amount_formatted"] == "AUD 123.45"
+
+
+async def test_amounts_follow_the_engagement_currency() -> None:
+    """需求 R366: 工具结果里的金额按 ToolEnv.currency (本轮读到的项目记账币种) 写, 调用结束后复原, 不串到别的调用."""
+    nzd = replace(env(), currency="NZD")
+    _, data = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"}, nzd)
+    assert data["row"]["debit_formatted"] == "NZD 50,000.00"
+    assert minimize({"amount_cents": 12345})["amount_formatted"] == "AUD 123.45"
 
 
 async def test_long_results_are_truncated() -> None:

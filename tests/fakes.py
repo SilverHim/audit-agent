@@ -91,6 +91,7 @@ from backend.contracts.models import (
     Confirmation,
     ConfirmationResult,
     Contract,
+    CurrencySource,
     Decision,
     DeclarationForm,
     Direction,
@@ -170,6 +171,8 @@ from backend.contracts.models import (
     Versioned,
     WorkingLanguage,
     WrittenRepresentationLetter,
+    initial_currency,
+    with_currency,
 )
 from backend.contracts.ports import (
     ConfirmationReceipt,
@@ -756,14 +759,23 @@ class FakeAbr:
 
 
 class FakeTrail:
-    """假留痕: 存在内存列表里, 按写入顺序发号 TR-1, TR-2, ... 读取按项目过滤. 独立于业务事务, 写入即生效."""
+    """假留痕: 存在内存列表里, 按写入顺序发号 TR-1, TR-2, ... 读取按项目过滤.
+    缺省独立提交; independent=False 时在外层事务提交后生效."""
 
     def __init__(self) -> None:
         self.entries: list[TrailEntry] = []  # 已写入的留痕, 各项目混在一起, 按写入顺序
+        self.output_store: FakeOutputStore | None = None
+        self.serial = 0
 
-    async def record(self, entry: TrailEntry) -> str:
-        trail_id = f"TR-{len(self.entries) + 1}"
-        self.entries.append(entry.model_copy(update={"id": trail_id}))
+    async def record(self, entry: TrailEntry, *, independent: bool = True) -> str:
+        self.serial = max(self.serial, len(self.entries)) + 1
+        trail_id = f"TR-{self.serial}"
+        stored = entry.model_copy(update={"id": trail_id})
+        txn = self.output_store.active_txn() if self.output_store is not None else None
+        if not independent and txn is not None:
+            txn.on_commit.append(lambda: self.entries.append(stored))
+        else:
+            self.entries.append(stored)
         return trail_id
 
     async def get(self, eid: str, id: str) -> TrailEntry | None:
@@ -1006,6 +1018,7 @@ class FakeEngagementStore:
         dataset: str | None,
         profile: ClientProfile,
         working_language: WorkingLanguage = "en",
+        currency: str | None = None,
     ) -> Engagement:
         raise NotImplementedError
 
@@ -1051,6 +1064,19 @@ class FakeEngagementStore:
             changes = {"working_language": language}
             self._write(eid, current.model_copy(update={**changes, "updated_at": datetime.now(UTC)}), changes)
         return current.working_language
+
+    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement:
+        """改记账币种与来源 (需求 R366), 返回之前的项目; 都相同时不改. 不存在 LookupError, 已锁定 EngagementLocked."""
+        current = await self.get(eid)
+        if current is None:
+            raise LookupError(f"Engagement {eid} not found")
+        if current.locked:
+            raise EngagementLocked(eid)
+        changed = with_currency(current, currency, source)
+        if changed != current:
+            changes = {"currency": changed.currency, "currency_source": changed.currency_source}
+            self._write(eid, changed.model_copy(update={"updated_at": datetime.now(UTC)}), changes)
+        return current
 
     def _write(self, eid: str, updated: Engagement, changes: dict[str, Any]) -> None:
         """写入改后的项目 (update 与 set_working_language 共用): 在 output_store 的事务块内时暂存进该事务, 记下改动
@@ -1159,6 +1185,7 @@ class CreatingEngagementStore(FakeEngagementStore):
         dataset: str | None,
         profile: ClientProfile,
         working_language: WorkingLanguage = "en",
+        currency: str | None = None,
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
@@ -1180,6 +1207,7 @@ class CreatingEngagementStore(FakeEngagementStore):
             client_profile_version=profile.version,
             phase=Phase.P0_Acceptance,
             working_language=working_language,
+            **initial_currency(currency),
             created_at=NOW,
             updated_at=NOW,
         )
@@ -2278,6 +2306,9 @@ class FakeDatasetLoader:
     def period(self, dataset: str) -> tuple[date, date] | None:
         return None  # 同 Numbat 的 CSV 数据集, 期间由审计师填
 
+    def currency(self, dataset: str) -> str | None:
+        return None  # 同 CSV 数据集, 建项目时取缺省澳元
+
 
 # 种子已载入整套数据集时各账表的行数 (Numbat 的量级, 只用于就绪判断与概览)
 SEEDED_STATS: dict[TableKind, TableStats] = {
@@ -2961,6 +2992,8 @@ def make_deps(
     if output_store is None:
         output_store = FakeOutputStore()
     bind_stores(engagement_store, output_store)
+    if isinstance(trail, FakeTrail):
+        trail.output_store = output_store
     if financial_store is None:
         financial_store = FakeFinancialStore()
     if data is None:
@@ -2985,7 +3018,15 @@ def make_deps(
         features = library.features
     elif features != library.features:
         raise ValueError(f"features {sorted(features)} 与程序库的 {sorted(library.features)} 不一致")
-    judgments = JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library)
+    from backend.services.currency import engagement_currency
+
+    judgments = JudgmentEngine(
+        llm,
+        OutputValidator(financial_store, library, trail),
+        trail,
+        library,
+        currency=engagement_currency(engagement_store),
+    )
     deps = replace(
         deps,
         library=library,

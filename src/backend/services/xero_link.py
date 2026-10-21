@@ -50,7 +50,7 @@ from backend.adapters.xero import (
     fetch,
     login_scopes,
 )
-from backend.adapters.xero_dataset import Period, Snapshot, build_tables
+from backend.adapters.xero_dataset import Period, Snapshot, base_currency, build_tables
 from backend.agents.base import AgentDeps
 from backend.contracts.data import (
     XERO_TABLES,
@@ -72,6 +72,7 @@ from backend.contracts.views import ActivityKind
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
 from backend.services.abn import abn_problem, dataset_profiles
+from backend.services.currency import currency_trail
 from backend.services.data_service import DataService
 from backend.services.xero_profile import check_key, organisation_info, profile_differences
 
@@ -606,6 +607,7 @@ class XeroLink:
             statements = "bank_statements" in files
             organisations = files.get("organisation") or [{}]
             organisation = organisation_info(organisations[0])
+            currency = base_currency(organisations[0])
         except XeroAuthExpired as e:
             await self.expire(eid)
             await self.sync_failed(eid, actor, "expired", e.status)
@@ -645,6 +647,23 @@ class XeroLink:
             "organisation_info": organisation,
         }
         await self.record(eid, actor, summary, payload)
+        if currency is not None:
+            await self.adopt_currency(eid, actor, currency)
+
+    async def adopt_currency(self, eid: str, actor: str, currency: str) -> None:
+        """同步取到的组织本位币 (需求 R366): 项目的记账币种改为它, 来源 xero; 审计师确认过的 (来源 auditor) 不改,
+        币种与来源都不变时不改; 改了写 data 留痕 currency (services.currency.currency_trail), 留痕写失败只记日志."""
+        engagements = self.deps.engagement_store
+        engagement = await engagements.get(eid)
+        if engagement is None or engagement.currency_source == "auditor":
+            return
+        before = await engagements.set_currency(eid, currency, "xero")
+        if before.currency_source == "auditor" or (before.currency, before.currency_source) == (currency, "xero"):
+            return
+        try:
+            await self.deps.trail.record(currency_trail(eid, actor, before, currency, "xero"))
+        except Exception:
+            logger.exception("Xero 同步改记账币种的留痕写入失败: %s", eid)
 
     async def sync_failed(
         self, eid: str, actor: str, reason: XeroSyncFailure, status: int | None, *, resources: list[str] | None = None

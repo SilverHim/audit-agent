@@ -14,7 +14,17 @@ from pathlib import Path
 from typing import Any, NoReturn, TypeGuard, Union, cast, get_args, get_origin
 
 import yaml
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError, Undefined, meta, nodes
+from jinja2 import (
+    Environment,
+    FileSystemLoader,
+    StrictUndefined,
+    TemplateSyntaxError,
+    Undefined,
+    meta,
+    nodes,
+    pass_context,
+)
+from jinja2.runtime import Context
 from pydantic import BaseModel, ValidationError
 from pydantic_core import to_jsonable_python
 
@@ -51,6 +61,7 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
 from backend.services.adjusted_tb import verified_entry_nos
+from backend.services.currency import format_money
 from backend.services.data_quality import REQUIRED_TABLES
 from backend.services.features import BASELINE, FEATURES, check_features
 
@@ -94,10 +105,21 @@ def days_before(day: date | str, days: int) -> date:
     return (day if isinstance(day, date) else date.fromisoformat(day)) - timedelta(days=days)
 
 
+@pass_context
+def money(context: Context, cents: int | None, currency: str | None = None) -> str:
+    """过滤器 money (需求 R366): 金额 (分) 按记账币种写, 如 {{ x.amount_cents | money }} → "AUD 1,234.56"
+    (services.currency.format_money, 带该币种通常的小数位). 币种取参数, 没给取渲染变量 currency (判断引擎按项目的
+    记账币种给, JudgmentEngine.call_llm), 都没有为澳元; 金额为空写 null."""
+    if cents is None:
+        return "null"
+    code = currency or context.get("currency")
+    return format_money(int(cents), code) if isinstance(code, str) and code else format_money(int(cents))
+
+
 def prompt_env(root: Path | None = None) -> Environment:
     """知识文件里 Jinja2 模板的环境: 提示词 (root 为模板目录), 与程序 YAML 带参数占位的文字 (不给 root, 见
     render_text). 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义; 另有过滤器
-    days_before."""
+    days_before 与 money."""
     env = Environment(
         loader=FileSystemLoader(root) if root is not None else None,
         trim_blocks=True,
@@ -107,6 +129,7 @@ def prompt_env(root: Path | None = None) -> Environment:
     )
     env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
     env.filters["days_before"] = days_before
+    env.filters["money"] = money
     return env
 
 

@@ -37,7 +37,7 @@ import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-ap
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
+import { formatMoney } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
 import { reasonText } from '@/lib/reason'
 import { manualInstructions, procedureName, type RankedTask, rankTasks, splitManual } from '@/lib/review'
@@ -484,6 +484,7 @@ function HistoryItem({
       </UserBubble>
     )
   }
+  if (item.kind === 'currency') return <EventLine>{t.currency.change(item.from, item.to)}</EventLine>
   if (item.kind === 'language') {
     const names = t.workingLanguage.names
     return <EventLine>{t.workingLanguage.changedEvent(names[item.from], names[item.to])}</EventLine>
@@ -642,7 +643,7 @@ function CurrentItem({
     return (
       <div className="flex flex-col gap-4">
         <ConciergeMessage>
-          <ConciergeText>{gateIntro(t, current.view)}</ConciergeText>
+          <ConciergeText>{gateIntro(t, current.view, overview.engagement.currency)}</ConciergeText>
           <GateMaterial eid={eid} view={current.view} />
         </ConciergeMessage>
         <GateDecisionCard
@@ -786,7 +787,7 @@ function ManualTaskEntry({
   )
 }
 
-function gateIntro(t: Messages, view: GateView): ReactNode {
+function gateIntro(t: Messages, view: GateView, currency = 'AUD'): ReactNode {
   const material = view.material
   if (material.kind === 'ACC-01') {
     const checks = material.scorecard.registry_checks
@@ -801,7 +802,7 @@ function gateIntro(t: Messages, view: GateView): ReactNode {
   if (material.kind === 'FIN-01') {
     return t.workspace.gateIntro['FIN-01'](
       material.misstatements.length,
-      formatAud(material.schedule.total_cents),
+      formatMoney(material.schedule.total_cents, currency),
       material.not_executed?.length ?? 0,
     )
   }
@@ -827,7 +828,7 @@ function localAnswer(
       .join(' ')
     const materiality =
       overview.materiality_cents != null
-        ? ` ${t.workspace.answers.materiality(formatAud(overview.materiality_cents), formatAud(overview.performance_materiality_cents))}`
+        ? ` ${t.workspace.answers.materiality(formatMoney(overview.materiality_cents, overview.engagement.currency), formatMoney(overview.performance_materiality_cents, overview.engagement.currency))}`
         : ''
     return head + materiality
   }

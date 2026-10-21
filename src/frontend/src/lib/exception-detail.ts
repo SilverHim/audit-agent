@@ -1,4 +1,4 @@
-import { formatAud, formatPct } from '@/lib/money'
+import { formatMoney, formatPct } from '@/lib/money'
 import type { Messages } from '@/locales/en'
 
 // 例外明细 (AuditException.detail, 即规则 SQL 的其余输出列) 按字段显示 (需求 R350): 以 _cents 结尾的按全站金额
@@ -22,33 +22,35 @@ function asNumber(value: unknown): number | null {
 }
 
 // 一个原子值的文本: 金额与比例按字段名后缀, 布尔取是否, 认得的字符串取值换成文案
-function valueText(key: string, value: unknown, labels: Labels): string {
+function valueText(key: string, value: unknown, labels: Labels, currency = 'AUD'): string {
   if (value === null || value === undefined) return '—'
   const number = asNumber(value)
-  if (key.endsWith('_cents') && number !== null) return formatAud(number)
+  if (key.endsWith('_cents') && number !== null) return formatMoney(number, currency)
   if (key.endsWith('_pct') && number !== null) return formatPct(number, 1)
   if (typeof value === 'boolean') return value ? labels.yes : labels.no
   if (typeof value === 'string') return labels.values[key]?.[value] ?? value
   return String(value)
 }
 
-function row(key: string, value: unknown, labels: Labels): DetailRow {
+function row(key: string, value: unknown, labels: Labels, currency = 'AUD'): DetailRow {
   const label = labels.fields[key] ?? key
-  if (isObject(value)) return { key, label, rows: detailRows(value, labels) }
+  if (isObject(value)) return { key, label, rows: detailRows(value, labels, currency) }
   if (Array.isArray(value) && value.some(isObject)) {
     const items = value.map((item, n): DetailRow => {
       const at = { key: `${key}.${n + 1}`, label: `${label} ${n + 1}` }
-      return isObject(item) ? { ...at, rows: detailRows(item, labels) } : { ...at, text: valueText(key, item, labels) }
+      return isObject(item)
+        ? { ...at, rows: detailRows(item, labels, currency) }
+        : { ...at, text: valueText(key, item, labels, currency) }
     })
     return { key, label, rows: items }
   }
   const text = Array.isArray(value)
-    ? value.map((item) => valueText(key, item, labels)).join(', ') || '—'
-    : valueText(key, value, labels)
+    ? value.map((item) => valueText(key, item, labels, currency)).join(', ') || '—'
+    : valueText(key, value, labels, currency)
   return { key, label, text }
 }
 
 // 明细的各行, 顺序同 detail 的字段顺序; 空的明细为空列表
-export function detailRows(detail: Record<string, unknown>, labels: Labels): DetailRow[] {
-  return Object.entries(detail).map(([key, value]) => row(key, value, labels))
+export function detailRows(detail: Record<string, unknown>, labels: Labels, currency = 'AUD'): DetailRow[] {
+  return Object.entries(detail).map(([key, value]) => row(key, value, labels, currency))
 }

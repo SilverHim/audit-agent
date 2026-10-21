@@ -534,6 +534,64 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/currency": {
+      "put": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Set Currency",
+        "description": "审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词\n输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423\nENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),\n币种与留痕在同一事务中写入, 留痕失败整体回滚. 不取项目锁 (同 PUT working-language): 后台执行中照样可改.",
+        "operationId": "engagements-set_currency",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CurrencyIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Engagement"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/resume": {
       "post": {
         "tags": [
@@ -8319,6 +8377,21 @@
         "title": "CriticVerdict",
         "description": "独立复核 (A7, GEN-09) 的结论."
       },
+      "CurrencyIn": {
+        "properties": {
+          "currency": {
+            "type": "string",
+            "title": "Currency"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "currency"
+        ],
+        "title": "CurrencyIn",
+        "description": "审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),\n写法不对报 422 INVALID_VALUE."
+      },
       "DataCheck": {
         "properties": {
           "id": {
@@ -9344,6 +9417,22 @@
             ],
             "title": "Working Language",
             "default": "en"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "default": "AUD"
+          },
+          "currency_source": {
+            "type": "string",
+            "enum": [
+              "default",
+              "xero",
+              "auditor"
+            ],
+            "title": "Currency Source",
+            "default": "default"
           },
           "created_at": {
             "type": "string",

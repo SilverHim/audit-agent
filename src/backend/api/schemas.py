@@ -98,6 +98,13 @@ class WorkingLanguageIn(Model):
     language: str
 
 
+class CurrencyIn(Model):
+    """审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),
+    写法不对报 422 INVALID_VALUE."""
+
+    currency: str
+
+
 class DatasetSummary(Model):
     """新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中."""
 

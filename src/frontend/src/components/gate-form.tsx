@@ -55,12 +55,13 @@ import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { inapplicable, initialChoice, selectableCandidates } from '@/lib/materiality'
-import { formatAud, formatPct } from '@/lib/money'
+import { formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
 import { reasonText } from '@/lib/reason'
 import { reportPart } from '@/lib/report-sections'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 import type { Messages } from '@/locales/en'
 
 // 阶段决定 (闸门) 的材料与决定卡片. 对话工作台和表单视图共用
@@ -104,6 +105,7 @@ function Panel({ title, aside, children }: { title: ReactNode; aside?: ReactNode
 }
 
 export function ExceptionList({ eid, items }: { eid: string; items: AuditException[] }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   if (!items.length) return null
   return (
@@ -113,7 +115,7 @@ export function ExceptionList({ eid, items }: { eid: string; items: AuditExcepti
           <div className="flex flex-wrap items-center gap-2">
             <Code className="font-semibold">{item.id}</Code>
             <StatusPill tone={item.severity === 'high' ? 'risk' : 'warn'}>{item.severity}</StatusPill>
-            <Code>{formatAud(item.amount_cents)}</Code>
+            <Code>{formatMoney(item.amount_cents)}</Code>
           </div>
           <ExceptionDetail detail={item.detail ?? {}} />
           <PointerList eid={eid} pointers={item.evidence} />
@@ -168,6 +170,7 @@ function PercentInput({
 
 // PLN-07 A03 的月度趋势 (本期按月的收入, 费用与员工费用); 没有月度数 (旧结果或没有总账) 时不显示
 function MonthlyTable({ rows }: { rows: MonthlyFigures[] }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   if (rows.length === 0) return null
   const labels = t.planning.monthly
@@ -196,9 +199,9 @@ function MonthlyTable({ rows }: { rows: MonthlyFigures[] }) {
             {rows.map((row) => (
               <tr key={row.month}>
                 <td className="border-b px-3 py-1.5 font-mono">{row.month.slice(0, 7)}</td>
-                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.revenue_cents)}</td>
-                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.expense_cents)}</td>
-                <td className="border-b px-3 py-1.5 text-right font-mono">{formatAud(row.employee_expense_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatMoney(row.revenue_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatMoney(row.expense_cents)}</td>
+                <td className="border-b px-3 py-1.5 text-right font-mono">{formatMoney(row.employee_expense_cents)}</td>
               </tr>
             ))}
           </tbody>
@@ -209,6 +212,7 @@ function MonthlyTable({ rows }: { rows: MonthlyFigures[] }) {
 }
 
 export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const material = view.material
   if (material.kind === 'ACC-01') {
@@ -281,9 +285,9 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           <dt className="text-muted-foreground">{t.completion.candidate}</dt>
           <dd className="m-0 font-semibold">{t.opinions[material.schedule.candidate_opinion]}</dd>
           <dt className="text-muted-foreground">{t.completion.total}</dt>
-          <dd className="m-0 font-mono">{formatAud(material.schedule.total_cents)}</dd>
+          <dd className="m-0 font-mono">{formatMoney(material.schedule.total_cents)}</dd>
           <dt className="text-muted-foreground">{t.completion.materiality}</dt>
-          <dd className="m-0 font-mono">{formatAud(material.schedule.materiality_cents)}</dd>
+          <dd className="m-0 font-mono">{formatMoney(material.schedule.materiality_cents)}</dd>
         </dl>
         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
         <UnrecognisedSuggestions eid={eid} items={material.schedule.unrecognised ?? []} />
@@ -600,6 +604,7 @@ function PlanningFields({
   levelReasons: Record<string, string>
   onLevelReason: (id: string, reason: string) => void
 }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const selected = candidates.candidates.find((item) => item.basis === choice.basis)
   const range = candidates.performance_pct_range ?? [0.5, 0.75]
@@ -614,13 +619,13 @@ function PlanningFields({
             return (
               <li key={item.basis} className="flex flex-wrap gap-x-2">
                 <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
-                <Code>{formatAud(item.base_amount_cents)}</Code>
+                <Code>{formatMoney(item.base_amount_cents)}</Code>
                 {reason ? (
                   <span className="text-muted-foreground">· {t.planning.notApplicable[reason]}</span>
                 ) : (
                   <span className="text-muted-foreground">
-                    · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
-                    <Code>{formatAud(item.high_cents)}</Code>
+                    · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatMoney(item.low_cents)}</Code>–
+                    <Code>{formatMoney(item.high_cents)}</Code>
                   </span>
                 )}
               </li>
@@ -672,8 +677,8 @@ function PlanningFields({
       </div>
       <span className="rounded-lg bg-muted px-3 py-2 text-[13.5px]">
         {t.planning.preview(
-          formatAud(overall),
-          overall != null ? formatAud(Math.round(overall * choice.performance_pct)) : '—',
+          formatMoney(overall),
+          overall != null ? formatMoney(Math.round(overall * choice.performance_pct)) : '—',
         )}
       </span>
       <div className="flex flex-col gap-2">

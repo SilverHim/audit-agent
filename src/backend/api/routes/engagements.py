@@ -1,6 +1,7 @@
 """POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile; GET plan;
-PUT working-language."""
+PUT working-language; PUT currency."""
 
+import re
 from typing import Annotated, cast, get_args
 
 from fastapi import APIRouter, Depends, Response
@@ -11,6 +12,7 @@ from backend.api.errors import api_error, catch_api
 from backend.api.routes.clients import dataset_clients
 from backend.api.schemas import (
     ClientProfileView,
+    CurrencyIn,
     EngagementCreate,
     EngagementSummary,
     ProfileVersionInfo,
@@ -29,6 +31,7 @@ from backend.contracts.views import EngagementOverview, PlanView
 from backend.orchestration.decisions import language_trail
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
+from backend.services.currency import currency_trail
 
 router = APIRouter(prefix="/engagements", tags=["engagements"])
 
@@ -40,6 +43,14 @@ def parse_language(value: str) -> WorkingLanguage:
     if value not in get_args(WorkingLanguage):
         raise api_error("INVALID_VALUE", f"工作语言须为 zh 或 en, 现为 {value!r}")
     return cast(WorkingLanguage, value)
+
+
+def parse_currency(value: str) -> str:
+    """请求里的记账币种 (PUT currency, 需求 R366): 须为三个大写字母 (ISO 4217 代码, 不查是否在用), 否则 422
+    INVALID_VALUE."""
+    if not re.fullmatch(r"[A-Z]{3}", value):
+        raise api_error("INVALID_VALUE", f"记账币种须为三个大写字母的 ISO 4217 代码, 现为 {value!r}")
+    return value
 
 
 @router.post("", status_code=201)
@@ -66,6 +77,7 @@ async def create_engagement(
     try:
         profile = deps.datasets.client_profile(body.dataset)
         period = deps.datasets.period(body.dataset)
+        currency = deps.datasets.currency(body.dataset)  # Xero 快照的本位币 (需求 R366); CSV 数据集为 None
     except FileNotFoundError as exc:
         raise api_error("NOT_FOUND", body.dataset) from exc
     except ValueError as exc:  # 含 SupplementMismatch 与画像校验失败 (ValidationError)
@@ -84,6 +96,7 @@ async def create_engagement(
             dataset=body.dataset,
             profile=profile,
             working_language=language,
+            currency=currency,
         )
     except ValueError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
@@ -190,6 +203,31 @@ async def set_working_language(
             except Exception:
                 await deps.engagement_store.set_working_language(engagement.id, before)  # 补偿: 改回原值
                 raise
+        updated = await deps.engagement_store.get(engagement.id)
+        if updated is None:
+            raise api_error("NOT_FOUND", engagement.id)
+    return updated
+
+
+@router.put("/{eid}/currency")
+async def set_currency(
+    body: CurrencyIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> Engagement:
+    """审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词
+    输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423
+    ENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),
+    币种与留痕在同一事务中写入, 留痕失败整体回滚. 不取项目锁 (同 PUT working-language): 后台执行中照样可改."""
+    currency = parse_currency(body.currency)
+    async with catch_api():
+        async with deps.output_store.transaction(engagement.id):
+            before = await deps.engagement_store.set_currency(engagement.id, currency, "auditor")
+            if (before.currency, before.currency_source) != (currency, "auditor"):
+                await deps.trail.record(
+                    currency_trail(engagement.id, user.id, before, currency, "auditor"), independent=False
+                )
         updated = await deps.engagement_store.get(engagement.id)
         if updated is None:
             raise api_error("NOT_FOUND", engagement.id)

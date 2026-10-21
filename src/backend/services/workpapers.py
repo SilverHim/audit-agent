@@ -16,12 +16,12 @@ from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from backend.contracts.errors import DataRejected
 from backend.contracts.knowledge import ProcedureTemplate, RequiredItem
 from backend.contracts.models import (
+    DEFAULT_CURRENCY,
     AcceptanceScorecard,
     AnalyticsResult,
     AuditException,
@@ -57,6 +57,7 @@ from backend.contracts.models import (
     WorkpaperSignoff,
     WorkpaperStatus,
 )
+from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import render_text, workpaper_kind
 
@@ -105,6 +106,7 @@ def workpaper_id(ref: str) -> str:
 class Sources:
     """一次刷新读到的 Store 内容, 都是各对象的最新版本. outputs 为 OUTPUT_BASIS 的字段 → 对象 (只读程序包用到的)."""
 
+    currency: str = DEFAULT_CURRENCY
     runs: list[ProcedureRun] = field(default_factory=list)
     populations: list[RunPopulation] = field(default_factory=list)
     exceptions: list[AuditException] = field(default_factory=list)
@@ -126,6 +128,7 @@ class View:
     judgments: list[Judgment]
     decisions: list[GateDecision]
     outputs: list[Versioned]
+    currency: str = DEFAULT_CURRENCY
 
 
 def view_of(template: ProcedureTemplate, sources: Sources) -> View:
@@ -147,7 +150,7 @@ def view_of(template: ProcedureTemplate, sources: Sources) -> View:
         key=lambda d: (d.decided_at, d.id),
     )
     outputs = [o for name in template.outputs if name in OUTPUT_BASIS for o in sources.outputs.get(name, [])]
-    return View(template, runs, current, populations, exceptions, judgments, decisions, outputs)
+    return View(template, runs, current, populations, exceptions, judgments, decisions, outputs, sources.currency)
 
 
 def basis_of(view: View) -> list[ObjectRef]:
@@ -163,11 +166,6 @@ def basis_of(view: View) -> list[ObjectRef]:
     ]
     refs = {(type(o).__name__, o.id): o.version for o in objects}
     return [ObjectRef(kind=kind, id=oid, version=version) for (kind, oid), version in sorted(refs.items())]
-
-
-def money(cents: int) -> str:
-    """金额的写法: 千分位, 两位小数, 如 9,900.00."""
-    return f"{Decimal(cents) / 100:,.2f}"
 
 
 def joined(parts: Iterable[LocalizedText]) -> LocalizedText | None:
@@ -201,7 +199,10 @@ def rule_draft(view: View) -> LocalizedText | None:
         amount = total_cents(i.amount_cents for i in items)
         zh, en = f"被测对象 {len(items)} 项", f"{plural(len(items), 'item')} tested"
         if amount is not None:
-            zh, en = f"{zh}, 合计 {money(amount)}", f"{en}, totalling {money(amount)}"
+            zh, en = (
+                f"{zh}, 合计 {format_money(amount, view.currency)}",
+                f"{en}, totalling {format_money(amount, view.currency)}",
+            )
         parts.append(LocalizedText(zh=f"{zh}.", en=f"{en}."))
     exceptions = [x for x in view.exceptions if x.run_id == run.id]
     specs = {r.id: r for r in template.rules}
@@ -358,8 +359,9 @@ def refreshed(
     previous: Workpaper | None, template: ProcedureTemplate, required: Sequence[RequiredItem], sources: Sources
 ) -> Workpaper | None:
     """按 sources 刷新 template 的底稿记录, 返回新版本; 没有依据 (还没执行或决定) 或与上一版相同时为空 (幂等).
-    第 1 版为 draft; 依据变了时已签署的改为 needs_rereview (unsigned), 草稿与缺项照新算; 只是草稿或缺项变了 (如
-    模板改了写法) 时出新版本而状态与签署不变. 纯函数."""
+    第 1 版为 draft; 依据变了时已签署的改为 needs_rereview (unsigned), 草稿与缺项照新算.
+    草稿金额的币种或文字变了也要求重新复核;
+    仅缺项变动不影响签署. 纯函数."""
     assert template.workpaper is not None
     view = view_of(template, sources)
     basis = basis_of(view)
@@ -374,7 +376,7 @@ def refreshed(
         new = new.model_copy(update={"conclusion_draft": draft})
     else:
         changes: dict[str, object] = {"basis": basis, "conclusion_draft": draft}
-        if basis != previous.basis:
+        if basis != previous.basis or draft != previous.conclusion_draft:
             changes |= unsigned(previous)
         new = previous.model_copy(update=changes)
     new = new.model_copy(update={"missing": missing_of(required, view, sources, new)})
@@ -405,7 +407,9 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
     outputs: dict[str, list[Versioned]] = {}
     for name in needed:
         outputs[name] = list(await store.latest(eid, OUTPUT_BASIS[name]))
+    engagement = await deps.engagement_store.get(eid)
     sources = Sources(
+        currency=engagement.currency if engagement else DEFAULT_CURRENCY,
         runs=await store.latest(eid, ProcedureRun),
         populations=await store.latest(eid, RunPopulation),
         exceptions=await store.latest(eid, AuditException),

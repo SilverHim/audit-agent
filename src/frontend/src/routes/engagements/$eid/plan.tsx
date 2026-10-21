@@ -12,11 +12,11 @@ import { GeneratedLanguage } from '@/components/working-language'
 import { useActorName } from '@/lib/actor'
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import { currentPlan, extentLabel, methodLabel, planTable, revisionHistory } from '@/lib/plan'
 import { reasonText } from '@/lib/reason'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 import { contentLanguage, type WorkingLanguage } from '@/lib/working-language'
 
 export const Route = createFileRoute('/engagements/$eid/plan')({ component: Plan })
@@ -138,17 +138,18 @@ function Revisions({ view }: { view: PlanView }) {
 }
 
 function Facts({ plan, view, lang }: { plan: AuditPlan; view: PlanView; lang: WorkingLanguage }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   return (
     <div className="grid gap-5 md:grid-cols-2">
       <Panel title={t.planPage.materiality}>
         <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[14px]">
           <dt className="text-muted-foreground">{t.planPage.overall}</dt>
-          <dd className="m-0 font-mono">{formatAud(plan.materiality_cents)}</dd>
+          <dd className="m-0 font-mono">{formatMoney(plan.materiality_cents)}</dd>
           <dt className="text-muted-foreground">{t.planPage.performance}</dt>
-          <dd className="m-0 font-mono">{formatAud(plan.performance_materiality_cents)}</dd>
+          <dd className="m-0 font-mono">{formatMoney(plan.performance_materiality_cents)}</dd>
           <dt className="text-muted-foreground">{t.planPage.trivial}</dt>
-          <dd className="m-0 font-mono">{formatAud(plan.clearly_trivial_cents)}</dd>
+          <dd className="m-0 font-mono">{formatMoney(plan.clearly_trivial_cents)}</dd>
         </dl>
       </Panel>
       <Panel title={t.planPage.risks}>
