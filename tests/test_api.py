@@ -671,11 +671,11 @@ CREATE = {"period_start": "2025-07-01", "period_end": "2026-06-30", "dataset": "
     ],
     ids=["unknown", "case", "locked", "not_mine", "create_unknown"],
 )
-def test_working_language_change_rejected(
+def test_working_language_rejected(
     api: SimpleNamespace, fields: dict[str, Any], method: str, url: str, body: dict[str, str], status: int, code: str
 ) -> None:
     """验收 1, 2: 取值不在 zh, en 422 INVALID_VALUE (区分大小写; 建项目与修改同一个校验 parse_language, 建项目时
-    不建); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改项目, 不留痕."""
+    不建); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改项目, 不留痕 (POST 一例只看错误码)."""
     store = language_store(api, **fields)
     response = api.client.request(method, url, headers=_auth(api), json=body)
     assert (response.status_code, response.json()["detail"]["code"]) == (status, code)

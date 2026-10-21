@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from backend.agents import ingest, sheets
+from backend.agents import ingest
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import (
     DocumentIntake,
@@ -36,7 +36,6 @@ from backend.contracts.models import (
     TaskStatus,
     TrailEntry,
     TrailKind,
-    WorkingLanguage,
 )
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
@@ -204,21 +203,31 @@ async def test_uploaded_confirmation_reply_is_extracted_without_linking() -> Non
     assert (extraction["data"]["account_no"], extraction["data"]["confirmed_balance_cents"]) == ("12345601", 120840000)
 
 
-async def test_upload_runs_take_the_project_language(monkeypatch: pytest.MonkeyPatch) -> None:
-    """需求 R339 验收 3 (审核 R339-07): 上传即处理的执行 (upload_run) 也记处理时项目的工作语言. 项目改为 zh 后, 直接上传
-    (分类, 合同与回函的抽取), A3 按指定类型抽取 ASIC 摘录, 智能导入 (分类与合同抽取, 账表识别) 建的执行都是 zh."""
-    built: list[tuple[str, str]] = []
-    real = ingest.upload_run
+class LanguageRecorder:
+    """判断引擎外包一层, 记下每次调用大模型时的 (程序, 交给它的执行的 language); 其余照转."""
 
-    def recording(
-        procedure_id: str, doc: DocumentRef, language: WorkingLanguage, job: str | None = None
-    ) -> ProcedureRun:
-        built.append((procedure_id, language))
-        return real(procedure_id, doc, language, job)
+    def __init__(self, inner: JudgmentEngine) -> None:
+        self.inner = inner
+        self.calls: list[tuple[str, str]] = []
 
-    monkeypatch.setattr(ingest, "upload_run", recording)
-    monkeypatch.setattr(sheets, "upload_run", recording)
-    runner, service, _, evidence, _ = setup()
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    async def call_llm(self, eid: str, template: Any, run: ProcedureRun, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((template.id, run.language))
+        return await self.inner.call_llm(eid, template, run, *args, **kwargs)
+
+
+async def test_upload_runs_take_the_project_language() -> None:
+    """需求 R339 验收 3 (审核 R339-07, R339-11): 上传即处理的执行也记处理时项目的工作语言. 项目改为 zh 后, 直接上传
+    (分类, 合同与回函的抽取), A3 按指定类型抽取 ASIC 摘录, 智能导入 (分类与合同抽取, 账表识别) 交给大模型的执行都是 zh;
+    在注入的判断引擎上记, 看的是交给大模型的那一次执行."""
+    runner, _, _, evidence, _ = setup()
+    deps = upload_deps(runner)
+    assert isinstance(deps.judgments, JudgmentEngine)
+    recorder = LanguageRecorder(deps.judgments)
+    deps = replace(deps, judgments=recorder)
+    service = DataService(deps, runner)
     assert await runner.deps.engagement_store.set_working_language(EID, "zh") == "en"
     engagement = await runner.deps.engagement_store.get(EID)
     assert engagement is not None
@@ -230,12 +239,14 @@ async def test_upload_runs_take_the_project_language(monkeypatch: pytest.MonkeyP
     extract = await evidence.save(
         EID, "900043030.pdf", b"%PDF registry", type=DocumentType.other, reliability=Reliability.internal_copy
     )
-    await DocumentIntake(upload_deps(runner)).classified(EID, extract, DocumentType.registry_extract, engagement)
+    await DocumentIntake(deps).classified(EID, extract, DocumentType.registry_extract, engagement)
     accounts = (REPO / "data" / "demo" / "accounts.csv").read_bytes()
     await service.start_batch(EID, [("CON-002.pdf", b"%PDF CON-002"), ("accounts.csv", accounts)], actor="U-1")
     await drain(service)
 
-    assert sorted(set(built)) == [(p, "zh") for p in ("DOC-04", "DOC-06", "DOC-CLASSIFY", "DOC-REGISTRY", "DOC-SHEET")]
+    assert sorted(set(recorder.calls)) == [
+        (p, "zh") for p in ("DOC-04", "DOC-06", "DOC-CLASSIFY", "DOC-REGISTRY", "DOC-SHEET")
+    ]
 
 
 async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:

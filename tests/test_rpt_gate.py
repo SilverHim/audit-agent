@@ -241,7 +241,11 @@ async def test_approve_signs_report_and_locks_last() -> None:
     [report] = [o for o in puts if isinstance(o, AuditReportVersion)]
     assert (report.id, report.version, report.status) == ("REPORT-2", 2, ReportStatus.signed)
     assert (report.report_date, report.approved_by, report.approved_at) == (date(2026, 10, 3), "U-1", SIGNED_AT)
-    assert report.sections == latest(s, AuditReportVersion, "REPORT-2").sections  # 签字不改正文
+    [draft] = [
+        r for r in s.output_store.rows if isinstance(r, AuditReportVersion) and (r.id, r.version) == ("REPORT-2", 1)
+    ]
+    assert report.sections == draft.sections  # 签字不改正文
+    assert report.run_id is not None and report.run_id == draft.run_id  # 沿用起草它的 RPT-03 执行 (需求 R339)
     [procedure] = [o for o in puts if isinstance(o, Procedure)]
     assert (procedure.id, procedure.version, procedure.status) == (
         "RPT-01",

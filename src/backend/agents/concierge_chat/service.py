@@ -583,7 +583,7 @@ class ConciergeChat:
         try:
             engagement = await self.deps.engagement_store.get(eid)
         except Exception as e:
-            log.warning("审计助理留痕时查不到项目 %s 的工作语言, 回答语言记 en: %s", eid, type(e).__name__)
+            log.warning("审计助理留痕时查项目 %s 的工作语言出错, 回答语言记 en: %s", eid, type(e).__name__)
             return "en"
         return engagement.working_language if engagement is not None else "en"
 

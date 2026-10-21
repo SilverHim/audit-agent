@@ -183,9 +183,12 @@ async def test_context_overflow_compacts_and_retries_once() -> None:
     trail = FakeTrail()
     await seed_turns(trail, 2)
     model = ScriptedChatModel([ContextOverflow("too long"), "早先问过问题 0。", "答案。"])
-    answer = await make_chat(model, chat_deps(trail)).ask(EID, USER, q("继续"))
+    answer = await make_chat(model, chat_deps(trail), state=project_state("zh")).ask(EID, USER, q("继续", "en"))
     assert answer.answer == "答案。"
     assert len(entries(trail, TrailKind.conversation_summary)) == 1
+    assert (
+        "Write the new summary in Simplified Chinese" in model.requests[1].messages[-1].content
+    )  # 重试前的摘要也按回答语言
     assert [m.content for m in model.requests[2].messages[1:]] == ["问题 1", "回答 1", "继续"]
 
 
