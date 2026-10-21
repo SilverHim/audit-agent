@@ -455,6 +455,7 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
         super().__init__(financial_store, adjustments=xero_adjustments(loader=loader), traits=traits)
         self.loader = loader
         self.span = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
+        self.base_currency = (loader if loader is not None else xero_loader()).currency(XERO_DATASET)
 
     def seed(self) -> "XeroFakeDatasetLoader":
         return self  # 文件由演示数据导入上传, 不由载入登记
@@ -470,6 +471,9 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
 
     def period(self, dataset: str) -> tuple[date, date] | None:
         return self.span
+
+    def currency(self, dataset: str) -> str | None:
+        return self.base_currency  # 同真实载入: 快照组织信息的本位币
 
 
 class LoadingDatasets(XeroFakeDatasetLoader):

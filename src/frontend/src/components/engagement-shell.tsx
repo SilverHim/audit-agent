@@ -20,7 +20,7 @@ import { BrandMark, CurrentUser, LanguageToggle } from '@/components/chrome'
 import { useDataSummary } from '@/lib/data-api'
 import { useI18n } from '@/lib/i18n'
 import { useManualTasks } from '@/lib/manual-api'
-import { formatAudShort } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 const STAGES = ['P0_Acceptance', 'P1_Planning', 'P2_Executing', 'P3_Completion', 'P4_Reporting'] as const
 type Stage = (typeof STAGES)[number]
@@ -63,6 +63,7 @@ function StageDot({ state }: { state: 'done' | 'current' | 'todo' }) {
 }
 
 function StageList({ overview }: { overview: EngagementOverview | undefined }) {
+  const { formatMoneyShort } = useMoney()
   const { t } = useI18n()
   const phase = overview?.engagement.phase ?? 'P0_Acceptance'
   const current = stageIndex(phase)
@@ -73,7 +74,7 @@ function StageList({ overview }: { overview: EngagementOverview | undefined }) {
     if (index < current) {
       if (stage === 'P0_Acceptance') return t.stageStatus.accepted
       if (stage === 'P1_Planning' && overview?.materiality_cents != null)
-        return t.stageStatus.materiality(formatAudShort(overview.materiality_cents))
+        return t.stageStatus.materiality(formatMoneyShort(overview.materiality_cents))
       if (stage === 'P4_Reporting') return t.stageStatus.signed
       return t.stageStatus.completed
     }

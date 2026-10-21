@@ -152,7 +152,7 @@ async def test_acc01_reject_caught_up_then_declined_without_put() -> None:
     """验收 2: 拒绝承接已提交 (Declined 且 locked): recover 补做后走 declined 到 END, 期间不写 Store."""
     s = await started()
     await submit_lost(s, acc01_decision(GateVerdict.reject))
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
 
     runner = GraphRunner(s.runner.app, s.runner.deps)  # 重启
     await runner.recover()
@@ -161,7 +161,7 @@ async def test_acc01_reject_caught_up_then_declined_without_put() -> None:
     snapshot = await runner.app.aget_state(CONFIG)
     assert snapshot.next == () and snapshot.values["phase"] is Phase.Declined
     assert runner.run_error(EID) is None
-    assert len(s.output_store.commits) == commits
+    assert len(s.output_store.workflow_commits) == commits
 
 
 async def test_pln_approve_rebuilds_materiality_and_takes_store_risks() -> None:
@@ -222,7 +222,7 @@ async def test_rpt01_approve_caught_up_then_archived_without_put() -> None:
     s = await at_rpt_gate()
     await reject_and_redraft(s)
     await submit_lost(s, rpt_decision(GateVerdict.approve, id="D-RPT-APPROVE", target_id="REPORT-2"))
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
 
     runner = GraphRunner(s.runner.app, s.runner.deps)  # 重启
     await runner.recover()
@@ -236,7 +236,7 @@ async def test_rpt01_approve_caught_up_then_archived_without_put() -> None:
         ReportStatus.signed,
     )
     assert snapshot.values["phase"] is Phase.Archived
-    assert len(s.output_store.commits) == commits
+    assert len(s.output_store.workflow_commits) == commits
 
 
 async def test_lost_trail_is_backfilled_once() -> None:
@@ -339,7 +339,7 @@ async def test_insufficient_info_caught_up_stays_at_gate(setup: Any, factory: An
     before = await s.runner.app.aget_state(CONFIG)
     decision = factory(GateVerdict.insufficient_info, id="D-INFO")
     await submit_lost(s, decision)
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
 
     await s.runner.resume(EID)
 
@@ -352,7 +352,7 @@ async def test_insufficient_info_caught_up_stays_at_gate(setup: Any, factory: An
     )
     await s.runner.resume(EID)
     assert (await s.runner.app.aget_state(CONFIG)).config == after.config
-    assert len(s.output_store.commits) == commits
+    assert len(s.output_store.workflow_commits) == commits
 
 
 @pytest.mark.parametrize(
@@ -408,14 +408,14 @@ async def test_missing_decisions_caught_up_in_decision_order() -> None:
     effects = acc01_effects(pack, last)
     await s.output_store.put(EID, [p for p in effects["procedure_pack"] if p.id == "ACC-01"], actor="A1")
     await s.engagement_store.update(EID, phase=Phase.Declined, locked=True)
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
 
     await s.runner.resume(EID)
     await wait_idle(s.runner, EID)
 
     after = await s.runner.app.aget_state(CONFIG)
     assert after.next == () and [d.id for d in after.values["gate_decisions"]] == ["D-FIRST", "D-LAST"]
-    assert len(s.output_store.commits) == commits
+    assert len(s.output_store.workflow_commits) == commits
 
 
 # ── R31: 客户画像与复核决定 ──
@@ -471,10 +471,10 @@ async def test_review_decision_at_await_events_resumed() -> None:
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert decision.id in {r.id for r in snapshot.values["review_records"]}
     assert snapshot.next == ("await_events",) and s.runner.run_error(EID) is None
-    rows = list(s.output_store.rows)
+    rows = list(s.output_store.workflow_rows)
     await s.runner.recover()
     assert not s.runner.is_running(EID)
-    assert (await s.runner.app.aget_state(CONFIG)).config == snapshot.config and s.output_store.rows == rows
+    assert (await s.runner.app.aget_state(CONFIG)).config == snapshot.config and s.output_store.workflow_rows == rows
 
 
 async def test_a7_upheld_with_draft_and_consultation_recovered() -> None:
@@ -792,7 +792,7 @@ async def test_catch_up_interrupted_after_copy_continues(cut: str, monkeypatch: 
     for n in (1, 2, 3):  # 决定时间倒置: D-1 最晚
         await submit_rerun(runner, store, f"D-{n}", NOW + timedelta(seconds=4 - n))
     assert "被杀" in (runner.run_error(EID) or "")
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
     app = runner.app
     update, invoke = app.aupdate_state, app.ainvoke
 
@@ -826,7 +826,7 @@ async def test_catch_up_interrupted_after_copy_continues(cut: str, monkeypatch: 
         {"awaiting": "human", "procedure_id": "ACC-04", "run_id": "RUN-ACC-04-4", "records": ["D-1", "D-2", "D-3"]}
     ]
     assert not any(t.error for t in after.tasks)
-    assert registry.calls == 4 and store.rows == rows
+    assert registry.calls == 4 and store.workflow_rows == rows
 
 
 async def test_group_rerun_recovered_in_run_order(monkeypatch: pytest.MonkeyPatch) -> None:

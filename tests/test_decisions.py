@@ -471,7 +471,7 @@ async def test_acc01_decision_and_effects_in_one_commit(verdict: GateVerdict, ch
 
     await s.submit.submit(EID, acc01_decision(verdict))
 
-    [commit] = [c for c in s.output_store.commits if any(isinstance(o, GateDecision) for o in c)]
+    [commit] = [c for c in s.output_store.workflow_commits if any(isinstance(o, GateDecision) for o in c)]
     assert [describe(o) for o in commit] == [
         ("GateDecision", "D-1", 1),
         ("Procedure", "ACC-01", 2),
@@ -630,7 +630,9 @@ async def test_update_profile_adopts_version_in_one_commit() -> None:
 
     await s.submit.update_client_profile(EID, *profile_update(FIXED_PROFILE), updated_by="U-1")
 
-    [commit] = [c for c in s.output_store.commits if EngagementWrite("save_profile", "CLIENT-001", {"version": 2}) in c]
+    [commit] = [
+        c for c in s.output_store.workflow_commits if EngagementWrite("save_profile", "CLIENT-001", {"version": 2}) in c
+    ]
     assert commit == [
         EngagementWrite("save_profile", "CLIENT-001", {"version": 2}),
         EngagementWrite("update", EID, {"client_profile_version": 2}),
@@ -777,7 +779,7 @@ async def side_effects(s: Started) -> tuple[Any, ...]:
     assert isinstance(trail, FakeTrail)
     return (
         list(s.output_store.rows),
-        list(s.output_store.commits),
+        list(s.output_store.workflow_commits),
         list(engagements.engagements),
         list(engagements.profiles),
         dict(engagements.profile_meta),
@@ -1045,7 +1047,7 @@ async def test_pln_approve_sets_materiality_completes_programs_and_moves_on() ->
     """验收 1: 三个金额进状态; PLN-01, PLN-03 completed; 决定与两条程序新版本同一次提交; 1 行 decision 留痕;
     越过闸门后进装配 (Numbat 带出的审计目标会装配出 P2 程序, fieldwork 尚为占位, 故只查越过闸门这一步)."""
     s = await at_pln_gate()
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
     trail_before = len(decision_trail(s))
     stop_after_submit(s)
 
@@ -1062,7 +1064,7 @@ async def test_pln_approve_sets_materiality_completes_programs_and_moves_on() ->
     pack = by_id(values["procedure_pack"])
     assert (pack["PLN-01"].version, pack["PLN-01"].status) == (3, ProcedureStatus.completed)
     assert (pack["PLN-03"].version, pack["PLN-03"].status) == (2, ProcedureStatus.completed)
-    [commit] = s.output_store.commits[commits_before:]
+    [commit] = s.output_store.workflow_commits[commits_before:]
     assert [(type(o).__name__, o.id, o.version) for o in commit] == [
         ("GateDecision", "D-PLN", 1),
         ("Procedure", "PLN-01", 3),
@@ -1077,7 +1079,7 @@ async def test_pln_approve_with_edit_versions_risk_and_objective() -> None:
     """验收 2: 现金存在性风险 high → significant: 风险项 v2 (等级, 理由, 确认人), 目标 v2 risk_level significant;
     其余风险项与目标仍 v1; 新版本与决定同一次提交."""
     s = await at_pln_gate()
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
     raise_cash = GateEdit(
         target_id="RISK-CASH-EXI",
         target_version=1,
@@ -1109,7 +1111,7 @@ async def test_pln_approve_with_edit_versions_risk_and_objective() -> None:
         "OBJ-REV-CUT": 1,
         "OBJ-CASH-EXI": 2,
     }
-    [commit] = s.output_store.commits[commits_before:]
+    [commit] = s.output_store.workflow_commits[commits_before:]
     assert {(type(o).__name__, o.id, o.version) for o in commit} == {
         ("GateDecision", "D-PLN", 1),
         ("Procedure", "PLN-01", 3),
@@ -1152,12 +1154,12 @@ async def test_pln_reject_reruns_analytics_and_old_binding_goes_stale() -> None:
     """验收 4: 驳回只写决定与留痕; 回 p1_analytics 重跑出 RUN-PLN-07-2, RUN-PLN-01-2, ANALYTICS v2, MATERIALITY v2,
     再停在闸门; 之后绑定 MATERIALITY v1 的决定报 VERSION_MISMATCH."""
     s = await at_pln_gate()
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, pln_decision(GateVerdict.reject))
     await wait_idle(s.runner, EID)
 
-    decision_commit = s.output_store.commits[commits_before]
+    decision_commit = s.output_store.workflow_commits[commits_before]
     assert [(type(o).__name__, o.id) for o in decision_commit] == [("GateDecision", "D-PLN")]
     assert decision_trail(s)[-1].idempotency_key == "D-PLN"
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
@@ -1175,12 +1177,12 @@ async def test_pln_reject_reruns_analytics_and_old_binding_goes_stale() -> None:
 async def test_pln_insufficient_info_stays_at_gate() -> None:
     """验收 5: 信息不足只写决定与留痕, 仍停在闸门, 程序与金额都不动."""
     s = await at_pln_gate()
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, pln_decision(GateVerdict.insufficient_info))
     await wait_idle(s.runner, EID)
 
-    assert [[(type(o).__name__, o.id) for o in c] for c in s.output_store.commits[commits_before:]] == [
+    assert [[(type(o).__name__, o.id) for o in c] for c in s.output_store.workflow_commits[commits_before:]] == [
         [("GateDecision", "D-PLN")]
     ]
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
@@ -1239,12 +1241,14 @@ async def test_pln_approve_rejected_when_objective_uncovered() -> None:
 async def test_pln_reject_allowed_when_objective_uncovered() -> None:
     """验收 2: 有缺口时驳回照常写入, 回 p1_analytics 重新分析后再停在闸门."""
     s = await at_pln_gate(inventory())
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, pln_decision(GateVerdict.reject))
     await wait_idle(s.runner, EID)
 
-    assert [(type(o).__name__, o.id) for o in s.output_store.commits[commits_before]] == [("GateDecision", "D-PLN")]
+    assert [(type(o).__name__, o.id) for o in s.output_store.workflow_commits[commits_before]] == [
+        ("GateDecision", "D-PLN")
+    ]
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
     assert snapshot.next == ("gate_p1_risk",)
     assert snapshot.values["materiality_candidates"].version == 2
@@ -1391,12 +1395,12 @@ async def test_checkpoint_ahead_versions_not_written_along() -> None:
     pack = (await s.runner.app.aget_state(config)).values["procedure_pack"]
     ahead = [p.model_copy(update={"version": p.version + 1}) if p.id == "PLN-07" else p for p in pack]
     await s.runner.app.aupdate_state(config, {"procedure_pack": ahead}, as_node="p1_analytics")
-    commits_before = len(s.output_store.commits)
+    commits_before = len(s.output_store.workflow_commits)
     stop_after_submit(s)
 
     await s.submit.submit(EID, pln_decision(GateVerdict.approve))
 
-    [commit] = s.output_store.commits[commits_before:]
+    [commit] = s.output_store.workflow_commits[commits_before:]
     assert [(type(o).__name__, o.id) for o in commit] == [
         ("GateDecision", "D-PLN"),
         ("Procedure", "PLN-01"),
@@ -1689,7 +1693,7 @@ async def test_plan_approve_enters_p2_in_one_commit() -> None:
     决定绑定 PLAN-1 v1 而状态中已是 v2, 路由仍为 approve, 下一节点 schedule (检查点历史); 第 0 层派发 REV-08, REV-03,
     CSH-04, CSH-05. 写出的每一版计划在 Store 与检查点中相同."""
     s = await at_plan_gate()
-    before = len(s.output_store.commits)
+    before = len(s.output_store.workflow_commits)
 
     await s.submit.submit(EID, PLAN_APPROVE)
     await wait_idle(s.runner, EID)
@@ -1713,7 +1717,7 @@ async def test_plan_approve_enters_p2_in_one_commit() -> None:
     values = await checkpoint_values(s)
     assert values["audit_plans"] == [approved] and values["phase"] is Phase.P2_Executing
     assert gate_route(GateId.PLN_15)(values) == "approve"  # 验收 6: 决定绑定 v1, 状态中已是 v2
-    [commit] = s.output_store.commits[before:]
+    [commit] = s.output_store.workflow_commits[before:]
     pln15 = s.latest_procedure("PLN-15")
     assert pln15.status is ProcedureStatus.completed
     assert sorted((type(o).__name__, o.id) for o in commit if not isinstance(o, EngagementWrite)) == [
@@ -1778,9 +1782,9 @@ async def test_plan_info_reject_revise_restart_and_approve() -> None:
         return [e.procedure_id for e in trail_of(s, TrailKind.decision) if e.idempotency_key == key]
 
     asked = plan_decision(GateVerdict.insufficient_info, id="D-P15I", reason="Awaiting partner availability")
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
     values = await decide(asked)
-    assert s.output_store.commits[commits:] == [[asked]] and decided("D-P15I") == ["PLN-15"]
+    assert s.output_store.workflow_commits[commits:] == [[asked]] and decided("D-P15I") == ["PLN-15"]
     assert await s.next_nodes() == ("gate_p1_plan",) and await plan_gate_view(s) == ("PLAN-1", 1, [])
     assert plan_versions(s) == [("PLAN-1", 1, PlanStatus.draft)] and values["phase"] is Phase.P1_Planning
     assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned

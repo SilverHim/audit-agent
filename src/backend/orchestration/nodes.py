@@ -87,6 +87,7 @@ from backend.services.procedure_library import ProcedureLibrary, highest_risk, m
 from backend.services.review_queue import RERUNNABLE, ReviewQueue
 from backend.services.run_summary import run_result
 from backend.services.staleness import current_results
+from backend.services.workpapers import refresh as refresh_workpapers
 
 logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
@@ -784,6 +785,7 @@ class GraphNodes:
             if problems:
                 raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
             await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, own, stored.id)])
+            await self.refresh_workpapers(eid)
             return own
         self.start_activity(state, eid, template, run)
         agent = self.agents[procedure_id]
@@ -802,6 +804,7 @@ class GraphNodes:
             if population is not None:
                 await self.deps.output_store.put(eid, [population], actor=writer)
         await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, saved, run.id)])
+        await self.refresh_workpapers(eid)
         return saved
 
     async def attempt(
@@ -854,7 +857,16 @@ class GraphNodes:
         if phase is not None:
             entries += phase_transition(engagement.id, state["phase"], phase, procedure_id, reruns=rewinds(state))
         await record_transitions(self.deps.trail, entries)
+        await self.refresh_workpapers(engagement.id)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+
+    async def refresh_workpapers(self, eid: str) -> None:
+        """刷新底稿记录 (需求 R330, services.workpapers.refresh): 程序执行终态 (含人工程序整理的结果) 提交并写完留痕
+        之后调; 出错只记日志, 图照常推进, 下一次刷新补上."""
+        try:
+            await refresh_workpapers(self.deps, eid)
+        except Exception:
+            logger.exception("刷新底稿记录失败: %s", eid)
 
     async def record_started(
         self, eid: str, template: ProcedureTemplate, run: ProcedureRun, stored: ProcedureRun | None
@@ -1139,6 +1151,7 @@ class GraphNodes:
             if clashes:
                 detail = ", ".join(clashes)
                 raise VersionConflict(f"{procedure_id} 整理出的对象与 Store 中已有的同版本内容不同: {detail}")
+        await self.refresh_workpapers(engagement.id)
         return written
 
     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
@@ -1474,6 +1487,7 @@ class GraphNodes:
         library = self.deps.library
         entries = [await self.run_finished_entry(eid, library.load(pid), saved, rid) for pid, saved, rid in finished]
         await record_transitions(self.deps.trail, [*entries, *await procedure_transitions(store, eid, stored)])
+        await self.refresh_workpapers(eid)
         saved_versions = {p.id: cast(Procedure, p) for p in stored}
         pack = [saved_versions.get(p.id, p) for p in pack]
         return {**result, "procedure_pack": pack, "staged_results": None}

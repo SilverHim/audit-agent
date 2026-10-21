@@ -1747,6 +1747,19 @@ export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupport
 export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | 'skipped';
 
 /**
+ * CurrencyIn
+ *
+ * 审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),
+ * 写法不对报 422 INVALID_VALUE.
+ */
+export type CurrencyIn = {
+    /**
+     * Currency
+     */
+    currency: string;
+};
+
+/**
  * DataCheck
  *
  * 一项体检的结果.
@@ -2302,6 +2315,14 @@ export type Engagement = {
      * Working Language
      */
     working_language?: 'zh' | 'en';
+    /**
+     * Currency
+     */
+    currency?: string;
+    /**
+     * Currency Source
+     */
+    currency_source?: 'default' | 'xero' | 'auditor';
     /**
      * Created At
      */
@@ -3421,6 +3442,23 @@ export type LlmTestResult = {
 };
 
 /**
+ * LocalizedText
+ *
+ * 中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)
+ * 与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入.
+ */
+export type LocalizedText = {
+    /**
+     * Zh
+     */
+    zh: string;
+    /**
+     * En
+     */
+    en: string;
+};
+
+/**
  * ManualRequest
  *
  * manual 任务交给人的请求 (需求 R92): 派发时抄自程序模板的 manual 段, 加上派发时生成的材料. 提交 manual_result
@@ -3890,6 +3928,26 @@ export type NotExecuted = {
      * Requests
      */
     requests: Array<DataRequest>;
+};
+
+/**
+ * ObjectRef
+ *
+ * 对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查.
+ */
+export type ObjectRef = {
+    /**
+     * Kind
+     */
+    kind: string;
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version: number;
 };
 
 /**
@@ -4960,6 +5018,13 @@ export type ReviewRecordIn = {
 };
 
 /**
+ * ReviewScope
+ *
+ * 底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330).
+ */
+export type ReviewScope = 'full' | 'sample' | 'conclusion_only';
+
+/**
  * ReviewStatus
  *
  * 判断的复核状态.
@@ -5926,6 +5991,158 @@ export type WorkingLanguageIn = {
 };
 
 /**
+ * Workpaper
+ *
+ * 一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
+ * services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
+ * 只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff.
+ */
+export type Workpaper = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Ref
+     */
+    ref: string;
+    /**
+     * Area
+     */
+    area: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    status?: WorkpaperStatus;
+    /**
+     * Basis
+     */
+    basis: Array<ObjectRef>;
+    conclusion_draft?: LocalizedText | null;
+    /**
+     * Conclusion
+     */
+    conclusion?: string | null;
+    /**
+     * Conclusion By
+     */
+    conclusion_by?: string | null;
+    /**
+     * Conclusion At
+     */
+    conclusion_at?: string | null;
+    /**
+     * Notes
+     */
+    notes?: Array<WorkpaperNote>;
+    signoff?: WorkpaperSignoff | null;
+    last_signoff?: WorkpaperSignoff | null;
+    /**
+     * Missing
+     */
+    missing?: Array<string>;
+};
+
+/**
+ * WorkpaperConclusionIn
+ *
+ * 审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330).
+ */
+export type WorkpaperConclusionIn = {
+    /**
+     * Text
+     */
+    text: string;
+};
+
+/**
+ * WorkpaperNote
+ *
+ * 底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,
+ * 底稿配置 supplementable), 只是补充时为空.
+ */
+export type WorkpaperNote = {
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Item
+     */
+    item?: string | null;
+    /**
+     * Added By
+     */
+    added_by: string;
+    /**
+     * Added At
+     */
+    added_at: string;
+};
+
+/**
+ * WorkpaperNoteIn
+ *
+ * 审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330).
+ */
+export type WorkpaperNoteIn = {
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Item
+     */
+    item?: string | null;
+};
+
+/**
+ * WorkpaperSignoff
+ *
+ * 底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围).
+ */
+export type WorkpaperSignoff = {
+    /**
+     * Signed By
+     */
+    signed_by: string;
+    /**
+     * Signed At
+     */
+    signed_at: string;
+    scope: ReviewScope;
+    /**
+     * Opinion
+     */
+    opinion?: string;
+};
+
+/**
+ * WorkpaperSignoffIn
+ *
+ * 审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330).
+ */
+export type WorkpaperSignoffIn = {
+    scope: ReviewScope;
+    /**
+     * Opinion
+     */
+    opinion?: string;
+};
+
+/**
+ * WorkpaperStatus
+ *
+ * 底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01.
+ */
+export type WorkpaperStatus = 'draft' | 'signed' | 'needs_rereview' | 'final';
+
+/**
  * XeroAuthorize
  *
  * 连接 Xero (GET /data/xero/connect): 前端跳去的授权地址.
@@ -6467,6 +6684,36 @@ export type EngagementsSetWorkingLanguageResponses = {
 };
 
 export type EngagementsSetWorkingLanguageResponse = EngagementsSetWorkingLanguageResponses[keyof EngagementsSetWorkingLanguageResponses];
+
+export type EngagementsSetCurrencyData = {
+    body: CurrencyIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/currency';
+};
+
+export type EngagementsSetCurrencyErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsSetCurrencyError = EngagementsSetCurrencyErrors[keyof EngagementsSetCurrencyErrors];
+
+export type EngagementsSetCurrencyResponses = {
+    /**
+     * Successful Response
+     */
+    200: Engagement;
+};
+
+export type EngagementsSetCurrencyResponse = EngagementsSetCurrencyResponses[keyof EngagementsSetCurrencyResponses];
 
 export type EngagementsResumeEngagementData = {
     body?: never;
@@ -8700,6 +8947,140 @@ export type IntegrationsXeroCallbackErrors = {
 };
 
 export type IntegrationsXeroCallbackError = IntegrationsXeroCallbackErrors[keyof IntegrationsXeroCallbackErrors];
+
+export type WorkpapersListWorkpapersData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers';
+};
+
+export type WorkpapersListWorkpapersErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersListWorkpapersError = WorkpapersListWorkpapersErrors[keyof WorkpapersListWorkpapersErrors];
+
+export type WorkpapersListWorkpapersResponses = {
+    /**
+     * Response Workpapers-List Workpapers
+     *
+     * Successful Response
+     */
+    200: Array<Workpaper>;
+};
+
+export type WorkpapersListWorkpapersResponse = WorkpapersListWorkpapersResponses[keyof WorkpapersListWorkpapersResponses];
+
+export type WorkpapersConcludeWorkpaperData = {
+    body: WorkpaperConclusionIn;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/conclusion';
+};
+
+export type WorkpapersConcludeWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersConcludeWorkpaperError = WorkpapersConcludeWorkpaperErrors[keyof WorkpapersConcludeWorkpaperErrors];
+
+export type WorkpapersConcludeWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Workpaper;
+};
+
+export type WorkpapersConcludeWorkpaperResponse = WorkpapersConcludeWorkpaperResponses[keyof WorkpapersConcludeWorkpaperResponses];
+
+export type WorkpapersNoteWorkpaperData = {
+    body: WorkpaperNoteIn;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/notes';
+};
+
+export type WorkpapersNoteWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersNoteWorkpaperError = WorkpapersNoteWorkpaperErrors[keyof WorkpapersNoteWorkpaperErrors];
+
+export type WorkpapersNoteWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Workpaper;
+};
+
+export type WorkpapersNoteWorkpaperResponse = WorkpapersNoteWorkpaperResponses[keyof WorkpapersNoteWorkpaperResponses];
+
+export type WorkpapersSignWorkpaperData = {
+    body: WorkpaperSignoffIn;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/signoff';
+};
+
+export type WorkpapersSignWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersSignWorkpaperError = WorkpapersSignWorkpaperErrors[keyof WorkpapersSignWorkpaperErrors];
+
+export type WorkpapersSignWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Workpaper;
+};
+
+export type WorkpapersSignWorkpaperResponse = WorkpapersSignWorkpaperResponses[keyof WorkpapersSignWorkpaperResponses];
 
 export type DataTableSchemasData = {
     body?: never;

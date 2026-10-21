@@ -28,7 +28,7 @@ from backend.core.security import create_access_token, decode_access_token, hash
 from backend.main import create_app
 from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
 from tests.external import REPO
-from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail
+from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail, bind_stores
 
 
 @functools.cache
@@ -332,8 +332,9 @@ def test_missing_token(api: SimpleNamespace) -> None:
         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
     ],
 )
-def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
-    response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
+@pytest.mark.parametrize("suffix", ["", "/workpapers"])  # 底稿记录 (需求 R330) 同样经 owned_engagement
+def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str, suffix: str) -> None:
+    response = api.client.get(f"/api/v1/engagements/{path}{suffix}", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == code
 
@@ -634,6 +635,9 @@ def language_store(api: SimpleNamespace, **fields: Any) -> FakeEngagementStore:
     deps = api.client.app.state.deps
     store = FakeEngagementStore(engagements=[deps.engagement_store.mine.model_copy(update=fields)])
     deps.engagement_store = store
+    deps.output_store = FakeOutputStore()
+    bind_stores(store, deps.output_store)
+    deps.trail.output_store = deps.output_store
     return store
 
 
@@ -689,3 +693,47 @@ def test_working_language_change_undone_when_trail_fails(api: SimpleNamespace, m
     with pytest.raises(RuntimeError, match="trail down"):
         api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
     assert store.engagements[0].working_language == "en" and api.trail.entries == []
+
+
+CURRENCY_URL = LANGUAGE_URL.replace("working-language", "currency")
+
+
+def test_currency_confirmation_and_changes_are_trailed_once(api: SimpleNamespace) -> None:
+    """确认缺省币种也记录来源, 同值重复确认幂等; 改币种记录前后值和当前用户."""
+    store = language_store(api)
+    for code in ("AUD", "AUD", "NZD"):
+        response = api.client.put(CURRENCY_URL, headers=_auth(api), json={"currency": code})
+        assert response.status_code == 200, response.text
+        assert (response.json()["currency"], response.json()["currency_source"]) == (code, "auditor")
+    assert store.engagements[0].currency == "NZD"
+    assert [(e.actor, e.kind, e.payload) for e in api.trail.entries] == [
+        ("USR-1", TrailKind.data, {"action": "currency", "from": "AUD", "to": "AUD", "source": "auditor"}),
+        ("USR-1", TrailKind.data, {"action": "currency", "from": "AUD", "to": "NZD", "source": "auditor"}),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fields", "url", "currency", "status", "code"),
+    [
+        ({}, CURRENCY_URL, "aud", 422, "INVALID_VALUE"),
+        ({}, CURRENCY_URL, "AU", 422, "INVALID_VALUE"),
+        ({"locked": True}, CURRENCY_URL, "NZD", 423, "ENGAGEMENT_LOCKED"),
+        ({}, CURRENCY_URL.replace("001", "002"), "NZD", 404, "NOT_FOUND"),
+    ],
+)
+def test_currency_rejected(
+    api: SimpleNamespace, fields: dict[str, Any], url: str, currency: str, status: int, code: str
+) -> None:
+    store = language_store(api, **fields)
+    response = api.client.put(url, headers=_auth(api), json={"currency": currency})
+    assert (response.status_code, response.json()["detail"]["code"]) == (status, code)
+    assert store.engagements[0].currency_source == "default" and api.trail.entries == []
+
+
+def test_currency_change_undone_when_trail_fails(api: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = language_store(api)
+    before = store.engagements[0]
+    monkeypatch.setattr(api.trail, "record", AsyncMock(side_effect=RuntimeError("trail down")))
+    with pytest.raises(RuntimeError, match="trail down"):
+        api.client.put(CURRENCY_URL, headers=_auth(api), json={"currency": "NZD"})
+    assert store.engagements[0] == before

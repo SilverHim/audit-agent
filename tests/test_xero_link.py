@@ -1145,3 +1145,20 @@ async def test_reconnect_keeps_sync_record_and_chosen_organisation(tmp_path: Pat
     assert again == synced and synced["status"] == "connected" and synced["last_synced_at"] is not None
     assert (dropped["organisation"], dropped["last_synced_at"]) == (None, synced["last_synced_at"])
     assert response.json()["detail"]["code"] == "XERO_TENANT_REQUIRED"
+
+
+@pytest.mark.external
+async def test_sync_currency_preserves_auditor_confirmation(tmp_path: Path) -> None:
+    """Xero 本位币只自动更新未人工确认的项目, 同值不重写留痕; 人工确认之后也不误记同步修改."""
+    c = case(tmp_path)
+    engagements = c.xero.deps.engagement_store
+    await c.xero.adopt_currency(c.eid, "U-1", "NZD")
+    await c.xero.adopt_currency(c.eid, "U-1", "NZD")
+    engagement = await engagements.get(c.eid)
+    assert engagement is not None and (engagement.currency, engagement.currency_source) == ("NZD", "xero")
+    await engagements.set_currency(c.eid, "USD", "auditor")
+    await c.xero.adopt_currency(c.eid, "U-1", "AUD")
+    assert (await engagements.get(c.eid)).currency == "USD"
+    assert [e.payload for e in c.trail.entries if e.payload.get("action") == "currency"] == [
+        {"action": "currency", "from": "AUD", "to": "NZD", "source": "xero"}
+    ]

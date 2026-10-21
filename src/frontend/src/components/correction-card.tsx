@@ -15,7 +15,7 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { correctionNoticeBody } from '@/lib/misstatements'
-import { formatAud } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 type Kind = CorrectionNoticeIn['kind']
 const KINDS: Kind[] = ['adjustments_posted', 'stop_waiting']
@@ -28,6 +28,7 @@ function toggle(list: string[], value: string, on: boolean): string[] {
 // 分录; 已载入的照样可勾, 只作标注) 与 "停止等待" (理由都选填, 需求 R360); 提交更正通知后刷新. 不在等更正 (NOT_AWAITING_CORRECTION)
 // 按文案提示. 待更正的错报变了由调用方换 key 重新挂载, 勾选与理由不带进下一份通知
 export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: string[]; disabled: boolean }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const queryClient = useQueryClient()
   const report = useQuery(reportsGetMisstatementsOptions({ path: { eid } }))
@@ -86,7 +87,7 @@ export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: strin
                   <Code className="font-semibold">{id}</Code>
                   {item ? (
                     <span>
-                      {item.account} · {t.directions[item.direction]} · <Code>{formatAud(item.amount_cents)}</Code>
+                      {item.account} · {t.directions[item.direction]} · <Code>{formatMoney(item.amount_cents)}</Code>
                     </span>
                   ) : null}
                 </label>

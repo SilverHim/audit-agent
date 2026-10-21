@@ -32,6 +32,21 @@ def not_blank(text: str) -> str:
 NonBlank = Annotated[str, AfterValidator(not_blank)]  # 必填文字: 去首尾空白后非空
 
 
+class LocalizedText(Model):
+    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)
+    与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."""
+
+    zh: str  # 中文
+    en: str  # 英文
+
+    @field_validator("zh", "en")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("不能为空或只有空白")
+        return value
+
+
 # ── 2.1 枚举 ──────────────────────────────────────────────
 
 
@@ -448,6 +463,23 @@ class ReportStatus(StrEnum):
 
     draft = "draft"  # 草稿
     signed = "signed"  # 已签字
+
+
+class WorkpaperStatus(StrEnum):
+    """底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01."""
+
+    draft = "draft"  # 未签署
+    signed = "signed"  # 已签署, 依据与内容在签署后没变
+    needs_rereview = "needs_rereview"  # 签署后依据或内容变了 (重跑, 新的决定, 改了结论或补充说明), 须重新复核
+    final = "final"  # 归档定稿 (需求 R337)
+
+
+class ReviewScope(StrEnum):
+    """底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330)."""
+
+    full = "full"  # 全部明细
+    sample = "sample"  # 抽查
+    conclusion_only = "conclusion_only"  # 只看结论
 
 
 class RepresentationStatus(StrEnum):
@@ -910,6 +942,22 @@ class ClientEntry(Model):
 # 项目的工作语言 (需求 R339, Issue #51): 底稿与回答用的语言. en 为英文 (缺省, 与之前的输出一致), zh 为中文
 WorkingLanguage = Literal["zh", "en"]
 
+# 记账币种 (需求 R366, Issue #66): ISO 4217 字母代码 (三个大写字母). 金额照旧按该币种的 "分" (×100 的整数) 存, 显示
+# 与提示词输入按它格式化 (services/currency). 没有 Xero 本位币也没由审计师确认时为澳元
+DEFAULT_CURRENCY = "AUD"
+CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+# 记账币种的来源: default 缺省 (还没确认), xero 取自 Xero 组织的本位币 (演示数据集建项目时, 同步时), auditor 审计师
+# 在数据管理页确认或改 (PUT currency)
+CurrencySource = Literal["default", "xero", "auditor"]
+
+
+def initial_currency(code: str | None) -> dict[str, str]:
+    """建项目时的记账币种与来源 (需求 R366): 数据集带本位币 (DatasetLoader.currency) 时取它, 来源 xero; 否则为澳元,
+    来源 default. 存储的 create 共用."""
+    if code:
+        return {"currency": code, "currency_source": "xero"}
+    return {"currency": DEFAULT_CURRENCY, "currency_source": "default"}
+
 
 class Engagement(Model):
     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
@@ -927,8 +975,22 @@ class Engagement(Model):
     # 工作语言 (需求 R339): 建项目时选, 之后可改 (PUT working-language, 留痕); 每次执行记下当时的值
     # (ProcedureRun.language), 已生成的内容不随之改写. 之前建的项目为 en
     working_language: WorkingLanguage = "en"
+    # 记账币种与来源 (需求 R366): 建项目时数据集带本位币的取它 (来源 xero), 否则为澳元 (default); Xero 同步与审计师
+    # 确认时改. 之前建的项目为澳元 (default)
+    currency: CurrencyCode = DEFAULT_CURRENCY
+    currency_source: CurrencySource = "default"
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
+
+
+def with_currency(engagement: Engagement, currency: str, source: CurrencySource) -> Engagement:
+    """改了记账币种与来源的项目 (需求 R366, 存储的 set_currency 共用): 经校验, 代码不是三个大写字母时抛
+    ValidationError; 与原值都相同时为原对象."""
+    if source == "xero" and engagement.currency_source == "auditor":
+        return engagement  # 同步与人工确认并发时, 持存储行锁后仍保护审计师的选择.
+    if (engagement.currency, engagement.currency_source) == (currency, source):
+        return engagement
+    return Engagement.model_validate({**engagement.model_dump(), "currency": currency, "currency_source": source})
 
 
 class AuditObjective(Versioned):
@@ -2050,6 +2112,48 @@ class IndependenceDeclaration(Versioned):
         if self.form is DeclarationForm.no_contraventions and listed:
             raise ValueError("form 为 no_contraventions 时不能列明违规")
         return self
+
+
+class WorkpaperNote(Model):
+    """底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,
+    底稿配置 supplementable), 只是补充时为空."""
+
+    text: str  # 说明
+    item: str | None = None  # 补齐的必填项代号, 如 materiality_factors
+    added_by: str  # 用户 ID
+    added_at: datetime  # 时间
+
+
+class WorkpaperSignoff(Model):
+    """底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."""
+
+    signed_by: str  # 签署人的用户 ID
+    signed_at: datetime  # 签署时间
+    scope: ReviewScope  # 复核范围
+    opinion: str = ""  # 复核意见, 选填 (Issue #61 的口径), 没写为空串
+
+
+class Workpaper(Versioned):
+    """一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
+    services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
+    只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."""
+
+    ref: str  # 索引号, 如 D-3 (程序 YAML 的 workpaper)
+    area: str  # 所属区, 如 D
+    procedure_id: str  # 所属程序
+    status: WorkpaperStatus = WorkpaperStatus.draft  # 状态
+    # 所依据的对象及其版本 (执行记录, 被测总体, 例外, 判断, 闸门决定与程序产出的材料; services.workpapers.basis_of),
+    # 按类名与 ID 排序; 刷新时与上一版比, 变了即内容变了
+    basis: list[ObjectRef]
+    # 结论草稿 (中英两种, 下载时按工作语言取): 规则与判断程序按模板拼出 (Q27), 其余为空 (R332, R333 补)
+    conclusion_draft: LocalizedText | None = None
+    conclusion: str | None = None  # 审计师改写的结论, 没改为空 (草稿照留)
+    conclusion_by: str | None = None  # 改写人的用户 ID
+    conclusion_at: datetime | None = None  # 改写时间
+    notes: list[WorkpaperNote] = []  # 补充说明, 按时间顺序
+    signoff: WorkpaperSignoff | None = None  # 当前有效的签署, 未签署或须重新复核时为空
+    last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署 (须重新复核时可见原签署), 没有为空
+    missing: list[str] = []  # 缺的必填项代号 (底稿配置的 required, 按配置顺序), 空为齐全
 
 
 # ── 2.7 其他 ───────────────────────────────────────────────

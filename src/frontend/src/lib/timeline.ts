@@ -17,6 +17,7 @@ type TimelineEvent =
       entries: string[]
       reason: string | null
     }
+  | { kind: 'currency'; at: string; from: string; to: string }
   | { kind: 'language'; at: string; from: WorkingLanguage; to: WorkingLanguage }
   | { kind: 'deferral'; at: string; target: string; deferred: boolean; request: string | null; xero: boolean }
   | {
@@ -168,6 +169,10 @@ export function buildTimeline(entries: TrailEntry[], complete = true): TimelineI
     }
     if (kind === 'data') {
       flush()
+      if (payload.action === 'currency' && str(payload.from) && str(payload.to)) {
+        items.push({ kind: 'currency', key, at, from: String(payload.from), to: String(payload.to) })
+        continue
+      }
       items.push({
         kind: 'data',
         key,

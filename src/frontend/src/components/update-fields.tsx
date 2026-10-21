@@ -4,7 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useI18n } from '@/lib/i18n'
 import { type UpdateDraft, VERIFIED_STATUSES } from '@/lib/misstatements'
-import { formatAud } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 // 错报更新载荷 (FIN-03 分类, FIN-09 验证; 需求 R159, R163): 判断带的载荷的显示, 与复核表单里人给载荷的字段
 
@@ -13,6 +13,7 @@ const SELECT = 'h-10 rounded-lg border border-input bg-card px-2.5 text-[14px]'
 
 // 判断带的载荷 (AI 给的分类或验证结果), 复核页的判断卡片里显示; 没写的字段不列
 export function UpdatePayload({ update }: { update: MisstatementUpdate }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const u = t.updateForm
   const rows: [string, string][] = []
@@ -21,8 +22,8 @@ export function UpdatePayload({ update }: { update: MisstatementUpdate }) {
   if (update.fraud_reason) rows.push([u.fraudReason, update.fraud_reason])
   if (update.status) rows.push([u.status, t.misstatementStatuses[update.status] ?? update.status])
   if (update.adjustment_entry_nos?.length) rows.push([u.entryNos, update.adjustment_entry_nos.join(', ')])
-  if (update.corrected_cents != null) rows.push([u.corrected, formatAud(update.corrected_cents)])
-  if (update.residual_cents != null) rows.push([u.residual, formatAud(update.residual_cents)])
+  if (update.corrected_cents != null) rows.push([u.corrected, formatMoney(update.corrected_cents)])
+  if (update.residual_cents != null) rows.push([u.residual, formatMoney(update.residual_cents)])
   if (update.needs_recommunication) rows.push([u.recommunicate, '✓'])
   return (
     <div className="flex flex-col gap-1.5 border-line-soft border-b px-4 py-4" data-testid="update-payload">
@@ -59,6 +60,7 @@ export function UpdateFields({
   onChange: (patch: Partial<UpdateDraft>) => void
   disabled: boolean
 }) {
+  const { currency } = useMoney()
   const { t } = useI18n()
   const u = t.updateForm
   return (
@@ -135,7 +137,7 @@ export function UpdateFields({
             />
           </label>
           <label htmlFor={`${id}-corrected`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-            {u.corrected}
+            {u.corrected} ({currency})
             <Input
               id={`${id}-corrected`}
               className="h-10 font-mono"
@@ -146,7 +148,7 @@ export function UpdateFields({
             />
           </label>
           <label htmlFor={`${id}-residual`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-            {u.residual}
+            {u.residual} ({currency})
             <Input
               id={`${id}-residual`}
               className="h-10 font-mono"

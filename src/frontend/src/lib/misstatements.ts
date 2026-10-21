@@ -8,7 +8,7 @@ import type {
   MisstatementUpdate,
   ReviewTaskView,
 } from '@/client/types.gen'
-import { audToCents } from '@/lib/money'
+import { moneyToCents } from '@/lib/money'
 import type { Messages } from '@/locales/en'
 
 // 错报生命周期的前端计算 (后端需求 R156, R159, R161, R162; 页面需求 R163): 生命周期的显示, 更正通知, FIN-08 的登记,
@@ -174,8 +174,8 @@ export type UpdateDraft = {
   fraudReason: string
   status: MisstatementStatus
   entryNos: string // 凭证号, 逗号或空白分隔
-  corrected: string // AUD
-  residual: string // AUD
+  corrected: string // 记账币种的主单位
+  residual: string // 记账币种的主单位
 }
 
 export function emptyUpdate(): UpdateDraft {
@@ -231,7 +231,7 @@ export function misstatementUpdate(
     const reason = draft.fraudReason.trim()
     return { ...base, kind, type: draft.type, fraud_indicative: draft.fraud, fraud_reason: draft.fraud ? reason : null }
   }
-  const amount = (text: string) => (text.trim() ? audToCents(text) : null)
+  const amount = (text: string) => (text.trim() ? moneyToCents(text) : null)
   const corrected = amount(draft.corrected)
   const residual = amount(draft.residual)
   if ((draft.corrected.trim() && corrected == null) || (draft.residual.trim() && residual == null))

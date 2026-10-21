@@ -1,25 +1,36 @@
-const AMOUNT = new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const FORMATS = new Map<string, Intl.NumberFormat>()
 
-// 金额统一显示为 "AUD 142,000.00", 中英文界面一致
-export function formatAud(cents: number | null | undefined): string {
+// 账表中的整数仍为主单位乘 100; 显示位数按项目币种, 中英文界面一致.
+export function formatMoney(cents: number | null | undefined, currency = 'AUD'): string {
   if (cents == null) return '—'
-  return `AUD ${AMOUNT.format(cents / 100)}`
+  let format = FORMATS.get(currency)
+  if (!format) {
+    const digits = new Intl.NumberFormat('en-AU', { style: 'currency', currency }).resolvedOptions()
+      .maximumFractionDigits
+    format = new Intl.NumberFormat('en-AU', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+    FORMATS.set(currency, format)
+  }
+  return `${currency} ${format.format(cents / 100)}`
 }
 
-// 不带小数的简写, 用于侧栏等空间紧的地方
-export function formatAudShort(cents: number | null | undefined): string {
+export function formatMoneyShort(cents: number | null | undefined, currency = 'AUD'): string {
   if (cents == null) return '—'
-  return `AUD ${new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(cents / 100)}`
+  return `${currency} ${new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(cents / 100)}`
 }
 
-// 小数比例 → 百分比, 缺省两位小数 (0.005 → "0.50%")
 export function formatPct(value: number | null | undefined, digits = 2): string {
   if (value == null) return '—'
   return `${(value * 100).toFixed(digits)}%`
 }
 
-export function audToCents(aud: string): number | null {
-  const value = Number(aud.replaceAll(',', '').trim())
-  if (!aud.trim() || !Number.isFinite(value)) return null
-  return Math.round(value * 100)
+export function moneyToCents(amount: string): number | null {
+  const value = Number(amount.replaceAll(',', '').trim())
+  if (!amount.trim() || !Number.isFinite(value)) return null
+  const cents = Math.round(value * 100)
+  return Number.isSafeInteger(cents) ? cents : null
 }
+
+// 旧调用的兼容别名; 项目界面使用 useMoney 提供的格式器.
+export const formatAud = formatMoney
+export const formatAudShort = formatMoneyShort
+export const audToCents = moneyToCents

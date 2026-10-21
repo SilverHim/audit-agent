@@ -14,9 +14,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { formatAbn } from '@/lib/abn'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
+import { formatMoney } from '@/lib/money'
 import { humanize, pointerKey } from '@/lib/presentation'
 import { type ProfileField, type ProfilePair, type ProfileWords, profileEvidence } from '@/lib/profile-evidence'
+import { useMoney } from '@/lib/use-money'
 import type { Messages } from '@/locales/en'
 
 // 能点开行明细的行指针来源 (同后端 SourceType); tests/table-kinds.test.ts 核对与接口一致
@@ -222,6 +223,7 @@ function TrailBody({ eid, trailId }: { eid: string; trailId: string }) {
 
 // 客户画像的一个字段 (需求 R302): 本项目采用版本中该字段的内容, 注明版本与管理层申报
 function ProfileBody({ eid, pointer }: { eid: string; pointer: EvidencePointer }) {
+  const { currency } = useMoney()
   const { t } = useI18n()
   const query = useQuery(engagementsGetClientProfileOptions({ path: { eid } }))
   if (query.isPending) return <p className="text-muted-foreground text-sm">{t.app.loading}</p>
@@ -229,6 +231,7 @@ function ProfileBody({ eid, pointer }: { eid: string; pointer: EvidencePointer }
   // 字段的显示沿用客户资料页 (主体类型, ABN) 与新建客户表单 (报告框架) 的标签与格式
   const frameworks: Record<string, string> = t.newClient.frameworks
   const words: ProfileWords = {
+    currency,
     yes: t.clientPage.yes,
     no: t.clientPage.no,
     display: {
@@ -282,13 +285,16 @@ function PairList({ pairs }: { pairs: ProfilePair[] }) {
 }
 
 export function RecordTable({ row, highlight }: { row: Record<string, unknown>; highlight?: string }) {
+  const { currency } = useMoney()
   return (
     <dl className="grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-sm">
       {Object.entries(row).map(([key, value]) => (
         <div key={key} className="contents">
           <dt className="text-muted-foreground">{humanize(key)}</dt>
           <dd className="break-all font-mono">
-            <span className={cn(highlight === key && 'rounded bg-mark px-1.5 py-0.5')}>{formatCell(key, value)}</span>
+            <span className={cn(highlight === key && 'rounded bg-mark px-1.5 py-0.5')}>
+              {formatCell(key, value, currency)}
+            </span>
           </dd>
         </div>
       ))}
@@ -296,9 +302,9 @@ export function RecordTable({ row, highlight }: { row: Record<string, unknown>; 
   )
 }
 
-function formatCell(key: string, value: unknown): string {
+function formatCell(key: string, value: unknown, currency: string): string {
   if (value == null) return '—'
-  if (key.endsWith('_cents') && typeof value === 'number') return formatAud(value)
+  if (key.endsWith('_cents') && typeof value === 'number') return formatMoney(value, currency)
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }

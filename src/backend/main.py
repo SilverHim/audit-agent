@@ -43,6 +43,7 @@ from backend.persistence.stores import (
 from backend.persistence.xero_connections import PostgresXeroConnectionStore
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.autonomy_policy import AutonomyPolicy
+from backend.services.currency import engagement_currency
 from backend.services.data_service import DataService
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
@@ -89,7 +90,13 @@ def build_deps(settings: Settings) -> AgentDeps:
         engagement_store=engagement_store,
         llm=llm,
         rules=SqlRuleEngine(financial_store),
-        judgments=JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library),
+        judgments=JudgmentEngine(
+            llm,
+            OutputValidator(financial_store, library, trail),
+            trail,
+            library,
+            currency=engagement_currency(engagement_store),
+        ),
         queue=ReviewQueue(library),
         library=library,
         trail=trail,

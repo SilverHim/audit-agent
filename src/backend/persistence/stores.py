@@ -20,7 +20,7 @@ from sqlalchemy import delete, exists, func, null, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
+from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_currency, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import DemoTable, Supplements
 from backend.contracts import records
@@ -32,6 +32,7 @@ from backend.contracts.models import (
     ClientEntry,
     ClientProfile,
     Contract,
+    CurrencySource,
     DocumentChannel,
     DocumentFailedStep,
     DocumentRef,
@@ -49,6 +50,8 @@ from backend.contracts.models import (
     User,
     Versioned,
     WorkingLanguage,
+    initial_currency,
+    with_currency,
 )
 from backend.contracts.ports import DatasetLoader
 from backend.contracts.records import (
@@ -747,6 +750,10 @@ class CsvDatasetLoader(TableLoader):
         """CSV 数据集不自带期间 (Numbat 由审计师填)."""
         return None
 
+    def currency(self, dataset: str) -> str | None:
+        """CSV 数据集不带记账币种 (建项目时取缺省澳元)."""
+        return None
+
 
 class XeroDatasetLoader(TableLoader):
     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
@@ -895,6 +902,10 @@ class XeroDatasetLoader(TableLoader):
         period = snapshot_period(self.snapshot(dataset))
         return period.start, period.end
 
+    def currency(self, dataset: str) -> str | None:
+        """快照组织信息的本位币 (需求 R366, adapters.xero_dataset.snapshot_currency)."""
+        return snapshot_currency(self.snapshot(dataset))
+
 
 class RoutingDatasetLoader:
     """按数据集名的前缀选载入器 (如 "xero/" 走 Xero), 其余走默认的 CSV 载入器."""
@@ -948,6 +959,9 @@ class RoutingDatasetLoader:
 
     def period(self, dataset: str) -> tuple[date, date] | None:
         return self.pick(dataset).period(dataset)
+
+    def currency(self, dataset: str) -> str | None:
+        return self.pick(dataset).currency(dataset)
 
     def datasets(self) -> list[str]:
         """各载入器的数据集合在一起, 按名称排序."""
@@ -1093,6 +1107,7 @@ class PostgresEngagementStore(Store):
         dataset: str | None,
         profile: ClientProfile,
         working_language: WorkingLanguage = "en",
+        currency: str | None = None,
     ) -> Engagement:
         if period_end < period_start:
             raise ValueError("period_end precedes period_start")
@@ -1116,6 +1131,7 @@ class PostgresEngagementStore(Store):
                 client_profile_version=adopted.version,
                 phase=Phase.P0_Acceptance,
                 working_language=working_language,
+                **initial_currency(currency),
                 created_at=now(),
                 updated_at=now(),
             )
@@ -1177,6 +1193,22 @@ class PostgresEngagementStore(Store):
             )
             if previous != language:
                 await conn.execute(update(t).where(t.c.id == eid).values(working_language=language, updated_at=now()))
+            return previous
+
+    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement:
+        """writable 锁住项目行后读旧值再改 (同 set_working_language); 币种与来源都相同时不改."""
+        t = m.engagements
+        async with transaction(self.engine, eid) as conn:
+            await writable(conn, eid)
+            row = (await conn.execute(select(t).where(t.c.id == eid))).mappings().one()
+            previous = Engagement.model_validate(dict(row))
+            changed = with_currency(previous, currency, source)  # 代码不是三个大写字母时 ValidationError, 不写
+            if changed != previous:
+                await conn.execute(
+                    update(t)
+                    .where(t.c.id == eid)
+                    .values(currency=changed.currency, currency_source=changed.currency_source, updated_at=now())
+                )
             return previous
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:

@@ -63,7 +63,7 @@ from backend.contracts.conversation import (
     Lang,
     ToolSpec,
 )
-from backend.contracts.models import AgentId, TrailEntry, TrailKind
+from backend.contracts.models import DEFAULT_CURRENCY, AgentId, TrailEntry, TrailKind
 from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
 from backend.contracts.views import EngagementOverview
 from backend.core.config import Settings
@@ -168,6 +168,8 @@ class ChatTurn:
     model: str = ""  # 最近一次调用的模型名
     # 本轮的回答语言 (项目的工作语言, 需求 R342): 读总览时定下, 之后改了工作语言也不影响这一轮; 还没读到时为空
     answer_lang: Lang | None = None
+    # 本轮工具结果里金额的币种 (项目的记账币种, 需求 R366): 读总览时定下
+    currency: str = DEFAULT_CURRENCY
     input_tokens: int = 0  # 本轮各次调用的输入 token 合计
     output_tokens: int = 0  # 本轮各次调用的输出 token 合计
     record: "asyncio.Task[Any] | None" = None  # 写这一轮 conversation 留痕 (正常或 aborted) 的独立任务, 只建一次
@@ -388,6 +390,7 @@ class ConciergeChat:
         # 回答语言取项目的工作语言 (需求 R342); 提问带的 lang 是界面语言, 只管工具提示 (见 _converse)
         answer_lang: Lang = overview.engagement.working_language
         turn.answer_lang = answer_lang
+        turn.currency = overview.engagement.currency
 
         def system(summary: Summary | None) -> str:
             return self.system_prompt(overview, answer_lang, summary.text if summary else "")
@@ -453,7 +456,7 @@ class ConciergeChat:
         ctx = ChatContext(
             model=model,
             tools=self.tools,
-            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero),
+            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero, turn.currency),
             ui_lang=question.lang,  # 界面语言: 工具提示文字按它, 回答语言另在系统提示里
             max_steps=limits.max_steps,
             max_tokens=limits.max_tokens,

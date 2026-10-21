@@ -10,9 +10,19 @@ import { Button } from '@/components/ui/button'
 import { useI18n } from '@/lib/i18n'
 
 // 后端加上 deferral, conversation 两类留痕后, 这里按字符串筛选即可
-const KINDS = ['all', 'decision', 'llm_call', 'transition', 'external_call', 'deferral', 'conversation'] as const
+const KINDS = [
+  'all',
+  'data',
+  'decision',
+  'llm_call',
+  'transition',
+  'external_call',
+  'deferral',
+  'conversation',
+] as const
 const TONES: Record<string, Tone> = {
   decision: 'warn',
+  data: 'neutral',
   llm_call: 'accent',
   transition: 'neutral',
   external_call: 'neutral',
@@ -80,7 +90,9 @@ function Trail() {
                     </span>
                     <StatusPill tone={TONES[entry.kind] ?? 'neutral'}>{label(entry.kind)}</StatusPill>
                     <span className="min-w-0 flex-1 truncate" lang="en">
-                      {entry.summary}
+                      {entry.payload?.action === 'currency'
+                        ? t.currency.change(String(entry.payload.from), String(entry.payload.to))
+                        : entry.summary}
                     </span>
                     <span className="text-[12.5px] text-muted-foreground">{actor(entry)}</span>
                   </summary>

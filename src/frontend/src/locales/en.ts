@@ -347,8 +347,8 @@ export const en = {
     fraudReasonInput: 'Reason for the fraud indication (optional)',
     status: 'Result',
     entryNos: 'Verified adjustment entries (comma-separated)',
-    corrected: 'Corrected (AUD)',
-    residual: 'Remaining (AUD)',
+    corrected: 'Corrected',
+    residual: 'Remaining',
     recommunicate: 'Communicate with management again',
     errors: {
       base: 'The misstatement for this task is not loaded yet. Try again shortly.',
@@ -1044,7 +1044,7 @@ export const en = {
     intro: 'Register a client that has no demo dataset. The profile is saved as version 1, entered manually by you.',
     optional: 'Optional · leave blank if the client has not declared it',
     yearEnd: 'Financial year end (MM-DD)',
-    approvalLimit: 'Payment approval limit (AUD)',
+    approvalLimit: 'Payment approval limit',
     framework: 'Financial reporting framework',
     priorAudited: 'Prior period audited',
     notDeclared: 'Not declared',
@@ -1274,6 +1274,15 @@ export const en = {
           ? `The rerun was not submitted (${code}). The page has been refreshed; try again with the current state.`
           : 'The rerun was not submitted. Check your connection and try again.',
     },
+  },
+  currency: {
+    title: 'Accounting currency',
+    hint: 'Confirm the currency of the amounts in this engagement. Changing it does not convert imported amounts.',
+    confirm: 'Confirm currency',
+    saved: 'Currency confirmed',
+    invalid: 'Enter a three-letter uppercase currency code',
+    source: { default: 'Default', xero: 'Xero base currency', auditor: 'Confirmed by auditor' },
+    change: (before: string, after: string) => `Accounting currency ${before} → ${after}`,
   },
   data: {
     title: 'Data management',
@@ -1541,8 +1550,8 @@ export const en = {
       name: 'Name',
       type: 'Type',
       category: 'Standard category',
-      current: 'Current year AUD',
-      prior: 'Prior year AUD',
+      current: 'Current year',
+      prior: 'Prior year',
     },
     edited: 'Edited',
     accountTypes: {

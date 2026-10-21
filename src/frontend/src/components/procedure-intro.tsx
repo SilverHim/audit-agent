@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react'
 import type { ProcedureRun } from '@/client/types.gen'
 import { useI18n } from '@/lib/i18n'
+import { useMoney } from '@/lib/use-money'
 import { procedureIntro } from '@/locales/procedure-intros'
 
 // 程序介绍 (程序页侧栏与程序详情页): 做什么, 什么时候执行 (含本项目取值), 需要的资料, 怎么判断, 结果与你的工作.
 // 本项目取值按最近一次执行的参数快照; 还没执行时不显示
 export function ProcedureIntroView({ procedureId, runs }: { procedureId: string; runs?: ProcedureRun[] }) {
+  const { currency } = useMoney()
   const { t, lang } = useI18n()
   const words = t.proceduresPage.intro
   const intro = procedureIntro(procedureId, lang)
@@ -14,7 +16,7 @@ export function ProcedureIntroView({ procedureId, runs }: { procedureId: string;
     (last, run) => (last && last.run_no >= run.run_no ? last : run),
     undefined,
   )
-  const project = latest && intro.project ? intro.project(latest.params_snapshot) : null
+  const project = latest && intro.project ? intro.project(latest.params_snapshot, currency) : null
   return (
     <div className="flex flex-col gap-3.5 text-[13.5px] leading-relaxed">
       <Part title={words.purpose}>

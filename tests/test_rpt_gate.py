@@ -113,11 +113,11 @@ async def test_report_draft_writes_first_revision() -> None:
     """验收 1: FIN-01 通过后 report_draft 经 execute 调 A10: REPORT-1 v1 与 RUN-RPT-03-1 同一次提交, 并入状态,
     停在 RPT-01 闸门; 报告为保留意见, 引用已确认的跨期判断."""
     s = await at_fin_gate()
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
     await s.submit.submit(EID, fin_decision(GateVerdict.approve))
     await wait_idle(s.runner, EID)
 
-    draft = [c for c in s.output_store.commits[commits:] if any(isinstance(o, AuditReportVersion) for o in c)]
+    draft = [c for c in s.output_store.workflow_commits[commits:] if any(isinstance(o, AuditReportVersion) for o in c)]
     [commit] = draft
     [report] = [o for o in commit if isinstance(o, AuditReportVersion)]
     [run] = [o for o in commit if isinstance(o, ProcedureRun)]
@@ -199,13 +199,13 @@ async def test_reject_returns_to_report_draft() -> None:
     """验收 1: reject 只写决定 (一次提交) 与 1 行 decision 留痕 (RPT-01 下); 下一步 report_draft; RPT-01 不变."""
     s = await at_rpt_gate()
     stop_after_submit(s)
-    commits, trail = len(s.output_store.commits), len(decision_trail(s))
+    commits, trail = len(s.output_store.workflow_commits), len(decision_trail(s))
     rpt01 = latest(s, Procedure, "RPT-01")
     decision = rpt_decision(GateVerdict.reject)
 
     await s.submit.submit(EID, decision)
 
-    assert s.output_store.commits[commits:] == [[decision]]
+    assert s.output_store.workflow_commits[commits:] == [[decision]]
     assert decision_trail(s)[trail:] == [("RPT-01", "D-RPT")]
     assert await s.next_nodes() == ("report_draft",)
     assert latest(s, Procedure, "RPT-01") == rpt01
@@ -215,14 +215,14 @@ async def test_insufficient_info_stays_at_gate() -> None:
     """验收 2: 信息不足只写决定与 1 行 decision 留痕; 报告与 RPT-01 不变, 仍停在闸门; 呈报的此前退回决定不含它."""
     s = await at_rpt_gate()
     rejected = await reject_and_redraft(s)
-    commits, trail = len(s.output_store.commits), len(decision_trail(s))
+    commits, trail = len(s.output_store.workflow_commits), len(decision_trail(s))
     report, rpt01 = latest(s, AuditReportVersion, "REPORT-2"), latest(s, Procedure, "RPT-01")
     decision = rpt_decision(GateVerdict.insufficient_info, id="D-RPT-INFO", target_id="REPORT-2")
 
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
 
-    assert s.output_store.commits[commits:] == [[decision]]
+    assert s.output_store.workflow_commits[commits:] == [[decision]]
     assert decision_trail(s)[trail:] == [("RPT-01", "D-RPT-INFO")]
     assert (latest(s, AuditReportVersion, "REPORT-2"), latest(s, Procedure, "RPT-01")) == (report, rpt01)
     assert await s.next_nodes() == ("gate_rpt01",)
@@ -233,7 +233,7 @@ async def approve_report_2(s: Started) -> tuple[GateDecision, int]:
     """退回一次后批准 REPORT-2 v1, 签字时刻 SIGNED_AT; 返回决定与提交前的提交数."""
     await reject_and_redraft(s)
     s.submit.now = lambda: SIGNED_AT
-    commits = len(s.output_store.commits)
+    commits = len(s.output_store.workflow_commits)
     decision = rpt_decision(GateVerdict.approve, id="D-RPT-APPROVE", target_id="REPORT-2")
     await s.submit.submit(EID, decision)
     await wait_idle(s.runner, EID)
@@ -248,7 +248,7 @@ async def test_approve_signs_report_and_locks_last() -> None:
 
     decision, commits = await approve_report_2(s)
 
-    [commit] = s.output_store.commits[commits:]
+    [commit] = s.output_store.workflow_commits[commits:]
     *puts, last = commit
     assert all(isinstance(o, Versioned) for o in puts)
     assert last == EngagementWrite("update", EID, {"phase": Phase.Archived, "locked": True})
@@ -277,7 +277,7 @@ async def test_approve_routes_to_archive_and_ends() -> None:
 
     decision, commits = await approve_report_2(s)
 
-    assert len(s.output_store.commits) == commits + 1  # 只有决定那一次提交, archive 没有写入
+    assert len(s.output_store.workflow_commits) == commits + 1  # 只有决定那一次提交, archive 没有写入
     snapshot = await s.runner.app.aget_state(CONFIG)
     assert snapshot.next == () and s.runner.run_error(EID) is None
     assert [(r.id, r.version, r.status) for r in snapshot.values["report_versions"]] == [

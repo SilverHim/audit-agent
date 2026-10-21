@@ -6,9 +6,9 @@ import { WithdrawDecision } from '@/components/withdraw-decision'
 import { useActorName } from '@/lib/actor'
 import { decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 
 // FIN-01 闸门材料的 "AI 建议为错报但未认定" 一节 (需求 R364, 后端 R363 的 schedule.unrecognised): 只提示, 不阻塞.
 // 金额超过明显微小临界值的醒目, 超过实际执行的重要性或达到重要性水平的标红, 并写对候选意见可能的影响 (would_qualify).
@@ -21,6 +21,7 @@ const LEVEL_TONES = {
 } as const
 
 export function UnrecognisedSuggestions({ eid, items }: { eid: string; items: UnrecognisedSuggestion[] }) {
+  const { formatMoney } = useMoney()
   const { t, formatDateTime } = useI18n()
   const actorName = useActorName()
   const overview = useOverview(eid)
@@ -51,7 +52,7 @@ export function UnrecognisedSuggestions({ eid, items }: { eid: string; items: Un
                 <Code>{item.subject_id}</Code>
                 <StatusPill tone={LEVEL_TONES[item.level]}>{labels.levels[item.level]}</StatusPill>
                 <span className="flex-1" />
-                <Code className={cn('font-semibold', red && 'text-risk')}>{formatAud(item.amount_cents)}</Code>
+                <Code className={cn('font-semibold', red && 'text-risk')}>{formatMoney(item.amount_cents)}</Code>
               </div>
               <span>
                 {item.account}

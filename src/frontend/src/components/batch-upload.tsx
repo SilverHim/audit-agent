@@ -4,6 +4,7 @@ import { type ReactNode, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { DocumentType, TableKind } from '@/client/types.gen'
 import { StatusPill } from '@/components/chrome'
+import { CurrencySettings } from '@/components/currency-settings'
 import { FailureTable, MappingTable, SELECT } from '@/components/import-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -42,7 +43,7 @@ import {
 } from '@/lib/data-api'
 import { errorText, type ParseFailure, parseFailures } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 // 智能导入 (后端需求 R277): "上传资料" 入口. 一批文件 (表格与其他文件混着) 交给数据管理智能体识别, 审计师看
 // 确认单, 单项可调整, 点一次 "确认导入" 写入. 数据管理页与补交卡片共用; 补交卡片上的上传带 request_id
@@ -187,6 +188,7 @@ function BatchDialog({ eid, batchId, onClose }: { eid: string; batchId: string |
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4 px-6 py-4">
+          {batch ? <CurrencySettings eid={eid} /> : null}
           {batch?.status === 'failed' ? (
             <div
               role="alert"
@@ -463,6 +465,7 @@ function BatchTable({
 
 // 识别为: 表格为哪张表 (或不是账表); 文件为类型, 合同带对方与条款数, 回函带银行与余额, 另列分类理由
 function Recognised({ item }: { item: BatchItem }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   if (item.item_kind === 'table') {
     const kind = item.plan?.kind
@@ -476,14 +479,14 @@ function Recognised({ item }: { item: BatchItem }) {
   if (item.contract) {
     detail = [
       t.batch.contract(item.contract.counterparty, item.contract.terms.length),
-      item.contract.amount_cents != null ? formatAud(item.contract.amount_cents) : null,
+      item.contract.amount_cents != null ? formatMoney(item.contract.amount_cents) : null,
     ]
       .filter(Boolean)
       .join(' · ')
   } else if (item.reply) {
     detail = t.batch.reply(
       String(item.reply.confirming_party ?? ''),
-      formatAud(Number(item.reply.confirmed_balance_cents)),
+      formatMoney(Number(item.reply.confirmed_balance_cents)),
     )
   }
   return (

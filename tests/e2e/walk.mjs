@@ -31,6 +31,7 @@ const result = {
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
   corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
+  currency: null, // 币种确认与锁定后的显示核对 (R366), 共用原有走通.
   withdrawal_totals: [], // Issue #67: 初次同意, 撤回后改判不是错报, 再撤回并同意的未更正合计
   activity: null, // 配了 activity 时的核对结果 (需求 R362), 见 checkActivity
   steps: [], // {no, name, url, shot, console, failed, ms}
@@ -603,11 +604,32 @@ async function checkWithdrawal() {
   result.withdrawal_totals.push(total)
 }
 
+async function confirmCurrency() {
+  await goto(`${base}/engagements/${result.eid}/data`)
+  await page.getByLabel('Accounting currency', { exact: true }).fill(config.currency)
+  await click(page.getByRole('button', { name: 'Confirm currency', exact: true }))
+  await waitFor(async () => {
+    const view = await overview()
+    return view.engagement.currency === config.currency && view.engagement.currency_source === 'auditor'
+  }, timeouts.action_ms, '保存项目币种')
+}
+
+async function checkArchivedCurrency() {
+  await goto(`${base}/engagements/${result.eid}/data`)
+  const input = page.getByLabel('Accounting currency', { exact: true })
+  await input.waitFor()
+  if (await input.inputValue() !== config.currency || !(await input.isDisabled())) throw new Error('归档后币种未保存或仍可修改')
+  await goto(`${base}/engagements/${result.eid}/data/accounts`)
+  await page.getByRole('columnheader', { name: `Current year (${config.currency})`, exact: true }).waitFor()
+  result.currency = config.currency
+}
+
 // ── 主循环: 每次停下按当时的状态办 (同 R311 的 drive) ──
 
 async function main() {
   if (!(await step('注册并登录', register))) return
   if (!(await step('新建演示项目', createEngagement))) return
+  if (config.currency && !(await step('确认项目币种', confirmCurrency))) return
   let readyPosted = false
   let last = ''
   let repeats = 0
@@ -619,6 +641,7 @@ async function main() {
     }
     if (view.engagement.phase === 'Archived') {
       result.reached_archive = true
+      if (config.currency) await step('核对归档后的币种与金额表头', checkArchivedCurrency)
       // 报告页上签字的那一稿带 "已签字归档" 标记; 等它出来再截图 (打开页面时内容还没渲染)
       await step('归档后的报告页', async () => {
         await goto(`${base}/engagements/${result.eid}/report`)

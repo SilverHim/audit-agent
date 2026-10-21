@@ -38,9 +38,9 @@ import {
   responsesDetails,
   separateCode,
 } from '@/lib/misstatements'
-import { formatAud } from '@/lib/money'
 import { manualInstructions, procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
+import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/manual/$taskId')({ component: ManualTaskPage })
 
@@ -271,6 +271,7 @@ function ResponsesForm({
   onChange: (id: string, row: ResponseRow) => void
   disabled: boolean
 }) {
+  const { formatMoney } = useMoney()
   const { t } = useI18n()
   const f = t.fin08.fields
   return (
@@ -288,7 +289,7 @@ function ResponsesForm({
               <span>
                 {item.account}
                 {code ? ` (${code})` : ''} · {t.directions[item.direction]} ·{' '}
-                <Code>{formatAud(item.amount_cents)}</Code>
+                <Code>{formatMoney(item.amount_cents)}</Code>
               </span>
             </legend>
             {item.source_conclusion ? <SourceConclusion eid={eid} item={item} /> : null}

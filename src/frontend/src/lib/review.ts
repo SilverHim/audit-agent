@@ -13,7 +13,7 @@ import type {
   ReviewRecordIn,
   ReviewTaskView,
 } from '@/client/types.gen'
-import { audToCents } from '@/lib/money'
+import { moneyToCents } from '@/lib/money'
 import type { Messages } from '@/locales/en'
 
 // 复核任务的公共计算: 对象, 金额, 复核档位, 决定请求体. 对话和队列共用, 保证口径一致
@@ -322,7 +322,7 @@ export function buildRecord(
 
 // 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案. 科目代码可空 (空为不填; 后端查它在本项目科目表中)
 export function misstatementDraft(input: ReviewDraft, t: Messages): MisstatementDraft | string {
-  const cents = audToCents(input.amount)
+  const cents = moneyToCents(input.amount)
   if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
   return {
     type: input.kind,

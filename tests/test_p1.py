@@ -92,7 +92,7 @@ async def test_p1_ingest_writes_run_program_and_document_status_in_one_commit() 
 
     patch = await nodes.p1_ingest(state)
 
-    [commit] = store.commits
+    [commit] = store.workflow_commits
     written = {(type(o).__name__, getattr(o, "id", None) or o.document_id) for o in commit}
     assert written == {
         ("ProcedureRun", "RUN-DOC-04-1"),

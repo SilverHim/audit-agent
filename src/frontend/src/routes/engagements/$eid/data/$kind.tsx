@@ -23,7 +23,9 @@ import {
 } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { formatMoney } from '@/lib/money'
 import { reasonText } from '@/lib/reason'
+import { useMoney } from '@/lib/use-money'
 
 type Search = { q?: string; page?: number; selected?: string }
 
@@ -44,9 +46,9 @@ export const Route = createFileRoute('/engagements/$eid/data/$kind')({
 const LIMIT = 50
 
 // 余额按会计惯例: 贷方 (负数) 加括号
-function money(cents: unknown): string {
+function money(cents: unknown, currency: string): string {
   if (typeof cents !== 'number') return '—'
-  const value = (Math.abs(cents) / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const value = formatMoney(Math.abs(cents), currency).slice(currency.length + 1)
   return cents < 0 ? `(${value})` : value
 }
 
@@ -198,6 +200,7 @@ function AccountsTable({
   selected: string | undefined
   onSelect: (code: string) => void
 }) {
+  const { currency } = useMoney()
   const { t } = useI18n()
   const cell = 'border-line-soft border-b px-3 py-2'
   return (
@@ -218,10 +221,10 @@ function AccountsTable({
               {t.dataTable.cols.category}
             </th>
             <th scope="col" className="border-b px-3 py-2.5 text-right font-semibold">
-              {t.dataTable.cols.current}
+              {t.dataTable.cols.current} ({currency})
             </th>
             <th scope="col" className="border-b px-4 py-2.5 text-right font-semibold">
-              {t.dataTable.cols.prior}
+              {t.dataTable.cols.prior} ({currency})
             </th>
           </tr>
         </thead>
@@ -252,9 +255,11 @@ function AccountsTable({
                     ) : null}
                   </span>
                 </td>
-                <td className={cn(cell, 'text-right font-mono text-[13px]')}>{money(row.balance_current_cents)}</td>
+                <td className={cn(cell, 'text-right font-mono text-[13px]')}>
+                  {money(row.balance_current_cents, currency)}
+                </td>
                 <td className={cn(cell, 'px-4 text-right font-mono text-[#4a5262] text-[13px]')}>
-                  {money(row.balance_prior_cents)}
+                  {money(row.balance_prior_cents, currency)}
                 </td>
               </tr>
             )
@@ -266,6 +271,7 @@ function AccountsTable({
 }
 
 function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }) {
+  const { currency } = useMoney()
   const { t, formatDateTime } = useI18n()
   const actorName = useActorName()
   const history = useAccountHistory(eid, row?.code ?? null)
@@ -300,7 +306,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
         </span>
         <h2 className="m-0 font-semibold text-[17px]">{row.name}</h2>
         <span className="text-[#4a5262] text-[13px]">
-          {t.dataTable.balances(money(row.balance_current_cents), money(row.balance_prior_cents))}
+          {t.dataTable.balances(money(row.balance_current_cents, currency), money(row.balance_prior_cents, currency))}
         </span>
       </div>
       <label className="flex flex-col gap-1.5 font-semibold text-[13px]">
@@ -394,10 +400,11 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
 }
 
 function GenericTable({ columns, rows }: { columns: TableColumn[]; rows: Array<Record<string, unknown>> }) {
+  const { currency } = useMoney()
   const { t, formatDate, formatDateTime } = useI18n()
   const show = (column: TableColumn, value: unknown) => {
     if (value === null || value === undefined || value === '') return '—'
-    if (column.type === 'amount') return money(value)
+    if (column.type === 'amount') return money(value, currency)
     if (column.type === 'date') return formatDate(String(value))
     if (column.type === 'datetime') return formatDateTime(String(value))
     if (column.type === 'bool') return value ? '✓' : '—'

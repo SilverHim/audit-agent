@@ -8,6 +8,7 @@ import { useDataReady, useDataSummary } from '@/lib/data-api'
 import { checkDetail } from '@/lib/data-checks'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { useMoney } from '@/lib/use-money'
 
 // "数据已齐" 按钮: 最近一次体检有不通过的项时先列出各项, 审计师可写理由 (选填, 需求 R360) 再确认, 否则直接确认
 export function DataReadyButton({
@@ -19,6 +20,7 @@ export function DataReadyButton({
   disabled?: boolean
   size?: ComponentProps<typeof Button>['size']
 }) {
+  const { currency } = useMoney()
   const { t, lang } = useI18n()
   const ready = useDataReady(eid)
   const checks = useDataSummary(eid).data?.checks ?? []
@@ -53,7 +55,7 @@ export function DataReadyButton({
           </DialogHeader>
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {failed.map((check) => {
-              const detail = checkDetail(check, t, lang)
+              const detail = checkDetail(check, t, lang, currency)
               return (
                 <li key={check.id} className="flex gap-2.5 text-[13.5px]">
                   <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn-strong" aria-hidden="true" />

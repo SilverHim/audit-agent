@@ -6,11 +6,12 @@ import { EvidenceLink } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { SubTabs } from '@/components/sub-tabs'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/evidence')({ component: Evidence })
 
 function Evidence() {
+  const { formatMoney } = useMoney()
   const { eid } = Route.useParams()
   const { t } = useI18n()
   const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
@@ -74,17 +75,17 @@ function Evidence() {
                 </div>
                 <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1">
                   <dt className="text-muted-foreground">{t.evidencePage.book}</dt>
-                  <dd className="m-0 font-mono">{formatAud(item.book_balance_cents)}</dd>
+                  <dd className="m-0 font-mono">{formatMoney(item.book_balance_cents)}</dd>
                   <dt className="text-muted-foreground">{t.evidencePage.confirmed}</dt>
-                  <dd className="m-0 font-mono">{formatAud(item.confirmed_balance_cents)}</dd>
+                  <dd className="m-0 font-mono">{formatMoney(item.confirmed_balance_cents)}</dd>
                   <dt className="text-muted-foreground">{t.evidencePage.difference}</dt>
-                  <dd className="m-0 font-mono">{formatAud(item.difference_cents)}</dd>
+                  <dd className="m-0 font-mono">{formatMoney(item.difference_cents)}</dd>
                   <dt className="text-muted-foreground">{t.evidencePage.accruedInterest}</dt>
                   <dd className="m-0 font-mono">
                     {/* 回函经 DOC-06 抽取过 (后端判定) 而没提应计利息时写明 "未提及"; 没抽取过的同其他各项为 — */}
                     {item.accrued_interest_cents == null && item.reply_extracted
                       ? t.evidencePage.accruedNotStated
-                      : formatAud(item.accrued_interest_cents)}
+                      : formatMoney(item.accrued_interest_cents)}
                   </dd>
                 </dl>
                 {item.reply_document_id ? (

@@ -29,8 +29,9 @@ import { useDocumentDetails, useDocumentHistory, useEditExtraction } from '@/lib
 import { type DetailsForm, detailsBody, detailsErrorText, detailsForm, historyFields } from '@/lib/document-details'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
-import { audToCents, formatAud } from '@/lib/money'
+import { formatMoney, moneyToCents } from '@/lib/money'
 import { reasonText } from '@/lib/reason'
+import { useMoney } from '@/lib/use-money'
 import type { Messages } from '@/locales/en'
 
 export const Route = createFileRoute('/engagements/$eid/data/documents/$docId')({ component: DocumentView })
@@ -82,7 +83,7 @@ function abnForm(abn: string): string {
     : abn
 }
 
-function contractItems(contract: Contract, t: Messages, formatDate: (iso: string) => string): Item[] {
+function contractItems(contract: Contract, t: Messages, formatDate: (iso: string) => string, currency = 'AUD'): Item[] {
   const base = { target: 'contracts' as const, id: contract.id }
   const facts: Item[] = [
     {
@@ -112,9 +113,9 @@ function contractItems(contract: Contract, t: Messages, formatDate: (iso: string
       id: 'amount_cents',
       group: 'fact',
       label: t.docView.fields.amount_cents,
-      value: formatAud(contract.amount_cents),
+      value: formatMoney(contract.amount_cents, currency),
       page: pageOf(contract.evidence, 'amount_cents'),
-      candidates: [`AUD ${plain}`, plain],
+      candidates: [`${currency} ${plain}`, plain],
       edit: { ...base, field: 'amount_cents', kind: 'amount', raw: plain },
     })
   }
@@ -145,7 +146,12 @@ function contractItems(contract: Contract, t: Messages, formatDate: (iso: string
   return [...facts, ...terms]
 }
 
-function confirmationItems(confirmation: Confirmation, t: Messages, formatDate: (iso: string) => string): Item[] {
+function confirmationItems(
+  confirmation: Confirmation,
+  t: Messages,
+  formatDate: (iso: string) => string,
+  currency = 'AUD',
+): Item[] {
   const base = { target: 'confirmations' as const, id: confirmation.id }
   const items: Item[] = [
     {
@@ -175,9 +181,9 @@ function confirmationItems(confirmation: Confirmation, t: Messages, formatDate: 
       id: 'confirmed_balance_cents',
       group: 'fact',
       label: t.docView.fields.confirmed_balance_cents,
-      value: formatAud(confirmation.confirmed_balance_cents),
+      value: formatMoney(confirmation.confirmed_balance_cents, currency),
       page: pageOf(confirmation.evidence, 'confirmed_balance_cents'),
-      candidates: [`AUD ${plain}`, plain],
+      candidates: [`${currency} ${plain}`, plain],
       edit: { ...base, field: 'confirmed_balance_cents', kind: 'amount', raw: plain },
     })
   }
@@ -334,14 +340,15 @@ function DocumentView() {
     }
   }, [eid, docId])
 
+  const { currency } = useMoney()
   const items = useMemo(() => {
     const contract = contracts.data?.find((item) => item.document_id === docId)
-    if (contract) return contractItems(contract, t, formatDate)
+    if (contract) return contractItems(contract, t, formatDate, currency)
     const confirmation = confirmations.data?.find((item) => item.reply_document_id === docId)
-    if (confirmation) return confirmationItems(confirmation, t, formatDate)
+    if (confirmation) return confirmationItems(confirmation, t, formatDate, currency)
     const extract = extracts.data?.find((item) => item.document_id === docId)
     return extract ? registryItems(extract, t, formatDate) : []
-  }, [contracts.data, confirmations.data, extracts.data, docId, t, formatDate])
+  }, [contracts.data, confirmations.data, extracts.data, docId, t, formatDate, currency])
 
   const current = items.find((item) => item.id === selected) ?? null
   const shownPage = page ?? current?.page ?? 1
@@ -589,7 +596,7 @@ function EditDialog({ eid, item, onClose }: { eid: string; item: Item | null; on
     setPartIndex(index)
     setValue(parts[index]?.raw ?? '')
   }
-  const parsed = part.kind === 'amount' ? audToCents(value) : value.trim()
+  const parsed = part.kind === 'amount' ? moneyToCents(value) : value.trim()
   const canSave = parsed !== null && parsed !== '' && value.trim() !== part.raw
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>

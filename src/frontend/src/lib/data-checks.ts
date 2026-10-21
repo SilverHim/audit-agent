@@ -1,14 +1,17 @@
 import type { DataCheck } from '@/client/types.gen'
-import { formatAud } from '@/lib/money'
+import { formatMoney } from '@/lib/money'
 import type { Messages } from '@/locales/en'
 
 // 一项数据体检结果的说明文字 (按 params), 数据管理页的体检卡与确认数据已齐时的未通过项共用
-export function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en'): string {
+export function checkDetail(check: DataCheck, t: Messages, lang: 'zh' | 'en', currency = 'AUD'): string {
   const p = check.params ?? {}
   const num = (value: unknown) => Number(value ?? 0)
   switch (check.id) {
     case 'debits_equal_credits':
-      return t.data.checkDetail.debits(formatAud(num(p.debit_cents)), formatAud(num(p.credit_cents)))
+      return t.data.checkDetail.debits(
+        formatMoney(num(p.debit_cents), currency),
+        formatMoney(num(p.credit_cents), currency),
+      )
     case 'journals_agree_tb':
       if (check.status === 'missing_data') return t.data.checkDetail.notImportedYet // 还没有账表, 不说 "0 个科目一致"
       return t.data.checkDetail.journals(num(p.accounts), Array.isArray(p.differences) ? p.differences.length : 0)

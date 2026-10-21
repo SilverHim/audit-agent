@@ -6,11 +6,12 @@ import { EvidenceLink } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { SubTabs } from '@/components/sub-tabs'
 import { useI18n } from '@/lib/i18n'
-import { formatAud } from '@/lib/money'
+import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/contracts')({ component: Contracts })
 
 function Contracts() {
+  const { formatMoney } = useMoney()
   const { eid } = Route.useParams()
   const { t, formatDate } = useI18n()
   const contracts = useQuery(evidenceListContractsOptions({ path: { eid } }))
@@ -32,7 +33,7 @@ function Contracts() {
                 <Code className="font-semibold">{contract.id}</Code>
                 <span className="font-semibold">{contract.counterparty}</span>
                 <span className="flex-1" />
-                <Code>{formatAud(contract.amount_cents)}</Code>
+                <Code>{formatMoney(contract.amount_cents)}</Code>
               </div>
               <span className="text-[13px] text-muted-foreground">
                 {contract.sign_date ? t.evidencePage.signedOn(formatDate(contract.sign_date)) : ''}

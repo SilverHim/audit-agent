@@ -307,7 +307,9 @@ async def test_normal_task_waits_in_node(tmp_path: Path) -> None:
 
     assert await case.waits() == [tst_payload([])]  # 键与失败等待相同
     assert (await GraphStateQuery(case.runner.app, case.runner.deps, case.runner).overview(EID)).awaiting_review
-    [commit] = [c for c in case.output_store.commits if any(getattr(o, "id", None) == f"RUN-{TST}-1" for o in c)]
+    [commit] = [
+        c for c in case.output_store.workflow_commits if any(getattr(o, "id", None) == f"RUN-{TST}-1" for o in c)
+    ]
     written = {(type(o).__name__, o.id, o.version) for o in commit if isinstance(o, Versioned)}
     assert {
         ("ProcedureRun", f"RUN-{TST}-1", 1),
@@ -936,11 +938,11 @@ async def test_node_replays_runs_and_decisions_from_store(tmp_path: Path) -> Non
     await case.submit.submit(EID, override(await case.task("S2"), "D-2"))
     await wait_idle(case.runner, EID)
     assert "被杀" in (case.runner.run_error(EID) or "")
-    rows = list(store.rows)
+    rows = list(store.workflow_rows)
 
     await case.runner.app.ainvoke(None, CONFIG)
 
-    assert store.rows == rows
+    assert store.workflow_rows == rows
     assert case.agent.calls == 1
     snapshot = await case.runner.app.aget_state(CONFIG)
     assert snapshot.next == ("gate_fin",)

@@ -14,8 +14,8 @@
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from backend.agents.base import AgentDeps
 from backend.contracts.conversation import ConciergeCitation, Lang, ToolCall, ToolSpec
 from backend.contracts.models import (
+    DEFAULT_CURRENCY,
     AuditException,
     AuditReportVersion,
     Contract,
@@ -48,6 +49,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import XeroConnections
 from backend.contracts.views import EngagementOverview, GateView
+from backend.services.currency import format_money
 from backend.services.deferrals import active_deferrals, target_of
 from backend.services.features import COLLAB
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE, ROW_EVIDENCE
@@ -72,6 +74,7 @@ class ToolEnv:
     state: StateReader  # 项目位置与闸门材料
     max_chars: int  # 单个工具结果的最多字符数
     xero: XeroConnections | None = None  # Xero 连接记录 (组织信息核对, 需求 R291); 为空时待办里没有这一类
+    currency: str = DEFAULT_CURRENCY  # 项目的记账币种 (需求 R366): 工具结果里的金额按它写 (money)
 
 
 @dataclass(frozen=True)
@@ -178,11 +181,16 @@ PERSON_FIELDS = frozenset(
 )
 
 
-def aud(cents: int | None) -> str | None:
-    """金额 (分) 的显示: AUD 1,234.56; 空为 None. 给模型现成的写法, 免得它自己换算出错."""
+# 本次工具调用所在项目的记账币种 (需求 R366): ToolBox.call 按 ToolEnv.currency 设, 调用结束复原; money 与 minimize 读它
+CURRENCY: ContextVar[str] = ContextVar("concierge_currency", default=DEFAULT_CURRENCY)
+
+
+def money(cents: int | None) -> str | None:
+    """金额 (分) 按项目的记账币种写, 如 AUD 1,234.56 (services.currency.format_money); 空为 None. 给模型现成的写法,
+    免得它自己换算出错."""
     if cents is None:
         return None
-    return f"AUD {Decimal(cents) / 100:,.2f}"
+    return format_money(cents, CURRENCY.get())
 
 
 def pseudonym(name: str) -> str:
@@ -191,10 +199,10 @@ def pseudonym(name: str) -> str:
 
 
 def minimize(value: Any) -> Any:
-    """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加 *_aud 写法;
+    """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加按记账币种的 *_formatted 写法;
     去掉 engagement_id 与 birth_date. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要
     经过它; 个人节点 ID 的出生日期段随后在 ToolBox.call 出口, 序列化之前去掉 (mask_person_node_ids).
-    *_aud 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
+    *_formatted 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
     if isinstance(value, list):
         return [minimize(item) for item in value]
     if not isinstance(value, Mapping):
@@ -211,7 +219,7 @@ def minimize(value: Any) -> Any:
             out[key] = minimize(item)
     for key, item in value.items():
         if key.endswith("_cents") and isinstance(item, int) and not isinstance(item, bool):
-            out[key[: -len("_cents")] + "_aud"] = aud(item)
+            out[key[: -len("_cents")] + "_formatted"] = money(item)
     return out
 
 
@@ -310,9 +318,9 @@ async def get_overview(env: ToolEnv, args: NoArgs) -> Found:
                 "total": o.progress.total,
                 "running": [{"id": pid, "name": procedure_name(env, pid)} for pid in o.progress.running],
             },
-            "materiality": aud(o.materiality_cents),
-            "performance_materiality": aud(o.performance_materiality_cents),
-            "clearly_trivial_threshold": aud(o.clearly_trivial_cents),
+            "materiality": money(o.materiality_cents),
+            "performance_materiality": money(o.performance_materiality_cents),
+            "clearly_trivial_threshold": money(o.clearly_trivial_cents),
             "opinion_route": o.opinion_route.value if o.opinion_route else None,
             "procedures": [
                 {
@@ -478,7 +486,9 @@ async def get_judgment(env: ToolEnv, args: JudgmentArgs) -> Found:
         "reasoning_chain": steps,
         "evidence": [pointer_brief(p) for p in judgment.evidence],
         "misstatement_draft": (
-            {**draft.model_dump(mode="json"), "amount_aud": aud(draft.amount_cents)} if draft is not None else None
+            {**draft.model_dump(mode="json"), "amount_formatted": money(draft.amount_cents)}
+            if draft is not None
+            else None
         ),
         "exception_ids": judgment.exception_ids,
         "superseded_by": judgment.superseded_by,
@@ -543,7 +553,7 @@ async def list_exceptions(env: ToolEnv, args: ByProcedure) -> Found:
                 "rule_id": x.rule_id,
                 "severity": x.severity,
                 "source_ids": x.source_ids,
-                "amount": aud(x.amount_cents),
+                "amount": money(x.amount_cents),
                 "disposition": x.disposition.value,
                 "attributed_by": x.attributed_by,
                 "detail": x.detail,
@@ -603,7 +613,7 @@ async def get_contract(env: ToolEnv, args: ContractArgs) -> Found:
             {
                 "id": c.id,
                 "counterparty": c.counterparty,
-                "amount": aud(c.amount_cents),
+                "amount": money(c.amount_cents),
                 "sign_date": c.sign_date.isoformat() if c.sign_date else None,
                 "terms": len(c.terms),
             }
@@ -621,7 +631,7 @@ async def get_contract(env: ToolEnv, args: ContractArgs) -> Found:
         "id": contract.id,
         "counterparty": contract.counterparty,
         "counterparty_abn": contract.counterparty_abn,
-        "amount": aud(contract.amount_cents),
+        "amount": money(contract.amount_cents),
         "sign_date": contract.sign_date.isoformat() if contract.sign_date else None,
         "terms": [{"id": t.id, "type": t.term_type.value, "page": t.page, "text": t.text} for t in contract.terms],
         "evidence": [pointer_brief(p) for p in contract.evidence],
@@ -643,19 +653,19 @@ async def get_misstatements(env: ToolEnv, args: NoArgs) -> Found:
     cites = {m.judgment_id: cite_judgment(judgments[m.judgment_id]) for m in items if m.judgment_id in judgments}
     data = {
         "misstatements": [
-            {**m.model_dump(mode="json", exclude={"review_record_id"}), "amount_aud": aud(m.amount_cents)}
+            {**m.model_dump(mode="json", exclude={"review_record_id"}), "amount_formatted": money(m.amount_cents)}
             for m in items
         ],
         "schedule": (
             {
                 **schedule.model_dump(mode="json"),
-                "total_aud": aud(schedule.total_cents),
-                "materiality_aud": aud(schedule.materiality_cents),
+                "total_formatted": money(schedule.total_cents),
+                "materiality_formatted": money(schedule.materiality_cents),
             }
             if schedule is not None
             else None
         ),
-        "materiality": aud(overview.materiality_cents),
+        "materiality": money(overview.materiality_cents),
         "opinion_route": overview.opinion_route.value if overview.opinion_route else None,
     }
     return Found(data, {k: v for k, v in cites.items() if k is not None})
@@ -853,14 +863,18 @@ class ToolBox:
         """执行一个调用 (_run). 发给模型的文本在这一处成形: 工具结果先 minimize, 再在序列化之前遮蔽个人节点 ID 的
         出生日期段 (mask_person_node_ids, 对结构化数据, 字典的键也遮; 需求 R305), 然后 json.dumps, 超过 max_chars
         截断 (遮蔽在前, 截口不会留下半截日期); 错误文本同样先遮蔽再序列化 (failure). 引用 (cites) 给前端, 原样."""
-        found = await self._run(env, call)
-        if isinstance(found, str):
-            return failure(found)
-        content = json.dumps(
-            mask_person_node_ids(minimize(found.data)),
-            ensure_ascii=False,
-            default=lambda o: mask_person_text(str(o)),  # 没 dump 的对象转成字符串后也遮蔽
-        )
+        token = CURRENCY.set(env.currency)  # 金额按项目的记账币种写 (需求 R366)
+        try:
+            found = await self._run(env, call)
+            if isinstance(found, str):
+                return failure(found)
+            content = json.dumps(
+                mask_person_node_ids(minimize(found.data)),
+                ensure_ascii=False,
+                default=lambda o: mask_person_text(str(o)),  # 没 dump 的对象转成字符串后也遮蔽
+            )
+        finally:
+            CURRENCY.reset(token)
         if len(content) > env.max_chars:
             content = content[: env.max_chars] + "…[结果过长, 已截断; 可用 limit, offset 翻页或换更具体的查询]"
         return ToolOutcome(content=content, ok=True, cites=found.cites)
