@@ -58,16 +58,21 @@ import {
   attachRule,
   buildDisputeRecord,
   buildRecord,
+  CHOICE_DECISIONS,
   criticReasonText,
   type DisputeSide,
+  defaultChoice,
   draftFromMisstatement,
   emptyDraft,
   isException,
   isJudgment,
   isRun,
+  PREFILLED,
   procedureName,
   type RankedTask,
+  type ReviewChoice,
   type ReviewDraft,
+  reviewChoices,
   type SideProposal,
   sideProposal,
 } from '@/lib/review'
@@ -673,11 +678,20 @@ export function ReviewDecisionCard({
   const queryClient = useQueryClient()
   const view: ReviewTaskView = ranked.view
   const judgment = isJudgment(view.target) ? view.target : null
-  // 只有一种决定可选 (如争议任务只能裁决分歧) 时直接选中
-  const [decision, setDecision] = useState<Decision | null>(
+  const proposedDraft = judgment?.misstatement_draft ?? null
+  // 判断的复核选项按 AI 结论给 (需求 R364): AI 判为错报时默认 "同意, 认定为错报", 错报字段按草稿带出; 其余任务照
+  // 后端的 allowed_decisions, 只有一种决定可选 (如争议任务只能裁决分歧) 时直接选中
+  const choices = reviewChoices(view)
+  const [choice, setChoice] = useState<ReviewChoice | null>(() => defaultChoice(view, choices))
+  const [picked, setPicked] = useState<Decision | null>(
     view.allowed_decisions.length === 1 ? view.allowed_decisions[0] : null,
   )
-  const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
+  const decision = choices ? (choice ? CHOICE_DECISIONS[choice] : null) : picked
+  const [draft, setDraft] = useState<ReviewDraft>(() =>
+    choice && PREFILLED.has(choice) && proposedDraft
+      ? draftFromMisstatement(emptyDraft(), proposedDraft)
+      : emptyDraft(),
+  )
   // 人给的错报更新载荷 (需求 R159, R163): 以判断带的 AI 载荷为起点, 可改
   const carried = judgment?.misstatement_update ?? null
   const [updateDraft, setUpdateDraft] = useState<UpdateDraft>(() =>
@@ -693,6 +707,21 @@ export function ReviewDecisionCard({
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
+  // 改了错报字段的 "同意" 即 "修改后认定为错报"
+  const setFigures = (patch: Partial<ReviewDraft>) => {
+    set(patch)
+    if (choice === 'agree_misstatement') setChoice('amend_misstatement')
+  }
+  // 选 "同意" 时错报字段回到 AI 草稿; 选 "不是错报" (推翻) 时结论为空则预填一句, 可改
+  const pick = (next: ReviewChoice) => {
+    setChoice(next)
+    if (next === 'agree_misstatement' && proposedDraft)
+      setDraft((current) => draftFromMisstatement(current, proposedDraft))
+    if (CHOICE_DECISIONS[next] === 'override')
+      setDraft((current) =>
+        current.conclusion.trim() ? current : { ...current, conclusion: t.card.notMisstatementConclusion },
+      )
+  }
   const updateKind = updateKindFor(view, decision)
   // 失败与无归因任务的载荷依据错报的当前版本, 从错报列表取; 判断带载荷时不用
   const misstatements = useQuery({
@@ -780,18 +809,31 @@ export function ReviewDecisionCard({
     >
       <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
         <legend className="sr-only">{t.card.decision}</legend>
-        {view.allowed_decisions.map((item) => (
-          <OptionCard
-            key={item}
-            name={`decision-${view.task.id}`}
-            value={item}
-            checked={decision === item}
-            onSelect={() => setDecision(item)}
-            label={t.decisions[item] ?? item}
-            hint={t.decisionHints[item]}
-            disabled={busy}
-          />
-        ))}
+        {choices
+          ? choices.map((item) => (
+              <OptionCard
+                key={item}
+                name={`decision-${view.task.id}`}
+                value={item}
+                checked={choice === item}
+                onSelect={() => pick(item)}
+                label={t.card.choices[item].label}
+                hint={t.card.choices[item].hint}
+                disabled={busy}
+              />
+            ))
+          : view.allowed_decisions.map((item) => (
+              <OptionCard
+                key={item}
+                name={`decision-${view.task.id}`}
+                value={item}
+                checked={picked === item}
+                onSelect={() => setPicked(item)}
+                label={t.decisions[item] ?? item}
+                hint={t.decisionHints[item]}
+                disabled={busy}
+              />
+            ))}
       </fieldset>
 
       {collabDispute ? (
@@ -885,7 +927,7 @@ export function ReviewDecisionCard({
                 id={`ms-type-${view.task.id}`}
                 className={SELECT}
                 value={draft.kind}
-                onChange={(event) => set({ kind: event.target.value as MisstatementType })}
+                onChange={(event) => setFigures({ kind: event.target.value as MisstatementType })}
               >
                 {MISSTATEMENT_TYPES.map((item) => (
                   <option key={item} value={item}>
@@ -899,7 +941,7 @@ export function ReviewDecisionCard({
                 id={`ms-account-${view.task.id}`}
                 className="h-10"
                 value={draft.account}
-                onChange={(event) => set({ account: event.target.value })}
+                onChange={(event) => setFigures({ account: event.target.value })}
               />
             </Field>
             <Field id={`ms-code-${view.task.id}`} label={t.card.msFields.accountCode}>
@@ -907,7 +949,7 @@ export function ReviewDecisionCard({
                 id={`ms-code-${view.task.id}`}
                 className={SELECT}
                 value={draft.accountCode}
-                onChange={(event) => set({ accountCode: event.target.value })}
+                onChange={(event) => setFigures({ accountCode: event.target.value })}
               >
                 <option value="">{t.card.msFields.noAccountCode}</option>
                 {codes.map((item) => (
@@ -922,7 +964,7 @@ export function ReviewDecisionCard({
                 id={`ms-assertion-${view.task.id}`}
                 className={SELECT}
                 value={draft.assertion}
-                onChange={(event) => set({ assertion: event.target.value as Assertion })}
+                onChange={(event) => setFigures({ assertion: event.target.value as Assertion })}
               >
                 {ASSERTIONS.map((item) => (
                   <option key={item} value={item}>
@@ -937,7 +979,7 @@ export function ReviewDecisionCard({
                 className="h-10 font-mono"
                 inputMode="decimal"
                 value={draft.amount}
-                onChange={(event) => set({ amount: event.target.value })}
+                onChange={(event) => setFigures({ amount: event.target.value })}
               />
             </Field>
             <Field id={`ms-direction-${view.task.id}`} label={t.card.msFields.direction}>
@@ -945,7 +987,7 @@ export function ReviewDecisionCard({
                 id={`ms-direction-${view.task.id}`}
                 className={SELECT}
                 value={draft.direction}
-                onChange={(event) => set({ direction: event.target.value as Direction })}
+                onChange={(event) => setFigures({ direction: event.target.value as Direction })}
               >
                 {DIRECTIONS.map((item) => (
                   <option key={item} value={item}>

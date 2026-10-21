@@ -22,6 +22,7 @@ from backend.contracts.models import (
     Procedure,
     RerunRequest,
     ReviewRecord,
+    ReviewWithdrawal,
 )
 from backend.contracts.state import EngagementState, fill_defaults, initial_state
 from backend.core.config import get_settings
@@ -92,6 +93,17 @@ def at_rerun_point(snapshot: StateSnapshot) -> bool:
     return gates.current_gate(snapshot.next, fill_defaults(snapshot.values)) in RERUN_GATES
 
 
+def at_withdraw_point(snapshot: StateSnapshot) -> bool:
+    """图停在可撤回复核决定的位置 (需求 R363): P2 的等复核 (await_events, 载荷种类 review), 或 FIN-01 闸门前 (意见
+    决定之前). 等待中的节点上次恢复时出错时不算, 须先恢复; 错报闭环的各节点内等待 (分类复核, 沟通, 等更正) 与 FIN-01
+    通过之后都不算. 项目锁定与执行中另由调用方判断."""
+    if any(task.interrupts and task.error for task in snapshot.tasks):
+        return False
+    if any(kind_of(waiting) is WaitKind.review for waiting in waiting_payloads(snapshot)):
+        return True
+    return gates.current_gate(snapshot.next, fill_defaults(snapshot.values)) is GateId.FIN_01
+
+
 def waiting_for_human(snapshot: StateSnapshot) -> bool:
     """图停在闸门前 (静态中断, 不带 interrupts) 或节点内 interrupt() 等人 (含等待中出错的节点).
     闸门节点按项目冻结的功能集取 (登记表, gates.node_gates)."""
@@ -102,8 +114,8 @@ def waiting_for_human(snapshot: StateSnapshot) -> bool:
 async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> str | None:
     """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断) 的内容, 须先补做; 没有返回 None.
 
-    两种情况: Store 中有检查点里没有的决定 (闸门决定, 复核决定, 过期重跑请求, 更正通知); 项目采用的画像版本
-    (Engagement.client_profile_version) 高于检查点的.
+    两种情况: Store 中有检查点里没有的决定 (闸门决定, 复核决定, 过期重跑请求, 更正通知, 复核决定的撤回); 项目采用的
+    画像版本 (Engagement.client_profile_version) 高于检查点的.
     比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须补做.
     节点内等待时, 本节点已读回的决定在节点返回前不进状态, 列在等待载荷的 records 中 (如 ACC-04 重跑后又失败,
     第一个 rerun 决定已用过), 也算检查点里有.
@@ -114,8 +126,10 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     stored |= {r.id for r in await deps.output_store.latest(eid, ReviewRecord)}
     stored |= {r.id for r in await deps.output_store.latest(eid, RerunRequest)}
     stored |= {n.id for n in await deps.output_store.latest(eid, CorrectionNotice)}
+    stored |= {w.id for w in await deps.output_store.latest(eid, ReviewWithdrawal)}
     in_state = {d.id for d in values["gate_decisions"]} | {r.id for r in values["review_records"]}
     in_state |= {r.id for r in values["rerun_requests"]} | {n.id for n in values["correction_notices"]}
+    in_state |= {w.id for w in values["review_withdrawals"]}
     for waiting in waiting_payloads(snapshot):
         if isinstance(waiting, dict):
             in_state.update(waiting.get("records", []))

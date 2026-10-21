@@ -58,13 +58,21 @@ export function taskAmount(view: ReviewTaskView, exceptions: Map<string, AuditEx
   return null
 }
 
+// 批量确认只用于 AI 判为不是错报的判断 (需求 R364): 其余落在可批量一档的 (后端给的或这里算的) 改为阅读推理链
 export function taskTier(
   view: ReviewTaskView,
   amount: number | null,
   overview: EngagementOverview | undefined,
 ): ReviewTier {
-  const own = (view as WithTier).tier
-  if (own) return own
+  const tier = (view as WithTier).tier ?? computedTier(view, amount, overview)
+  return tier === 'batch_eligible' && aiVerdict(view) !== 'clear' ? 'read_reasoning' : tier
+}
+
+function computedTier(
+  view: ReviewTaskView,
+  amount: number | null,
+  overview: EngagementOverview | undefined,
+): ReviewTier {
   const target = view.target
   if (!isJudgment(target)) return 'check_evidence'
   const performance = overview?.performance_materiality_cents
@@ -110,6 +118,61 @@ export function rankTasks(
     })
 }
 
+// AI 对判断对象的结论 (需求 R364, Issue #67): 判为错报 (proposed_action misstatement), 不是错报 (accept, close), 暂时
+// 判断不了 (more_evidence). 复核卡片按它给选项; 不是判断, 不是 normal 任务, 或判断带错报更新载荷 (FIN-03 分类, FIN-09
+// 验证, 对象是已有的错报) 时为 null, 卡片照后端的 allowed_decisions 逐项给
+export type AiVerdict = 'misstatement' | 'clear' | 'undetermined'
+
+export function aiVerdict(view: ReviewTaskView): AiVerdict | null {
+  const target = view.target
+  if (!isJudgment(target) || view.task.kind !== 'normal' || view.misstatement_update_kind) return null
+  if (target.proposed_action === 'misstatement') return 'misstatement'
+  return target.proposed_action === 'more_evidence' ? 'undetermined' : 'clear'
+}
+
+export type ReviewChoice =
+  | 'agree_misstatement'
+  | 'disagree_not_misstatement'
+  | 'amend_misstatement'
+  | 'agree_clear'
+  | 'disagree_misstatement'
+  | 'misstatement'
+  | 'not_misstatement'
+
+// 各选项提交的决定: 认定错报的带错报草稿; 与 AI 不同而 "不是错报" 的为推翻 (须写结论)
+export const CHOICE_DECISIONS: Record<ReviewChoice, Decision> = {
+  agree_misstatement: 'misstatement',
+  disagree_not_misstatement: 'override',
+  amend_misstatement: 'misstatement',
+  agree_clear: 'confirm',
+  disagree_misstatement: 'misstatement',
+  misstatement: 'misstatement',
+  not_misstatement: 'override',
+}
+
+// 按 AI 结论给的选项; 暂时判断不了时的 "要求补充证据" 待 R369
+const CHOICES: Record<AiVerdict, ReviewChoice[]> = {
+  misstatement: ['agree_misstatement', 'disagree_not_misstatement', 'amend_misstatement'],
+  clear: ['agree_clear', 'disagree_misstatement'],
+  undetermined: ['misstatement', 'not_misstatement'],
+}
+
+// 预填 AI 草稿的选项 (agree 为默认选中的那项)
+export const PREFILLED: ReadonlySet<ReviewChoice> = new Set(['agree_misstatement', 'amend_misstatement'])
+
+// 复核卡片的选项: 按 AI 结论, 只留后端允许的决定; aiVerdict 为 null 时为 null
+export function reviewChoices(view: ReviewTaskView): ReviewChoice[] | null {
+  const verdict = aiVerdict(view)
+  if (!verdict) return null
+  return CHOICES[verdict].filter((choice) => view.allowed_decisions.includes(CHOICE_DECISIONS[choice]))
+}
+
+// 默认选中的选项: AI 判为错报且有草稿时为 "同意, 认定为错报"; 其余不预选
+export function defaultChoice(view: ReviewTaskView, choices: ReviewChoice[] | null): ReviewChoice | null {
+  const draft = isJudgment(view.target) ? view.target.misstatement_draft : null
+  return draft && choices?.includes('agree_misstatement') ? 'agree_misstatement' : null
+}
+
 export type ReviewDraft = {
   reason: string
   conclusion: string
@@ -136,8 +199,8 @@ export function emptyDraft(): ReviewDraft {
   }
 }
 
-// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 只有人点"复制建议数据"才填入, 不预填; 例外:
-// 功能 collab 打开时仲裁采纳的一方建议错报, 选中即按该方的草稿预填 (见 attachRule)
+// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 预填的只有: AI 判为错报时 "同意" 与 "修改后认定"
+// 两项按判断的草稿 (需求 R364), 功能 collab 打开时仲裁采纳的一方建议错报 (见 attachRule); 其余由人点 "复制建议数据"
 export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
   return {
     ...draft,

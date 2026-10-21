@@ -7,16 +7,83 @@ from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import (
     AgentId,
     MisstatementStatus,
+    ProposedAction,
+    ReviewRecord,
+    ReviewStatus,
+    SuggestionLevel,
     UncorrectedItem,
     UncorrectedSchedule,
+    UnrecognisedSuggestion,
 )
-from backend.contracts.state import StatePatch
+from backend.contracts.state import EngagementState, StatePatch
+from backend.services.judgment_engine import judgment_key
 from backend.services.opinion import allowed_opinions
 from backend.services.staleness import current_results
 
 # FIN-04 能编入汇总表的错报状态: 未更正, 部分更正 (累计剩余额), 已更正 (只列 ID); 其余的出现即执行失败 (需求 R166).
 # 按枚举成员的同一性判断, 与编表时的分支一致: 检查点读回退回 model_construct 时状态是字符串, 也整次失败, 不按全额累计
 SCHEDULABLE = (MisstatementStatus.uncorrected, MisstatementStatus.partially_corrected, MisstatementStatus.corrected)
+
+
+def suggestion_level(amount: int, materiality: int, performance: int | None, trivial: int) -> SuggestionLevel:
+    """AI 建议错报金额 (绝对值) 的档位: 不低于整体重要性为 material (同 services.opinion 的金额路径口径), 超过执行
+    重要性 (未定为空时跳过) 为 above_performance, 超过明显微小临界值为 above_trivial, 其余 trivial. 纯函数."""
+    if amount >= materiality:
+        return "material"
+    if performance is not None and amount > performance:
+        return "above_performance"
+    return "above_trivial" if amount > trivial else "trivial"
+
+
+def unrecognised_suggestions(
+    state: EngagementState, total: int, materiality: int, performance: int | None, trivial: int
+) -> list[UnrecognisedSuggestion]:
+    """AI 建议为错报但未认定的判断 (需求 R363), 按程序与对象排序: 当前结果中的 AI 判断 (不是人工判断 -H{n}), 建议动作
+    为 misstatement 且带草稿, 已复核 (confirmed, 或 overridden: 审计师不同意), 而它与取代它的人工判断都没有当前结果的
+    错报 (撤回作废的不算). 复核人与时间取处理它的任务上最近一条没撤回的决定 (没有决定为空). 金额档位见
+    suggestion_level; would_qualify 为未更正合计 total 加上草稿金额后不低于整体重要性. 纯函数."""
+    current = current_results(state)
+    recognised = {m.judgment_id for m in current.misstatements if m.judgment_id is not None}
+    withdrawn = {w.record_id for w in state["review_withdrawals"]}
+    tasks = {t.id: t for t in state["review_tasks"]}
+    latest: dict[str, ReviewRecord] = {}  # 判断 ID → 处理它的任务上最近一条没撤回的决定
+    for record in sorted(state["review_records"], key=lambda r: r.decided_at):
+        task = tasks.get(record.task_id)
+        if task is not None and record.id not in withdrawn:
+            latest[task.target_id] = record
+    rows = []
+    for judgment in current.judgments:
+        draft = judgment.misstatement_draft
+        if (
+            judgment.proposed_action is not ProposedAction.misstatement
+            or draft is None
+            or judgment_key(judgment) != f"{judgment.procedure_id}:{judgment.subject_id}"  # 人工判断另带 :H{n}
+            or judgment.review_status not in (ReviewStatus.confirmed, ReviewStatus.overridden)
+            or {judgment.id, judgment.superseded_by} & recognised
+        ):
+            continue
+        decided = latest.get(judgment.id)
+        amount = abs(draft.amount_cents)
+        rows.append(
+            UnrecognisedSuggestion(
+                judgment_id=judgment.id,
+                procedure_id=judgment.procedure_id,
+                subject_id=judgment.subject_id,
+                task_id=decided.task_id if decided is not None else None,
+                record_id=decided.id if decided is not None else None,
+                decision=decided.decision if decided is not None else None,
+                reviewed_by=decided.reviewed_by if decided is not None else None,
+                decided_at=decided.decided_at if decided is not None else None,
+                account=draft.account,
+                account_code=draft.account_code,
+                assertion=draft.assertion,
+                amount_cents=draft.amount_cents,
+                direction=draft.direction,
+                level=suggestion_level(amount, materiality, performance, trivial),
+                would_qualify=total + amount >= materiality,
+            )
+        )
+    return sorted(rows, key=lambda r: (r.procedure_id, r.subject_id))
 
 
 class QCAgent(ProcedureAgent[UncorrectedSchedule]):
@@ -37,10 +104,13 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
         total_cents 为 items 金额之和, 不按高估低估抵销; 候选意见取 services.opinion.allowed_opinions (与 FIN-01 的校验
         同一函数, 需求 R184), 持续经营结论传 None, 即金额路径: 不低于整体重要性 materiality_cents 时为保留.
         两个门槛取本次执行的参数快照. 状态已有汇总表 (FIN-01 驳回后重做) 时出下一版.
+        unrecognised 列 AI 建议为错报但未认定的判断 (需求 R363, unrecognised_suggestions; 档位另取执行重要性), 不计入
+        合计与候选意见.
         例: 一条 14200000 高估的未更正错报, 重要性 12000000, 明显微小 600000 → items 一行, total 14200000, qualified.
         """
         params = ctx.run.params_snapshot
         materiality, trivial = params["materiality_cents"], params["clearly_trivial_cents"]
+        performance = params.get("performance_materiality_cents")  # 需求 R363 之前的参数快照没有
         misstatements = current_results(ctx.state).misstatements
         unsettled = [f"{m.id} ({m.status})" for m in misstatements if not any(m.status is s for s in SCHEDULABLE)]
         if unsettled:
@@ -83,6 +153,7 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
             total_cents=total,
             materiality_cents=materiality,
             candidate_opinion=options.candidate,
+            unrecognised=unrecognised_suggestions(ctx.state, total, materiality, performance, trivial),
         )
 
     async def interpret(self, ctx: RunContext, findings: UncorrectedSchedule) -> StatePatch:

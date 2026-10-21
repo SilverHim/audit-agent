@@ -1,0 +1,1716 @@
+From e92acd1f7256676a56397adb1ee00e1201ec91c7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 03:48:01 +0000
+Subject: [PATCH] =?UTF-8?q?wip:=20PLN-19=20=E9=87=8D=E8=A6=81=E6=80=A7?=
+ =?UTF-8?q?=E9=87=8D=E4=BC=B0=E7=9A=84=E5=A5=91=E7=BA=A6,=20=E6=A8=A1?=
+ =?UTF-8?q?=E6=9D=BF=E4=B8=8E=E6=8F=90=E7=A4=BA=E8=AF=8D?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 契约: GateId.PLN_19; MaterialityReassessment (REASSESSMENT), BasisAdjustment, MaterialityUse; ReassessmentDraft
+- 状态 materiality_reassessment (无 reducer, 缺省 None); A4 可写它与 judgments, 重放 singleton, 登记进 EXCEPTION_REFERRERS 与 gate_materials
+- gates.check_materiality, materiality_amounts 收候选或重估材料 (MaterialityOptions); 需求清单写的 decisions.py 位置不对
+- PLN-19.yaml (功能 reassessment, 底稿 A-5, M01 只换余额来源为 adjusted_trial_balance), PLN-19.md.j2; FIN-04 依赖加 PLN-19; 准则对照 ASA 320 加 A-5
+- A4 未接上: 测试加待落地表 AWAITING_AGENTS 与 PENDING_CHECKS (R208 删); R209 合入前不要在演示里打开 reassessment
+- 前端重新生成客户端, 文案表补 PLN-19; 接口文档第 0, 2.1, 2.4, 3, 5, 6, 8.1, 9 节, Demo需求文档第 2 节
+- 在 806f77b 上: ruff, mypy, 全套 4016 passed; 连库 3 passed; 变异 10 个全杀. 尚未变基到最新开发头 (按计划变更暂停)
+---
+ ...00\346\261\202\346\226\207\346\241\243.md" |   3 +-
+ ...45\345\217\243\346\226\207\346\241\243.md" |  83 +++++--
+ src/backend/contracts/llm_outputs.py          |  10 +
+ src/backend/contracts/models.py               |  87 +++++++-
+ src/backend/contracts/state.py                |   4 +
+ src/backend/knowledge/procedures/FIN-04.yaml  |   5 +-
+ src/backend/knowledge/procedures/PLN-19.yaml  |  66 ++++++
+ src/backend/knowledge/prompts/PLN-19.md.j2    | 129 +++++++++++
+ src/backend/knowledge/workpapers.yaml         |   2 +-
+ src/backend/orchestration/gates.py            |  19 +-
+ src/backend/orchestration/merge.py            |  26 ++-
+ src/backend/persistence/models.py             |   1 +
+ src/frontend/openapi.json                     |   3 +-
+ src/frontend/src/client/types.gen.ts          |   6 +-
+ src/frontend/src/locales/en.ts                |   9 +
+ src/frontend/src/locales/zh.ts                |   9 +
+ tests/fakes.py                                |  58 +++++
+ tests/test_agents_base.py                     |  11 +-
+ tests/test_contracts.py                       |  93 +++++++-
+ tests/test_decisions.py                       |  37 +++-
+ tests/test_knowledge.py                       | 202 +++++++++++++++++-
+ tests/test_merge.py                           |  33 +++
+ tests/test_output_validator.py                |   3 +-
+ tests/test_persistence_postgres.py            |  32 ++-
+ tests/test_state_compat.py                    |  28 +++
+ 25 files changed, 915 insertions(+), 44 deletions(-)
+ create mode 100644 src/backend/knowledge/procedures/PLN-19.yaml
+ create mode 100644 src/backend/knowledge/prompts/PLN-19.md.j2
+
+diff --git "a/docs/Demo\351\234\200\346\261\202\346\226\207\346\241\243.md" "b/docs/Demo\351\234\200\346\261\202\346\226\207\346\241\243.md"
+index 2be8a64..8cbb122 100644
+--- "a/docs/Demo\351\234\200\346\261\202\346\226\207\346\241\243.md"
++++ "b/docs/Demo\351\234\200\346\261\202\346\226\207\346\241\243.md"
+@@ -52,6 +52,7 @@ Xero 演示数据集（xero/20261017-q1）的种子载入（`python -m backend.p
+ | P3 | FIN-03 错报性质分类 | 混合 · L2 | A8 | 功能 misstatement。对每条未分类的已认定错报：审计目标与期间来源在代码中定，LLM 判类型（factual 或 judgmental，不做审计抽样故无 projected）与是否有舞弊迹象，每条错报一个 Judgment，带分类载荷，确认后写进错报的分类（需求 R157 定模板，A8 的执行由 R158 加，确认时写错报新版本与推翻、手工结果须由人给分类由 R159 加，所在节点由 R160 接入）；舞弊迹象只呈报，不阻断 |
+ | P3 | FIN-08 错报沟通与回复记录 | 人工 · L1 | A8 | 功能 misstatement（需求 R161）。在 communicate 节点由 A10 派一条人工任务：材料逐条列待沟通的错报（已分类的，或分录对不上须重新沟通的）与更正请求；审计师在人工队列页登记与管理层的沟通（时间、对象、回复时间与原文、是否同意更正），A8 整理：同意的记已沟通，等更正；拒绝的记未更正并保留回复原文。没有待沟通的错报时空执行 |
+ | P3 | FIN-09 更正验证 | 混合 · L2 | A8 | 功能 misstatement。对每条待验证（verifying）的错报：规则取凭证号以审计更正前缀开头的更正分录行，按来源对象与科目匹配，算已更正额与剩余额；LLM 判断是否完整更正及是否影响其他科目，每条错报一个 Judgment（需求 R164 定模板，执行由 R165 加） |
++| P3 | PLN-19 重要性重估 | 混合 · L1 · 闸门 | A4 | 功能 reassessment（需要 misstatement 与 planning）。每轮在更正验证之后、FIN-04 之前：规则按试算表加已验证更正分录重算收入、总资产、税前利润三种基准与候选，按未更正错报算调整后基准，与计划的重要性比较，变动达到门槛（10%）时出例外；LLM 判重要性是否仍适当并给建议，审计师在 PLN-19 闸门确认或修订（需求 R207 定契约与模板，执行与闸门由 R208、R209 加） |
+ | P3 | FIN-04 错报累计 | 规则 · L3 | A9 | 累计高于明显微小门槛的未更正错报，出汇总表；与整体重要性比较得候选意见 |
+ | P3 | FIN-01 未更正错报评价 | 闸门 · L1 | A9 | 呈递汇总表与候选意见；审计师确认意见类型并写理由 |
+ | P4 | RPT-03 报告文本生成 | LLM · L2 | A10 | 固定段落套模板，LLM 只写意见段与形成意见的基础段，事实断言回指已确认的 Judgment；按批注修订，每轮版本 +1 |
+@@ -64,7 +65,7 @@ ACC-01 ← ACC-04            REV-03 ← DOC-04            DOC-06 ← CSH-04
+ REV-02 ← REV-03、REV-08     CSH-02 ← CSH-05、DOC-06     FIN-01 ← FIN-04
+ RPT-03 ← FIN-01            RPT-01 ← RPT-03
+ GEN-02 ← GEN-05            GEN-03 ← DOC-04、GEN-08     GEN-01 ← GEN-03、GEN-08
+-ACC-08 ← ACC-01
++ACC-08 ← ACC-01            PLN-19 ← PLN-01            FIN-04 ← FIN-03、FIN-09、PLN-19
+ ```
+ 
+ P2 程序包分三层：第 0 层 REV-08、REV-03、CSH-04、CSH-05；第 1 层 REV-02、DOC-06；第 2 层 CSH-02。启用功能时各层另加：第 0 层 GEN-05、GEN-07、GEN-08；第 1 层 GEN-02、GEN-03；第 2 层 GEN-01。GEN-05 的增量实例不在程序包分层内，在 verify_correction 节点执行。
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index d1a5fa8..30508f0 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -25,8 +25,8 @@ A：智能体与编排；B：数据库与数据；C：前端与 API。
+ | Procedure | 程序编号，如 `REV-02` |
+ | ProcedureRun | `RUN-{procedure_id}-{run_no}` |
+ | RunPopulation（被测总体，需求 R324） | `POP-{run_id}`，如 `POP-RUN-REV-08-1`；每次执行至多一份，只写第 1 版 |
+-| AuditException | `X-{procedure_id}-{run_no}-{rule_id}-{n}`，n 按 SQL 结果顺序，如 GEN-07 第 1 次执行 S01 的第 1 条为 `X-GEN-07-1-S01-1`（需求 R177）；ACC-08 的核对不过为 `X-ACC-08-{run_no}-T0n-1`（每项至多一条，需求 R198） |
+-| Judgment | `J-{procedure_id}-{run_no}-{subject_id}`；人工建的加后缀 `-H{n}`，run_no 取任务 run_id 的编号；ACC-08 的建议判断为 `J-ACC-08-{run_no}-TERMS` |
++| AuditException | `X-{procedure_id}-{run_no}-{rule_id}-{n}`，n 按 SQL 结果顺序，如 GEN-07 第 1 次执行 S01 的第 1 条为 `X-GEN-07-1-S01-1`（需求 R177）；ACC-08 的核对不过为 `X-ACC-08-{run_no}-T0n-1`（每项至多一条，需求 R198）；PLN-19 调整后整体重要性较计划变动达到门槛为 `X-PLN-19-{run_no}-P01-1`（每次至多一条，需求 R207） |
++| Judgment | `J-{procedure_id}-{run_no}-{subject_id}`；人工建的加后缀 `-H{n}`，run_no 取任务 run_id 的编号；ACC-08 的建议判断为 `J-ACC-08-{run_no}-TERMS`；PLN-19 的为 `J-PLN-19-{run_no}-MATERIALITY`（需求 R207） |
+ | ReviewTask | `T-{target_id}-v{target_version}`；带 subject_id 的 failed 任务为 `T-{target_id}-{subject_id}-v{target_version}` |
+ | ReviewRecord、GateDecision、CorrectionNotice（更正通知，需求 R162） | `D-{uuid4}`；三类同在 decisions 表，共用 ID 空间（测试用 D-CN1 等固定 ID） |
+ | RerunRequest（过期重跑请求） | `RR-{uuid4}`；与决定同在 decisions 表，ID 不与决定重复 |
+@@ -36,7 +36,7 @@ A：智能体与编排；B：数据库与数据；C：前端与 API。
+ | ContractTerm | `{contract_id}-T{n}`，n 按页码与出现顺序 |
+ | AuditReportVersion | `REPORT-{revision}` |
+ | AuditPlan（总体审计计划，需求 R203，功能 planning） | `PLAN-{revision}`，revision 从 1 起（模型校验 ID 与修订号一致）。内容修订（PLN-15 驳回后重拟，PLN-19 修订重要性）一律出下一修订 `PLAN-{n+1}`，旧修订出新版本置 superseded；同一修订内只有状态变化出新版本（draft → approved → superseded）。当前计划为 status 不是 superseded 的修订中 revision 最大的。写入者：A4 在 PLN-15 中起草（第 1 修订与驳回后的重拟）；A1 写闸门效果（PLN-15 批准出 approved 新版本，R205；PLN-19 带 materiality 的通过直接建出下一修订，R210）。run_id：A4 写出的版本（起草新修订，把旧修订置 superseded）记本次执行（合并校验 `merge.check_own_run`）；A1 写出的版本与修订沿用所依据的那一版的 run_id，不另起执行。addresses_decision_id 为本修订回应的决定（PLN-15 驳回，或 PLN-19 带 materiality 的通过，如 D-RE19），revision_reason 取该决定的 reason；第 1 修订两者为空 |
+-| 闸门材料 | 每个项目固定：`SCORECARD`、`ANALYTICS`、`MATERIALITY`、`SCHEDULE`；约定条款与委任核验 `TERMS`（`models.TERMS_ID`，ACC-08，需求 R198），重读出新版本 |
++| 闸门材料 | 每个项目固定：`SCORECARD`、`ANALYTICS`、`MATERIALITY`、`SCHEDULE`；约定条款与委任核验 `TERMS`（`models.TERMS_ID`，ACC-08，需求 R198），重读出新版本；重要性重估 `REASSESSMENT`（`models.REASSESSMENT_ID`，PLN-19，需求 R207），每次执行出下一版 |
+ | WrittenRepresentationLetter（管理层声明书，需求 R215） | 每个项目固定：`REPLETTER`；状态或内容变化出新版本 |
+ | ComplianceCheck（签字前提的合规检查） | `CHECK-{procedure_id}`，如 `CHECK-FIN-10`；每条程序一份，再执行出新版本 |
+ | GovernanceCommunication（与治理层的沟通） | `GC-{procedure_id}-{run_no}`，首次为 `GC-RPT-07-1`；每次执行一份 |
+@@ -106,10 +106,12 @@ class CriticReasonCode(StrEnum): critic_off, no_review_model, level_l1, level_l2
+ class DisputeResolution(StrEnum): a6_upheld, a7_upheld, neither
+ DraftRule = Literal["required", "hidden", "optional"]   # 仲裁时错报草稿的规则（功能 collab）：须带、不能带、两可；`review_queue.draft_rule` 定
+ class NeitherAction(StrEnum):    human_conclusion   # 追加程序（环 2）本版不做
+-class GateId(StrEnum):           ACC_01 = "ACC-01", ACC_08 = "ACC-08", PLN_01_03 = "PLN-01/03", PLN_15 = "PLN-15", FIN_01 = "FIN-01", RPT_01 = "RPT-01"
++class GateId(StrEnum):           ACC_01 = "ACC-01", ACC_08 = "ACC-08", PLN_01_03 = "PLN-01/03", PLN_15 = "PLN-15", PLN_19 = "PLN-19", FIN_01 = "FIN-01", RPT_01 = "RPT-01"
+                                  # ACC_08：约定条款与委任（功能 acceptance，需求 R198）；第 7 节闸门登记表的行由 R201 加，之前没有闸门停在这里
+                                  # PLN_15：总体审计计划（功能 planning，需求 R203）；闸门节点 gate_p1_plan，登记与呈报见
+                                  # 第 7 节（需求 R205），功能关闭时不在主图中，提交这道闸门的决定报 NOT_AT_GATE
++                                 # PLN_19：重要性重估（功能 reassessment，需求 R207）；第 7 节闸门登记表的行与节点由 R209 加，
++                                 # 之前没有闸门停在这里。规格书 12.2 GateDecision.gate 的清单没有它，按偏离记（规格书原文不改）
+ class GateVerdict(StrEnum):      approve, reject, insufficient_info
+ class OpinionType(StrEnum):      unqualified, qualified, adverse, disclaimer
+ class GoingConcernOutcome(StrEnum): no_material_uncertainty, material_uncertainty_disclosed, material_uncertainty_not_disclosed, basis_inappropriate
+@@ -647,6 +649,45 @@ class UncorrectedSchedule(Versioned):        # FIN-04 产出，FIN-01 闸门的
+     materiality_cents: int
+     candidate_opinion: OpinionType           # services.opinion.allowed_opinions 的候选（需求 R184）：total ≥ materiality 为 qualified，否则 unqualified
+ 
++# 重要性重估（PLN-19，功能 reassessment，需求 R207）：A4 每轮在更正验证之后、FIN-04 之前执行（R208），PLN-19 闸门的材料（R209）
++REASSESSMENT_ID = "REASSESSMENT"
++MaterialityRef = Literal["materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"]
++
++class BasisAdjustment(BaseModel):            # 一个基准的调整；模型校验 adjusted = recorded + effect
++    basis: MaterialityBasis
++    recorded_base_cents: int                 # 调整后试算表（试算表加已验证更正分录，第 5 节"更正后余额"）上的基准金额
++    uncorrected_effect_cents: int            # 未更正错报对该基准的影响，带符号（取法见下）
++    adjusted_base_cents: int                 # recorded_base_cents + uncorrected_effect_cents
++
++class MaterialityUse(BaseModel):             # 参数引用重要性且已执行的一条 P2 程序（ASA 320 第 13 段的进一步审计程序）
++    procedure_id: str
++    refs: list[MaterialityRef]               # 它的参数引用的重要性 ref
++
++class MaterialityReassessment(Versioned):    # id 固定 REASSESSMENT，每次执行出下一版；PLN-19 闸门的 target，存 gate_materials（第 9 节）
++    run_id: str
++    planning_choice: MaterialityChoice       # 依据的选择：最后一条带 materiality 的通过决定（PLN-01/03 的，或之前 PLN-19 修订的）
++    planning_decision_id: str
++    planning_materiality_cents: int          # 执行时状态中的三项
++    planning_performance_cents: int
++    planning_trivial_cents: int
++    verified_adjustment_entry_nos: list[str] # 计入调整后试算表的已验证更正分录（参数快照的同名 ref，需求 R174）
++    candidates: list[MaterialityCandidate]   # 按调整后试算表重算的三个候选；以下两项同 PLN-01 参数
++    performance_pct_range: tuple[float, float]
++    clearly_trivial_pct: float
++    bases: list[BasisAdjustment]             # 三个基准，与 candidates 的基准相同且各一项，含原选择的基准（模型校验）
++    uncorrected_misstatement_ids: list[str]  # 参与调整的错报（uncorrected、partially_corrected）
++    unmapped_misstatement_ids: list[str]     # 其中科目映射不到的，不参与调整
++    current_overall_cents: int               # 原选择 × 所选基准的 recorded_base_cents
++    adjusted_overall_cents: int              # 原选择 × 所选基准的 adjusted_base_cents
++    change_pct: float                        # (adjusted_overall - planning_materiality) / planning_materiality，四位小数，ROUND_HALF_UP
++    revise_threshold_pct: float              # 建议修订的门槛（参数 0.10，实务惯例，非准则规定）
++    materiality_dependent_procedures: list[MaterialityUse]   # 参数引用三项之一且已执行的 P2 程序；FIN-04 等 P3 程序不列
++    exception_ids: list[str]                 # P01（X-PLN-19-{run_no}-P01-1，第 0 节）
++    judgment_id: str | None                  # 建议判断 J-PLN-19-{run_no}-MATERIALITY；判断调用失败时为空，材料注明 AI 建议缺失
++
++# 重要性校验与金额计算（orchestration.gates.check_materiality、materiality_amounts）收 MaterialityCandidates 或
++# MaterialityReassessment（gates.MaterialityOptions），取同名三字段 candidates、performance_pct_range、clearly_trivial_pct
++
+ # 签字前提的产出（需求 R215）：通用引用与合规检查；声明书、治理层沟通与独立性声明见第 2.6 节
+ class ObjectRef(BaseModel):                 # 对某个对象某一版本的引用
+     kind: str                                # 类名，如 UncorrectedSchedule、ComplianceCheck、WrittenRepresentationLetter
+@@ -675,6 +716,13 @@ class ComplianceCheck(Versioned):           # id = CHECK-{procedure_id}；A9 的
+     def failed_codes(self) -> list[str]: ... # failed 项的代号，按首次出现的顺序，同一代号只列一次；只读，不进 JSON
+ ```
+ 
++**未更正错报对基准的影响**（MaterialityReassessment.bases 的 uncorrected_effect_cents，需求 R207；R208 按此计算）。取当前结果中 status 为 uncorrected 的错报的 amount_cents，与 partially_corrected 的 residual_cents。科目先取 `Misstatement.account_code`（R156）；为空时取 account 文本末尾括号中的代码（如 "Interest Income (270)" 取 270）；再取不到时按科目名精确匹配科目表（不区分大小写）；都取不到的进 unmapped_misstatement_ids，不参与调整。按科目的 type 与 category（PLN-19 参数 revenue_categories、income_tax_categories，同 PLN-01）：
++
++- revenue：只看 category 在 revenue_categories 中的科目，高估减、低估加（如 AJE-X05 贷的 270 Interest Income 属 other_income，不进收入基准，设计稿 v2.1 第 2.8 节）；
++- profit_before_tax：看 type revenue 的科目（高估减、低估加）与 type expense 且 category 不在 income_tax_categories 中的科目（高估加、低估减）；
++- total_assets：看 type asset 的科目，高估减、低估加；
++- 其余科目对三个基准的影响都为 0。
++
+ ### 2.5 复核与决定
+ 
+ ```python
+@@ -1656,6 +1704,7 @@ class EngagementState(TypedDict):
+     materiality_cents: int | None                # 这三项与 opinion_route 只在图状态中，不进 AuditOutputStore
+     performance_materiality_cents: int | None
+     clearly_trivial_cents: int | None
++    materiality_reassessment: MaterialityReassessment | None   # 重要性重估 REASSESSMENT（功能 reassessment，需求 R207），A4（PLN-19）写
+     audit_objectives: list[AuditObjective]
+     risk_register: list[RiskItem]
+     audit_plans: Annotated[list[AuditPlan], upsert_by_id]   # 总体审计计划 PLAN-{revision}（需求 R203，功能 planning），A4（PLN-15）写；当前计划见第 0 节
+@@ -1717,7 +1766,7 @@ def initial_state(engagement: Engagement, procedures: list[Procedure], client_pr
+ | going_concern | GoingConcernConclusion \| None | None | 无 | A6（FIN-02） | singleton，模型带 run_id | 持续经营（GC-07、GC-08） |
+ | engagement_terms | EngagementTerms \| None | None | 无 | A2（ACC-08） | singleton，模型带 run_id | 承接（AP-1）；已由需求 R198 实现（存 gate_materials，不需迁移） |
+ | audit_plans | list[AuditPlan] | [] | upsert_by_id | A4（PLN-15 起草）；A1（PLN-15 批准与 PLN-19 修订的闸门效果，R205、R210） | by_procedure，模型须带 run_id | 计划（AP-6）；已由需求 R203 实现（存 gate_materials，不需迁移） |
+-| materiality_reassessment | MaterialityReassessment \| None | None | 无 | A4（PLN-19） | singleton | 计划（AP-10） |
++| materiality_reassessment | MaterialityReassessment \| None | None | 无 | A4（PLN-19） | singleton | 计划（AP-10）；已由需求 R207 实现（存 gate_materials，不需迁移；执行由 R208 加） |
+ | representation_letter | WrittenRepresentationLetter \| None | None | 无 | A5（FIN-07 的 collect） | singleton，模型带 run_id | 签字前提（SG-1、SG-8）；已由需求 R215 实现（以下四项同在表 completion_records，迁移 0017） |
+ | governance_communications | list[GovernanceCommunication] | [] | upsert_by_id | A10（RPT-07 的 collect） | by_run（ID GC-{程序}-{run_no}），模型带 run_id | 签字前提（SG-1、SG-13）；已由 R215 实现 |
+ | compliance_checks | list[ComplianceCheck] | [] | upsert_by_id | A9（FIN-18、FIN-10） | by_procedure（ID CHECK-{程序}），模型须带 run_id | 签字前提（SG-1）；已由 R215 实现 |
+@@ -1773,7 +1822,8 @@ awaiting_data 的程序不派发，也不执行，没有 Run。`scheduler.ready_
+ | exceptions | 执行程序的 Agent |
+ | ownership_graph | A5（GEN-08，需求 R137） |
+ | audit_plans | A4（PLN-15 起草新修订并把旧修订置 superseded，需求 R203 起可写，需求 R204 执行）；A1（DecisionSubmit）写闸门效果：PLN-15 批准出 approved 新版本（R205），PLN-19 带 materiality 的通过建出下一修订并把旧修订置 superseded（R210） |
+-| judgments | A6（REV-03、REV-02、CSH-02）；A2（ACC-08 的建议判断，不建复核任务） |
++| judgments | A6（REV-03、REV-02、CSH-02）；A2（ACC-08 的建议判断，不建复核任务）；A4（PLN-19 的建议判断，同不建复核任务，需求 R207） |
++| materiality_reassessment | A4（PLN-19，功能 reassessment，需求 R207 起可写；执行由 R208 加） |
+ | review_tasks | 执行程序的 Agent（A6 建判断任务，LLM 程序失败时建 failed 任务）；执行失败时由 A1 写 |
+ | confirmations | A5 建（CSH-04，含回函文件）；A3 写抽取结果（DOC-06）；A6 写比对结果（CSH-02） |
+ | misstatements | A1（DecisionSubmit）：人认定错报建第 1 版（misstatement 决定与附草稿的仲裁，第 7 节），等待更正的迁移（更正通知置 verifying 或 stopped_waiting）；A8：分类、沟通结果与验证结果的新版本（需求 R156 起可写，A8 还可写 judgments、review_tasks，需求 R165 起另可写 FIN-09 的 V02 exceptions；程序由错报闭环各需求加）；分类与验证的判断经复核决定确认时，错报新版本由 A1 在决定的事务内写，自动确认时由 A8 在片段中写（需求 R159）。迁移表见第 2.5 节 |
+@@ -2544,7 +2594,7 @@ def judgment_level(policy, template, procedure: Procedure, judgment: Judgment, *
+ | 条件 | 任务类型 | 目标 | 建任务者 |
+ |---|---|---|---|
+ | Run 整体失败：RuleError、Agent 抛异常、A1 合并校验不过 | failed | ProcedureRun，subject_id 为空 | A1 |
+-| 闸门程序（模板 gate 非空，如 ACC-08，需求 R198）的判断（优先于以下各行）：判断随闸门材料呈报，保持 pending，由闸门决定定其状态；判断调用失败（hybrid 本应 unattributed）时材料注明 AI 建议缺失（EngagementTerms.judgment_id 为空），闸门照常呈报。Run 整体失败仍按上一行 | 不建任务 | — | — |
++| 闸门程序（模板 gate 非空，如 ACC-08，需求 R198；PLN-19，需求 R207）的判断（优先于以下各行）：判断随闸门材料呈报，保持 pending，由闸门决定定其状态；判断调用失败（hybrid 本应 unattributed）时材料注明 AI 建议缺失（EngagementTerms、MaterialityReassessment 的 judgment_id 为空），闸门照常呈报。Run 整体失败仍按上一行 | 不建任务 | — | — |
+ | hybrid 某对象失败，且该对象有规则例外 | unattributed | rule_findings 的第一条 AuditException，该例外出新版本置 unattributed；该例外是本次执行刚建的（CSH-02 的 D01、D04，FIN-09 的 V02，`judgments_patch` 的 created）时不出新版本，unattributed 直接写在第 1 版上，任务以 v1 为目标（片段里同一例外只有一个版本，需求 R322）；任务带 run_id 与 subject_id，允许 rerun（只重判该对象，同 failed，需求 R347）与审计师自己下结论（override、misstatement） | 执行程序的 Agent |
+ | hybrid 某对象失败，且无规则例外（如 REV-02 只经 S01 选中的发票） | failed | ProcedureRun，带 subject_id | 同上 |
+ | llm 某对象失败（DOC-04、DOC-06、REV-03、RPT-03） | failed | ProcedureRun，带 subject_id（RPT-03 为空） | 同上 |
+@@ -2632,7 +2682,7 @@ class ProcedureAgent[F](ABC):          # F：execute 产出的原始发现类型
+ |---|---|---|---|
+ | A2 | `ClientIntelAgent` | ACC-04；ACC-08（功能 acceptance，需求 R198 登记写入归属，执行由 R200 加） | acceptance_scorecard、exceptions；另可写 engagement_terms、judgments、documents（ACC-08 的约定条款、建议判断与读过的约定文件，不写 review_tasks：闸门程序的判断不建复核任务，第 5 节需要人表） |
+ | A3 | `IngestAgent` | DOC-04、DOC-06 | documents、confirmations、review_tasks；合同经 `save_contract` 写入 |
+-| A4 | `RiskAssessorAgent` | PLN-07、PLN-01；PLN-15（功能 planning，需求 R204；未启用时注册表不映射，A4 只负责前两条；按程序编号分派到 `agents/audit_plan`，见下文 PLN-15 段） | analytics、materiality_candidates、audit_objectives、risk_register、exceptions；PLN-15：audit_plans |
++| A4 | `RiskAssessorAgent` | PLN-07、PLN-01；PLN-15（功能 planning，需求 R204；未启用时注册表不映射，A4 只负责前两条；按程序编号分派到 `agents/audit_plan`，见下文 PLN-15 段）；PLN-19（功能 reassessment，需求 R207 加模板与写入归属，执行由 R208 加：此前 A4 不声明它，功能打开时注册表没有它的 Agent） | analytics、materiality_candidates、audit_objectives、risk_register、exceptions；PLN-15：audit_plans；PLN-19：materiality_reassessment、judgments、exceptions（重估材料，建议判断与 P01，不写 review_tasks：闸门程序的判断不建任务） |
+ | A5 | `EvidenceAgent` | CSH-04、GEN-07（功能 going_concern）、GEN-08（功能 related_parties） | CSH-04：confirmations、documents；GEN-07：exceptions（需求 R177，见下文 GEN-07 段）；GEN-08：ownership_graph、exceptions、documents（需求 R137，见下文 GEN-08 段）；另可写 representation_letter（FIN-07，需求 R215 登记，程序由 R228 加） |
+ | A6 | `FieldworkAgent` | REV-08、REV-03、REV-02、CSH-05、CSH-02、GEN-05、GEN-02（后两条属功能 journals）、GEN-03（功能 related_parties，需求 R139） | exceptions、judgments、review_tasks、confirmations |
+ | A7 | `ReviewAgent` | GEN-09（不单独派发，由 A6 同步调用） | 无；结果写在 A6 的判断上 |
+@@ -2668,7 +2718,7 @@ A2 的 ACC-04 按项目采用的画像查 ABN 与 ASIC（`RegistrySource`），
+ 
+ A6 的判断程序（REV-03、REV-02、CSH-02、GEN-02、GEN-03）共用一套流程，各程序只负责选出判断对象（对象 ID、提示词要的 data、该对象的规则例外当前版本，可另带本项目采用版本的客户画像 `Subject.client_profile`，进 JudgmentContext.client_profile，推理链可引用它，需求 R128；GEN-03 带，其余不带；FIN-09 另带 `Subject.expected_residual_cents`、`entry_account_codes`，原样进 JudgmentContext，需求 R165）：rerun_subject_ids 非空时只留其中的对象；本程序仍有待决复核任务的对象（带 subject_id 的 unattributed 任务，或以其判断为目标的 normal 任务）已交人处理，不再重判（重判会让其例外升版，旧任务过期，整次结果被合并校验拒绝）；JudgmentContext.task 为 {params: Run 的参数快照, risks: Procedure.objective_ids 下的 RiskItem}（均为 JSON 形式，日期为字符串），fixture_key 取 `Subject.fixture_key`，缺省为对象 ID（FIN-03 取来源判断的对象，需求 R158），autonomy_level 为 Procedure 的运行时级别；各对象并发调 `JudgmentEngine.judge`，performed_by 为 Engagement.owner_id。流程在 `agents/judging.py`（A6 与 A8 的 FIN-03、FIN-09 共用，需求 R158、R165：Subject、Judged、subjects_awaiting_review、in_scope、earlier_findings、JudgingSteps、judge_all、judgments_patch；fieldwork 再导出前几个名字），插入点顺序固定：judge →（可选）程序自己补字段（`judge_all` 的 annotate：只对成功的判断调用，收 JudgmentOutcome 返回补了字段的 Judgment，不能改 ID、版本、autonomy_level、downgrade_reasons 与 critic 字段，调用后断言；FIN-03 写分类载荷，见 FIN-03 段）→ A7 `ReviewAgent.review` 独立复核（见下）→ 判断级降级（`JudgingSteps.downgrade`，规格书第 7.4 节，在 A7 之后）→ `ReviewQueue.classify` → `make_task`。降级收到的判断已带 critic 字段，另收该对象的规则例外（同 A7 收到的）；步骤由 `judging_steps(deps)` 按功能选：功能 autonomy 关闭时为 DEFAULT_STEPS（原样返回），打开时为 `judging.downgrade`（需求 R170，按 `autonomy_policy.judgment_level` 改写判断第 1 版的 autonomy_level 与 downgrade_reasons，取数见第 5 节“自主度降级”的接入一条），A7 读的仍是程序的运行时级别；classify 的关键证据缺失一项由 `judging.checks_key_evidence(deps)` 定（功能 autonomy 打开时为真，judgments_patch 传给 classify 的 key_evidence，不随步骤传）；判断失败的对象（failed、unattributed）不经复核与降级；规则程序（REV-08、CSH-05）不进本流程。按 classify 处理：normal 或 dispute 时判断待复核，以判断 v1 为目标建该类任务；不需要人时判断第 1 版即 confirmed，其 exception_ids 中的例外经 `attribute_exceptions` 出 attributed 新版本，带 misstatement_update 的（FIN-03）另按载荷写出所指错报的新版本（`review_queue.misstatement_updates`，错报取状态中的，片段另有 misstatements，只在有时带；需求 R159）；unattributed 时第一条规则例外出 unattributed 新版本，以新版本为目标建带 subject_id 的任务（这两处本次执行刚建、还没写入的例外不另出新版本，直接写在第 1 版上，见下文 CSH-02）；failed 时以本次 Run 为目标建带 subject_id 的任务。本次刚建的例外（`judgments_patch` 的 created：CSH-02 的 D01、D04，FIN-09 的 V02）依次排在片段 exceptions 前面，已归因或标为未归因的换成写好的那一版，再接其余例外的新版本。个别对象失败不算整次失败，Run 为 succeeded。各程序的判断对象：REV-03 为 `FinancialDataStore.contracts` 中的全部合同（按合同编号排序），data 为 {contract, document}，document 取该合同的文件登记（以存储的当前登记为准，同上）（不在状态中时报错），无规则例外。REV-02 为规则 S01 选中的发票加前置程序（REV-08）尚未归因的例外所指的发票（R01、R02、R03 都算），去重后按发票 ID 排序（只看当前结果，过期重跑取代的执行的例外不算，第 3 节）；data 为 invoice 与 delivery_notes（`FinancialDataStore.sales_invoices`、`delivery_notes`，带 source_type，发运单按 ID 排序）、journal_lines（需求 R100：该发票过账分录的全部行，invoice.journal_entry_id 经 `record(journal_entry, id)` 得凭证号，再 `journal_entries(entry_nos=...)` 一次取齐，按行 ID 排序；每行为 source_type journal_entry 加分录行各列，另带 `accounts(codes)` 的 account_name 与 account_category，科目表里没有的为 null；journal_entry_id 为空时为 []，指向的行查不到报错；提示词的错报金额取其中 account_category 为 revenue 的行，不含 GST，被引用的行金额由 supported_amounts 计入）、contract（`FinancialDataStore.contracts`）、document（该合同的文件登记，以 `FinancialDataStore.documents` 的当前登记为准，见下）与 contract_judgment（状态中当前结果（第 3 节）里该合同未被推翻的 REV-03 判断中 created_at 最新的一条，取 id、conclusion、review_status），发票没有合同时后三项为 null；发票、发票指向的分录行、合同或合同文件查不到时报错；规则例外为该发票上 REV-08 尚未归因的例外（按 ID 排序）。CSH-02 先做规则部分（D01、D04，在代码中做，见 CSH-02.yaml 注释）：逐个当前的函证（同 DOC-06，`evidence.current_confirmations`；按银行账户 ID 排序）比较回函余额与本期试算表中该账户总账科目的余额，函证出新版本写 book_balance_cents、difference_cents（回函减账面）与 result（相等为 agreed，否则 difference）；不等时建 D01 例外 X-CSH-02-{run_no}-D01-{n}（n 按账户 ID 排序编号，severity medium，金额为回函减账面，证据为函证中回函余额所在页的指针（按回函当前的文件登记经 `judgment_engine.document_pointer` 改写种类与可靠性，不沿用 DOC-06 当时写进函证的值；页码不在登记页数内的照原样，需求 R90）与试算表科目指针）；回函写明的应计利息（Confirmation.accrued_interest_cents，需求 R104）不为空、绝对值超过 clearly_trivial_cents（等于不算），而规则 D04 的行（窗口 [期末 - lookback_days, 期末] 内全部科目的分录行，同 D03 剔除作废对）中没有借方或贷方等于其绝对值的行时，建 D04 例外 X-CSH-02-{run_no}-D04-{n}（n 在 D04 内按账户 ID 排序编号，severity medium，金额为应计利息（带符号），detail 为 accrued_interest_cents、search_from、search_to 与 matched_line_ids（建例外时恒为空），证据为函证中应计利息所在页的指针，改写同 D01 的回函页），函证结果不变（余额相符的仍为 agreed）；函证还没有回函余额时报错；账户的筛选同判断对象（rerun_subject_ids 与已交人处理的对象）。D03、D04 剔除作废对：冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证，原凭证号为 reversal_entry_no_template 填入第一个捕获组，两者的行都不要；pattern 为空（数据集没有声明）时不剔除；pattern 由 DatasetTraits 按 Python re 校验，在规则 SQL 里按 PostgreSQL 正则执行，须写成两边通用的写法。再对有例外的账户判断：判断对象为有 D01 或 D04 的账户（按账户 ID，每个账户一次），data 为 bank_account（带 source_type）、confirmation（本次的新版本）、reply_document（回函的文件登记，以存储的当前登记为准，同上）、book_balance_cents、difference_cents、subsequent_transactions 与 period_end_entries（规则 D02、D03 返回的行按 bank_account_id 切给该账户，JSON 形式）；规则例外为前置程序（depends_on，即 CSH-05）在该账户上尚未归因的例外（当前结果，按 ID 排序）再加本次在该账户上的 D01、D04（依次）。CSH-02 的模板 always_review 为真，判断一律建 normal 任务。D01、D04 是本次刚建的（`judgments_patch` 的 created）：判断失败时 unattributed、自动关闭时 attributed 都直接写在它们的第 1 版上，不另出新版本，任务以 v1 为目标，片段里同一例外只有一个版本（需求 R322）。当前结果里该账户已有本程序尚未归因的 D01、D04 时沿用，不再新建（需求 R347，审核 R347-02、R347-11）：比对照做（函证照样出新版本），沿用的是此前执行本程序在该账户上出的 D01、D04 中尚未归因的（第 1 版 open 或判断失败时置的 unattributed 版本；已归因的不带回，按规则、ID 排序，`judging.earlier_findings`，与 FIN-09 的 V02 共用），作规则例外交判断；它们不是 created，判断确认时给同一 ID 出 attributed 新版本，再失败时第一条出 unattributed 新版本。若照常新建（ID 带 run_no），此前判断失败时已置 unattributed 的那条就没有任务再指向它（重跑不取代旧执行，两条都在当前结果里；部分重跑那次整次失败、接着整条重跑时也是）。首次执行与过期重跑（当前结果不含被取代的执行）没有此前的，照常按本次比对新建。两轮之间数据变了、函证差额与沿用的例外金额对不上的情形不另处理。例：Xero BA-091 第 1 次判断失败，X-CSH-02-1-D04-1 v1 unattributed；对其任务 rerun，第 2 次执行沿用它，不建 X-CSH-02-2-D04-1，复核认定错报时它出 v2 attributed。GEN-02（需求 R134，功能 journals，P2 固定集，没有规则 SQL，不经规则引擎）的判断对象是前置程序（GEN-05）当前结果中尚未归因的例外，按 detail 的 entry_no 分组，每笔凭证一个对象，按凭证号自然序（数字段按数值比较，相等时按原文）；GEN-05 的例外 detail 缺 entry_no 时报错（R12 只对挂了分录的发票出例外，GEN-05 的例外都有 entry_no）；先按 rerun_subject_ids 与已交人处理的对象筛选再取数据；规则例外为该凭证上尚未归因的例外（按 ID 排序），fixture_key 为凭证号；固定集的 objective_ids 为空，JudgmentContext.task.risks 为 []。data（GEN-02.md.j2 头注释，均为 JSON 形式，行带 source_type）：entry_lines 为 `journal_entries(entry_nos=[本凭证])` 的全部行；account_balances 为本凭证各科目的 code、name、category（`accounts(codes)`，科目表里没有的为 null）与本期、上期试算表余额 current_cents、prior_cents（没有该科目的行为 null），source_type trial_balance；bank 在本凭证涉及 cash 分类科目时为 {accounts, lines}，否则为 null：accounts 为总账科目在其中的 bank_account 行（按 ID），lines 为这些账户 `bank_transactions` 中交易日期在凭证日（分录行的 posting_date）前后 bank_window_days 天内（含两端）的行，加各账户本期（项目期间）的第一行，去重后按（账户，日期，ID）排序；related_entries 为相关凭证的全部行（不含本凭证，按凭证号自然序与行 ID）：本凭证例外 detail 所指的凭证（original_entry_no、reversal_entry_no、full_credits，paired_invoices 的 journal_entry_id 经 `record(journal_entry, id)` 得到的凭证），以及 detail 指向本凭证的其他 GEN-05 例外所在的凭证；related_invoices 为本凭证例外 detail 所指的发票（matched_invoices、invoice_id、paired_invoices 的 invoice_id，按 ID），每张为 {invoice, delivery_notes}；contracts 为这些发票所挂的合同，每项为 {contract, document}，按文件 ID 去重（同一份合同只送一次，发票以 contract_id 引用），按合同编号排序；发票、发运单、合同与合同文件登记与 REV-02 的同名项同一取法（`FieldworkAgent.invoice_records`）；related_findings 为 detail 指向本凭证的其他 GEN-05 例外（按 ID，已归因的也列）；documents 为 `documents(related_id=本凭证号)` 的文件，每项为 {document, pages}，pages 取 `EvidenceStore.pages`（整份送出，暂不设页数上限；超限的处理另立需求，规格书第 8.5 节）；fraud_risks 为风险清单中 fraud_related 为真的全部风险。"detail 所指的凭证" 按 detail 的键取，不按规则编号分支；matched_invoices 是发票，进 related_invoices，不算指向凭证。本凭证、相关凭证或 detail 所指的分录行查不到时报错，发票与合同同 REV-02。提示词的分录行只有本凭证与 related_entries 所列凭证（规格书第 8.5 节），不带出生日期。
+ 
+-A9 的 FIN-04 错报累计（`agents/qc.py`，需求 R23、R166；规格书 12.3 子状态机注）：按状态中当前结果的错报（第 3 节）编未更正错报汇总表 SCHEDULE（已有时出下一版）。按状态累计：uncorrected 取错报金额，partially_corrected 取剩余额 residual_cents；累计额高于明显微小门槛（clearly_trivial_cents）的进 items（带 direction 与 origin，origin 为空的按本期），其余的 ID 进 excluded_trivial_ids；corrected 的 ID 进 corrected_ids。还有其他状态的错报（identified、communicated、verifying 未结清；本版不写的 evaluated、closed 同样不能累计）时抛 ValueError，不出汇总表，由 A1 记执行失败并建 failed 任务，FIN-04 等人（兜底：正常拓扑下完成阶段认定的错报都经回流结清）。total_cents 为 items 之和，不按方向抵销；候选意见取 `services.opinion.allowed_opinions(total_cents=合计, materiality_cents=整体重要性, going_concern=None).candidate`，先算候选再一次构造汇总表（需求 R184，与 FIN-01 的校验同一函数），即不低于整体重要性为候选保留意见。A9 只走金额路径（FIN-04 早于 gate_fin 的 FIN-02 步，拿不到已批准的结论），综合候选由 FIN-01 闸门材料调本函数给出（GC-09，R187 验收 4），签字前提的参数由 SG-16 加。功能 misstatement 关闭时错报一律为 uncorrected，结果同 R23，corrected_ids 为空。FIN-04 的 depends_on 为 [FIN-03, FIN-09]（都属功能 misstatement，关闭时程序库丢弃这两条依赖，有效依赖为 []；FIN-09 由需求 R164 加入）。
++A9 的 FIN-04 错报累计（`agents/qc.py`，需求 R23、R166；规格书 12.3 子状态机注）：按状态中当前结果的错报（第 3 节）编未更正错报汇总表 SCHEDULE（已有时出下一版）。按状态累计：uncorrected 取错报金额，partially_corrected 取剩余额 residual_cents；累计额高于明显微小门槛（clearly_trivial_cents）的进 items（带 direction 与 origin，origin 为空的按本期），其余的 ID 进 excluded_trivial_ids；corrected 的 ID 进 corrected_ids。还有其他状态的错报（identified、communicated、verifying 未结清；本版不写的 evaluated、closed 同样不能累计）时抛 ValueError，不出汇总表，由 A1 记执行失败并建 failed 任务，FIN-04 等人（兜底：正常拓扑下完成阶段认定的错报都经回流结清）。total_cents 为 items 之和，不按方向抵销；候选意见取 `services.opinion.allowed_opinions(total_cents=合计, materiality_cents=整体重要性, going_concern=None).candidate`，先算候选再一次构造汇总表（需求 R184，与 FIN-01 的校验同一函数），即不低于整体重要性为候选保留意见。A9 只走金额路径（FIN-04 早于 gate_fin 的 FIN-02 步，拿不到已批准的结论），综合候选由 FIN-01 闸门材料调本函数给出（GC-09，R187 验收 4），签字前提的参数由 SG-16 加。功能 misstatement 关闭时错报一律为 uncorrected，结果同 R23，corrected_ids 为空。FIN-04 的 depends_on 为 [FIN-03, FIN-09, PLN-19]（前两条属功能 misstatement，PLN-19 属 reassessment，关闭时程序库丢弃指向未启用程序的依赖：基线有效依赖为 []，只开 misstatement 为 [FIN-03, FIN-09]；FIN-09 由需求 R164 加入，PLN-19 由需求 R207 加入）。
+ 
+ **意见类型的候选与可选范围**（`services/opinion.py`，需求 R184）：`allowed_opinions(*, total_cents: int, materiality_cents: int, going_concern: GoingConcernOutcome | None) -> OpinionOptions(candidate, allowed, reasons)`，只收它读的三项（关键字参数），纯函数，不读 IO。A9 的候选（汇总表的 candidate_opinion）、FIN-01 的 disposition 校验（`gates.fin01_check`，传当前汇总表的 total_cents 与 materiality_cents）与 FIN-01 闸门材料的综合候选都取它，不另写；规格书第 10 节 P3（五条独立路径，金额与持续经营取较严一方）。金额路径：total_cents ≥ materiality_cents 候选 qualified，否则 unqualified，可选 (unqualified, qualified)（候选可由审计师推翻，ASA 450 第 11 段，需求 R24）。持续经营（ASA 570 第 21-23 段）：None 与 no_material_uncertainty 不改金额路径；material_uncertainty_disclosed 不改意见类型（无保留加重大不确定性专段，第 22 段）；material_uncertainty_not_disclosed 至少保留，只可选 qualified（第 23 段的否定意见本版不支持）；basis_inappropriate 候选 adverse（第 21 段），没有可选的意见类型（本版不支持，GC-10 起 FIN-02 闸门拒绝批准它，正常走不到）。不是持续经营结论取值的输入（含误传的 OpinionType）报 AssertionError（assert_never），不按金额路径放行；枚举由读取边界还原（checkpoint.restore_enums），本函数不承诺接受字符串。adverse 与 disclaimer 在任何输入下都不可选；allowed 非空时 candidate 在其中（OpinionOptions 的不变式）。allowed 按 OpinionType 的顺序，reasons 每条路径一句（先金额后持续经营，写明准则段号）：金额一句写成金额路径的结论（如 “金额路径: 未更正错报合计 4853 分低于整体重要性 32431 分, 金额路径候选 unqualified (可由审计师推翻, ASA 450 para 11)”），持续经营较严时那句另写较严的结果（如 “较严, 候选改为 qualified, 不可选 unqualified”），两句不矛盾。调用方：A9 一直传 None（只走金额路径，见上文 FIN-04 段）；FIN-01 校验由 GC-10（R188）接上已批准的 FIN-02 结论；FIN-01 闸门材料的综合候选由 GC-09（R187）调本函数给出。本条两处调用都传 None，与原来的规则完全等价；签字前提 CHECK-FIN-18 的结果（含无法表示意见的分支）由 SG-16 另加关键字参数 check_fin18。例：Xero 合计 4853、重要性 32431，不论持续经营结论为空或 material_uncertainty_disclosed，候选 unqualified，可选 (unqualified, qualified)。
+ 
+@@ -3221,7 +3271,8 @@ class ProcedureTemplate(BaseModel):
+                                      #   L3 起 A7 复核会出争议任务）；须为判断程序（llm.output_model 为 JudgmentDraft 或子类，`judging_program`）且 outputs 含
+                                      #   judgments 与 misstatements（GraphNodes 构造时的 `merge.check_outputs`：复核确认写出的错报靠按 outputs 重放进状态）
+     gate: GateId | None = None       # 闸门程序的闸门编号。ACC-01、PLN-03、FIN-01、RPT-01 为 manual 的闸门步骤，不经 Agent；
+-                                     #   ACC-08（需求 R198）为挂闸门的 hybrid 程序，A2 执行，判断不建复核任务（第 5 节需要人表）
++                                     #   ACC-08（需求 R198）为挂闸门的 hybrid 程序，A2 执行，判断不建复核任务（第 5 节需要人表）；
++                                     #   PLN-19（需求 R207）同为挂闸门的 hybrid 程序，A4 执行
+     feature: str | None = None       # 所属功能（services/features.FEATURES 中的名字）；为空即基线，总是启用。GEN-09 为 critic
+     assertions: list[Assertion] = []
+     triggers: list[Trigger] = []     # 为空时：P2 以外的程序为固定集，项目启动即实例化；P2 程序只经依赖闭包加入（如 DOC-06），标 fixed 的除外
+@@ -3297,11 +3348,11 @@ class WorkpaperConfig(BaseModel):    # knowledge/workpapers.yaml
+ 
+ `{ref: …}` 参数除 ref 外只能另写 optional（布尔），且 optional 只用于 `profile.`（OPTIONAL_NAMESPACES）；多余的键、optional 不是布尔、用在别处，都在 ProcedureLibrary 构造时抛 ValueError（消息含 "程序编号.参数名"）。新的命名空间在 REF_NAMESPACES 登记一行（前缀 → 模型），并一并定它的 None 策略（NONE_RUNS：值为 None 时照样执行的命名空间，现为 dataset）、取值形式（JSON_NAMESPACES）、缺取值对象时的说明（MISSING_SOURCES）与解析时传入的对象：`resolve_params(..., traits=, profile=)` 两个关键字参数都必填，取值对象在循环前建一次；profile 为 None 时引用 `profile.` 抛 ValueError（"没有本项目采用的客户画像"）。
+ 
+-**产出字段**（outputs）：现有 27 条为 ACC-04 [acceptance_scorecard, exceptions]；ACC-08（功能 acceptance，需求 R198）[engagement_terms, judgments, exceptions, documents]；DOC-04 [documents, review_tasks]；DOC-06 [documents, confirmations, review_tasks]；PLN-07 [analytics, exceptions]；PLN-01 [materiality_candidates, audit_objectives, risk_register]；PLN-15（功能 planning）[audit_plans]；CSH-04 [confirmations, documents]；REV-08、CSH-05、GEN-05（功能 journals）[exceptions]；REV-03、REV-02、GEN-02（功能 journals，需求 R134）[judgments, exceptions, review_tasks]；CSH-02 [judgments, exceptions, review_tasks, confirmations]；FIN-03（功能 misstatement，需求 R157）[judgments, review_tasks, misstatements]；FIN-09（同，需求 R164；R165 加 V02 的 exceptions）[judgments, exceptions, review_tasks, misstatements]；FIN-04 [uncorrected_schedule]；RPT-03 [report_versions, review_tasks]（ConciergeAgent.interpret 返回空的 review_tasks）；GEN-07（功能 going_concern，需求 R177）[exceptions]；GEN-08（功能 related_parties）[ownership_graph, exceptions, documents]；GEN-03（功能 related_parties，需求 R139）[judgments, exceptions, review_tasks]；GEN-09、ACC-01、PLN-03、FIN-01、RPT-01 []。声明 documents 的四条另写 document_types：DOC-04 [contract]；DOC-06、CSH-04 [confirmation]；GEN-08 [registry_extract]；ACC-08 [engagement_letter, minutes]（只管重放取回哪些类型的文件，合并时不查，见第 3 节重放规则）。新程序与新字段按第 3 节登记清单声明。
++**产出字段**（outputs）：现有 28 条为 ACC-04 [acceptance_scorecard, exceptions]；ACC-08（功能 acceptance，需求 R198）[engagement_terms, judgments, exceptions, documents]；DOC-04 [documents, review_tasks]；DOC-06 [documents, confirmations, review_tasks]；PLN-07 [analytics, exceptions]；PLN-01 [materiality_candidates, audit_objectives, risk_register]；PLN-15（功能 planning）[audit_plans]；PLN-19（功能 reassessment，需求 R207）[materiality_reassessment, judgments, exceptions]；CSH-04 [confirmations, documents]；REV-08、CSH-05、GEN-05（功能 journals）[exceptions]；REV-03、REV-02、GEN-02（功能 journals，需求 R134）[judgments, exceptions, review_tasks]；CSH-02 [judgments, exceptions, review_tasks, confirmations]；FIN-03（功能 misstatement，需求 R157）[judgments, review_tasks, misstatements]；FIN-09（同，需求 R164；R165 加 V02 的 exceptions）[judgments, exceptions, review_tasks, misstatements]；FIN-04 [uncorrected_schedule]；RPT-03 [report_versions, review_tasks]（ConciergeAgent.interpret 返回空的 review_tasks）；GEN-07（功能 going_concern，需求 R177）[exceptions]；GEN-08（功能 related_parties）[ownership_graph, exceptions, documents]；GEN-03（功能 related_parties，需求 R139）[judgments, exceptions, review_tasks]；GEN-09、ACC-01、PLN-03、FIN-01、RPT-01 []。声明 documents 的四条另写 document_types：DOC-04 [contract]；DOC-06、CSH-04 [confirmation]；GEN-08 [registry_extract]；ACC-08 [engagement_letter, minutes]（只管重放取回哪些类型的文件，合并时不查，见第 3 节重放规则）。新程序与新字段按第 3 节登记清单声明。
+ 
+ **要用的客户资料**（inputs，需求 R272）：程序执行前必须有的客户资料，缺了程序不执行、记 awaiting_data，由 A3 提补交请求，资料到了自动接着跑（第 3 节程序等数据）。写法 `inputs: {tables: [bank_accounts], documents: [contract]}`，取值须为 TableKind、DocumentType（加载时校验，不过时抛 ValueError，消息带程序编号与文件名）。现有六条：DOC-04 documents [contract]；CSH-04 tables [bank_accounts]；CSH-05、CSH-02 [bank_accounts, bank_transactions]；REV-08 [sales_invoices, delivery_notes, bank_transactions]；REV-02 [sales_invoices]。不写的：就绪必需的三张表（科目表、试算表、总账，由 P1 等数据保证；CSH-05 的试算表、CSH-02 的总账也不写）；前置程序的结果（REV-03 的合同抽取、DOC-06 的回函）由 depends_on 表达，所以 REV-03、DOC-06 是 "前置未完成不派发" 而不是等数据，也不为回函向客户提请求。写法校验（含未启用的模板，违反时抛 ValueError，消息含程序编号）：只看模板就能判定的在程序库加载时查（`services/procedure_library.inputs_problems`）：不能写就绪必需的表，不能写 other；要看图节点的在 GraphNodes 构造时查（`orchestration/inputs.input_problems`）：P2 以外的程序只有 p1_ingest 的程序（DOC-04）能写 inputs（只有它在执行阶段等到数据后有地方补跑）。"本期有没有可测对象"（如只有上年的发票）不归 inputs，留给规则级的执行前检查（R130）；R130 的规则检查也不必再查 "表是空的"。
+ 
+-**读的数据**（reads，需求 R274）：现有为 PLN-07 [accounts, trial_balance, journal_entries]（A03 月度数读总账，需求 R103）；PLN-01 [accounts, trial_balance]；PLN-15 [accounts, trial_balance]（提示词带本期试算表，功能 planning，需求 R203）；REV-08 [sales_invoices, delivery_notes, bank_transactions]；REV-03 [contracts, documents]；REV-02 [sales_invoices, delivery_notes, journal_entries, accounts, contracts, documents]（总账与科目表为发票分录行，需求 R100）；CSH-04 [bank_accounts]；CSH-05 [bank_accounts, bank_transactions, trial_balance]；CSH-02 [bank_accounts, bank_transactions, journal_entries, trial_balance, confirmations, documents]；GEN-05 [journal_entries, accounts, sales_invoices, delivery_notes]（功能 journals，需求 R131；后两者为 R10、R12 的发票与发运或服务完成记录，需求 R132；审批日志补进总账时另记 journal_entries 变动，GEN-05 随之过期，可重跑：它不写 inputs，缺审批人时 R04 记 not_executable，不等数据）；GEN-02 [journal_entries, accounts, trial_balance, bank_accounts, bank_transactions, sales_invoices, delivery_notes, contracts, documents]（功能 journals，需求 R134：凭证行与相关凭证、科目与两期试算表、银行账户与流水、detail 所指的发票及其记录与合同、凭证关联的文件）；ACC-08 [documents]（功能 acceptance，需求 R198；建议判断引用约定文件的页，证据可靠性取自文件登记；承接阶段的执行不判过期）；ACC-04 [registry_extracts]（新客户的 ASIC 摘录，需求 R290；承接阶段的执行不记数据版本，按 R274 不判过期，审计师在 ACC-01 改摘录不会把 ACC-04 标过期，要重算记分卡须更新客户资料，经 ACC-01 的 rerun 重跑）；GEN-07 [bank_accounts, bank_transactions, journal_entries, accounts]（功能 going_concern，需求 R177）；FIN-03 [journal_entries, trial_balance, bank_transactions, sales_invoices, delivery_notes, documents]（功能 misstatement，需求 R157：来源判断对象的分录行，来源判断所引的其余行，即现有来源程序 REV-02、CSH-02、GEN-02 能引的行类型，与所引文件的登记）；FIN-09 [journal_entries, accounts]（功能 misstatement，需求 R164：V01 的审计更正分录行与科目表）；GEN-08 [registry_extracts, documents]（功能 related_parties，需求 R138：审计师上传或修改 ASIC 摘录后过期，重跑出关系图的下一版；关系的证据可靠性取自摘录文件的登记，重建也按登记取文件，补登记后过期）；GEN-03 [journal_entries, accounts, bank_transactions, sales_invoices, contracts, documents]（功能 related_parties，需求 R139；C01、C02 读前四张表，上下文另带对方合同与关联文件）；其余为空（承接阶段的其余程序只读客户资料；DOC-04、DOC-06 读文件；FIN-04、RPT-03 读状态）。documents 是文件登记（需求 R90）：审计师补登记可靠性、文件日期或关联对象记这一类，读它的只限判断引用文件页、证据可靠性取自文件登记的程序，即经 `JudgmentEngine.judge` 判断的 A6 程序 REV-03、REV-02、CSH-02、GEN-02、GEN-03，A2 的 ACC-08 与 A8 的 FIN-03（OutputValidator 按文件登记改写 document 指针的可靠性，`judgment_engine.document_pointer`；GEN-09 在 A6 的执行里调用，随之），以及 A5 的 GEN-08（关系的证据指向摘录文件页，由留痕重建时文件与可靠性取自文件登记，需求 R138）；REV-08、CSH-05、GEN-05 是规则程序，指针指向行，可靠性按行类型；DOC-04、DOC-06 抽的是文件内容，不受登记影响；CSH-04 回函的可靠性按收函渠道；RPT-03 引用判断不引用文件页；都不读。读文件登记的程序另写读哪几类文件的登记（document_reads，需求 R304）：REV-03 [contract]、REV-02 [contract]、CSH-02 [confirmation]、GEN-02 [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record]（相关发票所挂合同的登记，加关联对象含本凭证号的文件；后者类型不定，列全部可作证据的类型，即 judgment_engine.DOCUMENT_EVIDENCE 的键）、GEN-03（同 GEN-02 的全部可作证据的类型：关联对象含本节点的文件，类型不定，需求 R139）、ACC-08 [engagement_letter, minutes]（承接阶段的执行不判过期，声明只为满足加载校验）、FIN-03（功能 misstatement，需求 R157）同 GEN-02（来源判断所引文件的类型不定）、GEN-08 [registry_extract]；带文件类型的登记变动只让读该类的程序过期（新登记财务报表等别的类型的文件，这些程序都不过期），没带类型的旧变动照旧让它们都过期。document_reads 与产出侧的 document_types 不是一回事，不共用：document_types 是本程序交回的文件类型（outputs 含 documents，只管重放，DOC-04 [contract]、DOC-06 [confirmation]、CSH-04 [confirmation]），document_reads 是本程序读其登记的文件类型（只管过期）；交回合同文件的 DOC-04 不读登记，读合同登记的 REV-03 不交回文件。加载校验：reads 含 documents 而没写 document_reads，或写了 document_reads 而 reads 没有 documents，ProcedureLibrary 构造即抛 ValueError（`procedure_library.document_read_problems`；取 "必须声明"，不留按任何文件变动都过期的兜底；与 `merge.document_problems` 对 outputs 的 documents 与 document_types 的校验对称）。局限：变动记的是补登记时文件的当前类型，合同文件改成别的类型（改类型不删已抽出的合同，REV-03、REV-02 按文件 ID 仍引用它的登记）之后再补登记它，不再让 REV-03、REV-02 过期；改类型本来就不记数据变动，情形罕见，不为此改按文件 ID 判断。程序执行之外写进的合同、回函与 ASIC 摘录都记数据变动：审计师修改合同、回函、ASIC 摘录的抽取结果，上传或改类型后 A3 抽出的合同新版本（`DocumentIntake.contract`，与合同同一事务）与 ASIC 摘录新版本（`DocumentIntake.registry`，同一事务，需求 R290；上传的财务报表只分类不抽取，Issue #46）；回函副本的抽取只留查看，不进函证，不记。程序执行写出的（DOC-04 的合同、DOC-06 的函证）不记，靠 "依赖的程序在其后重跑过" 传播。过期判定见第 3 节。加载校验：规则 SQL、执行前检查的 SQL（RuleSpec.checks）与被测总体的 SQL（RuleSpec.population，需求 R324）中整词出现的账表名（DataInput 的取值；FROM、JOIN、逗号连接与子查询里的都算，列名或别名与账表同名时也算，宁多勿漏）须都在 reads 中，否则 ProcedureLibrary 构造即抛 ValueError（消息含程序编号与漏的表）；Agent 另读的数据（如 REV-02 的发运单与合同，CSH-02 的函证）靠 YAML 手写，不能自动核对。
++**读的数据**（reads，需求 R274）：现有为 PLN-07 [accounts, trial_balance, journal_entries]（A03 月度数读总账，需求 R103）；PLN-01 [accounts, trial_balance]；PLN-15 [accounts, trial_balance]（提示词带本期试算表，功能 planning，需求 R203）；PLN-19 [accounts, trial_balance, journal_entries]（功能 reassessment，需求 R207：M01 经 adjusted_trial_balance 读试算表与更正分录，科目表给类型与分类，错报按科目映射到基准）；REV-08 [sales_invoices, delivery_notes, bank_transactions]；REV-03 [contracts, documents]；REV-02 [sales_invoices, delivery_notes, journal_entries, accounts, contracts, documents]（总账与科目表为发票分录行，需求 R100）；CSH-04 [bank_accounts]；CSH-05 [bank_accounts, bank_transactions, trial_balance]；CSH-02 [bank_accounts, bank_transactions, journal_entries, trial_balance, confirmations, documents]；GEN-05 [journal_entries, accounts, sales_invoices, delivery_notes]（功能 journals，需求 R131；后两者为 R10、R12 的发票与发运或服务完成记录，需求 R132；审批日志补进总账时另记 journal_entries 变动，GEN-05 随之过期，可重跑：它不写 inputs，缺审批人时 R04 记 not_executable，不等数据）；GEN-02 [journal_entries, accounts, trial_balance, bank_accounts, bank_transactions, sales_invoices, delivery_notes, contracts, documents]（功能 journals，需求 R134：凭证行与相关凭证、科目与两期试算表、银行账户与流水、detail 所指的发票及其记录与合同、凭证关联的文件）；ACC-08 [documents]（功能 acceptance，需求 R198；建议判断引用约定文件的页，证据可靠性取自文件登记；承接阶段的执行不判过期）；ACC-04 [registry_extracts]（新客户的 ASIC 摘录，需求 R290；承接阶段的执行不记数据版本，按 R274 不判过期，审计师在 ACC-01 改摘录不会把 ACC-04 标过期，要重算记分卡须更新客户资料，经 ACC-01 的 rerun 重跑）；GEN-07 [bank_accounts, bank_transactions, journal_entries, accounts]（功能 going_concern，需求 R177）；FIN-03 [journal_entries, trial_balance, bank_transactions, sales_invoices, delivery_notes, documents]（功能 misstatement，需求 R157：来源判断对象的分录行，来源判断所引的其余行，即现有来源程序 REV-02、CSH-02、GEN-02 能引的行类型，与所引文件的登记）；FIN-09 [journal_entries, accounts]（功能 misstatement，需求 R164：V01 的审计更正分录行与科目表）；GEN-08 [registry_extracts, documents]（功能 related_parties，需求 R138：审计师上传或修改 ASIC 摘录后过期，重跑出关系图的下一版；关系的证据可靠性取自摘录文件的登记，重建也按登记取文件，补登记后过期）；GEN-03 [journal_entries, accounts, bank_transactions, sales_invoices, contracts, documents]（功能 related_parties，需求 R139；C01、C02 读前四张表，上下文另带对方合同与关联文件）；其余为空（承接阶段的其余程序只读客户资料；DOC-04、DOC-06 读文件；FIN-04、RPT-03 读状态）。documents 是文件登记（需求 R90）：审计师补登记可靠性、文件日期或关联对象记这一类，读它的只限判断引用文件页、证据可靠性取自文件登记的程序，即经 `JudgmentEngine.judge` 判断的 A6 程序 REV-03、REV-02、CSH-02、GEN-02、GEN-03，A2 的 ACC-08 与 A8 的 FIN-03（OutputValidator 按文件登记改写 document 指针的可靠性，`judgment_engine.document_pointer`；GEN-09 在 A6 的执行里调用，随之），以及 A5 的 GEN-08（关系的证据指向摘录文件页，由留痕重建时文件与可靠性取自文件登记，需求 R138）；REV-08、CSH-05、GEN-05 是规则程序，指针指向行，可靠性按行类型；DOC-04、DOC-06 抽的是文件内容，不受登记影响；CSH-04 回函的可靠性按收函渠道；RPT-03 引用判断不引用文件页；都不读。读文件登记的程序另写读哪几类文件的登记（document_reads，需求 R304）：REV-03 [contract]、REV-02 [contract]、CSH-02 [confirmation]、GEN-02 [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter, representation_letter, correspondence, governance_communication, agreement, internal_record]（相关发票所挂合同的登记，加关联对象含本凭证号的文件；后者类型不定，列全部可作证据的类型，即 judgment_engine.DOCUMENT_EVIDENCE 的键）、GEN-03（同 GEN-02 的全部可作证据的类型：关联对象含本节点的文件，类型不定，需求 R139）、ACC-08 [engagement_letter, minutes]（承接阶段的执行不判过期，声明只为满足加载校验）、FIN-03（功能 misstatement，需求 R157）同 GEN-02（来源判断所引文件的类型不定）、GEN-08 [registry_extract]；带文件类型的登记变动只让读该类的程序过期（新登记财务报表等别的类型的文件，这些程序都不过期），没带类型的旧变动照旧让它们都过期。document_reads 与产出侧的 document_types 不是一回事，不共用：document_types 是本程序交回的文件类型（outputs 含 documents，只管重放，DOC-04 [contract]、DOC-06 [confirmation]、CSH-04 [confirmation]），document_reads 是本程序读其登记的文件类型（只管过期）；交回合同文件的 DOC-04 不读登记，读合同登记的 REV-03 不交回文件。加载校验：reads 含 documents 而没写 document_reads，或写了 document_reads 而 reads 没有 documents，ProcedureLibrary 构造即抛 ValueError（`procedure_library.document_read_problems`；取 "必须声明"，不留按任何文件变动都过期的兜底；与 `merge.document_problems` 对 outputs 的 documents 与 document_types 的校验对称）。局限：变动记的是补登记时文件的当前类型，合同文件改成别的类型（改类型不删已抽出的合同，REV-03、REV-02 按文件 ID 仍引用它的登记）之后再补登记它，不再让 REV-03、REV-02 过期；改类型本来就不记数据变动，情形罕见，不为此改按文件 ID 判断。程序执行之外写进的合同、回函与 ASIC 摘录都记数据变动：审计师修改合同、回函、ASIC 摘录的抽取结果，上传或改类型后 A3 抽出的合同新版本（`DocumentIntake.contract`，与合同同一事务）与 ASIC 摘录新版本（`DocumentIntake.registry`，同一事务，需求 R290；上传的财务报表只分类不抽取，Issue #46）；回函副本的抽取只留查看，不进函证，不记。程序执行写出的（DOC-04 的合同、DOC-06 的函证）不记，靠 "依赖的程序在其后重跑过" 传播。过期判定见第 3 节。加载校验：规则 SQL、执行前检查的 SQL（RuleSpec.checks）与被测总体的 SQL（RuleSpec.population，需求 R324）中整词出现的账表名（DataInput 的取值；FROM、JOIN、逗号连接与子查询里的都算，列名或别名与账表同名时也算，宁多勿漏）须都在 reads 中，否则 ProcedureLibrary 构造即抛 ValueError（消息含程序编号与漏的表）；Agent 另读的数据（如 REV-02 的发运单与合同，CSH-02 的函证）靠 YAML 手写，不能自动核对。
+ 
+ **P2 固定集**（fixed）：全量分录扫描、关联方、期后事项、持续经营等每个审计都做的 P2 程序标 `fixed: true`，triggers 可为空。PLN-01/03 通过后 assemble_pack 把启用的 fixed 程序并入 trigger 匹配到的程序集，按编号排序后补齐依赖闭包；objective_ids 为空，不计入审计目标覆盖（有缺口照样阻断）。所属功能未启用时不加入。未标 fixed 且没有 trigger 的 P2 程序（DOC-06、GEN-09）仍只经依赖加入，GEN-09 没有程序依赖它，不装配。加载校验（对全部模板，含功能未启用的）：fixed 只用于 P2 程序；fixed 程序不对应审计目标，不写 triggers；没有关联审计目标，取不到风险等级，其参数与其依赖闭包中 P2 程序的参数都不能写 `{by_risk: ...}`（如固定集程序依赖 REV-08，而本项目没有审计目标匹配 REV-08 时，REV-08 只经依赖加入，取不到窗口天数的等级）；违反时 ProcedureLibrary 构造即抛 ValueError，消息含程序编号。`ProcedureLibrary.fixed()` 返回启用的 fixed 模板。
+ 
+@@ -3340,7 +3391,7 @@ rules:
+   # 10261、21026 不算；SI-2026-0612 这类带连字符的只按包含发票号）
+ ```
+ 
+-**范围说明与被测总体**（需求 R324；ASA 230 第 8(a)(b)、9(a) 段，ASA 330 第 28 段；执行见第 5 节 RuleEngine 约定）。程序可写 `scope`（范围说明），规则可写 `check`（检查项名称）与 `population`（被测总体）：emit exception 的规则例外只是没通过的项目，`population.sql` 另取该规则核对的全部项目（每项一行：source_type、source_id、amount_cents 与识别字段，绑定参数同规则 SQL），`population.description` 为筛选说明；emit rows 的规则以返回行为总体，不写 population。scope 与 description 可用 Jinja2 写参数占位（环境同提示词，`procedure_library.prompt_env`；只多一个过滤器 `days_before`），按一次执行的参数快照渲染（`procedure_library.render_text`，纯函数），如 `{{ period_end | days_before(window_days) }}`；check 不渲染。加载校验（含未启用的模板，违反时 ProcedureLibrary 构造即抛 ValueError，消息含程序与规则编号）：zh 与 en 须同时给出，去掉首尾空白后不为空（字段校验）；`population_problems`：emit rows 的规则不能写 population，总体 SQL 的绑定参数（写法同 SQLAlchemy `text()`，`::` 类型转换不算）只能用 params 中的与 eid；`text_problems`：占位语法写对，过滤器与检验（`is` 后的名字）只能用环境里已有的（条件块里的也查），变量（`jinja2.meta`）只能用 params 中的参数，check 不能有任何 Jinja 标记（`{{ }}`、`{% %}`、`{# #}`，按 Jinja 的词法判断）；总体 SQL 读的账表须在 reads 中（同上 `read_problems`）。不加派生参数：窗口起始日由过滤器从参数算。现有只有 REV-08 写了（三条规则各写一段，见下例）。
++**范围说明与被测总体**（需求 R324；ASA 230 第 8(a)(b)、9(a) 段，ASA 330 第 28 段；执行见第 5 节 RuleEngine 约定）。程序可写 `scope`（范围说明），规则可写 `check`（检查项名称）与 `population`（被测总体）：emit exception 的规则例外只是没通过的项目，`population.sql` 另取该规则核对的全部项目（每项一行：source_type、source_id、amount_cents 与识别字段，绑定参数同规则 SQL），`population.description` 为筛选说明；emit rows 的规则以返回行为总体，不写 population。scope 与 description 可用 Jinja2 写参数占位（环境同提示词，`procedure_library.prompt_env`；只多一个过滤器 `days_before`），按一次执行的参数快照渲染（`procedure_library.render_text`，纯函数），如 `{{ period_end | days_before(window_days) }}`；check 不渲染。加载校验（含未启用的模板，违反时 ProcedureLibrary 构造即抛 ValueError，消息含程序与规则编号）：zh 与 en 须同时给出，去掉首尾空白后不为空（字段校验）；`population_problems`：emit rows 的规则不能写 population，总体 SQL 的绑定参数（写法同 SQLAlchemy `text()`，`::` 类型转换不算）只能用 params 中的与 eid；`text_problems`：占位语法写对，过滤器与检验（`is` 后的名字）只能用环境里已有的（条件块里的也查），变量（`jinja2.meta`）只能用 params 中的参数，check 不能有任何 Jinja 标记（`{{ }}`、`{% %}`、`{# #}`，按 Jinja 的词法判断）；总体 SQL 读的账表须在 reads 中（同上 `read_problems`）。不加派生参数：窗口起始日由过滤器从参数算。现有 REV-08 写了 scope 与三条规则的总体（各写一段，见下例）；PLN-19 只写 scope（emit rows 的规则不写总体，需求 R207）。
+ 
+ ```yaml
+ # knowledge/procedures/REV-08.yaml（节选）
+@@ -3444,13 +3495,15 @@ depends_on: [ACC-04]
+ 
+ **PLN-15**（`knowledge/procedures/PLN-15.yaml`，需求 R203）。总体审计计划：owner A4，engine llm，L1，phase P1_Planning，cycle Planning，gate PLN-15，feature planning（关闭时不在程序库启用集与固定集中）；depends_on [PLN-01, PLN-03]（PLN-09 不可预见性候选由 assemble_pack 承担，PLN-16 总体应对未实现，都不列；约定书核对结果 TERMS 来自 ACC-08，不是程序依赖，功能 acceptance 关闭时没有 TERMS）；params 为 period_start、period_end 两个 ref；standards [ASA300-P07, ASA300-P09, ASA300-P13, ASA510-P06, ASA710-P14, ASA240-P32, ASA240-P33, ASA570-P10, ASQM1-P34f, CA2001-S293, CA2001-S315-4, CA2001-S323D-2A]（ASQM 1 第 34 段只摘 (f) 项，ID 按子项规则用小写 f）；llm 为 PLN-15.md.j2 → AuditPlanDraft。提示词头注释列出变量 entity、period_start、period_end、period_months、terms（可空）、analytics、materiality（choice 与三项）、objectives、risks、items、trial_balance（本期科目名、分类与余额）、revision、revision_reason（可空）、standards，第 2 修订起有 "## Revision {n}" 段与修订理由（tests/test_knowledge.py 守头注释与模板用到的变量一致）。执行（A4 组装骨架、调模型、校验）见第 6 节 PLN-15 段（需求 R204）。
+ 
++**PLN-19**（`knowledge/procedures/PLN-19.yaml`，需求 R207）。重要性重估：owner A4，engine hybrid，L1，phase P3_Completion，cycle Completion，gate PLN-19，feature reassessment（需要 misstatement 与 planning，R313；关闭时不在程序库启用集与固定集中）；workpaper A-5；depends_on [PLN-01]（每轮在更正验证之后、FIN-04 之前执行，节点 p3_reassess 与闸门见 R209）；outputs [materiality_reassessment, judgments, exceptions]；params：materiality_cents、performance_materiality_cents、clearly_trivial_cents、verified_adjustment_entry_nos 用 ref，candidates、performance_pct_range、clearly_trivial_pct、revenue_categories、income_tax_categories 同 PLN-01，revise_threshold_pct 0.10（实务惯例，非准则规定），另有 period_end（范围说明与提示词用）；standards [ASA320-P12, ASA320-P13, ASA450-P10]；evidence_required [voucher]；rules 只有 M01（emit rows），同 PLN-01 的 M01，只把余额来源换成 `adjusted_trial_balance(:eid, :verified_adjustment_entry_nos)`（第 5 节“更正后余额”，tests/test_knowledge.py 守两条只差这一段）；P01 例外不写 SQL，由 A4 按 M01 的行与状态在代码中算（同 CSH-02 D01，口径见 R208）；llm 为 PLN-19.md.j2 → ReassessmentDraft（JudgmentDraft 加 revise 与 suggested_choice，语义校验由 R208 登记，之前列在 test_output_validator 的待实现表）。提示词头注释列出变量 subject_id（MATERIALITY）、task、data（reassessment、misstatements、adjustment_lines、trial_balance）、rule_findings、standards，是 R208 的数据契约。重估材料与未更正错报对基准的影响见第 2.4 节。
++
+ **FIN-09**（`knowledge/procedures/FIN-09.yaml`，需求 R164）。更正验证：owner A8，engine hybrid，L2，phase P3_Completion，cycle Completion，feature misstatement（关闭时不在程序库启用集与固定集中）；params 为 adjustment_prefix（`{ref: dataset.audit_adjustment_entry_prefix}`，数据集未声明时 "AJE-"）；standards [ASA450-P07]；evidence_required [voucher]；规则 V01（emit rows）取凭证号以 adjustment_prefix 开头的审计更正分录的全部行，带科目名称、类型与分类（LEFT JOIN accounts），按凭证号与行 ID 排序；按前缀比较（`left(entry_no, length(前缀)) = 前缀`），不用 LIKE，前缀中的 % 与 _ 不作通配符；不看 is_adjustment（Xero 的手工分录也为真）。YAML 与提示词不写科目代码（tests/test_knowledge.py 守着）。llm 为 FIN-09.md.j2 → CorrectionVerificationDraft，头注释列出变量 subject_id、task.params（adjustment_prefix）、data（misstatement、source_judgment、matched_line_ids、entry_lines、corrected_cents、residual_cents）、rule_findings、standards，是 A8 执行（需求 R165）的数据契约；mock 的 fixture_key 取错报来源判断的 subject_id（同 FIN-03），Xero fixture 为 XJ-499、BA-091、826、804、805。depends_on 为 [FIN-08]（R161 补上；GEN-05 增量就绪后再加 GEN-05，需求 R164 验收 1 的差异，协调者 10-20 裁定）；R165 起 manual_result_allowed 为真、misstatement_update_kind 为 verification、outputs 为 [judgments, exceptions, review_tasks, misstatements]（V02 例外，A8 的写入范围同步加 exceptions）。
+ 
+ **GEN-09**（`knowledge/procedures/GEN-09.yaml`）。owner A7，engine llm，L4，phase P2_Executing，cycle Pervasive，triggers 为空且无程序依赖它，所以不进程序包、不进固定集；复核的触发与跳过规则写在 `agents/review.trigger`（判定顺序见第 6 节 A7 段），YAML 注释同步；params.sample_rate 为抽样比例；llm 为第一轮（GEN-09.md.j2，CriticIndependent），第二轮的提示词与输出模型见 `review.VERDICT_SPEC`。mock 固定输出在 `tests/fixtures/llm/GEN-09/{subject}-r1.json`、`-r2.json`（演示数据为 data/demo/llm/GEN-09）；测试用的争议变体在 `tests/fixtures/llm_variants/`。
+ 
+ **底稿配置**（`knowledge/workpapers.yaml`，模型 `contracts/knowledge.WorkpaperConfig`，需求 R329，Issue #50）。一个程序一份底稿：索引号与区写在程序 YAML 的 workpaper 一行（`workpaper: {ref: D-3, area: D}`），配置文件写区、不对应程序的系统底稿、各类底稿的必填项与准则文档要求对照；其中的名称与说明都是 LocalizedText（zh、en 都须给出，去掉首尾空白后不能为空，同 R324 的范围说明），模型见上方代码块。依据 ASA 230 第 8、9 段与附录 1，段号按 docs/参考资料 中各准则现行文本；版式见 docs/云端开发/design/底稿示例/。ProcedureLibrary 构造时读它（`library.workpapers`），与程序模板一起校验（`procedure_library.workpaper_problems`，含未启用的模板；不过时抛 ValueError，消息含程序编号或索引号；字段写错时抛 ValueError，消息带文件名）。
+ - 区（areas，按档案顺序）：A 计划、B 承接、C 现金、D 收入、G 一般、X 错报、Z 完成与报告，各有名称（zh、en）与序号写法 numbering。程序底稿的索引号为区字母本身或 `{区}-{序号}`：digits 为 1 起的数字，letters 为 A 起的大写字母；错报区 X 为 letters（X 为 FIN-04 的错报汇总，程序从 X-A 起，X-数字留给错报汇总表中的错报编号）。规则按配置的 numbering 判断，不按程序编号分支。
+-- 程序的索引号：A-1 PLN-15、A-2 PLN-01、A-3 PLN-03、A-4 PLN-07；B-1 ACC-01、B-2 ACC-04、B-3 ACC-08；C-1 CSH-04、C-2 DOC-06、C-3 CSH-05、C-4 CSH-02；D-1 DOC-04、D-2 REV-03、D-3 REV-08、D-4 REV-02；G-1 GEN-05、G-2 GEN-02、G-3 GEN-08、G-4 GEN-03、G-5 GEN-07；X FIN-04、X-A FIN-03、X-B FIN-08、X-C FIN-09（按错报流程：分类、沟通、更正验证）；Z-1 FIN-01、Z-2 RPT-03、Z-3 RPT-01。GEN-09 不出底稿（复核结果写进被复核判断所在的底稿）。新程序一律写 workpaper。
++- 程序的索引号：A-1 PLN-15、A-2 PLN-01、A-3 PLN-03、A-4 PLN-07、A-5 PLN-19（需求 R207）；B-1 ACC-01、B-2 ACC-04、B-3 ACC-08；C-1 CSH-04、C-2 DOC-06、C-3 CSH-05、C-4 CSH-02；D-1 DOC-04、D-2 REV-03、D-3 REV-08、D-4 REV-02；G-1 GEN-05、G-2 GEN-02、G-3 GEN-08、G-4 GEN-03、G-5 GEN-07；X FIN-04、X-A FIN-03、X-B FIN-08、X-C FIN-09（按错报流程：分类、沟通、更正验证）；Z-1 FIN-01、Z-2 RPT-03、Z-3 RPT-01。GEN-09 不出底稿（复核结果写进被复核判断所在的底稿）。新程序一律写 workpaper。
+ - 系统底稿（system，不对应程序）：00 审计档案索引、C 现金导引表（categories [cash]）、D 收入导引表（[revenue, other_income]）、S 准则文档要求对照。有 categories 的为导引表，取试算表中这些标准分类的科目，须属一个区（索引号即区字母）；不属区的（00、S）索引号不能归到某区（区字母本身或以 {区}- 开头，与准则对照按前缀归区的口径相同）；只给有审计程序的现金、收入两区各一张（Q29），其余报表项目列在索引的 "本期未执行专门程序的报表项目" 一节。
+ - 加载校验：区、必填项代号、准则对照的准则各不重复；程序与导引表的区在 areas 中，索引号合上面的写法；不属区的系统底稿的索引号不归到某区；程序之间、程序与系统底稿之间索引号不重复；必填项与准则对照所引的索引号与区都在。
+ - 必填项（required）：每项有代号 id、名称（zh、en）、出处（standard、paragraph，现行段号）、是否可由审计师的补充说明补齐（supplementable：理由、考虑因素与结论可以，编制、复核与事实不行；补充说明见 R330）与适用范围（kinds 为程序类别、refs 为索引号，都不写即全部底稿，否则为其并集）。全部底稿：ASA 230 第 9(b) 段编制人（preparer）与完成日期（completed_on），第 9(c) 段复核人（reviewer）、复核日期（reviewed_on）与范围（review_scope），第 8(a) 段程序的性质、时间与范围（procedures），第 8(b) 段结果（results），第 8(c) 段结论（conclusions，可补齐）。规则与判断类（kinds [rule, judgment]，`procedure_library.workpaper_kind`：engine rule 为 rule，判断程序 `judging_program` 为 judgment，人工程序、抽取与起草没有类别）另加第 9(a) 段被测项目的识别特征（tested_items）。A-2 另加 ASA 320 第 14 段的金额（materiality_amounts）与考虑因素（materiality_factors，含选择基准与比例的理由，可补齐）；X 另加 ASA 450 第 15(a)、(b)、(c) 段（clearly_trivial、misstatements_accumulated、uncorrected_conclusion，后者可补齐）；A-1 另加 ASA 300 第 12(a)、(b)、(c) 段（audit_strategy、audit_plan、plan_changes，后者可补齐）。`ProcedureLibrary.required_items(ref)` 按配置顺序给出某份底稿的必填项（索引号不存在抛 KeyError）。
+@@ -3697,7 +3750,7 @@ CREATE INDEX ix_audit_trail_engagement_key ON audit_trail (engagement_id, idempo
+ | confirmations | Confirmation |
+ | misstatements | Misstatement |
+ | report_versions | AuditReportVersion |
+-| gate_materials | AcceptanceScorecard、AnalyticsResult、MaterialityCandidates、UncorrectedSchedule、EngagementTerms（需求 R198；按 kind 列区分，不需迁移）、AuditPlan（总体审计计划，需求 R203；同上不需迁移） |
++| gate_materials | AcceptanceScorecard、AnalyticsResult、MaterialityCandidates、UncorrectedSchedule、EngagementTerms（需求 R198；按 kind 列区分，不需迁移）、AuditPlan（总体审计计划，需求 R203；同上不需迁移）、MaterialityReassessment（重要性重估，需求 R207；同上不需迁移） |
+ | ownership_graphs | OwnershipGraph（需求 R136，迁移 0016：建表并开行级安全，策略与授权同 0014 的新表） |
+ | completion_records | WrittenRepresentationLetter、ComplianceCheck、GovernanceCommunication、IndependenceDeclaration（签字前提的产出，需求 R215，迁移 0017：建表并开行级安全，策略与授权同 0016） |
+ 
+diff --git a/src/backend/contracts/llm_outputs.py b/src/backend/contracts/llm_outputs.py
+index 0da7cd2..bb217ce 100644
+--- a/src/backend/contracts/llm_outputs.py
++++ b/src/backend/contracts/llm_outputs.py
+@@ -13,6 +13,7 @@ from backend.contracts.models import (
+     EvidencePointer,
+     GoingConcernOutcome,
+     JudgmentRef,
++    MaterialityChoice,
+     Milestone,
+     MisstatementDraft,
+     MisstatementType,
+@@ -65,6 +66,15 @@ class CorrectionVerificationDraft(JudgmentDraft):
+     other_accounts: list[str]  # 更正分录涉及的错报科目以外的科目代码, 不重复, 没有为空; 须在匹配凭证的科目内
+ 
+ 
++class ReassessmentDraft(JudgmentDraft):
++    """PLN-19 对重要性重估的判断草稿 (需求 R207): 判断草稿的各项 (规则同 JudgmentDraft) 加是否建议修订重要性与建议的
++    选择. 建议修订时给出 suggested_choice, 否则为空; 语义校验 (如 revise 与 change_pct, 门槛的一致) 由 R208 登记.
++    校验后由判断引擎补全为 Judgment, 闸门程序的判断不建复核任务 (接口文档第 5 节)."""
++
++    revise: bool  # 是否建议修订重要性
++    suggested_choice: MaterialityChoice | None = None  # 建议的基准与比例; 不建议修订时为空
++
++
+ class ExtractedTerm(Model):
+     """从合同中抽出的一个条款."""
+ 
+diff --git a/src/backend/contracts/models.py b/src/backend/contracts/models.py
+index 731cd85..74294f6 100644
+--- a/src/backend/contracts/models.py
++++ b/src/backend/contracts/models.py
+@@ -306,13 +306,14 @@ class Decision(StrEnum):
+ 
+ 
+ class GateId(StrEnum):
+-    """闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行
+-    分别由需求 R201, R205 加."""
++    """闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, PLN-19 属功能 reassessment, 登记表
++    (orchestration/gates.GATES) 的行分别由需求 R201, R205, R209 加."""
+ 
+     ACC_01 = "ACC-01"  # 是否承接
+     ACC_08 = "ACC-08"  # 约定条款与委任 (需求 R198)
+     PLN_01_03 = "PLN-01/03"  # 重要性与风险清单
+     PLN_15 = "PLN-15"  # 总体审计计划 (需求 R203)
++    PLN_19 = "PLN-19"  # 重要性重估 (需求 R207)
+     FIN_01 = "FIN-01"  # 错报与意见类型
+     RPT_01 = "RPT-01"  # 报告批准与签字
+ 
+@@ -1358,6 +1359,87 @@ class UncorrectedSchedule(Versioned):
+     candidate_opinion: OpinionType  # 合计不低于整体重要性为保留, 否则无保留
+ 
+ 
++# PLN-19 重要性重估 (功能 reassessment, 需求 R207): A4 每轮在更正验证之后, FIN-04 之前执行 (R208), 结果
++# MaterialityReassessment 为 PLN-19 闸门的材料 (R209); 口径见接口文档第 2.4 节
++REASSESSMENT_ID = "REASSESSMENT"  # MaterialityReassessment 在每个项目里的固定 ID
++# 程序参数引用重要性的三个 ref (以它们为参数的程序, 重要性修订后要复核其结论, ASA 320 第 13 段)
++MaterialityRef = Literal["materiality_cents", "performance_materiality_cents", "clearly_trivial_cents"]
++
++
++class BasisAdjustment(Model):
++    """重要性重估中一个基准的调整: 调整后试算表 (试算表加已验证更正分录) 上的基准金额, 未更正错报对该基准的影响
++    (带符号, 取法见接口文档第 2.4 节), 两者之和为调整后基准 (模型校验)."""
++
++    basis: MaterialityBasis  # 基准
++    recorded_base_cents: int  # 调整后试算表上的基准金额, 单位分
++    uncorrected_effect_cents: int  # 未更正错报对该基准的影响, 单位分, 带符号
++    adjusted_base_cents: int  # 调整后基准 = recorded_base_cents + uncorrected_effect_cents
++
++    @model_validator(mode="after")
++    def adds_up(self) -> Self:
++        """调整后基准等于账面基准加未更正错报的影响."""
++        if self.adjusted_base_cents != self.recorded_base_cents + self.uncorrected_effect_cents:
++            raise ValueError(
++                f"{self.basis}: 调整后基准 {self.adjusted_base_cents} 不等于 {self.recorded_base_cents} 加 "
++                f"{self.uncorrected_effect_cents}"
++            )
++        return self
++
++
++class MaterialityUse(Model):
++    """以重要性为参数的一条已执行的 P2 程序 (ASA 320 第 13 段所说的进一步审计程序): 程序编号与它引用的 ref."""
++
++    procedure_id: str  # 程序编号
++    refs: list[MaterialityRef]  # 参数引用的重要性 ref, 按 MaterialityRef 的顺序
++
++
++class MaterialityReassessment(Versioned):
++    """重要性重估 (PLN-19, 需求 R207): 按调整后试算表重算三种基准的候选, 按未更正错报算调整后基准, 与计划的重要性
++    比较. 项目里只有一份, ID 固定为 REASSESSMENT (REASSESSMENT_ID), 每次执行出下一版. 闸门校验与重要性金额计算同
++    MaterialityCandidates (orchestration.gates.check_materiality, materiality_amounts 收同名三字段 candidates,
++    performance_pct_range, clearly_trivial_pct)."""
++
++    run_id: str  # 产出它的那次执行
++    planning_choice: (
++        "MaterialityChoice"  # 依据的选择: 最后一条带 materiality 的通过决定 (PLN-01/03, 或之前 PLN-19 修订的)
++    )
++    planning_decision_id: str  # 该决定的 ID
++    planning_materiality_cents: int  # 执行时状态中的整体重要性, 单位分
++    planning_performance_cents: int  # 执行时状态中的执行重要性
++    planning_trivial_cents: int  # 执行时状态中的明显微小门槛
++    verified_adjustment_entry_nos: list[str]  # 计入调整后试算表的已验证更正分录凭证号 (参数快照的同名 ref)
++    candidates: list[MaterialityCandidate]  # 按调整后试算表重算的三个候选
++    performance_pct_range: tuple[float, float]  # 执行重要性占整体重要性的比例范围, 同 PLN-01 参数
++    clearly_trivial_pct: float  # 明显微小门槛占整体重要性的默认比例, 同 PLN-01 参数
++    bases: list[BasisAdjustment]  # 三个基准的调整
++    uncorrected_misstatement_ids: list[str]  # 参与调整的错报 (uncorrected, partially_corrected)
++    unmapped_misstatement_ids: list[str]  # 其中科目映射不到的, 不参与调整
++    current_overall_cents: int  # 原选择 × 所选基准的 recorded_base_cents, 单位分
++    adjusted_overall_cents: int  # 原选择 × 所选基准的 adjusted_base_cents, 单位分
++    change_pct: float  # (adjusted_overall_cents - planning_materiality_cents) / planning_materiality_cents, 四位小数
++    revise_threshold_pct: float  # 建议修订的变动比例门槛 (参数, 实务惯例, 非准则规定)
++    materiality_dependent_procedures: list[MaterialityUse]  # 参数引用重要性且已执行的 P2 程序, 按程序编号
++    exception_ids: list[str]  # P01 例外
++    judgment_id: str | None  # AI 建议判断 (J-PLN-19-{run_no}-MATERIALITY); 判断调用失败, 没有建议时为空
++
++    @model_validator(mode="after")
++    def one_per_basis(self) -> Self:
++        """ID 为 REASSESSMENT; 候选与调整各基准一项, 两边的基准相同, 且含原选择的基准."""
++        if self.id != REASSESSMENT_ID:
++            raise ValueError(f"{self.id}: 重要性重估的 ID 须为 {REASSESSMENT_ID}")
++        for name, bases in (
++            ("candidates", [c.basis for c in self.candidates]),
++            ("bases", [b.basis for b in self.bases]),
++        ):
++            if len(set(bases)) != len(bases):
++                raise ValueError(f"{name} 的基准重复: {bases}")
++        if {c.basis for c in self.candidates} != {b.basis for b in self.bases}:
++            raise ValueError("candidates 与 bases 的基准不同")
++        if self.planning_choice.basis not in {b.basis for b in self.bases}:
++            raise ValueError(f"原选择的基准 {self.planning_choice.basis} 不在 bases 中")
++        return self
++
++
+ class ObjectRef(Model):
+     """对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查."""
+ 
+@@ -1494,6 +1576,7 @@ class MaterialityChoice(Model):
+ 
+ 
+ AuditPlan.model_rebuild()  # AuditPlan (第 2.3 节) 引用了本节的 MaterialityChoice
++MaterialityReassessment.model_rebuild()  # 同上 (第 2.4 节)
+ 
+ 
+ class PlanConfirmation(Model):
+diff --git a/src/backend/contracts/state.py b/src/backend/contracts/state.py
+index 1ef5f2f..e12f8e5 100644
+--- a/src/backend/contracts/state.py
++++ b/src/backend/contracts/state.py
+@@ -24,6 +24,7 @@ from backend.contracts.models import (
+     IndependenceDeclaration,
+     Judgment,
+     MaterialityCandidates,
++    MaterialityReassessment,
+     Misstatement,
+     OpinionType,
+     OwnershipGraph,
+@@ -119,6 +120,8 @@ class EngagementState(TypedDict):
+     materiality_cents: int | None  # 整体重要性, PLN-01/03 闸门确定; 只在图状态中
+     performance_materiality_cents: int | None  # 执行重要性, 同上
+     clearly_trivial_cents: int | None  # 明显微小门槛, 同上
++    # 重要性重估 REASSESSMENT (需求 R207, 功能 reassessment): A4 PLN-19 每次执行写下一版, PLN-19 闸门的材料
++    materiality_reassessment: MaterialityReassessment | None
+     audit_objectives: list[AuditObjective]  # 审计目标, 读数据集预置
+     risk_register: list[RiskItem]  # 风险清单, 读数据集预置, 闸门可改等级
+     # 总体审计计划 PLAN-{revision} (需求 R203, 功能 planning): A4 PLN-15 起草, PLN-15 闸门批准; 当前计划为 status 不是
+@@ -165,6 +168,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
+     "materiality_cents": None,
+     "performance_materiality_cents": None,
+     "clearly_trivial_cents": None,
++    "materiality_reassessment": None,
+     "audit_objectives": [],
+     "risk_register": [],
+     "audit_plans": [],
+diff --git a/src/backend/knowledge/procedures/FIN-04.yaml b/src/backend/knowledge/procedures/FIN-04.yaml
+index 6b7f6a3..908a6e2 100644
+--- a/src/backend/knowledge/procedures/FIN-04.yaml
++++ b/src/backend/knowledge/procedures/FIN-04.yaml
+@@ -10,8 +10,9 @@ autonomy_level: L3
+ params:
+   materiality_cents: {ref: materiality_cents}
+   clearly_trivial_cents: {ref: clearly_trivial_cents}
+-# 错报分类 FIN-03 与更正验证 FIN-09 之后 (都属功能 misstatement; 关闭时程序库丢弃这两条依赖)
+-depends_on: [FIN-03, FIN-09]
++# 错报分类 FIN-03, 更正验证 FIN-09 (功能 misstatement) 与重要性重估 PLN-19 (功能 reassessment, 需求 R207) 之后; 功能
++# 关闭时程序库丢弃指向未启用程序的依赖
++depends_on: [FIN-03, FIN-09, PLN-19]
+ standards: [ASA450-P05]
+ # 无 SQL, A9 从 state.misstatements (当前结果) 按错报状态计算 UncorrectedSchedule (需求 R166, 规格书 12.3 子状态机注):
+ # - 累计额: uncorrected 取 amount_cents, partially_corrected 取 residual_cents; 累计额 > clearly_trivial_cents 的进 items
+diff --git a/src/backend/knowledge/procedures/PLN-19.yaml b/src/backend/knowledge/procedures/PLN-19.yaml
+new file mode 100644
+index 0000000..5e1ee75
+--- /dev/null
++++ b/src/backend/knowledge/procedures/PLN-19.yaml
+@@ -0,0 +1,66 @@
++id: PLN-19
++name: 重要性重估
++workpaper: {ref: A-5, area: A}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml); 协调者 10-21 定在计划区
++# 规格书 6.1.2 (第 755, 812 行), 10 节 P3 (第 1425 行: 更正验证 → PLN-19 → FIN-04 → FIN-15); 设计稿 v2.1 第 2.8, 5.6,
++# 6.6 节; ASA 320 第 12, 13 段, ASA 450 第 10 段. 完成阶段按 "试算表加已验证更正分录" 重算三种基准与候选, 按未更正
++# 错报算调整后基准, 与计划的重要性比较, 结果 MaterialityReassessment (REASSESSMENT) 为 PLN-19 闸门的材料 (需求 R207;
++# 字段与未更正错报对基准的影响见接口文档第 2.4 节). 执行 (A4) 见 R208, 节点与闸门见 R209.
++# - M01 同 PLN-01 的 M01, 只把余额来源换成 adjusted_trial_balance(:eid, :verified_adjustment_entry_nos) (接口文档
++#   第 5 节 "更正后余额", 需求 R174); tests/test_knowledge.py 守住两边只差这一段.
++# - P01 例外不写 SQL, 由 A4 按 M01 的行与状态在代码中算 (同 CSH-02 D01 的写法): |change_pct| 达到 revise_threshold_pct
++#   时建 X-PLN-19-{run_no}-P01-1 (接口文档第 0 节), 比较口径见 R208.
++# - 闸门程序: 建议判断 J-PLN-19-{run_no}-MATERIALITY 不建复核任务, 判断失败时材料注明 AI 建议缺失 (接口文档第 5 节).
++scope:
++  zh: >-
++    {{ period_end }} 试算表加已验证的审计更正分录{% if verified_adjustment_entry_nos %} ({{ verified_adjustment_entry_nos | join(", ") }}) {% endif %}上的收入,
++    总资产与税前利润三种基准, 及未更正错报对它们的影响
++  en: >-
++    The revenue, total assets and profit before tax benchmarks on the {{ period_end }} trial balance with the verified
++    audit adjustments{% if verified_adjustment_entry_nos %} ({{ verified_adjustment_entry_nos | join(", ") }}){% endif %},
++    and the effect of uncorrected misstatements on them
++phase: P3_Completion
++cycle: Completion
++owner: A4
++feature: reassessment             # 功能开关 (services/features.py): 重要性重估, 需要 misstatement 与 planning (需求 R313)
++outputs: [materiality_reassessment, judgments, exceptions]
++# 本期试算表与更正分录 (adjusted_trial_balance 读这两张), 科目表 (M01 的类型与分类, 错报按科目映射到基准)
++reads: [accounts, trial_balance, journal_entries]
++engine: hybrid
++autonomy_level: L1
++gate: PLN-19
++params:
++  period_end: {ref: period_end}
++  materiality_cents: {ref: materiality_cents}
++  performance_materiality_cents: {ref: performance_materiality_cents}
++  clearly_trivial_cents: {ref: clearly_trivial_cents}
++  verified_adjustment_entry_nos: {ref: verified_adjustment_entry_nos}   # 已验证的审计更正分录凭证号 (需求 R174)
++  # 以下同 PLN-01
++  candidates:
++    - {basis: revenue, pct_low: 0.005, pct_high: 0.01}
++    - {basis: total_assets, pct_low: 0.01, pct_high: 0.02}
++    - {basis: profit_before_tax, pct_low: 0.05, pct_high: 0.05}
++  performance_pct_range: [0.5, 0.75]
++  clearly_trivial_pct: 0.05
++  revenue_categories: [revenue]          # 收入基准取这些标准分类的科目 (accounts.category)
++  income_tax_categories: [income_tax]    # 税前利润扣除的所得税分类
++  revise_threshold_pct: 0.10      # 调整后整体重要性较计划变动达到这一比例时建议修订: 实务惯例, 非准则规定
++# 每轮在更正验证 (FIN-09) 之后, FIN-04 之前执行 (节点 p3_reassess 与 PLN-19 闸门见 R209); 程序依赖只有计划的重要性
++depends_on: [PLN-01]
++standards: [ASA320-P12, ASA320-P13, ASA450-P10]
++evidence_required: [voucher]
++rules:
++  - id: M01
++    name: 更正后的重要性基准取数
++    severity: low
++    emit: rows
++    sql: |
++      WITH balances AS (SELECT t.balance_cents, a.code, a.type, COALESCE(a.category,'') AS category FROM adjusted_trial_balance(:eid, :verified_adjustment_entry_nos) t
++       JOIN accounts a ON a.engagement_id=:eid AND a.code=t.account_code)
++      SELECT 'revenue' AS basis, COALESCE(-SUM(balance_cents),0) AS base_amount_cents FROM balances WHERE category=ANY(:revenue_categories)
++      UNION ALL SELECT 'total_assets', COALESCE(SUM(balance_cents),0) FROM balances WHERE type='asset'
++      UNION ALL SELECT 'profit_before_tax', COALESCE(-SUM(balance_cents),0) FROM balances
++       WHERE type IN ('revenue','expense') AND category<>ALL(:income_tax_categories)
++      ORDER BY basis
++llm:
++  prompt: PLN-19.md.j2
++  output_model: ReassessmentDraft
+diff --git a/src/backend/knowledge/prompts/PLN-19.md.j2 b/src/backend/knowledge/prompts/PLN-19.md.j2
+new file mode 100644
+index 0000000..57ad958
+--- /dev/null
++++ b/src/backend/knowledge/prompts/PLN-19.md.j2
+@@ -0,0 +1,129 @@
++{#
++PLN-19 重要性重估 → ReassessmentDraft，每次执行调用一次（经 JudgmentEngine.judge；需求 R207 定提示词，A4 的执行由 R208 加）。
++判断不建复核任务，随 REASSESSMENT 在 PLN-19 闸门呈报，由闸门决定定其状态。
++渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。不写科目代码，科目都取自数据。
++变量：
++  subject_id              判断对象 MATERIALITY
++  task.params             参数快照：materiality_cents、performance_materiality_cents、clearly_trivial_cents（执行时状态中
++                          的三项）、verified_adjustment_entry_nos、candidates、performance_pct_range、clearly_trivial_pct、
++                          revenue_categories、income_tax_categories、revise_threshold_pct、period_end（PLN-19.yaml）
++  task.risks              本程序不按审计目标装配，为空
++  data.reassessment       本次的 MaterialityReassessment（judgment_id 为空）：planning_choice、planning_decision_id、
++                          planning_materiality_cents、planning_performance_cents、planning_trivial_cents、
++                          verified_adjustment_entry_nos、candidates、performance_pct_range、clearly_trivial_pct、bases
++                          （basis、recorded_base_cents、uncorrected_effect_cents、adjusted_base_cents）、
++                          uncorrected_misstatement_ids、unmapped_misstatement_ids、current_overall_cents、
++                          adjusted_overall_cents、change_pct、revise_threshold_pct、materiality_dependent_procedures
++                          （procedure_id、refs）、exception_ids
++  data.misstatements      uncorrected_misstatement_ids 所列的错报（Misstatement：id、version、type、account、account_code、
++                          assertion、amount_cents、residual_cents、direction、status、origin），按 ID
++  data.adjustment_lines   已验证更正分录（verified_adjustment_entry_nos）的全部行：source_type journal_entry、id、
++                          entry_no、posting_date、account_code、account_name、account_type、account_category、debit_cents、
++                          credit_cents、description，按行 ID；没有为空
++  data.trial_balance      调整后试算表（试算表加已验证更正分录）中三种基准所含的科目与错报、更正分录涉及的科目：
++                          source_type trial_balance、account_code、account_name、account_type、account_category、
++                          balance_cents（调整后余额，借方为正），按科目代码
++  rule_findings           P01 例外（调整后整体重要性较计划变动达到门槛时，见 PLN-19.yaml），否则为空
++  standards               StandardFragment 列表：id、standard、paragraph、text
++#}
++{% set r = data.reassessment %}
++{% set choice = r.planning_choice %}
++You assist a registered company auditor with the completion stage of an Australian financial report audit for the period ended {{ task.params.period_end }}.
++
++## Task
++
++Before the uncorrected misstatements are evaluated, reassess whether the materiality determined at planning is still appropriate (ASA450-P10, ASA320-P12), for subject {{ subject_id }}:
++
++1. Whether the information obtained during the audit (the verified audit adjustments and the uncorrected misstatements) would have caused the auditor to determine a different materiality for the financial report as a whole.
++2. If a lower materiality is appropriate, whether performance materiality should be revised and whether the nature, timing and extent of the further audit procedures that used materiality remain appropriate (ASA320-P13).
++
++The rule part of this procedure has recomputed the three benchmarks on the trial balance with the verified audit adjustments, and the effect of the uncorrected misstatements on each benchmark. Do not recompute these figures from other sources. The auditor decides at the PLN-19 gate; your advice is shown with the reassessment below.
++
++## Inputs
++
++Materiality at planning (decision {{ r.planning_decision_id }}): benchmark {{ choice.basis }}, {{ choice.pct }} of the benchmark, performance materiality {{ choice.performance_pct }} and clearly trivial {{ choice.clearly_trivial_pct }} of overall materiality; amounts (cents) {{ r.planning_materiality_cents }}, {{ r.planning_performance_cents }} and {{ r.planning_trivial_cents }}.
++
++Overall materiality on the planning choice (cents): {{ r.current_overall_cents }} on the adjusted trial balance, {{ r.adjusted_overall_cents }} after the effect of the uncorrected misstatements. Change from planning: {{ r.change_pct }} (revision threshold {{ r.revise_threshold_pct }}).
++
++Reassessment:
++```json
++{{ r | tojson(indent=2) }}
++```
++
++Uncorrected misstatements:
++{% if data.misstatements %}
++```json
++{{ data.misstatements | tojson(indent=2) }}
++```
++{% else %}
++None.
++{% endif %}
++
++Lines of the verified audit adjustments:
++{% if data.adjustment_lines %}
++```json
++{{ data.adjustment_lines | tojson(indent=2) }}
++```
++{% else %}
++None.
++{% endif %}
++
++Adjusted trial balance of the accounts involved (debit positive):
++```json
++{{ data.trial_balance | tojson(indent=2) }}
++```
++
++Rule findings:
++{% if rule_findings %}
++```json
++{{ rule_findings | tojson(indent=2) }}
++```
++{% else %}
++None.
++{% endif %}
++
++Standards (cite only these IDs):
++{% for f in standards %}
++- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
++{% endfor %}
++
++## Criteria
++
++1. Explain what moved each benchmark: the adjustment lines posted to accounts within it, and the uncorrected misstatements mapped to it (an overstatement of revenue or assets lowers the benchmark; an understatement raises it; for profit before tax, an overstated expense raises it). Misstatements listed as unmapped did not adjust any benchmark; say so when there are any.
++2. Revise when the change from planning reaches the revision threshold in either direction, or when the adjusted figures show that the planning benchmark is no longer appropriate (for example, it is no longer positive). A change below the threshold alone is not a reason to revise.
++3. When you suggest a revision, `suggested_choice` must be valid for the candidates above: a benchmark whose base amount is positive, `pct` within that candidate's range, `performance_pct` within the performance range, and `clearly_trivial_pct` above 0 and not above the default ratio.
++4. When the suggested materiality is lower than at planning, name the procedures listed under `materiality_dependent_procedures` whose conclusions should be reconsidered (ASA320-P13).
++
++## proposed_action
++
++- `accept`: materiality remains appropriate; `revise` is false.
++- `more_evidence`: a revision is suggested (`revise` is true) for the auditor to decide at the gate, or the inputs are not enough to conclude.
++- Do not use `close` or `misstatement`.
++
++## Output (ReassessmentDraft)
++
++- `conclusion`: two to four sentences: the adjusted overall materiality against planning, the main reason for any change, and whether materiality should be revised.
++- `reasoning_chain`: ordered steps, indexed from 0.
++  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
++  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
++  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
++  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
++  - Leave `status` unset. The last step is an inference that states whether materiality should be revised.
++- `evidence`: every pointer used in reasoning_chain, without duplicates.
++- `counter_argument`: the specific fact that, if it existed, would overturn the conclusion.
++- `proposed_action`: as above.
++- `misstatement_draft`: null.
++- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
++- `revise`: true or false, per criterion 2.
++- `suggested_choice`: when `revise` is true, the suggested `basis`, `pct`, `performance_pct` and `clearly_trivial_pct` (criterion 3); null when `revise` is false.
++
++Evidence pointers. Every pointer must include `source_type`.
++
++| Source | type | source_type | source_id | locator | page | reliability |
++|---|---|---|---|---|---|---|
++| Account balance | voucher | trial_balance | `account_code` | balance_cents | null | internal_original |
++| Adjustment line | voucher | journal_entry | row `id` | column name, e.g. credit_cents | null | internal_original |
++| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
++
++{% from "_output_language.md.j2" import narrative_language with context %}
++{{ narrative_language() }}
+diff --git a/src/backend/knowledge/workpapers.yaml b/src/backend/knowledge/workpapers.yaml
+index 2b4fa85..e523d46 100644
+--- a/src/backend/knowledge/workpapers.yaml
++++ b/src/backend/knowledge/workpapers.yaml
+@@ -209,7 +209,7 @@ standards:
+     content:
+       zh: "整体重要性, 特定重要性, 执行重要性的金额与考虑因素, 及其修订"
+       en: "Amounts of materiality, specific materiality and performance materiality, the factors considered, and their revision"
+-    refs: [A-2]
++    refs: [A-2, A-5]  # A-5 为 PLN-19 重要性重估 (需求 R207): 第 14(d) 段审计过程中的修订
+   - standard: ASA 330
+     paragraphs: 28-30
+     content:
+diff --git a/src/backend/orchestration/gates.py b/src/backend/orchestration/gates.py
+index 45f8f69..fd3a8c1 100644
+--- a/src/backend/orchestration/gates.py
++++ b/src/backend/orchestration/gates.py
+@@ -28,6 +28,7 @@ from backend.contracts.models import (
+     GateVerdict,
+     MaterialityCandidates,
+     MaterialityChoice,
++    MaterialityReassessment,
+     Phase,
+     PlanStatus,
+     Procedure,
+@@ -299,13 +300,19 @@ def revise_risks(
+     return new_risks, new_objectives
+ 
+ 
++# 重要性校验与金额计算收的材料: PLN-01 的候选, 或 PLN-19 的重估材料 (需求 R207); 两者有同名的三个字段 candidates,
++# performance_pct_range, clearly_trivial_pct
++MaterialityOptions = MaterialityCandidates | MaterialityReassessment
++
++
+ def to_cents(amount: Decimal) -> int:
+     """金额四舍五入到整数分 (0.5 进位)."""
+     return int(amount.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+ 
+ 
+-def materiality_amounts(candidates: MaterialityCandidates, choice: MaterialityChoice) -> tuple[int, int, int]:
+-    """按审计师的选择算出 (整体重要性, 执行重要性, 明显微小门槛), 单位分.
++def materiality_amounts(candidates: MaterialityOptions, choice: MaterialityChoice) -> tuple[int, int, int]:
++    """按审计师的选择算出 (整体重要性, 执行重要性, 明显微小门槛), 单位分. candidates 为 PLN-01 的候选或 PLN-19 的
++    重估材料 (需求 R207), 都取其 candidates.
+ 
+     整体重要性 = 所选基准金额 × pct; 执行重要性 = 整体重要性 × performance_pct; 明显微小 = 整体重要性 ×
+     clearly_trivial_pct. 比例按十进制计算 (Decimal(str(x)), 避免二进制浮点误差), 每项各自四舍五入到整数分.
+@@ -318,10 +325,10 @@ def materiality_amounts(candidates: MaterialityCandidates, choice: MaterialityCh
+     return overall, performance, trivial
+ 
+ 
+-def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoice) -> None:
+-    """重要性选择的取值校验, 不过报 INVALID_VALUE: basis 在候选中, 且该候选的基准金额为正 (Q18: 如税前亏损时
+-    不能以税前利润为基准; 候选照常列出并标本期不适用, 需求 R351. 按金额判断, 不看标记, 没有标记的旧候选同样拒绝);
+-    pct 在该候选 [pct_low, pct_high] 内;
++def check_materiality(candidates: MaterialityOptions, choice: MaterialityChoice) -> None:
++    """重要性选择的取值校验, 不过报 INVALID_VALUE (candidates 同 materiality_amounts): basis 在候选中, 且该候选的
++    基准金额为正 (Q18: 如税前亏损时不能以税前利润为基准; 候选照常列出并标本期不适用, 需求 R351. 按金额判断, 不看
++    标记, 没有标记的旧候选同样拒绝); pct 在该候选 [pct_low, pct_high] 内;
+     performance_pct 在 performance_pct_range 内 (闭区间); clearly_trivial_pct 大于 0 且不超过候选给的比例 (Q8)."""
+     candidate = next((c for c in candidates.candidates if c.basis == choice.basis), None)
+     if candidate is None:
+diff --git a/src/backend/orchestration/merge.py b/src/backend/orchestration/merge.py
+index bc2bda7..df3fbdc 100644
+--- a/src/backend/orchestration/merge.py
++++ b/src/backend/orchestration/merge.py
+@@ -16,6 +16,7 @@ from backend.contracts.models import (
+     ComplianceCheck,
+     EngagementTerms,
+     Judgment,
++    MaterialityReassessment,
+     ProcedureRun,
+     ReviewTask,
+     RunStatus,
+@@ -33,8 +34,18 @@ AGENT_FIELDS: dict[AgentId, frozenset[str]] = {
+     # A2: ACC-04 的评分卡与例外; ACC-08 (功能 acceptance) 另写约定条款, 建议判断与读过的约定文件, 不建复核任务
+     AgentId.A2: frozenset({"acceptance_scorecard", "exceptions", "engagement_terms", "judgments", "documents"}),
+     AgentId.A3: frozenset({"documents", "confirmations", "review_tasks"}),
++    # A4: 另有 PLN-19 (功能 reassessment, 需求 R207) 的重估材料与建议判断, 不建复核任务
+     AgentId.A4: frozenset(
+-        {"analytics", "materiality_candidates", "audit_objectives", "risk_register", "exceptions", "audit_plans"}
++        {
++            "analytics",
++            "materiality_candidates",
++            "audit_objectives",
++            "risk_register",
++            "exceptions",
++            "audit_plans",
++            "materiality_reassessment",
++            "judgments",
++        }
+     ),
+     AgentId.A5: frozenset({"confirmations", "documents", "exceptions", "ownership_graph", "representation_letter"}),
+     AgentId.A6: frozenset({"exceptions", "judgments", "review_tasks", "confirmations"}),
+@@ -81,6 +92,7 @@ FIELD_REPLAY: dict[str, Replay] = {
+     "compliance_checks": Replay.by_procedure,
+     "engagement_terms": Replay.singleton,
+     "audit_plans": Replay.by_procedure,
++    "materiality_reassessment": Replay.singleton,
+ }
+ SHAREABLE = frozenset(Replay) - {Replay.singleton}  # 两条以上程序声明同一字段时可用的取回方式
+ LATER_RUNS = frozenset({Replay.singleton, Replay.by_procedure})  # 取回本程序之后的执行的取回方式
+@@ -132,7 +144,14 @@ TARGET_FIELDS: dict[TargetType, str] = {
+ }
+ 
+ # 带 exception_ids 的对象: 合并时查所指的例外都在 (check_refs), 重放时补齐所指的例外 (nodes.add_referenced_exceptions)
+-EXCEPTION_REFERRERS = (Judgment, AcceptanceScorecard, AnalyticsResult, ComplianceCheck, EngagementTerms)
++EXCEPTION_REFERRERS = (
++    Judgment,
++    AcceptanceScorecard,
++    AnalyticsResult,
++    ComplianceCheck,
++    EngagementTerms,
++    MaterialityReassessment,
++)
+ 
+ STATE_HINTS = get_type_hints(EngagementState)  # 状态各字段的类型注解, 已去掉 reducer (Annotated)
+ 
+@@ -232,7 +251,8 @@ def check_refs(patch: StatePatch, state: EngagementState) -> list[str]:
+ 
+     - Judgment, AuditException, ReviewTask, ComplianceCheck: procedure_id 在程序包中; run_id 在片段或状态的执行记录中,
+       且该记录属于同一程序.
+-    - EXCEPTION_REFERRERS (判断, 评分卡, 分析结果, 合规检查, 约定条款): exception_ids 的每一项在片段或状态的例外中.
++    - EXCEPTION_REFERRERS (判断, 评分卡, 分析结果, 合规检查, 约定条款, 重要性重估): exception_ids 的每一项在片段或状态的
++      例外中.
+     - ReviewTask: target_type 对应字段中有 target_id. 待决任务的 target_version 须等于目标当前版本 (否则提交决定时
+       必报版本不符); 已决定任务 (重放取回的) 记的是复核时的版本, 目标之后可能被决定改出新版本, 只须不高于当前版本.
+     - 反向: 片段把某对象改出新版本, 而状态中有以它的原版本为目标的待决任务 (片段没有一并更新该任务), 任务随之过期.
+diff --git a/src/backend/persistence/models.py b/src/backend/persistence/models.py
+index c55cf40..784c520 100644
+--- a/src/backend/persistence/models.py
++++ b/src/backend/persistence/models.py
+@@ -267,6 +267,7 @@ OUTPUT_KINDS = {
+         "UncorrectedSchedule",
+         "EngagementTerms",  # 需求 R198; kind 为字符串列, 不需迁移
+         "AuditPlan",  # 需求 R203; 同上不需迁移
++        "MaterialityReassessment",  # 需求 R207; 同上不需迁移
+     ],
+     "ownership_graphs": ["OwnershipGraph"],  # 需求 R136, 迁移 0016
+     # 签字前提的四类产出 (需求 R215, 迁移 0017)
+diff --git a/src/frontend/openapi.json b/src/frontend/openapi.json
+index d4c8f4a..3985c86 100644
+--- a/src/frontend/openapi.json
++++ b/src/frontend/openapi.json
+@@ -10043,11 +10043,12 @@
+           "ACC-08",
+           "PLN-01/03",
+           "PLN-15",
++          "PLN-19",
+           "FIN-01",
+           "RPT-01"
+         ],
+         "title": "GateId",
+-        "description": "闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行\n分别由需求 R201, R205 加."
++        "description": "闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, PLN-19 属功能 reassessment, 登记表\n(orchestration/gates.GATES) 的行分别由需求 R201, R205, R209 加."
+       },
+       "GateVerdict": {
+         "type": "string",
+diff --git a/src/frontend/src/client/types.gen.ts b/src/frontend/src/client/types.gen.ts
+index 5b59166..040f38d 100644
+--- a/src/frontend/src/client/types.gen.ts
++++ b/src/frontend/src/client/types.gen.ts
+@@ -2805,10 +2805,10 @@ export type GateEdit = {
+ /**
+  * GateId
+  *
+- * 闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, 登记表 (orchestration/gates.GATES) 的行
+- * 分别由需求 R201, R205 加.
++ * 闸门. 基线四道; ACC-08 属功能 acceptance, PLN-15 属功能 planning, PLN-19 属功能 reassessment, 登记表
++ * (orchestration/gates.GATES) 的行分别由需求 R201, R205, R209 加.
+  */
+-export type GateId = 'ACC-01' | 'ACC-08' | 'PLN-01/03' | 'PLN-15' | 'FIN-01' | 'RPT-01';
++export type GateId = 'ACC-01' | 'ACC-08' | 'PLN-01/03' | 'PLN-15' | 'PLN-19' | 'FIN-01' | 'RPT-01';
+ 
+ /**
+  * GateVerdict
+diff --git a/src/frontend/src/locales/en.ts b/src/frontend/src/locales/en.ts
+index ca1bd21..e65f474 100644
+--- a/src/frontend/src/locales/en.ts
++++ b/src/frontend/src/locales/en.ts
+@@ -66,6 +66,7 @@ export const en = {
+     'ACC-08': 'Engagement terms and appointment',
+     'PLN-01/03': 'Materiality and risk register',
+     'PLN-15': 'Overall audit plan',
++    'PLN-19': 'Materiality reassessment',
+     'FIN-01': 'Uncorrected misstatements and opinion',
+     'RPT-01': 'Report approval and sign-off',
+   },
+@@ -74,6 +75,7 @@ export const en = {
+     'ACC-08': 'Are the engagement terms and the appointment in order?',
+     'PLN-01/03': 'Approve materiality and the risk register?',
+     'PLN-15': 'Approve the overall audit plan?',
++    'PLN-19': 'Is materiality still appropriate?',
+     'FIN-01': 'Confirm the opinion type?',
+     'RPT-01': 'Sign the audit report?',
+   },
+@@ -82,6 +84,7 @@ export const en = {
+     'ACC-08': { approve: 'Approve', reject: 'Decline', insufficient_info: 'Need more information' },
+     'PLN-01/03': { approve: 'Approve', reject: 'Send back', insufficient_info: 'Need more information' },
+     'PLN-15': { approve: 'Approve plan', reject: 'Send back', insufficient_info: 'Need more information' },
++    'PLN-19': { approve: 'Confirm', reject: 'Send back', insufficient_info: 'Need more information' },
+     'FIN-01': { approve: 'Confirm opinion', reject: 'Send back', insufficient_info: 'Need more information' },
+     'RPT-01': {
+       approve: 'Sign and archive',
+@@ -110,6 +113,11 @@ export const en = {
+       reject: 'Redraft the plan as the next revision with your comments',
+       insufficient_info: 'Keep this decision open',
+     },
++    'PLN-19': {
++      approve: 'Confirm the reassessment, revising materiality if needed',
++      reject: 'Rerun the reassessment with your comments',
++      insufficient_info: 'Keep this decision open',
++    },
+     'FIN-01': {
+       approve: 'Draft the report with this opinion',
+       reject: 'Return to completion work',
+@@ -130,6 +138,7 @@ export const en = {
+     'PLN-01': 'Materiality',
+     'PLN-03': 'Risk register sign-off',
+     'PLN-15': 'Overall audit plan',
++    'PLN-19': 'Materiality reassessment',
+     'REV-08': 'Three-way match',
+     'REV-03': 'Revenue contract terms',
+     'REV-02': 'Revenue cut-off',
+diff --git a/src/frontend/src/locales/zh.ts b/src/frontend/src/locales/zh.ts
+index c1d018f..58ab5f0 100644
+--- a/src/frontend/src/locales/zh.ts
++++ b/src/frontend/src/locales/zh.ts
+@@ -61,6 +61,7 @@ export const zh: Messages = {
+     'ACC-08': '约定条款与委任核验',
+     'PLN-01/03': '重要性与风险清单',
+     'PLN-15': '总体审计计划',
++    'PLN-19': '重要性重估',
+     'FIN-01': '未更正错报与审计意见',
+     'RPT-01': '审计报告批准与签字',
+   },
+@@ -69,6 +70,7 @@ export const zh: Messages = {
+     'ACC-08': '约定条款与委任是否齐备？',
+     'PLN-01/03': '是否批准重要性水平与风险清单？',
+     'PLN-15': '是否批准总体审计计划？',
++    'PLN-19': '重要性是否仍然适当？',
+     'FIN-01': '是否确认审计意见类型？',
+     'RPT-01': '是否签署审计报告？',
+   },
+@@ -77,6 +79,7 @@ export const zh: Messages = {
+     'ACC-08': { approve: '通过', reject: '不承接', insufficient_info: '信息不足' },
+     'PLN-01/03': { approve: '批准', reject: '退回', insufficient_info: '信息不足' },
+     'PLN-15': { approve: '批准计划', reject: '退回', insufficient_info: '信息不足' },
++    'PLN-19': { approve: '确认', reject: '退回重算', insufficient_info: '信息不足' },
+     'FIN-01': { approve: '确认意见', reject: '退回', insufficient_info: '信息不足' },
+     'RPT-01': { approve: '签字并归档', reject: '附批注退回', insufficient_info: '信息不足' },
+   },
+@@ -101,6 +104,11 @@ export const zh: Messages = {
+       reject: '按批注重拟计划，出下一修订',
+       insufficient_info: '暂不作出决定',
+     },
++    'PLN-19': {
++      approve: '确认重估结果，需要时修订重要性',
++      reject: '按批注重新执行重估',
++      insufficient_info: '暂不作出决定',
++    },
+     'FIN-01': {
+       approve: '按此意见类型起草报告',
+       reject: '退回完成评价阶段',
+@@ -121,6 +129,7 @@ export const zh: Messages = {
+     'PLN-01': '重要性水平',
+     'PLN-03': '风险清单终审',
+     'PLN-15': '总体审计计划',
++    'PLN-19': '重要性重估',
+     'REV-08': '凭证三单匹配',
+     'REV-03': '收入合同条款评价',
+     'REV-02': '收入截止性判断',
+diff --git a/tests/fakes.py b/tests/fakes.py
+index 85b0f76..879df98 100644
+--- a/tests/fakes.py
++++ b/tests/fakes.py
+@@ -80,6 +80,7 @@ from backend.contracts.models import (
+     AuditPlan,
+     AuditReportVersion,
+     AutonomyLevel,
++    BasisAdjustment,
+     CheckItem,
+     CheckItemStatus,
+     ClauseStatus,
+@@ -119,6 +120,8 @@ from backend.contracts.models import (
+     MaterialityCandidate,
+     MaterialityCandidates,
+     MaterialityChoice,
++    MaterialityReassessment,
++    MaterialityUse,
+     Milestone,
+     MisstatementDraft,
+     MisstatementType,
+@@ -2963,6 +2966,61 @@ def engagement_terms(run_id: str = "RUN-ACC-08-1", version: int = 1) -> Engageme
+     )
+ 
+ 
++def materiality_reassessment(run_id: str = "RUN-PLN-19-1", version: int = 1, **changes: Any) -> MaterialityReassessment:
++    """合成的重要性重估 REASSESSMENT (需求 R207, 只填契约用到的): 值取 Xero 第 1 轮 (R208 验收 1): AJE-X01, X05 已验证
++    后三种基准为 revenue 3243100, total_assets 1092882, profit_before_tax -1317843 (亏损, 本期不适用), 候选区间同 PLN-01
++    参数; 计划选 {revenue, 0.01, 0.5, 0.05} 得 32431, 16216, 1622; 没有未更正错报, change_pct 0; 参数引用执行重要性的
++    REV-02; 建议判断 J-PLN-19-{run_no}-MATERIALITY. changes 覆盖任意字段 (经 model_validate)."""
++    figures = [  # 基准, 金额, 比例区间, 候选区间 (分), 本期不适用的原因
++        ("revenue", 3243100, 0.005, 0.01, 16216, 32431, None),
++        ("total_assets", 1092882, 0.01, 0.02, 10929, 21858, None),
++        ("profit_before_tax", -1317843, 0.05, 0.05, -65892, -65892, "loss"),
++    ]
++    candidates = [
++        MaterialityCandidate(
++            basis=basis,  # type: ignore[arg-type]
++            base_amount_cents=amount,
++            pct_low=pct_low,
++            pct_high=pct_high,
++            low_cents=low,
++            high_cents=high,
++            not_applicable=reason,  # type: ignore[arg-type]
++        )
++        for basis, amount, pct_low, pct_high, low, high, reason in figures
++    ]
++    bases = [
++        BasisAdjustment(basis=basis, recorded_base_cents=amount, uncorrected_effect_cents=0, adjusted_base_cents=amount)  # type: ignore[arg-type]
++        for basis, amount, *_ in figures
++    ]
++    base = {
++        "id": "REASSESSMENT",
++        "version": version,
++        "run_id": run_id,
++        "planning_choice": MaterialityChoice(basis="revenue", pct=0.01, performance_pct=0.5, clearly_trivial_pct=0.05),
++        "planning_decision_id": "D-PLN",
++        "planning_materiality_cents": 32431,
++        "planning_performance_cents": 16216,
++        "planning_trivial_cents": 1622,
++        "verified_adjustment_entry_nos": ["AJE-X01", "AJE-X05"],
++        "candidates": candidates,
++        "performance_pct_range": (0.5, 0.75),
++        "clearly_trivial_pct": 0.05,
++        "bases": bases,
++        "uncorrected_misstatement_ids": [],
++        "unmapped_misstatement_ids": [],
++        "current_overall_cents": 32431,
++        "adjusted_overall_cents": 32431,
++        "change_pct": 0.0,
++        "revise_threshold_pct": 0.1,
++        "materiality_dependent_procedures": [
++            MaterialityUse(procedure_id="REV-02", refs=["performance_materiality_cents"])
++        ],
++        "exception_ids": [],
++        "judgment_id": f"J-PLN-19-{run_id.rsplit('-', 1)[-1]}-MATERIALITY",
++    }
++    return MaterialityReassessment.model_validate(base | changes)
++
++
+ def ownership_graph(run_id: str = "RUN-GEN-08-1", version: int = 1) -> OwnershipGraph:
+     """合成的股权与任职关系图 (需求 R136, 只填契约用到的): 报告主体 ACN-900043021, Alex Morgan 任董事并持 85 股,
+     Sam Whitfield 只持 15 股 (没有出生日期). 关系的证据为一份摘录 (高管第 1 页, 股东第 2 页)."""
+diff --git a/tests/test_agents_base.py b/tests/test_agents_base.py
+index 9c4760e..0c8ac3c 100644
+--- a/tests/test_agents_base.py
++++ b/tests/test_agents_base.py
+@@ -64,13 +64,20 @@ def test_build_agents_maps_every_declared_procedure() -> None:
+     assert {"GEN-05", "GEN-02"} <= declared - set(agents)
+ 
+ 
++# 完成阶段节点里已有模板而 Agent 还没接上的程序 → 接上它的需求 (同 test_output_validator 的 PENDING_CHECKS): 接上时
++# 必须从表里删掉, test_misstatement_nodes_have_agents 守着
++AWAITING_AGENTS: dict[str, str] = {"PLN-19": "R208"}  # 需求 R207 加模板, A4 由 R208 接上
++
++
+ def test_misstatement_nodes_have_agents() -> None:
+     """功能全开时, 完成阶段错报闭环各节点 (MISSTATEMENT_NODES) 中启用的程序都映射到 Agent: 节点不会在取 Agent 时抛
+-    KeyError (R160 第 1 轮审核 06); FIN-09 由 A8 执行 (需求 R165)."""
++    KeyError (R160 第 1 轮审核 06); FIN-09 由 A8 执行 (需求 R165). 待接上的 (AWAITING_AGENTS) 确实已启用而还没有
++    Agent, 接上了就得从表里删掉."""
+     deps = make_deps(FakeRegistry({}, {}), FakeTrail(), features=frozenset(FEATURES))
+     agents = build_agents(deps)
+     enabled = [pid for pids in MISSTATEMENT_NODES.values() for pid in pids if deps.library.enabled(pid)]
+-    assert [pid for pid in enabled if pid not in agents] == []
++    assert [pid for pid in enabled if pid not in agents and pid not in AWAITING_AGENTS] == []
++    assert [pid for pid in AWAITING_AGENTS if pid not in enabled or pid in agents] == []
+     assert isinstance(agents["FIN-09"], WorkpaperAgent)
+ 
+ 
+diff --git a/tests/test_contracts.py b/tests/test_contracts.py
+index 6d76a5b..3051d17 100644
+--- a/tests/test_contracts.py
++++ b/tests/test_contracts.py
+@@ -8,13 +8,15 @@ from pydantic import ValidationError
+ 
+ from backend.api.schemas import GateDecisionIn
+ from backend.contracts.errors import VersionConflict
+-from backend.contracts.llm_outputs import AuditPlanDraft, EngagementTermsExtraction
++from backend.contracts.llm_outputs import AuditPlanDraft, EngagementTermsExtraction, JudgmentDraft, ReassessmentDraft
+ from backend.contracts.models import (
++    REASSESSMENT_ID,
+     AsicExtract,
+     Assertion,
+     AuditException,
+     AuditPlan,
+     AutonomyLevel,
++    BasisAdjustment,
+     CheckItem,
+     CheckItemStatus,
+     ClauseStatus,
+@@ -41,6 +43,9 @@ from backend.contracts.models import (
+     IndependenceDeclaration,
+     Judgment,
+     ManagementResponse,
++    MaterialityChoice,
++    MaterialityReassessment,
++    MaterialityUse,
+     Misstatement,
+     MisstatementDraft,
+     MisstatementStatus,
+@@ -84,6 +89,7 @@ from tests.fakes import (
+     engagement_terms,
+     governance_communication,
+     independence_declaration,
++    materiality_reassessment,
+     ownership_graph,
+     representation_letter,
+ )
+@@ -1169,3 +1175,88 @@ def test_blank_account_code_is_none(code: str | None, kept: str | None) -> None:
+         type="factual", account="Office equipment", assertion="Existence", amount_cents=1, direction="overstated"
+     )
+     assert MisstatementDraft.model_validate(draft.model_dump() | {"account_code": code}).account_code == kept
++
++
++# ── 需求 R207: PLN-19 重要性重估的契约 ──
++
++REASSESSMENT_FIELDS = [  # 验收 1 所列的字段, 按序 (id, version 之后)
++    "run_id",
++    "planning_choice",
++    "planning_decision_id",
++    "planning_materiality_cents",
++    "planning_performance_cents",
++    "planning_trivial_cents",
++    "verified_adjustment_entry_nos",
++    "candidates",
++    "performance_pct_range",
++    "clearly_trivial_pct",
++    "bases",
++    "uncorrected_misstatement_ids",
++    "unmapped_misstatement_ids",
++    "current_overall_cents",
++    "adjusted_overall_cents",
++    "change_pct",
++    "revise_threshold_pct",
++    "materiality_dependent_procedures",
++    "exception_ids",
++    "judgment_id",
++]
++
++
++def test_materiality_reassessment_contract() -> None:
++    """验收 1, 4: MaterialityReassessment 的字段按验收 1, ID 固定为 REASSESSMENT; 不可改, 不收多余字段, 存储 JSON 往返
++    不变 (检查点往返见 test_state_compat). 模型校验: ID 不是 REASSESSMENT, 候选或调整的基准重复, 两边基准不同, 原选择
++    的基准不在调整中, 调整后基准不等于账面加影响, 引用的 ref 不是重要性三项之一, 都抛 ValidationError. GateId.PLN_19."""
++    r = materiality_reassessment()
++    assert list(MaterialityReassessment.model_fields) == ["id", "version", *REASSESSMENT_FIELDS]
++    assert (GateId.PLN_19.value, REASSESSMENT_ID) == ("PLN-19", "REASSESSMENT")
++    assert list(BasisAdjustment.model_fields) == [
++        "basis",
++        "recorded_base_cents",
++        "uncorrected_effect_cents",
++        "adjusted_base_cents",
++    ]
++    assert list(MaterialityUse.model_fields) == ["procedure_id", "refs"]
++    with pytest.raises(ValidationError):
++        r.change_pct = 0.5  # type: ignore[misc]
++    assert MaterialityReassessment.model_validate_json(r.model_dump_json()) == r
++    data = r.model_dump()
++    revenue, assets, profit = data["bases"]
++    for change, message in (
++        ({"extra": 1}, "extra"),
++        ({"id": "REASSESSMENT-2"}, "ID 须为 REASSESSMENT"),
++        ({"candidates": [*data["candidates"], data["candidates"][0]]}, "candidates 的基准重复"),
++        ({"bases": [revenue, revenue, profit]}, "bases 的基准重复"),
++        ({"bases": [revenue, assets]}, "candidates 与 bases 的基准不同"),
++        ({"bases": [assets, profit], "candidates": data["candidates"][1:]}, "原选择的基准 revenue 不在 bases 中"),
++        ({"bases": [revenue | {"uncorrected_effect_cents": -650000}, assets, profit]}, "不等于 3243100 加 -650000"),
++        ({"materiality_dependent_procedures": [{"procedure_id": "REV-02", "refs": ["materiality"]}]}, "refs"),
++        ({"run_id": None}, "run_id"),
++    ):
++        with pytest.raises(ValidationError, match=message):
++            MaterialityReassessment.model_validate({**data, **change})
++    lowered = BasisAdjustment(
++        basis="revenue", recorded_base_cents=3243100, uncorrected_effect_cents=-650000, adjusted_base_cents=2593100
++    )
++    assert lowered.adjusted_base_cents == 2593100  # 需求 R208 验收 5(a) 的收入错报
++
++
++def test_reassessment_draft_extends_judgment_draft() -> None:
++    """验收 3: ReassessmentDraft 为 JudgmentDraft 的字段加 revise (必填) 与 suggested_choice (MaterialityChoice, 缺省为
++    空); 语义校验 (revise 与 suggested_choice 一致等) 归 R208, 本条只查结构."""
++    assert issubclass(ReassessmentDraft, JudgmentDraft)
++    assert list(ReassessmentDraft.model_fields) == [*JudgmentDraft.model_fields, "revise", "suggested_choice"]
++    base = {
++        "conclusion": "Materiality remains appropriate.",
++        "reasoning_chain": [],
++        "evidence": [],
++        "counter_argument": "c",
++        "proposed_action": "accept",
++        "self_confidence": 0.9,
++    }
++    assert ReassessmentDraft.model_validate(base | {"revise": False}).suggested_choice is None
++    choice = {"basis": "revenue", "pct": 0.008, "performance_pct": 0.5, "clearly_trivial_pct": 0.05}
++    revised = ReassessmentDraft.model_validate(base | {"revise": True, "suggested_choice": choice})
++    assert revised.suggested_choice == MaterialityChoice(**choice)  # type: ignore[arg-type]
++    with pytest.raises(ValidationError, match="revise"):
++        ReassessmentDraft.model_validate(base)
+diff --git a/tests/test_decisions.py b/tests/test_decisions.py
+index 36ec5e5..e876a5c 100644
+--- a/tests/test_decisions.py
++++ b/tests/test_decisions.py
+@@ -52,7 +52,7 @@ from backend.core.config import get_settings
+ from backend.orchestration import runner as runner_module
+ from backend.orchestration.checkpoint import checkpoint_serde
+ from backend.orchestration.decisions import GraphDecisionSubmit
+-from backend.orchestration.gates import acc01_effects, gate_nodes, materiality_amounts, pln_effects
++from backend.orchestration.gates import acc01_effects, check_materiality, gate_nodes, materiality_amounts, pln_effects
+ from backend.orchestration.graph import build_graph, gate_route, route_schedule
+ from backend.orchestration.nodes import GraphNodes
+ from backend.orchestration.query import GraphStateQuery
+@@ -83,6 +83,7 @@ from tests.fakes import (
+     assert_pack_synced,
+     make_procedure,
+     make_runner,
++    materiality_reassessment,
+     numbat_p1_agents,
+     numbat_pln01_with,
+     profile_update,
+@@ -1017,6 +1018,40 @@ def by_id(objs: list[Any]) -> dict[str, Any]:
+     return {o.id: o for o in objs}
+ 
+ 
++def test_materiality_checks_take_the_reassessment() -> None:
++    """R207 验收 7: check_materiality 与 materiality_amounts 收 PLN-19 的重估材料 (同名三字段 candidates,
++    performance_pct_range, clearly_trivial_pct), 与收同样候选的 MaterialityCandidates 结果相同: Xero 第 1 轮的计划
++    选择得 (32431, 16216, 1622) 且通过校验; 以亏损的税前利润为基准, pct 超区间, performance_pct 超范围,
++    clearly_trivial_pct 超上限, 基准不在候选中, 两种材料都报 INVALID_VALUE, 消息相同."""
++    reassessment = materiality_reassessment()
++    candidates = MaterialityCandidates(
++        id="MATERIALITY",
++        candidates=reassessment.candidates,
++        performance_pct_range=reassessment.performance_pct_range,
++        clearly_trivial_pct=reassessment.clearly_trivial_pct,
++    )
++    choice = reassessment.planning_choice
++    expected = (32431, 16216, 1622)
++    assert materiality_amounts(reassessment, choice) == materiality_amounts(candidates, choice) == expected
++    check_materiality(reassessment, choice)
++    narrowed = reassessment.model_copy(
++        update={"candidates": reassessment.candidates[:1], "bases": reassessment.bases[:1]}
++    )
++    for change, message in (
++        ({"basis": "profit_before_tax", "pct": 0.05}, "本期不适用"),
++        ({"pct": 0.02}, "materiality.pct"),
++        ({"performance_pct": 0.8}, "materiality.performance_pct"),
++        ({"clearly_trivial_pct": 0.06}, "materiality.clearly_trivial_pct"),
++    ):
++        bad = choice.model_copy(update=change)
++        for material in (reassessment, candidates):
++            with pytest.raises(DecisionRejected, match=message) as info:
++                check_materiality(material, bad)
++            assert info.value.code == "INVALID_VALUE"
++    with pytest.raises(DecisionRejected, match="total_assets 不在候选中"):
++        check_materiality(narrowed, choice.model_copy(update={"basis": "total_assets"}))
++
++
+ async def test_pln_approve_sets_materiality_completes_programs_and_moves_on() -> None:
+     """验收 1: 三个金额进状态; PLN-01, PLN-03 completed; 决定与两条程序新版本同一次提交; 1 行 decision 留痕;
+     越过闸门后进装配 (Numbat 带出的审计目标会装配出 P2 程序, fieldwork 尚为占位, 故只查越过闸门这一步)."""
+diff --git a/tests/test_knowledge.py b/tests/test_knowledge.py
+index 9602af2..26087a5 100644
+--- a/tests/test_knowledge.py
++++ b/tests/test_knowledge.py
+@@ -17,13 +17,14 @@ import yaml
+ from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
+ from pydantic import ValidationError
+ 
+-from backend.contracts.knowledge import LLMSpec, LocalizedText, ManualSpec, ProcedureTemplate
++from backend.contracts.knowledge import LLMSpec, LocalizedText, ManualSpec, ProcedureTemplate, WorkpaperRef
+ from backend.contracts.llm_outputs import (
+     AuditPlanDraft,
+     ContractExtraction,
+     CorrectionVerificationDraft,
+     EngagementTermsExtraction,
+     MisstatementClassificationDraft,
++    ReassessmentDraft,
+ )
+ from backend.contracts.manual_results import ManagementResponses, result_model
+ from backend.contracts.models import (
+@@ -74,6 +75,7 @@ from tests.fakes import (
+     knowledge_library,
+     make_deps,
+     make_graph_nodes,
++    materiality_reassessment,
+ )
+ from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
+ from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
+@@ -2518,6 +2520,201 @@ def test_pln15_prompt_header_lists_its_variables() -> None:
+     assert f'"framework": "{terms.framework}"' in second and "Engagement terms: not checked" not in second
+ 
+ 
++# ── R207: PLN-19 重要性重估的程序模板与提示词 ──
++
++REASSESSMENT_FEATURES = frozenset({"critic", "misstatement", "planning", "reassessment"})
++# PLN-01 M01 的余额来源 (本期试算表) 与 PLN-19 换成的更正后余额 (需求 R174 的数据库函数); 两条 M01 只差这一段
++PLN01_BALANCES = (
++    "FROM trial_balance t\n JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code\n"
++    " WHERE t.engagement_id=:eid AND t.period='current')"
++)
++PLN19_BALANCES = (
++    "FROM adjusted_trial_balance(:eid, :verified_adjustment_entry_nos) t\n"
++    " JOIN accounts a ON a.engagement_id=:eid AND a.code=t.account_code)"
++)
++
++
++def test_pln19_template_loads_only_with_reassessment() -> None:
++    """验收 5, 6, 11: PLN-19 的各项 (完成阶段 A4 的混合程序, 挂 PLN-19 闸门与功能 reassessment, 依赖 PLN-01, 底稿
++    A-5); 参数: 重要性三项与已验证更正分录用 ref, 候选等五项同 PLN-01, 修订门槛 0.10; M01 与 PLN-01 的 M01 只差余额
++    来源一段; 准则片段都已登记且 procedures 列了 PLN-19; 输出模型为 ReassessmentDraft. 基线与只开 misstatement 时不
++    启用, 不进项目启动实例化的程序; 四个功能都开时进. FIN-04 的有效依赖随功能集: 基线 [], misstatement
++    [FIN-03, FIN-09], 再开 reassessment 加 PLN-19 (指向未启用程序的依赖丢弃, X-15)."""
++    base = ProcedureLibrary(ROOT)
++    t = base.load("PLN-19")
++    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.gate, t.feature) == (
++        "重要性重估",
++        Phase.P3_Completion,
++        "Completion",
++        AgentId.A4,
++        Engine.hybrid,
++        AutonomyLevel.L1,
++        GateId.PLN_19,
++        "reassessment",
++    )
++    assert (t.depends_on, t.triggers, t.fixed, t.workpaper) == (
++        ["PLN-01"],
++        [],
++        False,
++        WorkpaperRef(ref="A-5", area="A"),
++    )
++    assert (t.outputs, t.reads) == (
++        ["materiality_reassessment", "judgments", "exceptions"],
++        ["accounts", "trial_balance", "journal_entries"],
++    )
++    assert (t.standards, t.evidence_required) == (
++        ["ASA320-P12", "ASA320-P13", "ASA450-P10"],
++        [EvidenceType.voucher],
++    )
++    refs = [
++        "materiality_cents",
++        "performance_materiality_cents",
++        "clearly_trivial_cents",
++        "verified_adjustment_entry_nos",
++    ]
++    assert {name: t.params[name] for name in refs} == {name: {"ref": name} for name in refs}
++    pln01 = base.load("PLN-01")
++    copied = [
++        "candidates",
++        "performance_pct_range",
++        "clearly_trivial_pct",
++        "revenue_categories",
++        "income_tax_categories",
++    ]
++    assert {name: t.params[name] for name in copied} == {name: pln01.params[name] for name in copied}
++    assert t.params["revise_threshold_pct"] == 0.1
++    [m01] = t.rules
++    [original] = [r for r in pln01.rules if r.id == "M01"]
++    assert (m01.id, m01.emit) == ("M01", "rows") and original.sql.count(PLN01_BALANCES) == 1
++    assert m01.sql == original.sql.replace(PLN01_BALANCES, PLN19_BALANCES)
++    assert t.llm == LLMSpec(prompt="PLN-19.md.j2", output_model="ReassessmentDraft")
++    assert output_model(t) is ReassessmentDraft
++    for fragment_id in t.standards:
++        fragment = base.fragment(fragment_id)
++        assert fragment is not None and "PLN-19" in fragment.procedures, fragment_id
++
++    misstatement = ProcedureLibrary(ROOT, frozenset({"critic", "misstatement"}))
++    on = ProcedureLibrary(ROOT, REASSESSMENT_FEATURES)
++    for lib in (base, misstatement):
++        assert not lib.enabled("PLN-19") and "PLN-19" not in {p.id for p in fixed_procedures(lib)}
++    assert on.enabled("PLN-19") and "PLN-19" in {p.id for p in fixed_procedures(on)}
++    assert [lib.load("FIN-04").depends_on for lib in (base, misstatement, on)] == [
++        [],
++        ["FIN-03", "FIN-09"],
++        ["FIN-03", "FIN-09", "PLN-19"],
++    ]
++
++
++PLN19_VARIABLES = [  # 头注释按顺序列出的顶层变量
++    "subject_id",
++    "task",
++    "task",
++    "data",
++    "data",
++    "data",
++    "data",
++    "rule_findings",
++    "standards",
++]
++
++
++def pln19_variables() -> dict[str, Any]:
++    """PLN-19 提示词的变量, 按头注释逐项给齐 (列表都非空), 模拟 R208 交给 judge 的上下文: 重估材料取合成的 Xero 第 1
++    轮 (judgment_id 为空), 另加一条拒绝更正的利息收入错报 (R208 验收 4 的 M-5), AJE-X05 的一行, 试算表一行与 P01."""
++    library = ProcedureLibrary(ROOT, REASSESSMENT_FEATURES)
++    fragments = [library.fragment(f) for f in library.load("PLN-19").standards]
++    reassessment = materiality_reassessment(judgment_id=None)
++    misstatement = {
++        "id": "M-D-CSH02-091",
++        "version": 4,
++        "type": "factual",
++        "account": "Interest Income (270)",
++        "account_code": "270",
++        "assertion": "Completeness",
++        "amount_cents": 4853,
++        "residual_cents": None,
++        "direction": "understated",
++        "status": "uncorrected",
++        "origin": "current_period",
++    }
++    line = {
++        "source_type": "journal_entry",
++        "id": "AJE-X05-2",
++        "entry_no": "AJE-X05",
++        "posting_date": "2026-09-30",
++        "account_code": "270",
++        "account_name": "Interest Income",
++        "account_type": "revenue",
++        "account_category": "other_income",
++        "debit_cents": 0,
++        "credit_cents": 4853,
++        "description": "Audit adjustment AJE-X05",
++    }
++    balance = {
++        "source_type": "trial_balance",
++        "account_code": "200",
++        "account_name": "Sales",
++        "account_type": "revenue",
++        "account_category": "revenue",
++        "balance_cents": -3243100,
++    }
++    return {
++        "subject_id": "MATERIALITY",
++        "task": {"params": {"period_end": "2026-09-30", "revise_threshold_pct": 0.1}, "risks": []},
++        "data": {
++            "reassessment": reassessment.model_dump(mode="json"),
++            "misstatements": [misstatement],
++            "adjustment_lines": [line],
++            "trial_balance": [balance],
++        },
++        "rule_findings": [{"id": "X-PLN-19-1-P01-1", "rule_id": "P01", "amount_cents": -6500}],
++        "standards": [f.model_dump(mode="json") for f in fragments if f is not None],
++    }
++
++
++def test_pln19_prompt_renders_with_its_header_variables() -> None:
++    """验收 9: 头注释是 R208 的数据契约: 列出的变量 (subject_id, task, data 的 reassessment, misstatements,
++    adjustment_lines, trial_balance, rule_findings, standards) 恰为模板用到的顶层变量; 按它们渲染通过 (StrictUndefined),
++    计划的选择与三项金额, 调整前后的整体重要性与变动, 重估材料, 错报, 更正分录行, 试算表, 规则例外与片段正文都进了
++    提示词; 末尾有输出语言一节. 口径: 修订以门槛为准, 两个方向都算, 建议的选择须合候选的规则, 降低时点名引用重要性的
++    程序; 建议动作只有 accept 与 more_evidence. 缺任一顶层变量即抛 UndefinedError."""
++    source = (ROOT / "prompts" / "PLN-19.md.j2").read_text(encoding="utf-8")
++    header = source.split("#}", 1)[0]
++    listed = re.findall(r"^  (\w+)[.\s]", header, re.MULTILINE)
++    assert listed == PLN19_VARIABLES
++    assert meta.find_undeclared_variables(Environment().parse(source)) == set(PLN19_VARIABLES)
++    for field in ("reassessment", "misstatements", "adjustment_lines", "trial_balance"):
++        assert re.search(rf"^  data\.{field}\s", header, re.MULTILINE), field
++    variables = pln19_variables()
++    template = prompt_env(ROOT / "prompts").get_template("PLN-19.md.j2")
++    text = template.render(variables)
++    assert "Materiality at planning (decision D-PLN): benchmark revenue, 0.01 of the benchmark" in text
++    assert "amounts (cents) 32431, 16216 and 1622" in text
++    assert "32431 on the adjusted trial balance, 32431 after the effect" in text
++    assert "Change from planning: 0.0 (revision threshold 0.1)" in text
++    for fragment in ('"id": "REASSESSMENT"', '"id": "M-D-CSH02-091"', '"id": "AJE-X05-2"', '"account_code": "200"'):
++        assert fragment in text, fragment
++    assert '"id": "X-PLN-19-1-P01-1"' in text and "\n## Output language\n" in text
++    criteria = text.split("## Criteria", 1)[1].split("## proposed_action", 1)[0]
++    for phrase in (
++        "reaches the revision threshold in either direction",
++        "A change below the threshold alone is not a reason to revise",
++        "a benchmark whose base amount is positive",
++        "materiality_dependent_procedures",
++        "unmapped",
++    ):
++        assert phrase in criteria, phrase
++    actions = text.split("## proposed_action", 1)[1].split("## Output", 1)[0]
++    accept, more = (line for line in actions.splitlines() if line.startswith("- `"))
++    assert accept.startswith("- `accept`: materiality remains appropriate; `revise` is false")
++    assert more.startswith("- `more_evidence`: a revision is suggested (`revise` is true)")
++    for f in variables["standards"]:
++        assert f"- {f['id']} ({f['standard']} para {f['paragraph']}): {f['text'].strip()}" in text, f["id"]
++    for missing in set(PLN19_VARIABLES):
++        with pytest.raises(UndefinedError):
++            template.render({k: v for k, v in variables.items() if k != missing})
++
++
+ # ── R01 参数解析: 风险等级取最高, by_risk 与 ref 取不到值时报错 ──
+ 
+ 
+@@ -3445,6 +3642,7 @@ WORKPAPERS = {  # 程序 → 底稿索引号 (验收 1); GEN-09 不出底稿
+     "PLN-01": "A-2",
+     "PLN-03": "A-3",
+     "PLN-07": "A-4",
++    "PLN-19": "A-5",
+     "ACC-01": "B-1",
+     "ACC-04": "B-2",
+     "ACC-08": "B-3",
+@@ -3693,7 +3891,7 @@ STANDARD_REFS = {
+     "ASA 260": [],
+     "ASA 300": ["A-1"],
+     "ASA 315": ["A-3", "A-4"],
+-    "ASA 320": ["A-2"],
++    "ASA 320": ["A-2", "A-5"],
+     "ASA 330": [
+         "A-1",
+         "C",
+diff --git a/tests/test_merge.py b/tests/test_merge.py
+index 379344e..3093bc4 100644
+--- a/tests/test_merge.py
++++ b/tests/test_merge.py
+@@ -72,6 +72,7 @@ from tests.fakes import (
+     make_deps,
+     make_procedure,
+     make_run,
++    materiality_reassessment,
+     ownership_graph,
+     representation_letter,
+ )
+@@ -220,6 +221,8 @@ def test_agent_fields_match_section_6_table() -> None:
+         "risk_register",
+         "exceptions",
+         "audit_plans",  # 需求 R203 (PLN-15)
++        "materiality_reassessment",  # 需求 R207 (PLN-19), 下同
++        "judgments",
+     }
+     assert AGENT_FIELDS[AgentId.A5] == {
+         "confirmations",
+@@ -294,6 +297,36 @@ def test_a2_may_write_engagement_terms_but_not_review_tasks() -> None:
+         )
+ 
+ 
++def test_a4_may_write_reassessment_but_not_review_tasks() -> None:
++    """R207 验收 8: A4 执行 PLN-19 的片段 (重估材料 REASSESSMENT, 建议判断与 P01 例外, outputs 取 PLN-19.yaml) 通过;
++    再带复核任务被拒 (闸门程序的判断不建任务, A4 的写入范围不含 review_tasks); 重估材料引用的例外在片段与状态中都没有
++    时被拒 (EXCEPTION_REFERRERS), 原因含例外 ID."""
++    pln19 = make_run("PLN-19")
++    p01 = exception("X-PLN-19-1-P01-1", "PLN-19", pln19.id)
++    advice = judgment("J-PLN-19-1-MATERIALITY", "PLN-19", pln19.id, [p01.id]).model_copy(
++        update={"subject_id": "MATERIALITY"}
++    )
++    patch: StatePatch = {
++        "materiality_reassessment": materiality_reassessment(pln19.id, exception_ids=[p01.id]),
++        "judgments": [advice],
++        "exceptions": [p01],
++        "procedure_runs": [finished(pln19)],
++    }
++    state = make_state(procedure_pack=[*PACK, make_procedure("PLN-19", Phase.P3_Completion)])
++    check = {"writer": AgentId.A4, "procedure_id": "PLN-19", "run_id": pln19.id, "state": state}
++    assert declared("PLN-19") == ["materiality_reassessment", "judgments", "exceptions"]
++    check_patch(patch, **check, outputs=declared("PLN-19"))  # type: ignore[arg-type]
++    with pytest.raises(MergeRejected, match="merge_rejected: A4 不能写字段 review_tasks"):
++        check_patch(
++            {**patch, "review_tasks": [task(advice.id, run_id=pln19.id)]},
++            **check,  # type: ignore[arg-type]
++            outputs=[*declared("PLN-19"), "review_tasks"],
++        )
++    with pytest.raises(MergeRejected) as info:
++        check_patch({**patch, "judgments": [], "exceptions": []}, **check, outputs=declared("PLN-19"))  # type: ignore[arg-type]
++    assert info.value.reasons == ["MaterialityReassessment REASSESSMENT 引用的例外 X-PLN-19-1-P01-1 不存在"]
++
++
+ def test_ownership_graph_must_come_from_this_run() -> None:
+     """R136 审核意见 05: 关系图 (带 run_id, 不带 procedure_id) 的 run_id 须为本次执行: 指向 CSH-04 的执行 (在状态中)
+     或不存在的执行, 都被拒, 原因含对象 ID 与两个 run_id."""
+diff --git a/tests/test_output_validator.py b/tests/test_output_validator.py
+index 15bc77b..02dc1d1 100644
+--- a/tests/test_output_validator.py
++++ b/tests/test_output_validator.py
+@@ -23,6 +23,7 @@ from backend.contracts.llm_outputs import (
+     JudgmentDraft,
+     MisstatementClassificationDraft,
+     MisstatementNature,
++    ReassessmentDraft,
+     RegistryExtraction,
+     ReportDraft,
+     SheetRecognition,
+@@ -212,7 +213,7 @@ def test_output_model_rejects_unknown_name_and_missing_llm() -> None:
+ 
+ # 模板已引用而引用与语义校验还没实现的输出模型 → 实现它的需求. 这些模型的程序还没有 Agent 执行 (不在启用集与
+ # 注册表中); 实现时登记校验并从表里删掉 (test_pending_checks_are_not_registered 守着). AuditPlanDraft 已由需求 R204 登记
+-PENDING_CHECKS: dict[type[BaseModel], str] = {}
++PENDING_CHECKS: dict[type[BaseModel], str] = {ReassessmentDraft: "R208"}  # PLN-19 (需求 R207 加模板)
+ 
+ 
+ def test_every_referenced_output_model_is_registered() -> None:
+diff --git a/tests/test_persistence_postgres.py b/tests/test_persistence_postgres.py
+index da9770f..f93b4d9 100644
+--- a/tests/test_persistence_postgres.py
++++ b/tests/test_persistence_postgres.py
+@@ -32,6 +32,8 @@ from backend.contracts.models import (
+     GovernanceCommunication,
+     IndependenceDeclaration,
+     LlmSettings,
++    MaterialityCandidates,
++    MaterialityReassessment,
+     OwnershipGraph,
+     PlanStatus,
+     ProcedureRun,
+@@ -76,6 +78,7 @@ from tests.fakes import (
+     governance_communication,
+     independence_declaration,
+     make_run,
++    materiality_reassessment,
+     numbat_rev08_populations,
+     ownership_graph,
+     representation_letter,
+@@ -741,6 +744,27 @@ async def test_engagement_terms_round_trip_on_postgres(storage) -> None:
+     assert await store.latest(e.id, EngagementTerms) == [terms]
+ 
+ 
++async def test_materiality_reassessment_round_trip_on_postgres(storage) -> None:  # type: ignore[no-untyped-def]
++    """R207 验收 8: REASSESSMENT v1, v2 写进 gate_materials 表 (kind 列区分, 不需迁移), 按版本读回与写入的相等, 仍是
++    MaterialityReassessment (嵌套的选择, 候选, 调整与程序引用不丢, 比例范围仍是元组); 最新为 v2; 同表的重要性候选
++    不混进按类取的结果."""
++    engine, e, _, _ = storage
++    store = PostgresAuditOutputStore(engine)
++    v1 = materiality_reassessment()
++    v2 = materiality_reassessment(
++        "RUN-PLN-19-2", version=2, verified_adjustment_entry_nos=["AJE-X01", "AJE-X05", "AJE-X02"]
++    )
++    candidates = MaterialityCandidates(id="MATERIALITY", candidates=v1.candidates)
++    await store.put(e.id, [v1, candidates], actor="A4")
++    await store.put(e.id, [v2], actor="A4")
++
++    assert m.OUTPUTS["MaterialityReassessment"].name == m.OUTPUTS["MaterialityCandidates"].name == "gate_materials"
++    back = await store.get(e.id, MaterialityReassessment, "REASSESSMENT", 1)
++    assert type(back) is MaterialityReassessment and back == v1 and back.performance_pct_range == (0.5, 0.75)
++    assert await store.latest(e.id, MaterialityReassessment) == [v2]
++    assert await store.latest(e.id, MaterialityCandidates) == [candidates]
++
++
+ async def test_audit_plan_versions_on_postgres(storage) -> None:  # type: ignore[no-untyped-def]
+     """R203 验收 6: PLAN-1 v1 (draft), v2 (approved) 写进 gate_materials 表 (与评分卡等同表, kind 区分, 不需迁移);
+     按版本 get 读回与写入的相等, 仍是 AuditPlan, 状态仍是枚举, 时间表日期仍是 date, 叙述的段序不变 (JSONB 不保留
+@@ -1838,10 +1862,9 @@ async def test_adjusted_trial_balance_on_xero(xero_storage):
+     await x.xero.load(e.id, XERO_Q1)
+     trial = await financial.trial_balance(e.id, "current")
+ 
+-    async def bases(sql: str, entry_nos: list[str]) -> tuple[int, int, int]:
++    async def bases(sql: str, entry_nos: list[str], key: str = "entry_nos") -> tuple[int, int, int]:
+         rows = {
+-            r["basis"]: r["base_amount_cents"]
+-            for r in await financial.query(e.id, sql, categories | {"entry_nos": entry_nos})
++            r["basis"]: r["base_amount_cents"] for r in await financial.query(e.id, sql, categories | {key: entry_nos})
+         }
+         return rows["revenue"], rows["total_assets"], rows["profit_before_tax"]
+ 
+@@ -1865,6 +1888,9 @@ async def test_adjusted_trial_balance_on_xero(xero_storage):
+     await agrees(both)
+     await agrees(first)  # 已载入的 X02 至 X04 不在列表中: 不算
+     assert await bases(m01, both) == (3243100, 1092882, -2213699)
++    # PLN-19 模板的 M01 即此口径 (需求 R207; 两条 M01 只差余额来源一段由 test_knowledge 守住), 参数名取模板的 ref
++    [reassessed] = [r.sql for r in ProcedureLibrary(ROOT / "src/backend/knowledge").load("PLN-19").rules]
++    assert await bases(reassessed, both, "verified_adjustment_entry_nos") == (3243100, 1092882, -2213699)
+     assert await bases(m01, first) == (3243100, 1092882, -1317843)
+     assert await bases(m01, []) == await bases(original, []) == unadjusted
+     assert await financial.trial_balance(e.id, "current") == trial  # 系统试算表不随更正改版
+diff --git a/tests/test_state_compat.py b/tests/test_state_compat.py
+index 0ff2b6f..fc108ca 100644
+--- a/tests/test_state_compat.py
++++ b/tests/test_state_compat.py
+@@ -21,6 +21,7 @@ from backend.contracts.models import (
+     AuditPlan,
+     AuditReportVersion,
+     AutonomyLevel,
++    BasisAdjustment,
+     CheckItemStatus,
+     ClauseStatus,
+     CommunicationForm,
+@@ -36,6 +37,8 @@ from backend.contracts.models import (
+     IndependenceDeclaration,
+     Judgment,
+     MaterialityChoice,
++    MaterialityReassessment,
++    MaterialityUse,
+     Misstatement,
+     MisstatementStatus,
+     ObjectRef,
+@@ -95,6 +98,7 @@ from tests.fakes import (
+     make_procedure,
+     make_run,
+     make_runner,
++    materiality_reassessment,
+     numbat_all_p2_agents,
+     ownership_graph,
+     representation_letter,
+@@ -192,6 +196,7 @@ def test_initial_state_equals_previous_literal() -> None:
+         materiality_cents=None,
+         performance_materiality_cents=None,
+         clearly_trivial_cents=None,
++        materiality_reassessment=None,  # 需求 R207 加
+         audit_objectives=[],
+         risk_register=[],
+         audit_plans=[],  # 需求 R203 加
+@@ -530,6 +535,29 @@ async def test_audit_plans_survive_checkpoint_and_default_to_empty() -> None:
+     assert isinstance(back[1].materiality_choice, MaterialityChoice) and back[1].timetable[0].due == date(2026, 8, 14)
+ 
+ 
++class ReassessmentOnly(TypedDict):
++    materiality_reassessment: MaterialityReassessment | None
++
++
++async def test_materiality_reassessment_survives_checkpoint_and_defaults_to_none() -> None:
++    """R207 验收 8: 旧检查点没有 materiality_reassessment 键时读到 None (initial_state 也是); 经检查点白名单序列化存取
++    一轮后仍是 MaterialityReassessment, 嵌套的选择, 候选, 调整与程序引用不退化, 比例范围仍是元组; 无 reducer, 下一版
++    整个替换上一版."""
++    assert fill_defaults({})["materiality_reassessment"] is None
++    assert initial_state(ENGAGEMENT, [], 1)["materiality_reassessment"] is None
++    written = materiality_reassessment()
++    back = (await checkpoint_round_trip(ReassessmentOnly, {"materiality_reassessment": written}))[
++        "materiality_reassessment"
++    ]
++    assert type(back) is MaterialityReassessment and back == written
++    assert isinstance(back.planning_choice, MaterialityChoice) and isinstance(back.bases[0], BasisAdjustment)
++    assert isinstance(back.materiality_dependent_procedures[0], MaterialityUse)
++    assert back.performance_pct_range == (0.5, 0.75)
++    second = materiality_reassessment("RUN-PLN-19-2", version=2)
++    state = apply_patch(initial_state(ENGAGEMENT, [], 1), {"materiality_reassessment": written})
++    assert apply_patch(state, {"materiality_reassessment": second})["materiality_reassessment"] == second
++
++
+ def test_audit_plans_merge_by_id_and_version() -> None:
+     """R203 验收 6: audit_plans 按 upsert_by_id 并入: 驳回后的下一修订与旧修订的新版本并入后两份并存, 不整体替换;
+     同 ID 版本更低的抛 VersionConflict."""
+-- 
+2.43.0
+

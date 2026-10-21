@@ -225,8 +225,9 @@ def review_tier(
     1. 目标不是判断 (例外或执行记录): 查验证据.
     2. 金额超过执行重要性: 完整复核 (执行重要性未定时跳过).
     3. 置信度低于 0.70: 查验证据; 不超过 0.90: 阅读推理链.
-    4. 置信度高于 0.90: L1 或任务不是 normal 的阅读推理链; 金额为空或不超过明显微小临界值的可批量确认;
-       其余阅读推理链. "金额较小" 取明显微小临界值是保守口径 (规格书只写了 "低"), 要调改这一处.
+    4. 置信度高于 0.90: L1 或任务不是 normal 的阅读推理链; 建议动作不是接受或关闭 (AI 判为错报或暂时判断不了) 的
+       阅读推理链 (批量确认只用于 AI 判为不是错报的, 需求 R363); 金额为空或不超过明显微小临界值的可批量确认; 其余
+       阅读推理链. "金额较小" 取明显微小临界值是保守口径 (规格书只写了 "低"), 要调改这一处.
     """
     if task.kind is TaskKind.dispute or (
         isinstance(target, Judgment) and target.critic_verdict is CriticVerdict.inconsistent
@@ -241,6 +242,8 @@ def review_tier(
     if target.confidence <= BATCH_ABOVE:
         return ReviewTier.read_reasoning
     if target.autonomy_level is AutonomyLevel.L1 or task.kind is not TaskKind.normal:
+        return ReviewTier.read_reasoning
+    if target.proposed_action not in (ProposedAction.accept, ProposedAction.close):
         return ReviewTier.read_reasoning
     if amount is None or (trivial_cents is not None and abs(amount) <= trivial_cents):
         return ReviewTier.batch_eligible
@@ -273,9 +276,13 @@ class ReviewQueue:
     def __init__(self, library: ProcedureLibrary) -> None:
         self.library = library  # 程序库: 按任务的 procedure_id 取模板
 
-    def allowed(self, task: ReviewTask) -> frozenset[Decision]:
-        """某个任务允许的决定: 按任务类型取 ALLOWED; failed 任务带判断对象且模板允许时, 另可人工执行并提交结果."""
+    def allowed(self, task: ReviewTask, target: Versioned | None = None) -> frozenset[Decision]:
+        """某个任务允许的决定: 按任务类型取 ALLOWED; failed 任务带判断对象且模板允许时, 另可人工执行并提交结果.
+        复核选项跟着 AI 结论 (需求 R363): 目标 (target, 任务目标的当前版本; 不给时只按任务) 是建议认定错报的判断时没有
+        confirm, 同意即以 misstatement 认定 (带错报草稿), 不同意以 override 另出结论, 不能以确认结束而不生成错报."""
         decisions = ALLOWED[task.kind]
+        if isinstance(target, Judgment) and target.proposed_action is ProposedAction.misstatement:
+            decisions = decisions - {Decision.confirm}
         if (
             task.kind is TaskKind.failed
             and task.subject_id is not None

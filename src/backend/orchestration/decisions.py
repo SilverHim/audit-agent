@@ -52,6 +52,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
+    ReviewWithdrawal,
     RiskItem,
     TargetType,
     TaskKind,
@@ -82,12 +83,13 @@ from backend.orchestration.nodes import (
 from backend.orchestration.runner import (
     GraphRunner,
     at_rerun_point,
+    at_withdraw_point,
     correction_wait,
     features_mismatch,
     resume_required,
     review_waits,
 )
-from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions, rewinds
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.data_quality import OnHand
@@ -406,7 +408,12 @@ def check_review_values(
             "VERSION_MISMATCH",
             f"{task.target_id} 当前为第 {current} 版, 任务与决定绑定的是第 {record.target_version} 版",
         )
-    if record.decision not in deps.queue.allowed(task):
+    if record.decision not in deps.queue.allowed(task, target):
+        if record.decision is Decision.confirm and isinstance(target, Judgment):  # 建议认定错报的判断 (需求 R363)
+            raise DecisionRejected(
+                "DECISION_NOT_ALLOWED",
+                f"{target.id} 的 AI 建议为错报: 同意即认定错报 (misstatement, 带错报草稿), 不同意以 override 另出结论",
+            )
         raise DecisionRejected("DECISION_NOT_ALLOWED", f"{task.kind} 任务不能 {record.decision}")
     template = deps.library.load(task.procedure_id)
     check_review_fields(record, task.kind, template.misstatement_update_kind)
@@ -894,6 +901,76 @@ def language_trail(eid: str, actor: str, before: WorkingLanguage, after: Working
     )
 
 
+# 可以撤回的复核决定 (需求 R363): 执行阶段程序 normal 任务上的这三种, 改的是判断与它认定的错报
+WITHDRAWABLE = frozenset({Decision.confirm, Decision.override, Decision.misstatement})
+
+
+def withdraw_problem(
+    record: ReviewRecord,
+    task: ReviewTask,
+    records: Sequence[ReviewRecord],
+    withdrawals: Sequence[ReviewWithdrawal],
+    library: ProcedureLibrary,
+) -> str | None:
+    """这条决定为什么不能撤回 (需求 R363), 能撤回为 None: 须是执行阶段程序 normal 任务 (目标为判断) 上的 confirm,
+    override 或 misstatement; 没撤回过; 任务已决定, 且它是任务上最近一条 (按决定时间) 没撤回的决定. records 与
+    withdrawals 为本项目的全部决定与撤回. 只看决定本身, 图的位置另由 runner.at_withdraw_point 判断. 撤回的校验与
+    复核队列标可撤回的决定 (ReviewTaskView.withdrawable_record_id) 共用. 纯函数."""
+    if (
+        record.decision not in WITHDRAWABLE
+        or task.kind is not TaskKind.normal
+        or task.target_type is not TargetType.Judgment
+        or library.load(task.procedure_id).phase is not Phase.P2_Executing
+    ):
+        return f"{record.id} 不能撤回: 只能撤回执行阶段程序复核任务上的 confirm, override 或 misstatement 决定"
+    withdrawn = {w.record_id for w in withdrawals}
+    if record.id in withdrawn:
+        return f"{record.id} 已撤回"
+    mine = [r for r in records if r.task_id == task.id and r.id not in withdrawn]
+    latest = max(mine, key=lambda r: r.decided_at, default=None)
+    if task.status is not TaskStatus.decided or latest is None or latest.id != record.id:
+        return f"{record.id} 不是任务 {task.id} 最近的决定, 不能撤回"
+    return None
+
+
+def withdrawal_trail(eid: str, withdrawal: ReviewWithdrawal, record: ReviewRecord, task: ReviewTask) -> TrailEntry:
+    """撤回复核决定的 decision 留痕 (需求 R363, 防重复键为撤回 ID): 撤回的决定, 它的种类, 任务与理由; 原决定的留痕
+    照旧保留. 提交与恢复补做共用."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=withdrawal.withdrawn_by,
+        procedure_id=task.procedure_id,
+        summary=f"撤回 {task.id} 的 {record.decision.value} 决定 {record.id}",
+        idempotency_key=withdrawal.id,
+        payload={
+            "withdrawal_id": withdrawal.id,
+            "record_id": record.id,
+            "decision": record.decision.value,
+            "task_id": task.id,
+            "reason": withdrawal.reason,
+        },
+    )
+
+
+async def withdrawal_patch(
+    deps: AgentDeps, eid: str, pack: list[Procedure], withdrawal: ReviewWithdrawal, phase: Phase
+) -> StatePatch:
+    """撤回写检查点的片段 (以 fan_in 身份写, 提交与恢复补做共用): 撤回本身, Store 中任务, 判断, 例外与错报的最新
+    版本 (同等复核读回时整体并入, nodes.await_events), 程序包换成 Store 的最新版本, 阶段. 之后由 after_fan_in 转到
+    等复核 (任务已回到待决)."""
+    store = deps.output_store
+    return {
+        "review_withdrawals": [withdrawal],
+        "review_tasks": await store.latest(eid, ReviewTask),
+        "judgments": await store.latest(eid, Judgment),
+        "exceptions": await store.latest(eid, AuditException),
+        "misstatements": await store.latest(eid, Misstatement),
+        "procedure_pack": latest_in_order(pack, await store.latest(eid, Procedure)),
+        "phase": phase,
+    }
+
+
 class GraphDecisionSubmit:
     """DecisionSubmit 的实现: 审计师所有决定的唯一写入口.
 
@@ -969,7 +1046,8 @@ class GraphDecisionSubmit:
         同一 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算.
         """
         store = self.deps.output_store
-        for kind in (GateDecision, ReviewRecord, RerunRequest, CorrectionNotice):  # 同在 decisions 表, ID 不能重
+        # 同在 decisions 表, ID 不能重 (撤回需求 R363)
+        for kind in (GateDecision, ReviewRecord, RerunRequest, CorrectionNotice, ReviewWithdrawal):
             if await store.get(eid, kind, decision_id) is not None:
                 raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
 
@@ -1076,7 +1154,7 @@ class GraphDecisionSubmit:
             pack = values["procedure_pack"]
             effects, sources = await spec.effects(self.deps, eid, decision, target, pack, self.now())
             created = new_versions(effects, sources)
-            reruns = len(values["rerun_requests"])
+            reruns = rewinds(values)
             written = await self._write_gate(eid, decision, effects, created, values["phase"], reruns)
             # 材料一并写入: 决定绑定的是 Store 中的版本, 路由按状态中的材料判断决定是否过期, 两者须一致.
             # 效果已出材料的新版本时 (RPT-01 签字, PLN-15 批准) 只写新版本, 路由另行放行 (spec.passed)
@@ -1309,7 +1387,7 @@ class GraphDecisionSubmit:
             # 留痕在业务事务提交后写, 防重复键为请求 ID; 写失败时再提交报 RESUME_REQUIRED, 由恢复补做补写
             await self.deps.trail.record(rerun_trail(eid, request))
             entries = await procedure_transitions(store, eid, saved)
-            reruns = len(values["rerun_requests"]) + 1  # 回退计入本请求 (见 trail.phase_transition)
+            reruns = rewinds(values) + 1  # 回退计入本请求 (见 trail.phase_transition)
             entries += phase_transition(eid, phase, Phase.P2_Executing, None, reruns=reruns)
             await record_transitions(self.deps.trail, entries)
             # 以 fan_in 身份写入 (恢复补做写同样的字段, recovery.catch_up_rerun): 检查点从等复核或闸门处转到
@@ -1323,6 +1401,130 @@ class GraphDecisionSubmit:
             }
             await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
         return request
+
+    async def withdraw_review(
+        self, eid: str, withdrawal_id: str, record_id: str, *, reason: str | None, withdrawn_by: str
+    ) -> ReviewWithdrawal:
+        """撤回一条复核决定, 重新选择 (需求 R363, 第 7 节). FIN-01 通过前, 图停在 P2 等复核或 FIN-01 闸门时可用.
+
+        校验顺序: ENGAGEMENT_LOCKED, ENGAGEMENT_BUSY, FEATURES_MISMATCH, RESUME_REQUIRED (同其他决定); 图不在 P2 的
+        等复核或 FIN-01 闸门前 (如 FIN-01 已通过, 或在错报闭环的节点内等待) → NOT_WITHDRAWABLE; 决定不存在 →
+        LookupError (404); 不是执行阶段程序 normal 任务上的 confirm, override 或 misstatement, 已撤回, 或不是该任务最近
+        的决定 (任务之后又被别的决定处理过) → INVALID_VALUE; 撤回 ID 用过 → INVALID_VALUE. 理由选填.
+        通过后一个事务内写 (见 withdrawal_effects): 撤回; 任务新版本 pending (绑定判断的新版本); 判断新版本 pending
+        (superseded_by 清空); 推翻建的人工判断置 superseded; 决定归因的例外恢复为归因之前的处置; 认定的错报置 withdrawn
+        (不再计入, 见 services.staleness.current_misstatements); 程序新版本回到等人; 已过执行阶段时阶段回 P2_Executing.
+        提交后写 decision 留痕 (原决定的留痕照旧) 与状态迁移留痕, 再以 fan_in 身份写检查点 (withdrawal_patch): 之后由
+        after_fan_in 转到等复核, 新决定照常提交; 执行阶段结清后回完成阶段, FIN-04 重新累计, FIN-01 闸门重新呈报.
+        """
+        async with self._deciding(eid) as (_, snapshot):
+            if not at_withdraw_point(snapshot):
+                raise DecisionRejected(
+                    "NOT_WITHDRAWABLE", "只能在执行阶段等复核或 FIN-01 闸门处 (意见决定之前) 撤回复核决定"
+                )
+            store = self.deps.output_store
+            record = await store.get(eid, ReviewRecord, record_id)
+            if record is None:
+                raise LookupError(f"复核决定 {record_id} 不存在")
+            task = await store.get(eid, ReviewTask, record.task_id)
+            if task is None:
+                raise LookupError(f"复核任务 {record.task_id} 不存在")
+            await self._check_withdrawable(eid, record, task)
+            await self._check_decision_id(eid, withdrawal_id)
+            values = fill_defaults(snapshot.values)
+            withdrawal = ReviewWithdrawal(
+                id=withdrawal_id,
+                record_id=record.id,
+                task_id=task.id,
+                reason=reason,
+                withdrawn_by=withdrawn_by,
+                withdrawn_at=self.now(),
+            )
+            created = await self.withdrawal_effects(eid, record, task)
+            phase = values["phase"]
+            async with store.transaction(eid):
+                await store.put(eid, [withdrawal], actor=withdrawn_by)
+                saved = await store.put(eid, created, actor=AgentId.A1)
+                if saved != created:
+                    clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                    raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+                if phase is not Phase.P2_Executing:
+                    await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+            # 留痕在业务事务提交后写, 防重复键为撤回 ID; 写失败时再提交报 RESUME_REQUIRED, 由恢复补做补写
+            await self.deps.trail.record(withdrawal_trail(eid, withdrawal, record, task))
+            entries = await procedure_transitions(store, eid, saved)
+            reruns = rewinds(values) + 1  # 回退计入本次撤回 (见 trail.phase_transition)
+            entries += phase_transition(eid, phase, Phase.P2_Executing, task.procedure_id, reruns=reruns)
+            await record_transitions(self.deps.trail, entries)
+            patch = await withdrawal_patch(self.deps, eid, values["procedure_pack"], withdrawal, Phase.P2_Executing)
+            await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
+        return withdrawal
+
+    async def _check_withdrawable(self, eid: str, record: ReviewRecord, task: ReviewTask) -> None:
+        """决定能撤回 (withdraw_problem, 按 Store 中的决定与撤回), 不能时抛 DecisionRejected("INVALID_VALUE")."""
+        store = self.deps.output_store
+        records = await store.latest(eid, ReviewRecord)
+        withdrawals = await store.latest(eid, ReviewWithdrawal)
+        problem = withdraw_problem(record, task, records, withdrawals, self.deps.library)
+        if problem is not None:
+            raise DecisionRejected("INVALID_VALUE", problem)
+
+    async def withdrawal_effects(self, eid: str, record: ReviewRecord, task: ReviewTask) -> list[Versioned]:
+        """撤回 record (已通过 _check_withdrawable) 要写的新版本, 都按 Store 最新版本出: 判断回到待复核 (pending,
+        superseded_by 清空); 推翻建的人工判断 (原判断的 superseded_by) 置 superseded, superseded_by 为空; 归因于原判断或
+        人工判断的例外恢复为归因之前那一版的处置与归因; 认定的错报 M-{决定 ID} 置 withdrawn; 任务回到 pending, 绑定判断
+        的新版本; 程序按仍待决的任务重算 (recompute_procedure, 至少等这个任务)."""
+        store = self.deps.output_store
+        judgment = await store.get(eid, Judgment, task.target_id)
+        assert judgment is not None  # 任务目标在 Store 中
+        reopened = judgment.model_copy(
+            update={"version": judgment.version + 1, "review_status": ReviewStatus.pending, "superseded_by": None}
+        )
+        created: list[Versioned] = [reopened]
+        explainers = {judgment.id}
+        if record.decision is Decision.override and judgment.superseded_by is not None:
+            human = await store.get(eid, Judgment, judgment.superseded_by)
+            if human is not None:
+                explainers.add(human.id)
+                retired = {"version": human.version + 1, "review_status": ReviewStatus.superseded}
+                created.append(human.model_copy(update=retired | {"superseded_by": None}))
+        for exception_id in judgment.exception_ids:
+            exception = await store.get(eid, AuditException, exception_id)
+            if exception is None or exception.attributed_by not in explainers or exception.version == 1:
+                continue
+            before = await store.get(eid, AuditException, exception_id, exception.version - 1)
+            assert before is not None  # 同一例外的上一版
+            restored = {
+                "version": exception.version + 1,
+                "disposition": before.disposition,
+                "attributed_by": before.attributed_by,
+            }
+            created.append(exception.model_copy(update=restored))
+        if record.decision is Decision.misstatement:
+            misstatement = await store.get(eid, Misstatement, f"M-{record.id}")
+            if misstatement is not None and misstatement.status is not MisstatementStatus.withdrawn:
+                # 未更正依据与重新沟通标记只属于原状态; 原值仍在历史版本里, 作废版本不得带着它们违反模型校验.
+                update = {
+                    "version": misstatement.version + 1,
+                    "status": MisstatementStatus.withdrawn,
+                    "uncorrected_basis": None,
+                    "needs_recommunication": False,
+                }
+                created.append(Misstatement.model_validate({**misstatement.model_dump(), **update}))
+        latest_task = await store.get(eid, ReviewTask, task.id)
+        assert latest_task is not None
+        reopen = {"version": latest_task.version + 1, "status": TaskStatus.pending, "target_version": reopened.version}
+        pending_task = latest_task.model_copy(update=reopen)
+        created.append(pending_task)
+        procedure = await store.get(eid, Procedure, task.procedure_id)
+        assert procedure is not None  # 任务所属程序在程序包中, 已入库
+        pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
+        waiting = [*(t for t in pending if t.id != task.id), pending_task]
+        done = done_status(self.deps.library.load(task.procedure_id))
+        updated = recompute_procedure(procedure, waiting, done, COLLAB in self.deps.features)
+        if updated is not None:
+            created.append(updated)
+        return created
 
     async def update_client_profile(
         self,

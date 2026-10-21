@@ -8,6 +8,7 @@ import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { JudgmentCard, ReviewDecisionCard } from '@/components/concierge'
 import { QueryState } from '@/components/query-state'
 import { buttonVariants } from '@/components/ui/button'
+import { WithdrawDecision } from '@/components/withdraw-decision'
 import { decisionsDisabled } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -88,9 +89,19 @@ function ReviewTaskPage() {
                   }
                 />
               ) : (
-                <StatusPill tone="ok" className="self-start">
-                  {t.formView.alreadyDecided}
-                </StatusPill>
+                <div className="flex flex-col gap-3">
+                  <StatusPill tone="ok" className="self-start">
+                    {t.formView.alreadyDecided}
+                  </StatusPill>
+                  {/* FIN-01 通过前可撤回这条任务最近的决定 (需求 R364); 撤回后任务回到待复核, 本页换成决定卡 */}
+                  {ranked.view.withdrawable_record_id ? (
+                    <WithdrawDecision
+                      eid={eid}
+                      recordId={ranked.view.withdrawable_record_id}
+                      disabled={decisionsDisabled(overview)}
+                    />
+                  ) : null}
+                </div>
               )}
             </>
           ) : (

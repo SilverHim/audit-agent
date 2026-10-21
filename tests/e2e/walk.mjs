@@ -31,6 +31,7 @@ const result = {
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
   corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
+  withdrawal_totals: [], // Issue #67: 初次同意, 撤回后改判不是错报, 再撤回并同意的未更正合计
   activity: null, // 配了 activity 时的核对结果 (需求 R362), 见 checkActivity
   steps: [], // {no, name, url, shot, console, failed, ms}
   issues: [], // {step, page, symptom, shot, expected}
@@ -388,6 +389,31 @@ function reviewPlan(view, pending) {
   return { error: `驱动不认得的任务类型 ${task.kind}` }
 }
 
+// 判断的复核卡片按 AI 结论给选项 (需求 R364): 决定表的决定 → 卡片上的选项. 判为错报时认定错报用默认的 "同意" (草稿
+// 由 AI 带出, 不另填), 其余 "不是错报" 的为推翻 (须写结论); 卡片照 allowed_decisions 给选项时 (争议, 例外, 带错报更新
+// 载荷的判断) 选项即决定本身
+const CHOICES = {
+  misstatement: { misstatement: 'agree_misstatement', override: 'disagree_not_misstatement' },
+  accept: { confirm: 'agree_clear', misstatement: 'disagree_misstatement' },
+  close: { confirm: 'agree_clear', misstatement: 'disagree_misstatement' },
+  more_evidence: { misstatement: 'misstatement', override: 'not_misstatement' },
+}
+
+async function optionFor(view, plan) {
+  const id = view.task.id
+  if (await page.locator(`[id="decision-${id}-${plan.decision}"]`).count()) return { option: plan.decision, plan }
+  const byAction = CHOICES[view.target.proposed_action] ?? {}
+  // AI 判为错报或暂时判断不了时没有 "确认": 决定表的确认改为推翻, 结论同其余推翻
+  const conclusion = config.confirm_conclusion
+  const want =
+    plan.decision === 'confirm' && !byAction.confirm
+      ? { ...plan, decision: 'override', conclusion, reason: plan.reason ?? conclusion }
+      : plan
+  const option = byAction[want.decision]
+  if (!option) throw new Error(`${id} 的卡片没有对应 ${plan.decision} 的选项 (AI 结论 ${view.target.proposed_action})`)
+  return { option, plan: want }
+}
+
 async function fillDraft(id, draft) {
   await selectById(`ms-type-${id}`, draft.type)
   await fillById(`ms-account-${id}`, draft.account)
@@ -398,25 +424,31 @@ async function fillDraft(id, draft) {
 
 async function decideTask(view, pending) {
   const id = view.task.id
-  const plan = reviewPlan(view, pending)
+  let plan = reviewPlan(view, pending)
   if (plan.error) {
     issue(plan.error, '每个对象至多重跑一次, 任务类型在决定表的范围内')
     throw new Stuck(plan.error)
   }
-  result.decisions.push([id, plan.decision])
   await goto(`${base}/engagements/${result.eid}/reviews/${encodeURIComponent(id)}`)
   await recordButton().waitFor()
+  let byDefault = false
   if (view.allowed_decisions.length > 1 || plan.decision !== 'dispute_resolution') {
     if (!view.allowed_decisions.includes(plan.decision)) throw new Error(`${id} 不能选 ${plan.decision} (可选 ${view.allowed_decisions})`)
-    await choose(`decision-${id}-${plan.decision}`)
+    const chosen = await optionFor(view, plan)
+    plan = chosen.plan
+    byDefault = chosen.option === 'agree_misstatement'
+    const radio = page.locator(`[id="decision-${id}-${chosen.option}"]`)
+    if (byDefault && !(await radio.isChecked())) issue(`${id} 的 "同意, 认定为错报" 没有默认选中`, 'AI 判为错报时默认选中同意 (需求 R364)')
+    if (!byDefault) await choose(`decision-${id}-${chosen.option}`)
   }
+  result.decisions.push([id, plan.decision])
   if (plan.choice) await choose(`dispute-${id}-${plan.choice}`)
   if (plan.draft && plan.decision === 'dispute_resolution') {
     const attach = page.locator(`[id="attach-ms-${id}"]`)
     if ((await attach.count()) && !(await attach.isChecked())) await attach.check()
   }
   if (plan.conclusion && plan.decision !== 'confirm') await fillById(`conclusion-${id}`, plan.conclusion)
-  if (plan.draft) await fillDraft(id, plan.draft)
+  if (plan.draft && !byDefault) await fillDraft(id, plan.draft)
   if (plan.reason) await fillById(`reason-${id}`, plan.reason)
   await snap('form')
   const button = recordButton()
@@ -458,9 +490,12 @@ async function doManual(view) {
   // 登记表每条错报一组 (fieldset, 以错报编号为名); 组内的回复原文框把它与 "是否同意更正" 那一小组区分开
   const rows = page.getByRole('group').filter({ has: page.getByLabel(labels.response) })
   const count = await rows.count()
-  if (count !== plan.rows) issue(`登记表有 ${count} 行`, `材料里待沟通的错报 ${plan.rows} 条各一行`)
+  // 撤回后重新认定时可能只有一条新错报要沟通, 登记行须逐一对应本次任务材料.
+  const expectedRows = task.manual_request.material.misstatements
+  if (count !== expectedRows.length) issue(`登记表有 ${count} 行`, `材料里待沟通的错报 ${expectedRows.length} 条各一行`)
   for (let i = 0; i < count; i += 1) {
     const row = rows.nth(i)
+    if (!(await row.innerText()).includes(expectedRows[i].id)) throw new Error('沟通登记行与本次任务材料的错报不符')
     await row.getByLabel(labels.communicatedAt).fill(await localDateTime(plan.communicated_at))
     await row.getByLabel(labels.communicatedTo).fill(plan.communicated_to)
     await row.getByLabel(labels.respondedAt).fill(await localDateTime(plan.responded_at))
@@ -493,8 +528,10 @@ async function postCorrection(view) {
   await heading.waitFor()
   const card = page.locator('section').filter({ has: heading })
   for (const id of ids) await card.getByRole('checkbox', { name: new RegExp(`^${id}\\b`) }).check()
-  await card.getByRole('radio', { name: new RegExp(`^${labels.posted}`) }).check()
-  for (const entry of config.correction.entries) {
+  const stopping = Boolean(config.review_withdrawal)
+  await card.getByRole('radio', { name: new RegExp(`^${stopping ? labels.stop : labels.posted}`) }).check()
+  const entries = stopping ? [] : config.correction.entries
+  for (const entry of entries) {
     const box = card.getByRole('checkbox', { name: new RegExp(`^${entry}\\b`) })
     await box.waitFor()
     await box.check()
@@ -503,8 +540,67 @@ async function postCorrection(view) {
   const submit = card.getByRole('button', { name: labels.submit, exact: true })
   if (await submit.isDisabled()) throw new Error('更正通知的提交按钮不可点')
   await click(submit)
-  result.corrections.push(['adjustments_posted', ids, config.correction.entries])
+  result.corrections.push([stopping ? 'stop_waiting' : 'adjustments_posted', ids, entries])
   await waitFor(async () => !(await overview()).awaiting_correction, timeouts.action_ms, '更正通知')
+}
+
+// Issue #67 的两种撤回入口共用: 理由留空也能提交, 等任务重新待决; 读接口只核对状态, 写入都经页面.
+async function withdrawDecision(view, button) {
+  await click(button)
+  const form = page.getByTestId(`withdraw-${view.withdrawable_record_id}`)
+  const confirm = form.getByRole('button', { name: config.labels.withdraw.confirm, exact: true })
+  await confirm.waitFor()
+  if (await confirm.isDisabled()) throw new Error('撤回理由留空时不可提交')
+  await click(confirm)
+  await waitFor(async () => {
+    const tasks = (await api(`/engagements/${result.eid}/review-tasks?status=pending`)).body ?? []
+    return tasks.some((task) => task.task.id === view.task.id)
+  }, timeouts.action_ms, '撤回后任务回到待复核')
+  await idle('撤回之后的后台执行')
+}
+
+async function checkWithdrawal() {
+  const gate = (await api(`/engagements/${result.eid}/gate`)).body
+  const schedule = gate.material.schedule
+  const stage = result.withdrawal_totals.length
+  const total = [79853, 4853, 79853][stage]
+  if (schedule.total_cents !== total) throw new Error(`撤回验收第 ${stage + 1} 次合计为 ${schedule.total_cents}, 应为 ${total}`)
+  if (schedule.items.length !== (stage === 1 ? 1 : 2)) throw new Error('错报汇总条数不符')
+  const tasks = (await api(`/engagements/${result.eid}/review-tasks?status=decided`)).body ?? []
+  const view = tasks.find((task) => subjectOf(task) === 'XJ-499' && task.task.procedure_id === 'GEN-02')
+  if (!view?.withdrawable_record_id) throw new Error('FIN-01 之前没有给出 XJ-499 的可撤回决定')
+  if (stage === 0) {
+    if (schedule.unrecognised.length) throw new Error('两笔均同意时出现了未认定建议')
+    await goto(`${base}/engagements/${result.eid}/reviews/${encodeURIComponent(view.task.id)}`)
+    await withdrawDecision(view, page.getByRole('button', { name: config.labels.withdraw.action, exact: true }))
+    await recordButton().waitFor()
+    await choose(`decision-${view.task.id}-disagree_not_misstatement`)
+    if (await recordButton().isDisabled()) throw new Error('选择不是错报后没有预填结论')
+    await click(recordButton())
+    result.decisions.push([view.task.id, 'override'])
+  } else if (stage === 1) {
+    if (schedule.unrecognised.length !== 1 || schedule.unrecognised[0].subject_id !== 'XJ-499') throw new Error('未认定建议没有列出 XJ-499')
+    await goto(`${base}/engagements/${result.eid}/gate`)
+    const row = page.getByTestId('unrecognised-XJ-499')
+    await row.waitFor()
+    const text = await row.innerText()
+    for (const expected of ['750.00', config.labels.withdraw.material, config.labels.withdraw.impact]) {
+      if (!text.includes(expected)) throw new Error(`未认定建议缺少 ${expected}`)
+    }
+    if (!(await row.getAttribute('class')).includes('border-risk')) throw new Error('重大金额没有标红')
+    await snap('unrecognised')
+    await withdrawDecision(view, row.getByRole('button', { name: config.labels.withdraw.redecide, exact: true }))
+    const pending = (await api(`/engagements/${result.eid}/review-tasks?status=pending`)).body
+    await decideTask(pending.find((task) => task.task.id === view.task.id), pending)
+  } else {
+    if (schedule.unrecognised.length) throw new Error('重新同意后仍列出已认定建议')
+    await decideGate('FIN-01')
+    await idle('意见决定之后的后台执行')
+    await goto(`${base}/engagements/${result.eid}/reviews/${encodeURIComponent(view.task.id)}`)
+    await page.getByText(config.labels.withdraw.decided, { exact: true }).waitFor()
+    if (await page.getByRole('button', { name: config.labels.withdraw.action, exact: true }).count()) throw new Error('FIN-01 通过后仍有撤回入口')
+  }
+  result.withdrawal_totals.push(total)
 }
 
 // ── 主循环: 每次停下按当时的状态办 (同 R311 的 drive) ──
@@ -555,7 +651,7 @@ async function main() {
       action = confirmReady
     } else if (view.current_gate) {
       name = `闸门 ${view.current_gate}`
-      action = () => decideGate(view.current_gate)
+      action = config.review_withdrawal && view.current_gate === 'FIN-01' ? checkWithdrawal : () => decideGate(view.current_gate)
     } else if (view.awaiting_correction) {
       name = '提交更正通知'
       action = () => postCorrection(view)

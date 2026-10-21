@@ -256,7 +256,8 @@ OUTPUT_KINDS = {
         "GateDecision",
         "RerunRequest",
         "CorrectionNotice",
-    ],  # 更正通知需求 R162, kind 为文本列
+        "ReviewWithdrawal",  # 复核决定的撤回 (需求 R363)
+    ],  # 更正通知需求 R162, kind 为文本列, 不需迁移
     "confirmations": ["Confirmation"],
     "misstatements": ["Misstatement"],
     "report_versions": ["AuditReportVersion"],

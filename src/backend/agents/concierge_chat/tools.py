@@ -344,11 +344,19 @@ async def get_gate(env: ToolEnv, args: NoArgs) -> Found:
     return Found({"gate": view.gate.value, "target_id": view.target_id, "material": material}, cites)
 
 
+# 待处理事项里 AI 建议为错报但未认定的一条给模型的字段 (需求 R363); 复核人化名与时间不给
+SUGGESTED = {
+    "judgment_id", "procedure_id", "subject_id", "record_id", "decision", "account", "assertion", "amount_cents",
+    "direction", "level", "would_qualify",
+}  # fmt: skip
+
+
 async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
-    """待人处理的事项, 按 阶段决定 → 补交请求 (A3 提出, 待补交的) → Xero 组织信息与客户画像的核对 (待处理的, 需求
-    R291; 锁定的项目不列) → 复核任务 的顺序, 同工作台; 各项标明是否已标记稍后处理. 补交请求按 DataStore.requests
-    的顺序 (提出时间, 同批按固定顺序). 复核任务按创建时间, 项目开了功能 collab 时争议任务 (dispute) 排在其余复核
-    任务之前."""
+    """待人处理的事项, 按 阶段决定 → AI 建议为错报但未认定的判断 (停在 FIN-01 闸门时, 取汇总表的 unrecognised, 需求
+    R363) → 补交请求 (A3 提出, 待补交的) → Xero 组织信息与客户画像的核对 (待处理的, 需求 R291; 锁定的项目不列) →
+    复核任务 的顺序, 同工作台; 各项标明是否已标记稍后处理 (未认定的错报只提示, 没有这一项). 补交请求按
+    DataStore.requests 的顺序 (提出时间, 同批按固定顺序). 复核任务按创建时间, 项目开了功能 collab 时争议任务
+    (dispute) 排在其余复核任务之前."""
     deps, eid = env.deps, env.eid
     overview = await env.state.overview(eid)
     tasks = {t.id: t for t in await deps.output_store.latest(eid, ReviewTask)}
@@ -365,6 +373,13 @@ async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
     if overview.current_gate is not None:
         gate = overview.current_gate
         items.append({"type": "gate_decision", "gate": gate.value, "deferred": ("gate", gate.value) in deferred})
+    if overview.current_gate is GateId.FIN_01:  # 意见决定前的兜底提示 (需求 R363)
+        schedule = await deps.output_store.get(eid, UncorrectedSchedule, "SCHEDULE")
+        for suggestion in schedule.unrecognised if schedule is not None else []:
+            items.append({"type": "unrecognised_misstatement", **suggestion.model_dump(mode="json", include=SUGGESTED)})
+            judgment = await deps.output_store.get(eid, Judgment, suggestion.judgment_id)
+            if judgment is not None:
+                cites[judgment.id] = cite_judgment(judgment)
     for request in requests:
         if request.status != "open":
             continue

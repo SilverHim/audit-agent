@@ -78,6 +78,8 @@ MAX_CALLS = FIXED_CALLS + LIVE_MARGIN  # 用量上限
 MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
 RERUN_REASON = "The model output did not pass validation; rerun."
 CONFIRM_CONCLUSION = "The original conclusion stands: no misstatement is identified for this item."
+# 模型建议认定错报而决定表期望不认定时 "不同意, 不是错报" 的结论 (需求 R363: 这类判断不能确认, 只能认定或推翻)
+NOT_MISSTATEMENT_CONCLUSION = "No misstatement is identified for this item; the proposed misstatement is not supported."
 BA091_REASON = "Accrued interest of AUD 48.53 confirmed by the bank was not recorded."
 
 
@@ -157,8 +159,9 @@ def rerun_key(view: dict[str, Any], walk: LiveWalk) -> tuple[str, str]:
 def review_body(
     view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk, pending: Sequence[dict[str, Any]] = ()
 ) -> dict[str, Any]:
-    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明). pending 为当时全部
-    待决任务 (复核队列各项): 下 rerun 时同程序同一次执行其余可重跑的任务随之重跑 (一轮失败算一组, 同
+    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明); 只是期望确认而模型
+    建议认定错报 (复核队列的 allowed_decisions 没有 confirm, 需求 R363) 时改为推翻, 结论为不是错报. pending 为当时
+    全部待决任务 (复核队列各项): 下 rerun 时同程序同一次执行其余可重跑的任务随之重跑 (一轮失败算一组, 同
     decisions.rerun_group), 一并计数."""
     task = view["task"]
     kind = task["kind"]
@@ -194,6 +197,8 @@ def review_body(
                 "reason": expected.reason or conclusion,
                 "override_conclusion": conclusion,
             }
+        if "confirm" not in view["allowed_decisions"]:  # 模型建议认定错报: 不同意, 不是错报
+            return body | {"decision": "override", "override_conclusion": NOT_MISSTATEMENT_CONCLUSION}
         return body | {"decision": "confirm"}
     if kind == "dispute":
         return body | dispute_fields(view, expected)
@@ -562,12 +567,13 @@ async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[
     return len(pointers), unresolved
 
 
-def assert_hard(data: dict[str, Any]) -> None:
+def assert_hard(data: dict[str, Any], *, expected_p2_entries: Sequence[str] = ("PLN-15",)) -> None:
     """硬性检查 (需求 R311 验收 2): 走到归档 (调用方已由驱动保证, run_error 始终为空); 每个判断对象有模型结论, 重跑至多
     一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见在报告语言
     (起草它的执行记录的语言) 下的标题; 合同 3 份与函证 2 户都已抽取; 总体审计计划两个修订都出了 (每个修订一次通过, 或
     failed 后重跑一次), PLAN-1 已取代, PLAN-2 批准后由它推进到执行阶段 (需求 R317); 中文执行写出的文字都是中文
-    (需求 R343, mock 下没有中文执行). 软性的差异只告警 (warn_soft)."""
+    (需求 R343, mock 下没有中文执行). expected_p2_entries 默认仅计划批准, 撤回验收须逐项列出再次进入执行阶段的来源.
+    软性的差异只告警 (warn_soft)."""
     assert data["missing_subjects"] == [], data["missing_subjects"]
     assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
     assert data["pointers"] > 30
@@ -579,7 +585,7 @@ def assert_hard(data: dict[str, Any]) -> None:
     assert (data["contracts"], data["confirmations"]) == (3, 2)
     assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
     assert data["plans"] == [["PLAN-1", "superseded"], ["PLAN-2", "approved"]], data["plans"]
-    assert data["entered_p2_by"] == ["PLN-15"], data["entered_p2_by"]
+    assert data["entered_p2_by"] == list(expected_p2_entries), data["entered_p2_by"]
 
 
 # 演示配置下的终态 (需求 R263 验收 3, 同 R287 的计数): 重要性按 PLN-01/03 闸门的决定 (收入 1%, 执行 50%, 明显微小 5%);

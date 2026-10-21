@@ -10,7 +10,15 @@ from fastapi import APIRouter, Depends, Query
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_decisions, get_deps, get_query, owned_engagement
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import IdBody, JudgmentDetail, ProcedureDetail, RerunIn, ReviewRecordIn, ReviewTaskView
+from backend.api.schemas import (
+    IdBody,
+    JudgmentDetail,
+    ProcedureDetail,
+    RerunIn,
+    ReviewRecordIn,
+    ReviewTaskView,
+    ReviewWithdrawalIn,
+)
 from backend.contracts.models import (
     AuditException,
     Decision,
@@ -26,6 +34,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     ReviewTier,
+    ReviewWithdrawal,
     TargetType,
     TaskKind,
     TaskStatus,
@@ -33,7 +42,7 @@ from backend.contracts.models import (
     User,
 )
 from backend.contracts.views import EngagementOverview, TaskPresentation
-from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit, update_decisions
+from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit, update_decisions, withdraw_problem
 from backend.orchestration.query import GraphStateQuery
 from backend.services.deferrals import is_active, latest_entries
 from backend.services.features import COLLAB
@@ -45,8 +54,8 @@ from backend.services.trail_pages import all_of_kind
 router = APIRouter(prefix="/engagements/{eid}", tags=["reviews"])
 
 
-def _allowed(task: ReviewTask, deps: AgentDeps) -> list[Decision]:
-    permitted = deps.queue.allowed(task)
+def _allowed(task: ReviewTask, deps: AgentDeps, target: Judgment | AuditException | ProcedureRun) -> list[Decision]:
+    permitted = deps.queue.allowed(task, target)
     return [item for item in Decision if item in permitted]
 
 
@@ -99,7 +108,7 @@ async def task_parts(
     misstatements = await updated_misstatement(deps, eid, target)
     subject = await subject_amount(deps.financial_store, eid, target) if isinstance(target, Judgment) else None
     amount = task_amount(target, exceptions, subject, misstatements)
-    allowed = _allowed(task, deps)
+    allowed = _allowed(task, deps, target)
     return TaskParts(
         procedure_name=template.name,
         target=target,
@@ -122,8 +131,9 @@ async def list_review_tasks(
     kind: TaskKind | None = None,
 ) -> list[ReviewTaskView]:
     """status, kind 省略时不按它过滤 (都省略为全部), 按创建时间升序; 人工队列另见 GET /manual-tasks (需求 R94).
-    allowed_decisions 取 ReviewQueue.allowed; amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与
-    队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有."""
+    allowed_decisions 取 ReviewQueue.allowed (按目标的 AI 结论, 需求 R363); amount_cents 与 tier 按总览的执行重要性与
+    明显微小临界值计算, 对话与队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.
+    withdrawable_record_id: 总览 can_withdraw 为真时, 已决定的任务上最近一条没撤回且能撤回的决定 (需求 R363)."""
     filters: dict[str, TaskStatus] = {}
     if status is not None:
         filters["status"] = status
@@ -131,6 +141,7 @@ async def list_review_tasks(
         tasks = await deps.output_store.latest(engagement.id, ReviewTask, **filters)
         exceptions = {x.id: x for x in await deps.output_store.latest(engagement.id, AuditException)}
         overview = await query.overview(engagement.id)
+        withdrawable = await withdrawable_records(deps, engagement.id) if overview.can_withdraw else {}
         views: list[ReviewTaskView] = []
         for task in sorted(tasks, key=lambda item: item.created_at):
             if kind is not None and task.kind is not kind:
@@ -148,9 +159,29 @@ async def list_review_tasks(
                     draft_rules=parts.draft_rules,
                     misstatement_update_kind=parts.misstatement_update_kind,
                     update_decisions=parts.update_decisions,
+                    withdrawable_record_id=withdrawable.get(task.id),
                 )
             )
     return views
+
+
+async def withdrawable_records(deps: AgentDeps, eid: str) -> dict[str, str]:
+    """任务 ID → 该任务上能撤回的决定 ID (需求 R363): 已决定的任务上最近一条没撤回的决定 (按决定时间), 能撤回
+    (decisions.withdraw_problem, 与撤回的校验同一函数) 的才列. 图的位置由调用方按总览 can_withdraw 判断."""
+    store = deps.output_store
+    records = await store.latest(eid, ReviewRecord)
+    withdrawals = await store.latest(eid, ReviewWithdrawal)
+    withdrawn = {w.record_id for w in withdrawals}
+    tasks = {t.id: t for t in await store.latest(eid, ReviewTask, status=TaskStatus.decided)}
+    latest: dict[str, ReviewRecord] = {}
+    for record in sorted(records, key=lambda r: r.decided_at):
+        if record.task_id in tasks and record.id not in withdrawn:
+            latest[record.task_id] = record
+    return {
+        task_id: record.id
+        for task_id, record in latest.items()
+        if withdraw_problem(record, tasks[task_id], records, withdrawals, deps.library) is None
+    }
 
 
 @router.post("/review-tasks/{task_id}/presentations")
@@ -205,6 +236,24 @@ async def submit_review_record(
     async with catch_api():
         await decisions.submit(engagement.id, record)
     return IdBody(id=record.id)
+
+
+@router.post("/review-records/{record_id}/withdraw", status_code=202)
+async def withdraw_review_record(
+    record_id: str,
+    body: ReviewWithdrawalIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
+) -> IdBody:
+    """撤回一条复核决定, 重新选择 (需求 R363); 返回撤回 ID (WD-{uuid4}). 理由选填. 只能在执行阶段等复核或 FIN-01
+    闸门处 (意见决定之前; FIN-01 已通过等 409 NOT_WITHDRAWABLE); 决定不存在 404; 不能撤回的决定 (见
+    decisions.withdraw_problem) 422 INVALID_VALUE; 锁定 423, 执行中 409. 撤回后任务回到待决, 图回到等复核."""
+    async with catch_api():
+        withdrawal = await decisions.withdraw_review(
+            engagement.id, f"WD-{uuid4()}", record_id, reason=body.reason, withdrawn_by=user.id
+        )
+    return IdBody(id=withdrawal.id)
 
 
 @router.get("/procedures/{pid}")

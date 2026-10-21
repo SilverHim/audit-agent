@@ -208,6 +208,22 @@ def test_batch_only_for_high_confidence_small_normal_non_l1() -> None:
     assert tier(judgment(0.95), None, TaskKind.failed) is ReviewTier.read_reasoning
 
 
+@pytest.mark.parametrize(
+    ("proposed", "expected"),
+    [
+        (ProposedAction.accept, ReviewTier.batch_eligible),
+        (ProposedAction.close, ReviewTier.batch_eligible),
+        (ProposedAction.misstatement, ReviewTier.read_reasoning),
+        (ProposedAction.more_evidence, ReviewTier.read_reasoning),
+    ],
+)
+def test_batch_only_for_judgments_that_are_not_misstatements(proposed: ProposedAction, expected: ReviewTier) -> None:
+    """需求 R363: 批量确认只用于 AI 判为不是错报的 (接受, 关闭); 判为错报或暂时判断不了的同为高置信小金额也逐条看."""
+    draft = NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": TRIVIAL})
+    fields = {"misstatement_draft": draft} if proposed is ProposedAction.misstatement else {}
+    assert tier(judgment(0.95, proposed_action=proposed, **fields), TRIVIAL) is expected
+
+
 def test_tier_before_materiality_is_set() -> None:
     """PLN-01/03 之前没有阈值: 不判超过执行重要性; 有金额时不能确定 "金额小", 不批量."""
     assert review_tier(task(), judgment(0.95), 10**12, None, None) is ReviewTier.read_reasoning

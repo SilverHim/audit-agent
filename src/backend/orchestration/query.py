@@ -39,6 +39,7 @@ from backend.orchestration.nodes import SETTLED
 from backend.orchestration.runner import (
     GraphRunner,
     at_rerun_point,
+    at_withdraw_point,
     awaiting_data,
     correction_wait,
     resume_required,
@@ -177,6 +178,7 @@ class GraphStateQuery:
             stale_procedure_ids=[p.id for p in ordered if p.id in stale],
             # 图停在可重跑的位置且未锁定, 不在执行 (RESUME_REQUIRED 等另见 run_error, 提交时再判断)
             can_rerun=not engagement.locked and not self.runner.is_running(eid) and at_rerun_point(snapshot),
+            can_withdraw=not engagement.locked and not running and at_withdraw_point(snapshot),
             pending_tasks=len(pending),
             materiality_cents=values["materiality_cents"],
             performance_materiality_cents=values["performance_materiality_cents"],

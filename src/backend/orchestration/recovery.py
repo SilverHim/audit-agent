@@ -26,17 +26,24 @@ from backend.contracts.models import (
     RerunRequest,
     ReviewRecord,
     ReviewTask,
+    ReviewWithdrawal,
     TaskKind,
     TaskStatus,
     TrailEntry,
     TrailKind,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.decisions import notice_trail, rerun_trail, review_trail
+from backend.orchestration.decisions import notice_trail, rerun_trail, review_trail, withdrawal_patch, withdrawal_trail
 from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
 from backend.orchestration.nodes import confirmations_from_store, node_table
-from backend.orchestration.runner import GraphRunner, at_rerun_point, correction_wait, waiting_payloads
-from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.orchestration.runner import (
+    GraphRunner,
+    at_rerun_point,
+    at_withdraw_point,
+    correction_wait,
+    waiting_payloads,
+)
+from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions, rewinds
 from backend.services.review_queue import RERUNNABLE
 
 
@@ -84,7 +91,7 @@ async def backfill_transitions(
     before = {(p.id, p.version) for p in values["procedure_pack"]}
     changed = [p for p in await deps.output_store.latest(eid, Procedure) if (p.id, p.version) not in before]
     entries = await procedure_transitions(deps.output_store, eid, changed)
-    count = len(values["rerun_requests"]) + reruns
+    count = rewinds(values) + reruns
     entries += phase_transition(eid, values["phase"], engagement.phase, procedure_id, reruns=count)
     await record_transitions(deps.trail, entries)
 
@@ -186,6 +193,36 @@ async def catch_up_rerun(
             "confirmations": await confirmations_from_store(store, eid),
             "phase": engagement.phase,
         }
+        await app.aupdate_state(config, patch, as_node="fan_in")
+        snapshot = await app.aget_state(config)
+    return snapshot
+
+
+async def catch_up_withdrawals(
+    app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot
+) -> StateSnapshot:
+    """Store 中有检查点里没有的复核决定撤回 (需求 R363, DecisionSubmit.withdraw_review 已提交, 检查点没跟上) 时逐个
+    补进检查点 (按撤回时间): 先补写 decision 留痕与状态迁移留痕, 再以 fan_in 身份写入同提交时的片段
+    (decisions.withdrawal_patch, 阶段取项目表的); 之后由 after_fan_in 转到等复核. 图不在可撤回的位置 (P2 等复核或
+    FIN-01 闸门) 时抛 RuntimeError. 返回补做后的检查点."""
+    eid = engagement.id
+    store = deps.output_store
+    config = GraphRunner.config(eid)
+    known = {w.id for w in fill_defaults(snapshot.values)["review_withdrawals"]}
+    missing = [w for w in await store.latest(eid, ReviewWithdrawal) if w.id not in known]
+    for withdrawal in sorted(missing, key=lambda w: w.withdrawn_at):
+        if not at_withdraw_point(snapshot):
+            at = snapshot.next
+            raise RuntimeError(f"复核决定的撤回 {withdrawal.id} 未进检查点, 图却不在可撤回的位置 ({at}), 无法补做")
+        record = await store.get(eid, ReviewRecord, withdrawal.record_id)
+        task = await store.get(eid, ReviewTask, withdrawal.task_id)
+        if record is None or task is None:
+            raise RuntimeError(f"复核决定的撤回 {withdrawal.id} 所撤的决定或任务不在 Store 中, 无法补做")
+        # 先补留痕再写检查点 (理由同 catch_up_gates)
+        await record_once(deps, withdrawal_trail(eid, withdrawal, record, task))
+        await backfill_transitions(deps, engagement, snapshot, task.procedure_id, reruns=1)
+        pack = fill_defaults(snapshot.values)["procedure_pack"]
+        patch = await withdrawal_patch(deps, eid, pack, withdrawal, engagement.phase)
         await app.aupdate_state(config, patch, as_node="fan_in")
         snapshot = await app.aget_state(config)
     return snapshot
@@ -310,12 +347,13 @@ async def catch_up_correction(deps: AgentDeps, engagement: Engagement, snapshot:
 async def catch_up(
     app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement
 ) -> Command[Any] | None:
-    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定, 更正通知. 前三者
-    直接写进检查点; 复核决定与更正通知由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回
-    None (从检查点继续). 补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
+    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定的撤回, 复核决定,
+    更正通知. 前四者直接写进检查点; 复核决定与更正通知由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的
+    输入, 其余返回 None (从检查点继续). 补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
     snapshot = await app.aget_state(GraphRunner.config(engagement.id))
     snapshot = await catch_up_gates(app, deps, engagement, snapshot)
     snapshot = await catch_up_profile(app, deps, engagement, snapshot)
     snapshot = await catch_up_rerun(app, deps, engagement, snapshot)
+    snapshot = await catch_up_withdrawals(app, deps, engagement, snapshot)
     command = await catch_up_review(app, deps, engagement, snapshot)
     return command if command is not None else await catch_up_correction(deps, engagement, snapshot)

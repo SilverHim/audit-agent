@@ -12,6 +12,7 @@ engine: rule
 autonomy_level: L3
 params:
   materiality_cents: {ref: materiality_cents}
+  performance_materiality_cents: {ref: performance_materiality_cents}  # AI 建议为错报但未认定一节的金额档位 (需求 R363)
   clearly_trivial_cents: {ref: clearly_trivial_cents}
 # 错报分类 FIN-03 与更正验证 FIN-09 之后 (都属功能 misstatement; 关闭时程序库丢弃这两条依赖)
 depends_on: [FIN-03, FIN-09]
@@ -24,4 +25,6 @@ standards: [ASA450-P05]
 # - total_cents = items 的 amount_cents 之和, 不按 direction 抵销
 # - materiality_cents 取 params; total_cents >= materiality_cents 时 candidate_opinion = qualified, 否则 unqualified
 #   (services.opinion.allowed_opinions, 需求 R184)
+# - unrecognised (需求 R363, agents/qc.unrecognised_suggestions): 当前结果中 AI 建议为错报而已复核, 却没有认定出错报的
+#   判断, 带草稿金额, 方向与复核人; 金额档位对明显微小, 执行重要性与整体重要性; 只提示, 不计入合计与候选意见
 rules: []

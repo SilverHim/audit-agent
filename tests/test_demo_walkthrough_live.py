@@ -376,7 +376,7 @@ def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
 def test_review_bodies_follow_the_decision_table() -> None:
     """各类任务的决定都合复核接口的请求体 (ReviewRecordIn), 且按演示决定表: 争议任务原判断与期望一致时维持, 否则
     "两者都不采用" 给出期望的结论, 期望错报时附草稿; 无解释的例外先重跑一次, 仍失败再认定错报或推翻; failed 同一
-    对象第二次失败即判失败."""
+    对象第二次失败即判失败; 期望确认而模型建议认定错报时推翻 (需求 R363)."""
     table, walk = decision_table("USR-1"), LiveWalk()
     both = {"allowed_resolutions": ["a6_upheld", "a7_upheld", "neither"]}
     cases = {
@@ -402,6 +402,13 @@ def test_review_bodies_follow_the_decision_table() -> None:
         unattributed = view_of("unattributed", subject)
         assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == "rerun", subject
         assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == then, subject
+    # 需求 R363: 期望确认而模型建议认定错报 (复核队列没有 confirm 可选) 时推翻为不是错报; 能确认时照旧确认
+    for allowed, decision in (
+        (["override", "misstatement"], "override"),
+        (["confirm", "override", "misstatement"], "confirm"),
+    ):
+        normal = view_of("normal", "XJ-397", allowed_decisions=allowed)
+        assert ReviewRecordIn.model_validate(review_body(normal, table, walk)).decision == decision, allowed
     failed = view_of("failed", "XJ-430")
     failed["task"]["subject_id"] = "XJ-430"
     assert ReviewRecordIn.model_validate(review_body(failed, table, walk)).decision == "rerun"

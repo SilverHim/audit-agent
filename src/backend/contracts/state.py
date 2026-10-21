@@ -33,6 +33,7 @@ from backend.contracts.models import (
     RerunRequest,
     ReviewRecord,
     ReviewTask,
+    ReviewWithdrawal,
     RiskItem,
     RunPopulation,
     ScheduleRow,
@@ -142,6 +143,8 @@ class EngagementState(TypedDict):
     rerun_requests: Annotated[list[RerunRequest], append_unique]  # 过期程序的重跑请求, 只追加 (DecisionSubmit 写)
     # 更正通知 (需求 R162), 只追加: DecisionSubmit 写 Store, 等待更正的节点读回后并入
     correction_notices: Annotated[list[CorrectionNotice], append_unique]
+    # 撤回的复核决定 (需求 R363), 只追加: DecisionSubmit.withdraw_review 写 Store 后以 fan_in 身份写入
+    review_withdrawals: Annotated[list[ReviewWithdrawal], append_unique]
     uncorrected_schedule: UncorrectedSchedule | None  # 未更正错报汇总表, A9 写
     # 签字前提的四类审计产出 (需求 R215): 声明书 REPLETTER (A5 FIN-07), 合规检查 CHECK-{程序} (A9 FIN-10, FIN-18),
     # 治理层沟通 GC-{程序}-{run_no} (A10 RPT-07), 独立性声明 S307C (A10 RPT-08 起草, RPT-01 签字时由 A1 置 signed)
@@ -183,6 +186,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "misstatements": [],
     "rerun_requests": [],
     "correction_notices": [],
+    "review_withdrawals": [],
     "uncorrected_schedule": None,
     "representation_letter": None,
     "compliance_checks": [],

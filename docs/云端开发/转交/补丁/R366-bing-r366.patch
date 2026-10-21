@@ -1,0 +1,1464 @@
+From b3cbb5e70854c368a474695113334584e6a21632 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:28:20 +0000
+Subject: [PATCH] =?UTF-8?q?wip:=20R366=20=E6=9A=82=E5=81=9C=E6=97=B6?=
+ =?UTF-8?q?=E7=9A=84=E8=BF=9B=E5=BA=A6=20(=E6=9C=AA=E5=AE=8C=E6=88=90)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ ...45\345\217\243\346\226\207\346\241\243.md" | 36 ++++++--
+ src/backend/adapters/xero_dataset.py          | 13 +++
+ src/backend/agents/concierge_chat/service.py  |  7 +-
+ src/backend/agents/concierge_chat/tools.py    | 66 ++++++++------
+ src/backend/api/routes/engagements.py         | 41 ++++++++-
+ src/backend/api/schemas.py                    |  7 ++
+ src/backend/contracts/models.py               | 28 ++++++
+ src/backend/contracts/ports.py                | 22 +++--
+ .../knowledge/prompts/concierge/system.md.j2  |  2 +-
+ src/backend/main.py                           |  9 +-
+ .../versions/0024_engagement_currency.py      | 22 +++++
+ src/backend/persistence/models.py             |  6 +-
+ src/backend/persistence/stores.py             | 34 ++++++-
+ src/backend/services/currency.py              | 55 ++++++++++++
+ src/backend/services/judgment_engine.py       | 13 ++-
+ src/backend/services/procedure_library.py     | 27 +++++-
+ src/backend/services/xero_link.py             | 21 ++++-
+ src/frontend/openapi.json                     | 89 +++++++++++++++++++
+ .../src/client/@tanstack/react-query.gen.ts   | 26 +++++-
+ src/frontend/src/client/index.ts              |  4 +-
+ src/frontend/src/client/sdk.gen.ts            | 20 ++++-
+ src/frontend/src/client/types.gen.ts          | 51 +++++++++++
+ tests/fakes.py                                | 22 +++++
+ tests/test_concierge_chat_tools.py            | 21 +++--
+ tests/xero_fakes.py                           |  4 +
+ 25 files changed, 586 insertions(+), 60 deletions(-)
+ create mode 100644 src/backend/migrations/versions/0024_engagement_currency.py
+ create mode 100644 src/backend/services/currency.py
+
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index adcc8f9..71548d9 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -12,7 +12,7 @@ A：智能体与编排；B：数据库与数据；C：前端与 API。这是早
+ | 领域类型 | 只在 `src/backend/contracts/` 定义，其他包只引用 |
+ | 模型配置 | `model_config = ConfigDict(frozen=True, extra="forbid")`；修改一律 `model_copy(update=...)` 并 version +1 |
+ | 命名 | Python 与 JSON 字段都用 snake_case；枚举用 `StrEnum` |
+-| 金额 | 整数分，字段名以 `_cents` 结尾；币种 AUD |
++| 金额 | 整数分，字段名以 `_cents` 结尾；币种为项目的记账币种（`Engagement.currency`，ISO 4217 代码，缺省 AUD，需求 R366），显示为 "AUD 1,234.56"（币种代码、千分位与该币种通常的小数位，`services/currency.format_money`；前端 `lib/money.formatMoney`） |
+ | 时间 | `datetime` 存 UTC；报告日等业务日期用 `date`，按 Australia/Sydney 取当天 |
+ | 项目隔离 | 存储接口的每个方法第一个参数都是 `eid`（engagement_id）；EngagementStore、UserStore 除外 |
+ | 版本 | 存进审计产出表的对象都继承 `Versioned`（`id` + `version`），每次修改追加新版本，旧版本不覆盖 |
+@@ -374,10 +374,18 @@ class Engagement(BaseModel):          # 客户名称、ABN 不在此重复存，
+     version_snapshot: dict[str, str] = {}    # 项目启动时冻结，之后不覆盖：procedure_library_commit、llm_mode、model（mock 模式为 "mock"）、critic_model_version（复核模型名，mock 为 "mock"，未单独配置时同 model）、prompts_sha256、features（功能集，见第 7 节功能集冻结）、frozen_at（UTC，ISO 8601）
+     working_language: WorkingLanguage = "en"  # 工作语言（需求 R339，Issue #51）：建项目时选，之后可改（PUT working-language，留痕）；
+                                     #   每次执行记下当时的值（ProcedureRun.language），已生成的内容不改写；迁移 0023 之前的项目为 en
++    currency: CurrencyCode = "AUD"  # 记账币种（需求 R366，Issue #66）：ISO 4217 代码（三个大写字母）；金额照旧按 "分" 存，显示与提示词
++                                    #   输入按它格式化。建项目时数据集带本位币的取它（`DatasetLoader.currency`，来源 xero），否则 AUD（default）；
++                                    #   Xero 同步取组织本位币（来源 auditor 的不改），审计师在数据管理页确认或改（PUT currency）；迁移 0024 之前的项目为 AUD
++    currency_source: CurrencySource = "default"  # 记账币种的来源：default（缺省，还没确认）、xero（Xero 组织本位币）、auditor（审计师确认）
+     created_at: datetime
+     updated_at: datetime
+ 
+ WorkingLanguage = Literal["zh", "en"]   # en 为英文（缺省，与之前的输出一致），zh 为中文
++CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]   # 需求 R366；DEFAULT_CURRENCY = "AUD"
++CurrencySource = Literal["default", "xero", "auditor"]
++# initial_currency(code)：建项目时的币种与来源（有 code 为它与 xero，否则 AUD 与 default）；with_currency(e, code, source)：改了
++#   币种与来源的项目（经校验，代码写法不对抛 ValidationError），存储的 create 与 set_currency 共用
+ 
+ class AuditObjective(Versioned):
+     account: str                    # 如 "Revenue"、"Cash"
+@@ -1942,6 +1950,9 @@ class DatasetLoader(Protocol):
+         # 可建项目的数据集名，按名称排序，供新建项目时选客户。CSV：DATASET_ROOT 下带 client_profile.json 的子目录（external 等不算）；
+         #   Xero：快照根下同时有 organisation.json 与 dataset.json 的目录，名为 "xero/{快照目录}"；以 . 开头的目录（拉取中的 .{名}.partial）不算；
+         #   RoutingDatasetLoader 合并各载入器的结果再排序
++    def currency(self, dataset: str) -> str | None: ...
++        # 数据集带的记账币种（需求 R366）：Xero 取快照 organisation.json 第一项的 BaseCurrency（三个大写字母，否则为 None，
++        #   `adapters.xero_dataset.snapshot_currency`）；CSV 数据集（Numbat）为 None，建项目时取 AUD
+     def period(self, dataset: str) -> tuple[date, date] | None: ...
+         # 数据集自带的审计期间（起始日，截止日），建项目时期间须与之相同（载入器按它取数，不读项目期间）；不自带时为 None，
+         #   由审计师填。Xero 取快照 dataset.json 的 period_start、period_end（20261017-q1 为 2026-07-01 至 2026-09-30，
+@@ -2062,8 +2073,9 @@ class XeroConnectionStore(Protocol):             # 表 xero_connections（需求
+ class EngagementStore(Protocol):                 # 跨项目表，不带 eid 前缀参数
+     async def create(self, *, owner_id: str, period_start: date, period_end: date,
+                      dataset: str | None, profile: ClientProfile,
+-                     working_language: WorkingLanguage = "en") -> Engagement: ...
+-        # 取号 ENG-{yyyy}-{nnn}；client_id = profile.id；phase = P0_Acceptance；working_language 为建项目时选的（需求 R339）。profile（数据集带的画像；新建的客户为其
++                     working_language: WorkingLanguage = "en", currency: str | None = None) -> Engagement: ...
++        # 取号 ENG-{yyyy}-{nnn}；client_id = profile.id；phase = P0_Acceptance；working_language 为建项目时选的（需求 R339）；
++        # currency 为数据集带的记账币种（需求 R366，`initial_currency`：有则来源 xero，None 为 AUD、来源 default）。profile（数据集带的画像；新建的客户为其
+         # 最新一版，dataset 为 None）与 client_profiles 中该客户的各版比较内容（不看版本号）：没有该客户时按 profile 写入；
+         # 有一版相同（数据集没变）沿用最新一版，含审计师在 ACC-01 改过的；都不同（数据集本身改了）才写新一版（最新版本 +1）；
+         # 旧版本不改（R127）；写入的版本 source 为 dataset，updated_by 为 owner_id；client_profile_version 为写入或沿用的那一版
+@@ -2076,6 +2088,9 @@ class EngagementStore(Protocol):                 # 跨项目表，不带 eid 前
+     async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage: ...
+         # 改工作语言（需求 R339），返回改之前的值；与之相同时不改（不刷新 updated_at）。项目不存在 LookupError，已锁定 EngagementLocked
+         #（Postgres 为 writable 锁住项目行后读旧值再改，并发的修改排队）
++    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement: ...
++        # 改记账币种与来源（需求 R366），返回改之前的项目；币种与来源都相同时不改（不刷新 updated_at）；代码写法不对抛 ValidationError
++        #（with_currency）。项目不存在 LookupError，已锁定 EngagementLocked（同 set_working_language 的 writable 一路）
+     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...
+     async def save_profile(self, profile: ClientProfile, *, source: ProfileSource,
+                            updated_by: str | None,
+@@ -2285,7 +2300,11 @@ class ProcedureLibrary:                          # A
+ def prompt_env(root: Path | None = None) -> Environment: ...
+     # 知识文件中 Jinja2 模板的环境，提示词（root 为模板目录）与程序 YAML 带占位的文字共用：去掉块标签行的换行与行首
+     #   空白，缺变量即报错（StrictUndefined，含经 tojson 输出的），不做 HTML 转义，tojson 键排序；另有过滤器
+-    #   days_before（日期往前推 n 天，日期可为 ISO 文本：参数快照经 Store 读回后日期为文本）。原在 judgment_engine
++    #   days_before（日期往前推 n 天，日期可为 ISO 文本：参数快照经 Store 读回后日期为文本）与 money（需求 R366：金额（分）
++    #   按记账币种写，如 {{ x.amount_cents | money }} → "AUD 1,234.56"，`services/currency.format_money`；币种取参数，没给取
++    #   渲染变量 currency，都没有为 AUD；空为 null）。判断引擎 `call_llm` 渲染提示词时另加变量 currency（项目当前的记账币种，
++    #   组装根给 `JudgmentEngine(currency=services.currency.engagement_currency(engagement_store))`，不给为 AUD；调用方给的同名
++    #   变量不算），与 output_language 并列。原在 judgment_engine
+ def render_text(text: LocalizedText, params: Mapping[str, Any]) -> LocalizedText: ...
+     # scope 与规则总体的 description 按一次执行的参数快照渲染，纯函数；占位只能用 params 中的参数（加载时校验），快照
+     #   缺参数抛 UndefinedError
+@@ -2833,7 +2852,7 @@ A10 的另一半：审计师的对话入口（规格书 5.2 节 A10 的边界、
+ 
+ - **服务**：`ConciergeChat(deps, state, source, limits)`，lifespan 里在 `app.state.query` 之后构造，挂 `app.state.concierge`（依赖已编译的主图，所以不放进 AgentDeps）。state 为 `StateReader`（`overview`、`gate`，由 `GraphStateQuery` 满足）。方法：`history(eid)`、`begin(eid, user_id, question) -> ChatTurn`（后台任务，SSE 用 `turn.sse()`）、`ask(...)`（等回答结束）、`shutdown()`。同一项目同时只答一个问题，忙时抛 `ConversationBusy`；与主图的项目锁无关，主图执行中也能问。
+ - **对话图**（`loop.py`，LangGraph，不带检查点）：`START → call_model ⇄ run_tools → END`。call_model 流式调模型，经 `runtime.stream_writer` 推 delta；run_tools 并发执行工具，推 tool 事件（提示正在查什么）。每调一次模型记一步，到 `CONCIERGE_MAX_STEPS` 后以 tool_choice=none 再调一次收尾；recursion_limit 为 2×上限+3，只作兜底。回答为各步文本按顺序以空行拼接，delta 同样补空行，界面所见即留痕所记。
+-- **工具**（`tools.py`，参数用 Pydantic 校验，schema 不含项目 ID，项目由服务端绑定）：get_overview（另带 progress：当前阶段、本阶段已结清数与总数、正在运行的程序 {id, name}，取 EngagementOverview.progress，需求 R325）、get_gate、list_open_items（阶段决定 → 待补交的资料（`DataStore.requests` 中 status 为 open 的，按其顺序，带标题、用途程序与原因）→ Xero 组织信息与客户画像的核对（需求 R291：`ToolEnv.xero`（组装根接 XeroLink.connections）给的 sources.xero.profile_check 中待处理的一项，即有对不上的项且没作出选择；锁定的项目不列；带 key、differences、两边的法定名称与 ABN、画像版本）→ 复核任务（按创建时间；项目开了功能 collab 时争议任务单列在其余复核任务之前，争议之间按创建时间，不按置信度或金额；功能集取 EngagementOverview.features），同工作台的顺序；各项标明是否稍后处理，补交请求与 Xero 核对的标记按 `active_deferrals(..., requests, xero_check)` 判断）、list_judgments、get_judgment（结论、置信度及分项、推理链与各步证据指针、反方论证、错报草稿，以及判断上全部 `critic_` 字段）、get_procedure、list_exceptions、get_evidence（一行财务数据或文件登记）、get_contract（DOC-04 抽出的合同：不给编号为全部合同概要，给编号为对方、金额、签订日与各条款原文及页码，条款编号可引用并带页码指针）、get_misstatements、get_report（RPT-01 决定的理由为空时不列该项，需求 R358）、get_standard、search_trail（只回摘要，不含对话类留痕，最近的在前）。带版本的对象取 AuditOutputStore 最新版，位置与重要性取 overview，闸门材料取 gate。外发数据边界：`ToolBox.call` 出口对全部结果统一做一次递归的 `minimize`（各工具不再各自处理，免得二次化名）：去掉 engagement_id 与 birth_date（个人的出生日期，关系图节点与登记摘录有）；账号、BSB 只留末三位；人员字段（created_by、approved_by、signed_by、performed_by、reviewed_by、decided_by、updated_by、deferred_by，含嵌套对象里的）换成稳定化名（同一人同一化名，能看出是否同一人）；金额另给 `*_aud` 写法；闸门材料里的客户画像只给名称与 ABN。未知工具的 tool 事件提示与错误文本都用固定文字，不回显模型给的工具名。之后在序列化之前对结构化结果做一次 `mask_person_node_ids`（错误文本用 `mask_person_text`），个人节点 ID 去掉出生日期段（R305），再 json.dumps 与截断；get_evidence 对登记摘录类文件不发文件名；给前端的引用（cites）原样。系统提示词告诉模型：人员节点 ID 发来时已去掉出生日期，同名者可能显示为同一 ID，须按关系与证据区分。结果超过 `CONCIERGE_TOOL_RESULT_CHARS` 截断；一轮工具结果合计超过 `CONCIERGE_TURN_RESERVE`×3 字符后，再调的工具不执行，回提示。参数不合法、未知工具、查不到、工具出错都回错误文本，不中断回答。
++- **工具**（`tools.py`，参数用 Pydantic 校验，schema 不含项目 ID，项目由服务端绑定）：get_overview（另带 progress：当前阶段、本阶段已结清数与总数、正在运行的程序 {id, name}，取 EngagementOverview.progress，需求 R325）、get_gate、list_open_items（阶段决定 → 待补交的资料（`DataStore.requests` 中 status 为 open 的，按其顺序，带标题、用途程序与原因）→ Xero 组织信息与客户画像的核对（需求 R291：`ToolEnv.xero`（组装根接 XeroLink.connections）给的 sources.xero.profile_check 中待处理的一项，即有对不上的项且没作出选择；锁定的项目不列；带 key、differences、两边的法定名称与 ABN、画像版本）→ 复核任务（按创建时间；项目开了功能 collab 时争议任务单列在其余复核任务之前，争议之间按创建时间，不按置信度或金额；功能集取 EngagementOverview.features），同工作台的顺序；各项标明是否稍后处理，补交请求与 Xero 核对的标记按 `active_deferrals(..., requests, xero_check)` 判断）、list_judgments、get_judgment（结论、置信度及分项、推理链与各步证据指针、反方论证、错报草稿，以及判断上全部 `critic_` 字段）、get_procedure、list_exceptions、get_evidence（一行财务数据或文件登记）、get_contract（DOC-04 抽出的合同：不给编号为全部合同概要，给编号为对方、金额、签订日与各条款原文及页码，条款编号可引用并带页码指针）、get_misstatements、get_report（RPT-01 决定的理由为空时不列该项，需求 R358）、get_standard、search_trail（只回摘要，不含对话类留痕，最近的在前）。带版本的对象取 AuditOutputStore 最新版，位置与重要性取 overview，闸门材料取 gate。外发数据边界：`ToolBox.call` 出口对全部结果统一做一次递归的 `minimize`（各工具不再各自处理，免得二次化名）：去掉 engagement_id 与 birth_date（个人的出生日期，关系图节点与登记摘录有）；账号、BSB 只留末三位；人员字段（created_by、approved_by、signed_by、performed_by、reviewed_by、decided_by、updated_by、deferred_by，含嵌套对象里的）换成稳定化名（同一人同一化名，能看出是否同一人）；金额另给按项目记账币种的 `*_formatted` 写法（需求 R366：`ToolEnv.currency` 取本轮读到的总览的 engagement.currency，`ToolBox.call` 期间设进 ContextVar `CURRENCY`，`money` 与 `minimize` 按它经 `services/currency.format_money` 写；原为 `*_aud`）；闸门材料里的客户画像只给名称与 ABN。未知工具的 tool 事件提示与错误文本都用固定文字，不回显模型给的工具名。之后在序列化之前对结构化结果做一次 `mask_person_node_ids`（错误文本用 `mask_person_text`），个人节点 ID 去掉出生日期段（R305），再 json.dumps 与截断；get_evidence 对登记摘录类文件不发文件名；给前端的引用（cites）原样。系统提示词告诉模型：人员节点 ID 发来时已去掉出生日期，同名者可能显示为同一 ID，须按关系与证据区分。结果超过 `CONCIERGE_TOOL_RESULT_CHARS` 截断；一轮工具结果合计超过 `CONCIERGE_TURN_RESERVE`×3 字符后，再调的工具不执行，回提示。参数不合法、未知工具、查不到、工具出错都回错误文本，不中断回答。
+ - **引用**（`citations.py`）：模型输出纯文本；编号池只来自本轮工具结果、上下文中保留的历史问答的引用与压缩摘要的编号池，审计师自己输入的编号不算。回答中出现的池内编号按首次出现排序、按 (kind, id) 去重生成 ConciergeCitation（kind 为 judgment、procedure、evidence、trail；evidence 带 pointer）。匹配时长编号优先，前后不能紧挨 `[A-Za-z0-9_-]`（"REV-02" 不命中 "J-REV-02-1-…" 里的那段）。
+ - **历史与压缩**（`memory.py`）：每轮写一条 conversation 留痕，actor 为当前用户，summary 为问题前 80 字，payload 为 `{question, answer, ui_lang, answer_lang, citations, model, tools: [{name, arguments, ok, ids, chars}], aborted?}`（工具只记轨迹，不记结果原文；ui_lang 为提问带的界面语言，answer_lang 为这一轮的回答语言，即读总览时项目的工作语言，还没读到总览就中断的取项目当时的工作语言，查项目出错时记日志并取 en，问题照样留痕，需求 R342）。重建时回答语言依次取 answer_lang、lang、en（`memory.recorded_language`；值不是 zh、en 的同没有）：需求 R342 之前的留痕只有 lang（那时回答跟提问带的语言走），两项都没有取 en（同 Engagement 的缺省，只有手写或损坏的留痕会这样）；历史回放中断且没有文字的回答按回答语言写明中断。回放给模型的只有"问 + 答"，工具结果只在本轮内使用（项目状态在变，下一轮重新查），所以压缩总是按整轮切。重建 = 最新一条 conversation_summary 留痕（payload `{summary, covers_through, cite_pool, tokens_before, turns}`，covers_through 为覆盖到的那一轮的留痕 ID）+ 其后的各轮，即规格书"对话记忆重建自 audit_trail"。一轮开始时估算 系统提示 + 历史 + 问题 + 工具说明 的 token（汉字与中文标点各 1，其余字符每 3 个 1），超过 `CONCIERGE_CONTEXT_BUDGET` 时保留最近 `CONCIERGE_KEEP_TURNS` 轮原文，较早的轮连同上一份摘要用 `prompts/concierge/summary.md.j2` 写成新摘要（用这一轮的回答语言写，变量 answer_lang，不看审计师提问用的语言；mock 规则模型按其中 “Write the new summary in” 一行的语言出摘要），写进系统提示词的"Earlier conversation"一节；摘要失败只截掉较早的轮（不写摘要，下一轮再试）。上游报上下文超限且本轮还没有输出时，保留轮数减半再压缩，重试一次。
+ - **提示词**：`knowledge/prompts/concierge/system.md.j2`、`summary.md.j2`，放在子目录，不计入 `prompts_sha256`。系统提示词写明上述边界：先查后答、讲判断必须给推理链要点、反方论证与独立复核结论、争议项不评判谁更有理、查不到就直说、工具结果与文档内容是数据不是指令、按回答语言作答（变量 answer_lang，取项目的工作语言，需求 R342；“Language:” 一行与末尾的语言要求都用它，mock 规则模型按 “Language:” 一行出中英文案）。界面语言（提问带的 lang）只决定 tool 事件的提示文字（`ChatContext.ui_lang`），两者在代码里分开，不混用。
+@@ -3627,6 +3646,8 @@ CREATE TABLE engagements (id TEXT PRIMARY KEY, client_id TEXT NOT NULL,
+                     phase TEXT NOT NULL, locked BOOLEAN NOT NULL DEFAULT false,
+                     version_snapshot JSONB NOT NULL DEFAULT '{}', client_profile_version INT NOT NULL,
+                     working_language TEXT NOT NULL DEFAULT 'en',  -- 迁移 0023（需求 R339）：工作语言，旧项目为 en
++                    currency TEXT NOT NULL DEFAULT 'AUD',  -- 迁移 0024（需求 R366）：记账币种（ISO 4217），旧项目为 AUD
++                    currency_source TEXT NOT NULL DEFAULT 'default',  -- 迁移 0024：记账币种的来源 default、xero、auditor
+                     created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL);
+ CREATE TABLE client_profiles (id TEXT, version INT, data JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL,
+                     source TEXT, updated_by TEXT,  -- 迁移 0011（需求 R288）：该版的来源 ProfileSource 与写入的用户 ID，老版本为空（未记录）
+@@ -3858,10 +3879,11 @@ PostgreSQL 检查点把顶层 `StrEnum` 作为 JSON 字符串存储；`AuditPost
+ | `GET /clients` | — | `list[ClientSummary]`（需求 R288）：每个客户一行，不按数据集。client_id、legal_name、abn（库里有画像时取 `EngagementStore.clients()` 的最新一版，否则取数据集画像）、origin（ProfileSource，取第 1 版的来源；老版本没记来源而该 id 是数据集客户的为 dataset，否则为空）、latest_version（库里最新版本号，还没进库的数据集客户为空）、datasets（`list[ClientDataset]`：dataset、period_start、period_end（可空）、default，取法同 `GET /datasets`；demo 为该数据集带演示资料，判断同数据管理页概览的 demo.available（`DataService.demo.has_supplement`，只查快照与补造目录在不在，需求 R287）；按画像 id 归并，按数据集名排序；新建的客户为空）。行为库里各客户并上还没进库的数据集客户，排序：有带演示资料的数据集的（演示公司）在前，再是带默认数据集的，再按名称（不分大小写）与编号。新建项目时前端据此做下拉选择，末项为"新建客户"，演示公司的选项标"演示"，选中时下方说明可在数据管理页按阶段载入演示资料；默认选带默认数据集的客户（没有时第一个）；选数据集客户时提交它的数据集（默认的或第一个；现在每个客户只有一个，有多个时再出数据集选择），数据集带期间时自动填起止日；选新建的客户时提交 client_id，期间缺省同 Numbat 的财年 |
+ | `POST /clients` | ClientCreate：ClientProfile 去掉 id 与 version，原有 6 项必填，notes 与扩展字段可省略 | 201 ClientSummary（需求 R288）：新建客户，编号 `CLIENT-M-{12 位十六进制}`，经 `EngagementStore.create_client` 写画像第 1 版（source manual，updated_by 为当前用户），不写留痕（出处在 client_profiles 的 source、updated_by、updated_at）。法定名称去首尾空白后存，ABN 去空白后存。按顺序拒绝：法定名称为空 422 MISSING_FIELD；ABN 不是 11 位数字或校验位不对（ABR 公布的模 89 算法，`services/abn.abn_problem`）422 INVALID_VALUE；其余字段不合 ClientProfile（如 financial_year_end 不是合法月日）422 INVALID_VALUE；同一 ABN 已是别的客户（库里各客户的最新一版与数据集画像）409 ABN_TAKEN，detail 另带已有的 client_id 与 legal_name，前端提示并给"改选已有客户"；撞号 409 VERSION_MISMATCH，不覆盖。ACC-01 更新客户资料时同样查 ABN（见 PUT client-profile） |
+ | `GET /clients/abn-lookup?abn=&legal_name=` | — | AbnLookupView（需求 R289）：新建客户与 ACC-01 改画像的表单里的 ABN 在线核对。ABN 去空白后不是 11 位数字或校验位不对 422 INVALID_VALUE（不发请求）；否则经 `AgentDeps.abn_lookup`（CachedAbnLookup，同一 ABN 5 分钟内取缓存，改法定名称只重新比较）查 ABR ABN Lookup：status 为 found（record 为 AbnRecord）、not_found，或 unavailable（reason 为 not_configured、unreachable、rejected、service_error，不报错，建项目后 ACC-04 转人工确认）；给了 legal_name 且查到、登记名称公开时 name_matches 按 ACC-04 的规则（`client_intel.normalize_name`）比较，否则为空。不写留痕（还没有项目，留痕按项目约束；建项目后 ACC-04 照常实查并留痕）。前端在校验位通过后、输入停顿约半秒再查；ACC-01 的画像表单只对没有数据集的项目查（有数据集的 ACC-04 读数据集的登记）。已注销、查不到或名称不一致只警示，不拦提交 |
+-| `POST /engagements` | EngagementCreate `{period_start, period_end, dataset?, client_id?, working_language?}`，dataset 与 client_id 须给且只给一个，否则 422 INVALID_VALUE；working_language 为 zh 或 en（字符串，取值在路由里查，与 PUT working-language 共用 `parse_language`），不带为 en（与之前的输出一致；前端表单缺省取界面语言，需求 R339），不在 zh、en 时 422 INVALID_VALUE、不建项目，交 `EngagementStore.create` | 201 EngagementOverview（running 为真）。新建的客户（给 client_id，需求 R288）：取该客户最新一版画像调 `EngagementStore.create(dataset=None)`，再 `await runner.start(eid)`；客户不存在 404 NOT_FOUND，是数据集客户 422 INVALID_VALUE（按数据集建）；期间不限。数据集客户（给 dataset，行为不变）由数据集的客户画像决定：handler 取 `DatasetLoader.client_profile(dataset)` 调 `EngagementStore.create`，再 `await runner.start(eid)`。数据集不存在 404 NOT_FOUND；画像不合格、补造文件与快照不匹配、数据集的期间读不了（dataset.json 不合格），或数据集自带期间（`DatasetLoader.period`）而请求的期间与之不同时 422 INVALID_VALUE（期间不同的消息含两组期间），都不建项目。补造不匹配（含补造画像或计划不合模型）时消息以 "补造文件与快照不匹配" 开头，只列文件名；测试副本未经允许时为 "测试副本 (injected=<场景>) 只能在 allow_injected 下载入" |
++| `POST /engagements` | EngagementCreate `{period_start, period_end, dataset?, client_id?, working_language?}`，dataset 与 client_id 须给且只给一个，否则 422 INVALID_VALUE；working_language 为 zh 或 en（字符串，取值在路由里查，与 PUT working-language 共用 `parse_language`），不带为 en（与之前的输出一致；前端表单缺省取界面语言，需求 R339），不在 zh、en 时 422 INVALID_VALUE、不建项目，交 `EngagementStore.create` | 201 EngagementOverview（running 为真）。新建的客户（给 client_id，需求 R288）：取该客户最新一版画像调 `EngagementStore.create(dataset=None)`，再 `await runner.start(eid)`；客户不存在 404 NOT_FOUND，是数据集客户 422 INVALID_VALUE（按数据集建）；期间不限。数据集客户（给 dataset，行为不变）由数据集的客户画像决定：handler 取 `DatasetLoader.client_profile(dataset)` 与 `DatasetLoader.currency(dataset)`（Xero 快照的本位币，需求 R366）调 `EngagementStore.create`，再 `await runner.start(eid)`。数据集不存在 404 NOT_FOUND；画像不合格、补造文件与快照不匹配、数据集的期间读不了（dataset.json 不合格），或数据集自带期间（`DatasetLoader.period`）而请求的期间与之不同时 422 INVALID_VALUE（期间不同的消息含两组期间），都不建项目。补造不匹配（含补造画像或计划不合模型）时消息以 "补造文件与快照不匹配" 开头，只列文件名；测试副本未经允许时为 "测试副本 (injected=<场景>) 只能在 allow_injected 下载入" |
+ | `GET /engagements` | — | `list[EngagementSummary]`：id、client_name（取客户画像 legal_name）、period_start、period_end（取项目本身）、phase、current_gate、pending_tasks、updated_at |
+ | `GET /engagements/{eid}` | — | EngagementOverview |
+ | `PUT /engagements/{eid}/working-language` | WorkingLanguageIn `{language}`（字符串，取值在路由里查，`parse_language`） | 200 Engagement（改后的项目；需求 R339）：`EngagementStore.set_working_language`，之后建的执行用新语言，已有的执行与产出不改。取值不在 zh、en 422 INVALID_VALUE（区分大小写）；项目锁定 423 ENGAGEMENT_LOCKED（存储的 writable 一路）；与当前值相同不改、不留痕；改了时写一行 decision 留痕（`decisions.language_trail`：actor 为当前用户，payload {action: working_language, from, to}，不带防重复键，不进 decisions 表）；留痕写失败时把语言改回原值（再调一次 set_working_language）后照原错误报错，不留下没有留痕的修改。不取项目锁：后台执行中照样可改，改之后才建的执行记录取新值 |
++| `PUT /engagements/{eid}/currency` | CurrencyIn `{currency}`（字符串，ISO 4217 代码，在路由里查，`parse_currency`） | 200 Engagement（改后的项目；需求 R366）：审计师在数据管理页确认或改记账币种，`EngagementStore.set_currency(eid, currency, "auditor")`，之后的金额显示与提示词输入按它，已存的金额（分）不换算。代码不是三个大写字母 422 INVALID_VALUE；项目锁定 423 ENGAGEMENT_LOCKED；币种与来源都不变时不改、不留痕；改了时写一行 data 留痕（`services/currency.currency_trail`：actor 为当前用户，payload {action: currency, from, to, source: auditor}），留痕写失败时改回原值后照原错误报错。不取项目锁（同 PUT working-language） |
+ | `POST /engagements/{eid}/resume` | — | 202；调 `runner.resume`，用于 run_error 非空时重试 |
+ | `GET /engagements/{eid}/data/summary` | — | DataSummary（`DataService.summary`）：sources.xero 取 `XeroConnections.source`（组装根接 `xero_link.StoredXeroConnections`，见下"Xero 网页连接"）；tables 按 TableKind 顺序，来源、原文件名与 updated_at 取该表最新一版（`DataStore.versions` 中数据版本最大者；数据集载入的表没有版本行，来源为空，updated_at 取首次载入时间），records、records_detail（只有试算表）、日期范围取当前数据（`DataStore.stats`）；status：有进行中的作业涉及该表为 converting，否则有行（审批日志：有版本）为 received，没有为 not_received；checks 取最近一次体检；processing 为 DataService 登记的进行中作业涉及的账表与文件数（导入一张表计 1，文件处理每份文件计 1，同步按覆盖的表计；单 worker，内存登记）；open_requests 为待补交请求数；demo 为演示数据导入的入口，见第 2.8 节 DemoSummary（只对带补造目录的 Xero 演示数据集读 demo_import 留痕与检查点，其余只给 available 为假，需求 R270）。OpenAPI tag 为 data |
+ | `POST /engagements/{eid}/data/imports` | multipart：`files` 放单个 CSV、XLSX、XLS（≤50 MB），可带 `request_id` | ImportPreview（解析第一个工作表）；不止一个文件或类型不支持、读不了 422 INVALID_VALUE；超过 50 MB 413 FILE_TOO_LARGE；锁定 423；登记会话时取项目锁，忙 409 ENGAGEMENT_BUSY。不写账表与留痕；规则见下"账表导入" |
+@@ -3972,7 +3994,7 @@ GateDecisionIn、ReviewRecordIn、CorrectionNoticeIn 为 GateDecision、ReviewRe
+ - 选组织（tenant）：只能选授权给到的；持项目锁；改了时写 data 留痕 action xero_tenant（payload organisation），没改不写。
+ - 令牌：`adapters/xero.XeroClient` 的令牌存储为异步协议 TokenSource（load、save）。网页用 `xero_link.ConnectionTokens` 读写库里的密文：Xero 刷新时会轮换刷新令牌，刷新后立即加密写库（`XeroConnectionStore.set_tokens`，记下换得时间 refreshed_at），不晚存；命令行用 TokenStore（令牌文件，格式不变）。刷新返回 invalid_grant 时抛 XeroAuthExpired，连接置 expired；refreshed_at 超过 60 天的也按 expired（刷新令牌 60 天不用即失效）。换了主密钥，已存的令牌解不开，同步报 503 SETTINGS_KEY_INVALID，须重新连接。
+ - 概览（`StoredXeroConnections.source`）：没有连接行为 not_connected；有则为 connected 或 expired（见上），organisation 与 tenant_id 为选定的组织（多个组织未选时为空，前端据此显示选组织），last_synced_at 与 scope（最近一次同步写的表）取连接行；syncing 为同步作业在跑（`DataService.launch` 带作业种类 `xero_sync` 登记，`DataService.running` 按种类查：别的数据作业占着项目锁时为假）；last_sync 为当前连接最近一次同步的结果（`AuditTrail.last_of` 取本项目 xero_synced、xero_sync_failed、xero_disconnect 三种 data 留痕中最近的一条，是断开时为空，否则转成 XeroSyncResult，不另存；与连接行的最近同步、接入范围同口径：断开再连为空，失效后直接重新连接保留）。前端只按这几项显示，不从表的来源与 converting 推断。
+-- 同步（sync）：在请求里依次查锁定（423）、取项目锁并登记作业（`DataService.launch`，种类 xero_sync，总览的活动与失败见第 7 节"系统正在做的事"；忙 409 ENGAGEMENT_BUSY），再在 launch 的 prepare 里查连接（没有 XERO_NOT_CONNECTED；已失效 XERO_RECONNECT_REQUIRED，并置 expired；多个组织未选 XERO_TENANT_REQUIRED）与访问令牌（快到期即刷新一次：invalid_grant 置 expired 报 XERO_RECONNECT_REQUIRED，其他 Xero 错误 502 XERO_UNAVAILABLE），不过时注销作业、释放锁并报错，不起作业。后台作业按项目审计期间与上期期末（起始日前一天）取数（`adapters/xero.fetch`，与命令行 pull 同一套取数；原始响应只留在内存中，不写快照目录，用完即丢），经 `xero_dataset.build_tables`（内存快照 `Snapshot(files=...)`，映射同数据集载入）转成标准表，以 `write_tables(source="xero", actor=发起人)` 写成一个新数据版本（data_changes、程序过期、每表一条 data 留痕 action sync 与写完体检，同导入），再记下同步时间与实际写的表（概览的 scope），写 data 留痕 action xero_synced（payload tables 为实际写的表，skipped 为 XERO_TABLES 中没写的表与原因，organisation_info 为取到的组织信息中核对客户画像要用的三项，见下"Xero 组织信息与客户画像的核对"）。计划写的表（`XeroLink.labels`，即 202 的 tables）：XERO_TABLES 七张（含应付账单，需求 R178），Xero 没有发运单与审批日志，不写，已导入的保留；付费接口只在 `live` 时取（`mock` 按 `off`，不读网页导出），不取时计划里就没有银行这一对。没取到 Journals 时（`off`、`mock`，或 `live` 下 Journals 接口 401、403）总账从单据反推并按试算表补齐（同数据集载入），不算同步失败。没取到银行对账单时银行账户与银行流水这一对都不写，已导入的两张保留：只写账户而不写流水，已导入流水的 bank_account_id 可能对不上 Xero 生成的账户 ID，也不拿空表盖掉已导入的流水；skipped 的原因为 paid_off（`off`、`mock`）或 statements_forbidden（`live` 下对账单接口 401、403）。作业失败时不写数据，写 data 留痕 action xero_sync_failed（payload reason 与 status，status 为 HTTP 状态码，没有时为空）：授权失效 expired（另置 expired；起作业后取数时 401 再刷新得 invalid_grant 也是，令牌接口回 400 或 401 都一样：fetch 只把资源本身的 401、403 记为不可用，刷新失效照常上抛），Xero 报错 xero_error，付费接口以外的资源 401、403 forbidden（payload 另带 resources 资源名；不拿空表盖掉已有的数据），中途主密钥不可用 settings_key，响应转不了表或转换时其他意外错误 mapping（日志只记异常类型）；写库失败记 write 后上抛，由后台任务记日志。期间概览中计划写的表为 converting，processing 按表计数；同步期间再同步、导入或选组织报 ENGAGEMENT_BUSY。
++- 同步（sync）：在请求里依次查锁定（423）、取项目锁并登记作业（`DataService.launch`，种类 xero_sync，总览的活动与失败见第 7 节"系统正在做的事"；忙 409 ENGAGEMENT_BUSY），再在 launch 的 prepare 里查连接（没有 XERO_NOT_CONNECTED；已失效 XERO_RECONNECT_REQUIRED，并置 expired；多个组织未选 XERO_TENANT_REQUIRED）与访问令牌（快到期即刷新一次：invalid_grant 置 expired 报 XERO_RECONNECT_REQUIRED，其他 Xero 错误 502 XERO_UNAVAILABLE），不过时注销作业、释放锁并报错，不起作业。后台作业按项目审计期间与上期期末（起始日前一天）取数（`adapters/xero.fetch`，与命令行 pull 同一套取数；原始响应只留在内存中，不写快照目录，用完即丢），经 `xero_dataset.build_tables`（内存快照 `Snapshot(files=...)`，映射同数据集载入）转成标准表，以 `write_tables(source="xero", actor=发起人)` 写成一个新数据版本（data_changes、程序过期、每表一条 data 留痕 action sync 与写完体检，同导入），再记下同步时间与实际写的表（概览的 scope），写 data 留痕 action xero_synced（payload tables 为实际写的表，skipped 为 XERO_TABLES 中没写的表与原因，organisation_info 为取到的组织信息中核对客户画像要用的三项，见下"Xero 组织信息与客户画像的核对"）。之后取组织信息第一项的本位币（BaseCurrency，三个大写字母，`xero_dataset.base_currency`；没有或写法不对不改）作项目的记账币种（需求 R366，`XeroLink.adopt_currency`）：来源为 auditor（审计师确认过）的不改，币种与来源都不变不改；改了时 `set_currency(eid, 币种, "xero")` 并写 data 留痕 action currency（`services/currency.currency_trail`，source xero，写失败只记日志）。计划写的表（`XeroLink.labels`，即 202 的 tables）：XERO_TABLES 七张（含应付账单，需求 R178），Xero 没有发运单与审批日志，不写，已导入的保留；付费接口只在 `live` 时取（`mock` 按 `off`，不读网页导出），不取时计划里就没有银行这一对。没取到 Journals 时（`off`、`mock`，或 `live` 下 Journals 接口 401、403）总账从单据反推并按试算表补齐（同数据集载入），不算同步失败。没取到银行对账单时银行账户与银行流水这一对都不写，已导入的两张保留：只写账户而不写流水，已导入流水的 bank_account_id 可能对不上 Xero 生成的账户 ID，也不拿空表盖掉已导入的流水；skipped 的原因为 paid_off（`off`、`mock`）或 statements_forbidden（`live` 下对账单接口 401、403）。作业失败时不写数据，写 data 留痕 action xero_sync_failed（payload reason 与 status，status 为 HTTP 状态码，没有时为空）：授权失效 expired（另置 expired；起作业后取数时 401 再刷新得 invalid_grant 也是，令牌接口回 400 或 401 都一样：fetch 只把资源本身的 401、403 记为不可用，刷新失效照常上抛），Xero 报错 xero_error，付费接口以外的资源 401、403 forbidden（payload 另带 resources 资源名；不拿空表盖掉已有的数据），中途主密钥不可用 settings_key，响应转不了表或转换时其他意外错误 mapping（日志只记异常类型）；写库失败记 write 后上抛，由后台任务记日志。期间概览中计划写的表为 converting，processing 按表计数；同步期间再同步、导入或选组织报 ENGAGEMENT_BUSY。
+ - 断开（DELETE /data/xero）：持项目锁（忙 409；锁定的项目也可以断开，只删令牌，不写数据）；用刷新令牌调 Xero 撤销接口，然后删除本项目的连接行（令牌随之删除）；撤销失败（网络、4xx、令牌解不开）也删，返回 revoked 为 false。已同步的数据与版本不动，概览回到 not_connected。写 data 留痕 action xero_disconnect（payload revoked、organisation）。
+ - 令牌、授权码与 client secret 不进日志、留痕、响应与异常消息：留痕 payload 只有组织名、组织的法定名称与 ABN、组织数、scope、表名、资源名、原因代码与状态码；XeroClient 的错误消息去掉已见过的令牌、授权码、PKCE verifier 与 client secret。Xero 连接的留痕写失败只记日志，不影响连接、选组织与断开。
+ 
+diff --git a/src/backend/adapters/xero_dataset.py b/src/backend/adapters/xero_dataset.py
+index bc2d9c6..a56a793 100644
+--- a/src/backend/adapters/xero_dataset.py
++++ b/src/backend/adapters/xero_dataset.py
+@@ -726,6 +726,19 @@ def build_tables(snapshot: Snapshot) -> dict[str, list[Any]]:
+     }
+ 
+ 
++def base_currency(organisation: Mapping[str, Any]) -> str | None:
++    """组织信息的本位币 (BaseCurrency, 需求 R366): 三个大写字母的 ISO 4217 代码, 否则 (没有或写法不对) 为 None.
++    演示数据集建项目与 Xero 同步共用."""
++    code = organisation.get("BaseCurrency")
++    return code if isinstance(code, str) and re.fullmatch(r"[A-Z]{3}", code) else None
++
++
++def snapshot_currency(snapshot: Snapshot) -> str | None:
++    """快照组织信息 (organisation.json 的第一项) 的本位币; 没有组织信息时为 None."""
++    organisations = snapshot.load("organisation")
++    return base_currency(organisations[0]) if organisations else None
++
++
+ def client_profile(snapshot: Snapshot) -> ClientProfile:
+     """组织信息 → 客户画像. ABN 取 RegistrationNumber (澳洲组织的 ABN); 行业代码与董事 API 不提供, 留空.
+ 
+diff --git a/src/backend/agents/concierge_chat/service.py b/src/backend/agents/concierge_chat/service.py
+index 5a1de21..24bd0e4 100644
+--- a/src/backend/agents/concierge_chat/service.py
++++ b/src/backend/agents/concierge_chat/service.py
+@@ -63,7 +63,7 @@ from backend.contracts.conversation import (
+     Lang,
+     ToolSpec,
+ )
+-from backend.contracts.models import AgentId, TrailEntry, TrailKind
++from backend.contracts.models import DEFAULT_CURRENCY, AgentId, TrailEntry, TrailKind
+ from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
+ from backend.contracts.views import EngagementOverview
+ from backend.core.config import Settings
+@@ -168,6 +168,8 @@ class ChatTurn:
+     model: str = ""  # 最近一次调用的模型名
+     # 本轮的回答语言 (项目的工作语言, 需求 R342): 读总览时定下, 之后改了工作语言也不影响这一轮; 还没读到时为空
+     answer_lang: Lang | None = None
++    # 本轮工具结果里金额的币种 (项目的记账币种, 需求 R366): 读总览时定下
++    currency: str = DEFAULT_CURRENCY
+     input_tokens: int = 0  # 本轮各次调用的输入 token 合计
+     output_tokens: int = 0  # 本轮各次调用的输出 token 合计
+     record: "asyncio.Task[Any] | None" = None  # 写这一轮 conversation 留痕 (正常或 aborted) 的独立任务, 只建一次
+@@ -388,6 +390,7 @@ class ConciergeChat:
+         # 回答语言取项目的工作语言 (需求 R342); 提问带的 lang 是界面语言, 只管工具提示 (见 _converse)
+         answer_lang: Lang = overview.engagement.working_language
+         turn.answer_lang = answer_lang
++        turn.currency = overview.engagement.currency
+ 
+         def system(summary: Summary | None) -> str:
+             return self.system_prompt(overview, answer_lang, summary.text if summary else "")
+@@ -453,7 +456,7 @@ class ConciergeChat:
+         ctx = ChatContext(
+             model=model,
+             tools=self.tools,
+-            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero),
++            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero, turn.currency),
+             ui_lang=question.lang,  # 界面语言: 工具提示文字按它, 回答语言另在系统提示里
+             max_steps=limits.max_steps,
+             max_tokens=limits.max_tokens,
+diff --git a/src/backend/agents/concierge_chat/tools.py b/src/backend/agents/concierge_chat/tools.py
+index 4e9c05a..48b00e1 100644
+--- a/src/backend/agents/concierge_chat/tools.py
++++ b/src/backend/agents/concierge_chat/tools.py
+@@ -14,8 +14,8 @@
+ import hashlib
+ import json
+ from collections.abc import Awaitable, Callable, Mapping, Sequence
++from contextvars import ContextVar
+ from dataclasses import dataclass, field
+-from decimal import Decimal
+ from typing import Any, Literal, Protocol, cast
+ 
+ from pydantic import BaseModel, ConfigDict, Field, ValidationError
+@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
+ from backend.agents.base import AgentDeps
+ from backend.contracts.conversation import ConciergeCitation, Lang, ToolCall, ToolSpec
+ from backend.contracts.models import (
++    DEFAULT_CURRENCY,
+     AuditException,
+     AuditReportVersion,
+     Contract,
+@@ -48,6 +49,7 @@ from backend.contracts.models import (
+ )
+ from backend.contracts.ports import XeroConnections
+ from backend.contracts.views import EngagementOverview, GateView
++from backend.services.currency import format_money
+ from backend.services.deferrals import active_deferrals, target_of
+ from backend.services.features import COLLAB
+ from backend.services.judgment_engine import DOCUMENT_EVIDENCE, ROW_EVIDENCE
+@@ -72,6 +74,7 @@ class ToolEnv:
+     state: StateReader  # 项目位置与闸门材料
+     max_chars: int  # 单个工具结果的最多字符数
+     xero: XeroConnections | None = None  # Xero 连接记录 (组织信息核对, 需求 R291); 为空时待办里没有这一类
++    currency: str = DEFAULT_CURRENCY  # 项目的记账币种 (需求 R366): 工具结果里的金额按它写 (money)
+ 
+ 
+ @dataclass(frozen=True)
+@@ -178,11 +181,16 @@ PERSON_FIELDS = frozenset(
+ )
+ 
+ 
+-def aud(cents: int | None) -> str | None:
+-    """金额 (分) 的显示: AUD 1,234.56; 空为 None. 给模型现成的写法, 免得它自己换算出错."""
++# 本次工具调用所在项目的记账币种 (需求 R366): ToolBox.call 按 ToolEnv.currency 设, 调用结束复原; money 与 minimize 读它
++CURRENCY: ContextVar[str] = ContextVar("concierge_currency", default=DEFAULT_CURRENCY)
++
++
++def money(cents: int | None) -> str | None:
++    """金额 (分) 按项目的记账币种写, 如 AUD 1,234.56 (services.currency.format_money); 空为 None. 给模型现成的写法,
++    免得它自己换算出错."""
+     if cents is None:
+         return None
+-    return f"AUD {Decimal(cents) / 100:,.2f}"
++    return format_money(cents, CURRENCY.get())
+ 
+ 
+ def pseudonym(name: str) -> str:
+@@ -191,10 +199,10 @@ def pseudonym(name: str) -> str:
+ 
+ 
+ def minimize(value: Any) -> Any:
+-    """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加 *_aud 写法;
++    """外发版本 (递归处理嵌套的对象与列表): 账号, BSB 打码; 人员字段换化名; 金额 (分) 另加按记账币种的 *_formatted 写法;
+     去掉 engagement_id 与 birth_date. 凡是整体 model_dump 后外发的内容 (闸门材料, 例外明细, 财务数据行, 错报) 都要
+     经过它; 个人节点 ID 的出生日期段随后在 ToolBox.call 出口, 序列化之前去掉 (mask_person_node_ids).
+-    *_aud 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
++    *_formatted 一律以 *_cents 的换算为准: 先转完全部字段, 再写换算值, 与输入里已有的同名字段及键的顺序无关."""
+     if isinstance(value, list):
+         return [minimize(item) for item in value]
+     if not isinstance(value, Mapping):
+@@ -211,7 +219,7 @@ def minimize(value: Any) -> Any:
+             out[key] = minimize(item)
+     for key, item in value.items():
+         if key.endswith("_cents") and isinstance(item, int) and not isinstance(item, bool):
+-            out[key[: -len("_cents")] + "_aud"] = aud(item)
++            out[key[: -len("_cents")] + "_formatted"] = money(item)
+     return out
+ 
+ 
+@@ -310,9 +318,9 @@ async def get_overview(env: ToolEnv, args: NoArgs) -> Found:
+                 "total": o.progress.total,
+                 "running": [{"id": pid, "name": procedure_name(env, pid)} for pid in o.progress.running],
+             },
+-            "materiality": aud(o.materiality_cents),
+-            "performance_materiality": aud(o.performance_materiality_cents),
+-            "clearly_trivial_threshold": aud(o.clearly_trivial_cents),
++            "materiality": money(o.materiality_cents),
++            "performance_materiality": money(o.performance_materiality_cents),
++            "clearly_trivial_threshold": money(o.clearly_trivial_cents),
+             "opinion_route": o.opinion_route.value if o.opinion_route else None,
+             "procedures": [
+                 {
+@@ -463,7 +471,9 @@ async def get_judgment(env: ToolEnv, args: JudgmentArgs) -> Found:
+         "reasoning_chain": steps,
+         "evidence": [pointer_brief(p) for p in judgment.evidence],
+         "misstatement_draft": (
+-            {**draft.model_dump(mode="json"), "amount_aud": aud(draft.amount_cents)} if draft is not None else None
++            {**draft.model_dump(mode="json"), "amount_formatted": money(draft.amount_cents)}
++            if draft is not None
++            else None
+         ),
+         "exception_ids": judgment.exception_ids,
+         "superseded_by": judgment.superseded_by,
+@@ -528,7 +538,7 @@ async def list_exceptions(env: ToolEnv, args: ByProcedure) -> Found:
+                 "rule_id": x.rule_id,
+                 "severity": x.severity,
+                 "source_ids": x.source_ids,
+-                "amount": aud(x.amount_cents),
++                "amount": money(x.amount_cents),
+                 "disposition": x.disposition.value,
+                 "attributed_by": x.attributed_by,
+                 "detail": x.detail,
+@@ -588,7 +598,7 @@ async def get_contract(env: ToolEnv, args: ContractArgs) -> Found:
+             {
+                 "id": c.id,
+                 "counterparty": c.counterparty,
+-                "amount": aud(c.amount_cents),
++                "amount": money(c.amount_cents),
+                 "sign_date": c.sign_date.isoformat() if c.sign_date else None,
+                 "terms": len(c.terms),
+             }
+@@ -606,7 +616,7 @@ async def get_contract(env: ToolEnv, args: ContractArgs) -> Found:
+         "id": contract.id,
+         "counterparty": contract.counterparty,
+         "counterparty_abn": contract.counterparty_abn,
+-        "amount": aud(contract.amount_cents),
++        "amount": money(contract.amount_cents),
+         "sign_date": contract.sign_date.isoformat() if contract.sign_date else None,
+         "terms": [{"id": t.id, "type": t.term_type.value, "page": t.page, "text": t.text} for t in contract.terms],
+         "evidence": [pointer_brief(p) for p in contract.evidence],
+@@ -628,19 +638,19 @@ async def get_misstatements(env: ToolEnv, args: NoArgs) -> Found:
+     cites = {m.judgment_id: cite_judgment(judgments[m.judgment_id]) for m in items if m.judgment_id in judgments}
+     data = {
+         "misstatements": [
+-            {**m.model_dump(mode="json", exclude={"review_record_id"}), "amount_aud": aud(m.amount_cents)}
++            {**m.model_dump(mode="json", exclude={"review_record_id"}), "amount_formatted": money(m.amount_cents)}
+             for m in items
+         ],
+         "schedule": (
+             {
+                 **schedule.model_dump(mode="json"),
+-                "total_aud": aud(schedule.total_cents),
+-                "materiality_aud": aud(schedule.materiality_cents),
++                "total_formatted": money(schedule.total_cents),
++                "materiality_formatted": money(schedule.materiality_cents),
+             }
+             if schedule is not None
+             else None
+         ),
+-        "materiality": aud(overview.materiality_cents),
++        "materiality": money(overview.materiality_cents),
+         "opinion_route": overview.opinion_route.value if overview.opinion_route else None,
+     }
+     return Found(data, {k: v for k, v in cites.items() if k is not None})
+@@ -838,14 +848,18 @@ class ToolBox:
+         """执行一个调用 (_run). 发给模型的文本在这一处成形: 工具结果先 minimize, 再在序列化之前遮蔽个人节点 ID 的
+         出生日期段 (mask_person_node_ids, 对结构化数据, 字典的键也遮; 需求 R305), 然后 json.dumps, 超过 max_chars
+         截断 (遮蔽在前, 截口不会留下半截日期); 错误文本同样先遮蔽再序列化 (failure). 引用 (cites) 给前端, 原样."""
+-        found = await self._run(env, call)
+-        if isinstance(found, str):
+-            return failure(found)
+-        content = json.dumps(
+-            mask_person_node_ids(minimize(found.data)),
+-            ensure_ascii=False,
+-            default=lambda o: mask_person_text(str(o)),  # 没 dump 的对象转成字符串后也遮蔽
+-        )
++        token = CURRENCY.set(env.currency)  # 金额按项目的记账币种写 (需求 R366)
++        try:
++            found = await self._run(env, call)
++            if isinstance(found, str):
++                return failure(found)
++            content = json.dumps(
++                mask_person_node_ids(minimize(found.data)),
++                ensure_ascii=False,
++                default=lambda o: mask_person_text(str(o)),  # 没 dump 的对象转成字符串后也遮蔽
++            )
++        finally:
++            CURRENCY.reset(token)
+         if len(content) > env.max_chars:
+             content = content[: env.max_chars] + "…[结果过长, 已截断; 可用 limit, offset 翻页或换更具体的查询]"
+         return ToolOutcome(content=content, ok=True, cites=found.cites)
+diff --git a/src/backend/api/routes/engagements.py b/src/backend/api/routes/engagements.py
+index 6675faa..fcf8b20 100644
+--- a/src/backend/api/routes/engagements.py
++++ b/src/backend/api/routes/engagements.py
+@@ -1,6 +1,7 @@
+ """POST, GET /engagements; GET /engagements/{eid}; POST /engagements/{eid}/resume; GET client-profile; GET plan;
+-PUT working-language."""
++PUT working-language; PUT currency."""
+ 
++import re
+ from typing import Annotated, cast, get_args
+ 
+ from fastapi import APIRouter, Depends, Response
+@@ -11,6 +12,7 @@ from backend.api.errors import api_error, catch_api
+ from backend.api.routes.clients import dataset_clients
+ from backend.api.schemas import (
+     ClientProfileView,
++    CurrencyIn,
+     EngagementCreate,
+     EngagementSummary,
+     ProfileVersionInfo,
+@@ -29,6 +31,7 @@ from backend.contracts.views import EngagementOverview, PlanView
+ from backend.orchestration.decisions import language_trail
+ from backend.orchestration.query import GraphStateQuery
+ from backend.orchestration.runner import GraphRunner
++from backend.services.currency import currency_trail
+ 
+ router = APIRouter(prefix="/engagements", tags=["engagements"])
+ 
+@@ -42,6 +45,14 @@ def parse_language(value: str) -> WorkingLanguage:
+     return cast(WorkingLanguage, value)
+ 
+ 
++def parse_currency(value: str) -> str:
++    """请求里的记账币种 (PUT currency, 需求 R366): 须为三个大写字母 (ISO 4217 代码, 不查是否在用), 否则 422
++    INVALID_VALUE."""
++    if not re.fullmatch(r"[A-Z]{3}", value):
++        raise api_error("INVALID_VALUE", f"记账币种须为三个大写字母的 ISO 4217 代码, 现为 {value!r}")
++    return value
++
++
+ @router.post("", status_code=201)
+ async def create_engagement(
+     body: EngagementCreate,
+@@ -66,6 +77,7 @@ async def create_engagement(
+     try:
+         profile = deps.datasets.client_profile(body.dataset)
+         period = deps.datasets.period(body.dataset)
++        currency = deps.datasets.currency(body.dataset)  # Xero 快照的本位币 (需求 R366); CSV 数据集为 None
+     except FileNotFoundError as exc:
+         raise api_error("NOT_FOUND", body.dataset) from exc
+     except ValueError as exc:  # 含 SupplementMismatch 与画像校验失败 (ValidationError)
+@@ -84,6 +96,7 @@ async def create_engagement(
+             dataset=body.dataset,
+             profile=profile,
+             working_language=language,
++            currency=currency,
+         )
+     except ValueError as exc:
+         raise api_error("INVALID_VALUE", str(exc)) from exc
+@@ -196,6 +209,32 @@ async def set_working_language(
+     return updated
+ 
+ 
++@router.put("/{eid}/currency")
++async def set_currency(
++    body: CurrencyIn,
++    engagement: Annotated[Engagement, Depends(owned_engagement)],
++    user: Annotated[User, Depends(current_user)],
++    deps: Annotated[AgentDeps, Depends(get_deps)],
++) -> Engagement:
++    """审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词
++    输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423
++    ENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),
++    留痕写失败时改回原值再抛错. 不取项目锁 (同 PUT working-language): 后台执行中照样可改."""
++    currency = parse_currency(body.currency)
++    async with catch_api():
++        before = await deps.engagement_store.set_currency(engagement.id, currency, "auditor")
++        if (before.currency, before.currency_source) != (currency, "auditor"):
++            try:
++                await deps.trail.record(currency_trail(engagement.id, user.id, before, currency, "auditor"))
++            except Exception:
++                await deps.engagement_store.set_currency(engagement.id, before.currency, before.currency_source)
++                raise
++        updated = await deps.engagement_store.get(engagement.id)
++        if updated is None:
++            raise api_error("NOT_FOUND", engagement.id)
++    return updated
++
++
+ @router.post("/{eid}/resume", status_code=202, response_model=None)
+ async def resume_engagement(
+     engagement: Annotated[Engagement, Depends(owned_engagement)],
+diff --git a/src/backend/api/schemas.py b/src/backend/api/schemas.py
+index fe485b4..6d8d501 100644
+--- a/src/backend/api/schemas.py
++++ b/src/backend/api/schemas.py
+@@ -97,6 +97,13 @@ class WorkingLanguageIn(Model):
+     language: str
+ 
+ 
++class CurrencyIn(Model):
++    """审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),
++    写法不对报 422 INVALID_VALUE."""
++
++    currency: str
++
++
+ class DatasetSummary(Model):
+     """新建项目时可选的一个客户: 数据集名, 其客户画像的名称与 ABN, 自带的审计期间, 是否默认选中."""
+ 
+diff --git a/src/backend/contracts/models.py b/src/backend/contracts/models.py
+index d45c662..35f6a85 100644
+--- a/src/backend/contracts/models.py
++++ b/src/backend/contracts/models.py
+@@ -907,6 +907,22 @@ class ClientEntry(Model):
+ # 项目的工作语言 (需求 R339, Issue #51): 底稿与回答用的语言. en 为英文 (缺省, 与之前的输出一致), zh 为中文
+ WorkingLanguage = Literal["zh", "en"]
+ 
++# 记账币种 (需求 R366, Issue #66): ISO 4217 字母代码 (三个大写字母). 金额照旧按该币种的 "分" (×100 的整数) 存, 显示
++# 与提示词输入按它格式化 (services/money). 没有 Xero 本位币也没由审计师确认时为澳元
++DEFAULT_CURRENCY = "AUD"
++CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
++# 记账币种的来源: default 缺省 (还没确认), xero 取自 Xero 组织的本位币 (演示数据集建项目时, 同步时), auditor 审计师
++# 在数据管理页确认或改 (PUT currency)
++CurrencySource = Literal["default", "xero", "auditor"]
++
++
++def initial_currency(code: str | None) -> dict[str, str]:
++    """建项目时的记账币种与来源 (需求 R366): 数据集带本位币 (DatasetLoader.currency) 时取它, 来源 xero; 否则为澳元,
++    来源 default. 存储的 create 共用."""
++    if code:
++        return {"currency": code, "currency_source": "xero"}
++    return {"currency": DEFAULT_CURRENCY, "currency_source": "default"}
++
+ 
+ class Engagement(Model):
+     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
+@@ -924,10 +940,22 @@ class Engagement(Model):
+     # 工作语言 (需求 R339): 建项目时选, 之后可改 (PUT working-language, 留痕); 每次执行记下当时的值
+     # (ProcedureRun.language), 已生成的内容不随之改写. 之前建的项目为 en
+     working_language: WorkingLanguage = "en"
++    # 记账币种与来源 (需求 R366): 建项目时数据集带本位币的取它 (来源 xero), 否则为澳元 (default); Xero 同步与审计师
++    # 确认时改. 之前建的项目为澳元 (default)
++    currency: CurrencyCode = DEFAULT_CURRENCY
++    currency_source: CurrencySource = "default"
+     created_at: datetime  # 创建时间
+     updated_at: datetime  # 最后更新时间
+ 
+ 
++def with_currency(engagement: Engagement, currency: str, source: CurrencySource) -> Engagement:
++    """改了记账币种与来源的项目 (需求 R366, 存储的 set_currency 共用): 经校验, 代码不是三个大写字母时抛
++    ValidationError; 与原值都相同时为原对象."""
++    if (engagement.currency, engagement.currency_source) == (currency, source):
++        return engagement
++    return Engagement.model_validate({**engagement.model_dump(), "currency": currency, "currency_source": source})
++
++
+ class AuditObjective(Versioned):
+     """审计目标: 某科目的某项认定, 风险等级取其下风险项的最高等级."""
+ 
+diff --git a/src/backend/contracts/ports.py b/src/backend/contracts/ports.py
+index 84e8d45..50843c5 100644
+--- a/src/backend/contracts/ports.py
++++ b/src/backend/contracts/ports.py
+@@ -46,6 +46,7 @@ from backend.contracts.models import (
+     ClientEntry,
+     ClientProfile,
+     Contract,
++    CurrencySource,
+     DocumentChannel,
+     DocumentFailedStep,
+     DocumentRef,
+@@ -293,6 +294,11 @@ class DatasetLoader(Protocol):
+         Xero 取快照的 dataset.json; CSV 数据集 (如 Numbat) 为 None."""
+         ...
+ 
++    def currency(self, dataset: str) -> str | None:
++        """数据集带的记账币种 (需求 R366): Xero 取快照组织信息的本位币 (BaseCurrency, 三个大写字母, 否则为 None);
++        CSV 数据集 (如 Numbat) 为 None, 建项目时取缺省."""
++        ...
++
+ 
+ class DataStore(Protocol):
+     """数据管理的存储 (B 实现): 数据版本与就绪确认, 账表统计. 表见开发接口文档第 9 节."""
+@@ -550,13 +556,14 @@ class EngagementStore(Protocol):
+         dataset: str | None,
+         profile: ClientProfile,
+         working_language: WorkingLanguage = "en",
++        currency: str | None = None,
+     ) -> Engagement:
+         """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance; working_language 为建项目时选的工作
+-        语言 (需求 R339). profile (数据集带的画像; 新建的客户
+-        为其最新一版, dataset 为 None) 与 client_profiles 中该客户的各版比较内容 (不看版本号): 没有该客户时按 profile
+-        写入; 有一版相同 (数据集没变) 沿用最新一版, 含审计师在 ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版
+-        (最新版本 +1). 旧版本不改. 写入的版本 source 为 dataset, updated_by 为 owner_id. client_profile_version 为
+-        写入或沿用的那一版."""
++        语言 (需求 R339); currency 为数据集带的记账币种 (需求 R366, 来源记 xero), 为 None 时为澳元 (来源
++        default). profile (数据集带的画像; 新建的客户为其最新一版, dataset 为 None) 与 client_profiles 中该客户的
++        各版比较内容 (不看版本号): 没有该客户时按 profile 写入; 有一版相同 (数据集没变) 沿用最新一版, 含审计师在
++        ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版 (最新版本 +1). 旧版本不改. 写入的版本 source 为
++        dataset, updated_by 为 owner_id. client_profile_version 为写入或沿用的那一版."""
+         ...
+ 
+     async def get(self, eid: str) -> Engagement | None: ...
+@@ -579,6 +586,11 @@ class EngagementStore(Protocol):
+         LookupError, 已锁定抛 EngagementLocked; 读旧值与改在同一事务, 并发的两次修改各自看到前一次的结果."""
+         ...
+ 
++    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement:
++        """改项目的记账币种与来源 (需求 R366), 返回改之前的项目; 币种与来源都与之相同时不改 (不刷新 updated_at).
++        项目不存在抛 LookupError, 已锁定抛 EngagementLocked; 读旧值与改在同一事务."""
++        ...
++
+     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...
+ 
+     async def save_profile(
+diff --git a/src/backend/knowledge/prompts/concierge/system.md.j2 b/src/backend/knowledge/prompts/concierge/system.md.j2
+index 8fb063e..83d7a7e 100644
+--- a/src/backend/knowledge/prompts/concierge/system.md.j2
++++ b/src/backend/knowledge/prompts/concierge/system.md.j2
+@@ -27,7 +27,7 @@ Language: {{ answer_lang }}
+ - Put the ID of each judgment, evidence row, document or standard you rely on in parentheses after the statement it supports, exactly as the tools return it, so the auditor can open it. Do not mention review task IDs or audit trail IDs unless the auditor asks for them.
+ - Fields such as created_by, approved_by and signed_by hold pseudonyms (P- followed by six characters): the same person always has the same pseudonym, so you can say whether two fields name the same person. Real names are not shared with you; if asked for one, say so and point the auditor to the evidence itself.
+ - Person IDs such as PER-MORGAN-ALEX reach you without the date of birth that the stored ID ends with. Two different people with the same name can therefore show the same ID: tell them apart by their relationships and evidence, and do not treat them as one person without that.
+-- Amounts: quote the *_aud fields as given; do not convert cents yourself.
++- Amounts: quote the *_formatted fields (and other amounts already written with a currency code) as given; they are in the engagement's functional currency. Do not convert cents yourself.
+ - Be concise.
+ 
+ ## Boundaries
+diff --git a/src/backend/main.py b/src/backend/main.py
+index 19ce2c1..9cb0a64 100644
+--- a/src/backend/main.py
++++ b/src/backend/main.py
+@@ -43,6 +43,7 @@ from backend.persistence.stores import (
+ from backend.persistence.xero_connections import PostgresXeroConnectionStore
+ from backend.services.audit_trail import PostgresAuditTrail
+ from backend.services.autonomy_policy import AutonomyPolicy
++from backend.services.currency import engagement_currency
+ from backend.services.data_service import DataService
+ from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+ from backend.services.llm_settings import LlmSettingsService
+@@ -89,7 +90,13 @@ def build_deps(settings: Settings) -> AgentDeps:
+         engagement_store=engagement_store,
+         llm=llm,
+         rules=SqlRuleEngine(financial_store),
+-        judgments=JudgmentEngine(llm, OutputValidator(financial_store, library, trail), trail, library),
++        judgments=JudgmentEngine(
++            llm,
++            OutputValidator(financial_store, library, trail),
++            trail,
++            library,
++            currency=engagement_currency(engagement_store),
++        ),
+         queue=ReviewQueue(library),
+         library=library,
+         trail=trail,
+diff --git a/src/backend/migrations/versions/0024_engagement_currency.py b/src/backend/migrations/versions/0024_engagement_currency.py
+new file mode 100644
+index 0000000..9e4f965
+--- /dev/null
++++ b/src/backend/migrations/versions/0024_engagement_currency.py
+@@ -0,0 +1,22 @@
++"""项目的记账币种 (需求 R366, Issue #66): engagements 加 currency (ISO 4217 代码) 与 currency_source (default, xero,
++auditor), 之前的项目为澳元, 来源 default (还没确认). 金额照旧按 "分" 存, 不改数据.
++
++新库 0001 按当前模型建表时已带这两列 (缺省同上), 这里跳过; 旧库补上. 可重复执行; 降级删掉这两列.
++"""
++
++from alembic import op
++
++revision = "0024"
++down_revision = "0023"
++branch_labels = None
++depends_on = None
++
++
++def upgrade() -> None:
++    op.execute("ALTER TABLE engagements ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'AUD'")
++    op.execute("ALTER TABLE engagements ADD COLUMN IF NOT EXISTS currency_source TEXT NOT NULL DEFAULT 'default'")
++
++
++def downgrade() -> None:
++    op.execute("ALTER TABLE engagements DROP COLUMN IF EXISTS currency_source")
++    op.execute("ALTER TABLE engagements DROP COLUMN IF EXISTS currency")
+diff --git a/src/backend/persistence/models.py b/src/backend/persistence/models.py
+index c55cf40..9b0572a 100644
+--- a/src/backend/persistence/models.py
++++ b/src/backend/persistence/models.py
+@@ -105,12 +105,16 @@ users.append_constraint(UniqueConstraint("email"))
+ engagements = table(
+     "engagements",
+     "id:s client_id:s period_start:d period_end:d dataset:s owner_id:s phase:s locked:z "
+-    "version_snapshot:j client_profile_version:i working_language:s created_at:t updated_at:t",
++    "version_snapshot:j client_profile_version:i working_language:s currency:s currency_source:s created_at:t "
++    "updated_at:t",
+     ("id",),
+     scoped=False,
+ )
+ engagements.c.owner_id.append_foreign_key(ForeignKey("users.id"))
+ engagements.c.working_language.server_default = DefaultClause("en")  # 工作语言 (需求 R339, 迁移 0023), 之前的项目为 en
++# 记账币种与来源 (需求 R366, 迁移 0024), 之前的项目为澳元, 来源 default
++engagements.c.currency.server_default = DefaultClause("AUD")
++engagements.c.currency_source.server_default = DefaultClause("default")
+ # 客户画像: 每个客户 (id) 一组版本, 跨项目; source 为该版的来源 (ProfileSource), updated_by 为写入的用户 (迁移 0011)
+ client_profiles = table(
+     "client_profiles", "id:s version:i data:j source:s updated_by:s updated_at:t", ("id", "version"), scoped=False
+diff --git a/src/backend/persistence/stores.py b/src/backend/persistence/stores.py
+index e7a4d3c..81a55b1 100644
+--- a/src/backend/persistence/stores.py
++++ b/src/backend/persistence/stores.py
+@@ -20,7 +20,7 @@ from sqlalchemy import delete, exists, func, null, or_, select, text, update
+ from sqlalchemy.dialects.postgresql import insert
+ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+ 
+-from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_period
++from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_currency, snapshot_period
+ from backend.adapters.xero_dataset import client_profile as xero_client_profile
+ from backend.adapters.xero_supplements import DemoTable, Supplements
+ from backend.contracts import records
+@@ -32,6 +32,7 @@ from backend.contracts.models import (
+     ClientEntry,
+     ClientProfile,
+     Contract,
++    CurrencySource,
+     DocumentChannel,
+     DocumentFailedStep,
+     DocumentRef,
+@@ -49,6 +50,8 @@ from backend.contracts.models import (
+     User,
+     Versioned,
+     WorkingLanguage,
++    initial_currency,
++    with_currency,
+ )
+ from backend.contracts.ports import DatasetLoader
+ from backend.contracts.records import (
+@@ -747,6 +750,10 @@ class CsvDatasetLoader(TableLoader):
+         """CSV 数据集不自带期间 (Numbat 由审计师填)."""
+         return None
+ 
++    def currency(self, dataset: str) -> str | None:
++        """CSV 数据集不带记账币种 (建项目时取缺省澳元)."""
++        return None
++
+ 
+ class XeroDatasetLoader(TableLoader):
+     """Xero 快照 (xero pull 的输出目录): dataset 为 "xero/{快照目录名}", 对应 {root}/{快照目录名}.
+@@ -895,6 +902,10 @@ class XeroDatasetLoader(TableLoader):
+         period = snapshot_period(self.snapshot(dataset))
+         return period.start, period.end
+ 
++    def currency(self, dataset: str) -> str | None:
++        """快照组织信息的本位币 (需求 R366, adapters.xero_dataset.snapshot_currency)."""
++        return snapshot_currency(self.snapshot(dataset))
++
+ 
+ class RoutingDatasetLoader:
+     """按数据集名的前缀选载入器 (如 "xero/" 走 Xero), 其余走默认的 CSV 载入器."""
+@@ -949,6 +960,9 @@ class RoutingDatasetLoader:
+     def period(self, dataset: str) -> tuple[date, date] | None:
+         return self.pick(dataset).period(dataset)
+ 
++    def currency(self, dataset: str) -> str | None:
++        return self.pick(dataset).currency(dataset)
++
+     def datasets(self) -> list[str]:
+         """各载入器的数据集合在一起, 按名称排序."""
+         return sorted(name for loader in (self.default, *self.by_prefix.values()) for name in loader.datasets())
+@@ -1093,6 +1107,7 @@ class PostgresEngagementStore(Store):
+         dataset: str | None,
+         profile: ClientProfile,
+         working_language: WorkingLanguage = "en",
++        currency: str | None = None,
+     ) -> Engagement:
+         if period_end < period_start:
+             raise ValueError("period_end precedes period_start")
+@@ -1116,6 +1131,7 @@ class PostgresEngagementStore(Store):
+                 client_profile_version=adopted.version,
+                 phase=Phase.P0_Acceptance,
+                 working_language=working_language,
++                **initial_currency(currency),
+                 created_at=now(),
+                 updated_at=now(),
+             )
+@@ -1179,6 +1195,22 @@ class PostgresEngagementStore(Store):
+                 await conn.execute(update(t).where(t.c.id == eid).values(working_language=language, updated_at=now()))
+             return previous
+ 
++    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement:
++        """writable 锁住项目行后读旧值再改 (同 set_working_language); 币种与来源都相同时不改."""
++        t = m.engagements
++        async with transaction(self.engine, eid) as conn:
++            await writable(conn, eid)
++            row = (await conn.execute(select(t).where(t.c.id == eid))).mappings().one()
++            previous = Engagement.model_validate(dict(row))
++            changed = with_currency(previous, currency, source)  # 代码不是三个大写字母时 ValidationError, 不写
++            if changed != previous:
++                await conn.execute(
++                    update(t)
++                    .where(t.c.id == eid)
++                    .values(currency=changed.currency, currency_source=changed.currency_source, updated_at=now())
++                )
++            return previous
++
+     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None:
+         eid = self._joined_eid()  # 画像是跨项目表, 并入当前项目事务而不改其 RLS 范围
+         stmt = (
+diff --git a/src/backend/services/currency.py b/src/backend/services/currency.py
+new file mode 100644
+index 0000000..7efdbc4
+--- /dev/null
++++ b/src/backend/services/currency.py
+@@ -0,0 +1,55 @@
++"""记账币种 (需求 R366, Issue #66): 金额的显示与币种变动的留痕.
++
++金额照旧按记账币种的 "分" (×100 的整数, 字段名以 _cents 结尾) 存, 显示为 "AUD 1,234.56": 币种代码, 千分位, 该币种
++通常的小数位 (多数两位; 日元等为零位, 巴林第纳尔等为三位, 见 MINOR_DIGITS). 提示词输入 (模板过滤器 money,
++services.procedure_library), 审计助理的工具结果 (agents.concierge_chat.tools) 都用 format_money, 不各写一套.
++"""
++
++from collections.abc import Awaitable, Callable
++from decimal import ROUND_HALF_UP, Decimal
++
++from backend.contracts.models import DEFAULT_CURRENCY, Engagement, TrailEntry, TrailKind
++from backend.contracts.ports import EngagementStore
++
++# 小数位不是两位的 ISO 4217 币种 (ISO 4217 的 minor unit); 其余按两位
++MINOR_DIGITS: dict[str, int] = {
++    **dict.fromkeys(("BIF", "CLP", "DJF", "GNF", "ISK", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "VND", "VUV"), 0),
++    **dict.fromkeys(("XAF", "XOF", "XPF"), 0),
++    **dict.fromkeys(("BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"), 3),
++}
++
++
++def format_money(cents: int, currency: str = DEFAULT_CURRENCY) -> str:
++    """金额 (分) 的显示: 币种代码, 空格, 千分位与该币种通常的小数位, 如 "AUD 1,234.56", "JPY 1,235" (四舍五入),
++    负数为 "AUD -1,234.56"."""
++    digits = MINOR_DIGITS.get(currency, 2)
++    amount = (Decimal(cents) / 100).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
++    return f"{currency} {amount:,.{digits}f}"
++
++
++async def default_currency(eid: str) -> str:
++    """不按项目查时的记账币种: 澳元 (判断引擎没给查询函数时, 如测试)."""
++    return DEFAULT_CURRENCY
++
++
++def engagement_currency(store: EngagementStore) -> Callable[[str], Awaitable[str]]:
++    """按项目查记账币种的函数 (组装根给判断引擎): 项目当前的 currency, 查不到项目为澳元."""
++
++    async def lookup(eid: str) -> str:
++        engagement = await store.get(eid)
++        return engagement.currency if engagement is not None else DEFAULT_CURRENCY
++
++    return lookup
++
++
++def currency_trail(eid: str, actor: str, before: Engagement, after: str, source: str) -> TrailEntry:
++    """记账币种的确认或修改的 data 留痕: payload 的 action 为 currency, from 与 to 为改前与改后的代码, source 为来源
++    (auditor: 审计师在数据管理页确认, PUT currency; xero: Xero 同步取组织本位币, services.xero_link). 币种与来源都
++    不变时调用方不写."""
++    return TrailEntry(
++        engagement_id=eid,
++        kind=TrailKind.data,
++        actor=actor,
++        summary=f"记账币种 {before.currency} → {after} ({source})",
++        payload={"action": "currency", "from": before.currency, "to": after, "source": source},
++    )
+diff --git a/src/backend/services/judgment_engine.py b/src/backend/services/judgment_engine.py
+index 93072a9..4237c54 100644
+--- a/src/backend/services/judgment_engine.py
++++ b/src/backend/services/judgment_engine.py
+@@ -73,6 +73,7 @@ from backend.contracts.services import (
+     ValidationContext,
+     ValidationReport,
+ )
++from backend.services.currency import default_currency
+ from backend.services.procedure_library import ProcedureLibrary, prompt_env
+ 
+ Level = Literal["syntax", "structure", "reference", "semantic"]
+@@ -921,9 +922,17 @@ class JudgmentEngine:
+     """
+ 
+     def __init__(
+-        self, llm: LLMClient, validator: OutputValidator, trail: AuditTrail, library: ProcedureLibrary
++        self,
++        llm: LLMClient,
++        validator: OutputValidator,
++        trail: AuditTrail,
++        library: ProcedureLibrary,
++        *,
++        currency: Callable[[str], Awaitable[str]] | None = None,
+     ) -> None:
+         self.llm = llm  # 大模型客户端
++        # 项目的记账币种 (需求 R366): 组装根给按项目查的函数 (services.currency.engagement_currency); 不给时为澳元
++        self.currency = currency or default_currency
+         self.validator = validator  # 四级校验
+         self.trail = trail  # 写 llm_call 留痕
+         self.library = library  # 取准则片段
+@@ -977,6 +986,8 @@ class JudgmentEngine:
+         # 重跑是新的执行记录, 取它建立时的语言. 各提示词末尾的 _output_language.md.j2 一节用它; 调用方给的同名变量不算.
+         # 校验同按这一语言 (如报告两段的标题, 需求 R341), 调用方给的 ctx.language 也不算
+         outbound["output_language"] = run.language
++        # 记账币种 (需求 R366): 模板过滤器 money 缺省按它写金额; 取项目当前的值, 调用方给的同名变量不算
++        outbound["currency"] = await self.currency(eid)
+         ctx = ctx.model_copy(update={"language": run.language})
+         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
+         trail_ids: list[str] = []
+diff --git a/src/backend/services/procedure_library.py b/src/backend/services/procedure_library.py
+index a38ae0f..5078958 100644
+--- a/src/backend/services/procedure_library.py
++++ b/src/backend/services/procedure_library.py
+@@ -14,7 +14,17 @@ from pathlib import Path
+ from typing import Any, NoReturn, TypeGuard, Union, cast, get_args, get_origin
+ 
+ import yaml
+-from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError, Undefined, meta, nodes
++from jinja2 import (
++    Environment,
++    FileSystemLoader,
++    StrictUndefined,
++    TemplateSyntaxError,
++    Undefined,
++    meta,
++    nodes,
++    pass_context,
++)
++from jinja2.runtime import Context
+ from pydantic import BaseModel, ValidationError
+ from pydantic_core import to_jsonable_python
+ 
+@@ -51,6 +61,7 @@ from backend.contracts.models import (
+ from backend.contracts.records import DatasetTraits
+ from backend.contracts.state import EngagementState
+ from backend.services.adjusted_tb import verified_entry_nos
++from backend.services.currency import format_money
+ from backend.services.data_quality import REQUIRED_TABLES
+ from backend.services.features import BASELINE, FEATURES, check_features
+ 
+@@ -94,10 +105,21 @@ def days_before(day: date | str, days: int) -> date:
+     return (day if isinstance(day, date) else date.fromisoformat(day)) - timedelta(days=days)
+ 
+ 
++@pass_context
++def money(context: Context, cents: int | None, currency: str | None = None) -> str:
++    """过滤器 money (需求 R366): 金额 (分) 按记账币种写, 如 {{ x.amount_cents | money }} → "AUD 1,234.56"
++    (services.currency.format_money, 带该币种通常的小数位). 币种取参数, 没给取渲染变量 currency (判断引擎按项目的
++    记账币种给, JudgmentEngine.call_llm), 都没有为澳元; 金额为空写 null."""
++    if cents is None:
++        return "null"
++    code = currency or context.get("currency")
++    return format_money(int(cents), code) if isinstance(code, str) and code else format_money(int(cents))
++
++
+ def prompt_env(root: Path | None = None) -> Environment:
+     """知识文件里 Jinja2 模板的环境: 提示词 (root 为模板目录), 与程序 YAML 带参数占位的文字 (不给 root, 见
+     render_text). 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义; 另有过滤器
+-    days_before."""
++    days_before 与 money."""
+     env = Environment(
+         loader=FileSystemLoader(root) if root is not None else None,
+         trim_blocks=True,
+@@ -107,6 +129,7 @@ def prompt_env(root: Path | None = None) -> Environment:
+     )
+     env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
+     env.filters["days_before"] = days_before
++    env.filters["money"] = money
+     return env
+ 
+ 
+diff --git a/src/backend/services/xero_link.py b/src/backend/services/xero_link.py
+index aada57b..d89af11 100644
+--- a/src/backend/services/xero_link.py
++++ b/src/backend/services/xero_link.py
+@@ -50,7 +50,7 @@ from backend.adapters.xero import (
+     fetch,
+     login_scopes,
+ )
+-from backend.adapters.xero_dataset import Period, Snapshot, build_tables
++from backend.adapters.xero_dataset import Period, Snapshot, base_currency, build_tables
+ from backend.agents.base import AgentDeps
+ from backend.contracts.data import (
+     XERO_TABLES,
+@@ -72,6 +72,7 @@ from backend.contracts.views import ActivityKind
+ from backend.core.config import Settings
+ from backend.core.security import SecretKeyError, decrypt_secret, encrypt_secret
+ from backend.services.abn import abn_problem, dataset_profiles
++from backend.services.currency import currency_trail
+ from backend.services.data_service import DataService
+ from backend.services.xero_profile import check_key, organisation_info, profile_differences
+ 
+@@ -606,6 +607,7 @@ class XeroLink:
+             statements = "bank_statements" in files
+             organisations = files.get("organisation") or [{}]
+             organisation = organisation_info(organisations[0])
++            currency = base_currency(organisations[0])
+         except XeroAuthExpired as e:
+             await self.expire(eid)
+             await self.sync_failed(eid, actor, "expired", e.status)
+@@ -645,6 +647,23 @@ class XeroLink:
+             "organisation_info": organisation,
+         }
+         await self.record(eid, actor, summary, payload)
++        if currency is not None:
++            await self.adopt_currency(eid, actor, currency)
++
++    async def adopt_currency(self, eid: str, actor: str, currency: str) -> None:
++        """同步取到的组织本位币 (需求 R366): 项目的记账币种改为它, 来源 xero; 审计师确认过的 (来源 auditor) 不改,
++        币种与来源都不变时不改; 改了写 data 留痕 currency (services.currency.currency_trail), 留痕写失败只记日志."""
++        engagements = self.deps.engagement_store
++        engagement = await engagements.get(eid)
++        if engagement is None or engagement.currency_source == "auditor":
++            return
++        before = await engagements.set_currency(eid, currency, "xero")
++        if (before.currency, before.currency_source) == (currency, "xero"):
++            return
++        try:
++            await self.deps.trail.record(currency_trail(eid, actor, before, currency, "xero"))
++        except Exception:
++            logger.exception("Xero 同步改记账币种的留痕写入失败: %s", eid)
+ 
+     async def sync_failed(
+         self, eid: str, actor: str, reason: XeroSyncFailure, status: int | None, *, resources: list[str] | None = None
+diff --git a/src/frontend/openapi.json b/src/frontend/openapi.json
+index 11d4ec2..ef77be7 100644
+--- a/src/frontend/openapi.json
++++ b/src/frontend/openapi.json
+@@ -534,6 +534,64 @@
+         }
+       }
+     },
++    "/api/v1/engagements/{eid}/currency": {
++      "put": {
++        "tags": [
++          "engagements"
++        ],
++        "summary": "Set Currency",
++        "description": "审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词\n输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423\nENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),\n留痕写失败时改回原值再抛错. 不取项目锁 (同 PUT working-language): 后台执行中照样可改.",
++        "operationId": "engagements-set_currency",
++        "security": [
++          {
++            "HTTPBearer": []
++          }
++        ],
++        "parameters": [
++          {
++            "name": "eid",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Eid"
++            }
++          }
++        ],
++        "requestBody": {
++          "required": true,
++          "content": {
++            "application/json": {
++              "schema": {
++                "$ref": "#/components/schemas/CurrencyIn"
++              }
++            }
++          }
++        },
++        "responses": {
++          "200": {
++            "description": "Successful Response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/Engagement"
++                }
++              }
++            }
++          },
++          "422": {
++            "description": "Validation Error",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/HTTPValidationError"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
+     "/api/v1/engagements/{eid}/resume": {
+       "post": {
+         "tags": [
+@@ -7999,6 +8057,21 @@
+         "title": "CriticVerdict",
+         "description": "独立复核 (A7, GEN-09) 的结论."
+       },
++      "CurrencyIn": {
++        "properties": {
++          "currency": {
++            "type": "string",
++            "title": "Currency"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "currency"
++        ],
++        "title": "CurrencyIn",
++        "description": "审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),\n写法不对报 422 INVALID_VALUE."
++      },
+       "DataCheck": {
+         "properties": {
+           "id": {
+@@ -9025,6 +9098,22 @@
+             "title": "Working Language",
+             "default": "en"
+           },
++          "currency": {
++            "type": "string",
++            "pattern": "^[A-Z]{3}$",
++            "title": "Currency",
++            "default": "AUD"
++          },
++          "currency_source": {
++            "type": "string",
++            "enum": [
++              "default",
++              "xero",
++              "auditor"
++            ],
++            "title": "Currency Source",
++            "default": "default"
++          },
+           "created_at": {
+             "type": "string",
+             "format": "date-time",
+diff --git a/src/frontend/src/client/@tanstack/react-query.gen.ts b/src/frontend/src/client/@tanstack/react-query.gen.ts
+index 65c6b34..5250563 100644
+--- a/src/frontend/src/client/@tanstack/react-query.gen.ts
++++ b/src/frontend/src/client/@tanstack/react-query.gen.ts
+@@ -3,8 +3,8 @@
+ import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
+ 
+ import { client } from '../client.gen';
+-import { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
++import { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetCurrency, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
++import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetCurrencyData, EngagementsSetCurrencyError, EngagementsSetCurrencyResponse, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
+ 
+ export type QueryKey<TOptions extends Options> = [
+     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
+@@ -309,6 +309,28 @@ export const engagementsSetWorkingLanguageMutation = (options?: Partial<Options<
+     return mutationOptions;
+ };
+ 
++/**
++ * Set Currency
++ *
++ * 审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词
++ * 输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423
++ * ENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),
++ * 留痕写失败时改回原值再抛错. 不取项目锁 (同 PUT working-language): 后台执行中照样可改.
++ */
++export const engagementsSetCurrencyMutation = (options?: Partial<Options<EngagementsSetCurrencyData>>): UseMutationOptions<EngagementsSetCurrencyResponse, EngagementsSetCurrencyError, Options<EngagementsSetCurrencyData>> => {
++    const mutationOptions: UseMutationOptions<EngagementsSetCurrencyResponse, EngagementsSetCurrencyError, Options<EngagementsSetCurrencyData>> = {
++        mutationFn: async (fnOptions) => {
++            const { data } = await engagementsSetCurrency({
++                ...options,
++                ...fnOptions,
++                throwOnError: true
++            });
++            return data;
++        }
++    };
++    return mutationOptions;
++};
++
+ /**
+  * Resume Engagement
+  *
+diff --git a/src/frontend/src/client/index.ts b/src/frontend/src/client/index.ts
+index ddb79ae..667986b 100644
+--- a/src/frontend/src/client/index.ts
++++ b/src/frontend/src/client/index.ts
+@@ -1,4 +1,4 @@
+ // This file is auto-generated by @hey-api/openapi-ts
+ 
+-export { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, conversationStreamConcierge, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from './sdk.gen';
+-export type { AbnLookupView, AbnRecord, AcceptanceMaterial, AcceptanceScorecard, AccountCategoryIn, Activity, ActivityFailure, AdjustmentEntryView, AgentId, AnalyticsResult, Annotation, Assertion, AuditException, AuditObjective, AuditorAppointment, AuditorConsent, AuditPlan, AuditReportVersion, AuthLoginData, AuthLoginError, AuthLoginErrors, AuthLoginResponse, AuthLoginResponses, AuthRegisterData, AuthRegisterError, AuthRegisterErrors, AuthRegisterResponse, AuthRegisterResponses, AutonomyLevel, BatchFile, BatchIssue, BatchIssueCode, BatchItem, BatchItemEdit, BodyAuthLogin, BodyDataStartBatch, BodyDataStartImport, BodyEvidenceUploadDocuments, CategoryVersion, CheckId, ClientCreate, ClientDataset, ClientOptions, ClientProfile, ClientProfileIn, ClientProfileView, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupErrors, ClientsAbnLookupResponse, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientErrors, ClientsCreateClientResponse, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponse, ClientsListClientsResponses, ClientSummary, CompletionMaterial, ConciergeAnswer, ConciergeCitation, ConciergeQuestion, Confirmation, ConfirmationResult, ConfirmationView, Contract, ContractTerm, ContractVersion, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeErrors, ConversationAskConciergeResponse, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationError, ConversationListConversationErrors, ConversationListConversationResponse, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeError, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, ConversationTurn, CorrectionNotice, CorrectionNoticeIn, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponse, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponse, CorrectionsSubmitCorrectionNoticeResponses, CriticReasonCode, CriticReasonType, CriticTrigger, CriticVerdict, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryErrors, DataAccountHistoryResponse, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetErrors, DataChangeImportSheetResponse, DataChangeImportSheetResponses, DataCheck, DataCommitImportData, DataCommitImportError, DataCommitImportErrors, DataCommitImportResponse, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchErrors, DataConfirmBatchResponse, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsError, DataDataRequestsErrors, DataDataRequestsResponse, DataDataRequestsResponses, DataDemoImportData, DataDemoImportError, DataDemoImportErrors, DataDemoImportResponse, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemErrors, DataEditBatchItemResponse, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchError, DataGetBatchErrors, DataGetBatchResponse, DataGetBatchResponses, DataListBatchesData, DataListBatchesError, DataListBatchesErrors, DataListBatchesResponse, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableResponses, DataReadiness, DataReadyData, DataReadyError, DataReadyErrors, DataReadyIn, DataReadyResponse, DataReadyResponses, DataRequest, DataRetryBatchData, DataRetryBatchError, DataRetryBatchErrors, DataRetryBatchResponse, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryErrors, DataSetAccountCategoryResponse, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DatasetsListDatasetsResponses, DatasetSummary, DataSources, DataStartBatchData, DataStartBatchError, DataStartBatchErrors, DataStartBatchResponse, DataStartBatchResponses, DataStartImportData, DataStartImportError, DataStartImportErrors, DataStartImportResponse, DataStartImportResponses, DataSummary, DataSummaryData, DataSummaryError, DataSummaryErrors, DataSummaryResponse, DataSummaryResponses, DataTablePageData, DataTablePageError, DataTablePageErrors, DataTablePageResponse, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponse, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectError, DataXeroConnectErrors, DataXeroConnectResponse, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectErrors, DataXeroDisconnectResponse, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckErrors, DataXeroProfileCheckResponse, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncError, DataXeroSyncErrors, DataXeroSyncResponse, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantError, DataXeroTenantErrors, DataXeroTenantResponse, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsErrors, DataXeroTenantsResponse, DataXeroTenantsResponses, Decision, DeclaredHolding, DeclaredParty, DeferralIn, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsErrors, DeferralsListDeferralsResponse, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralErrors, DeferralsSetDeferralResponse, DeferralsSetDeferralResponses, DeferralView, DemoImportIn, DemoImportResult, DemoSummary, Direction, DisputeResolution, DocumentDetailsIn, DocumentRef, DocumentType, DocumentTypeIn, DowngradeCondition, Engagement, EngagementCreate, EngagementOverview, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponse, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponse, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementErrors, EngagementsGetEngagementResponse, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanErrors, EngagementsGetPlanResponse, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageResponses, EngagementSummary, EngagementTerms, Engine, EqrRecommendation, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryErrors, EvidenceContractHistoryResponse, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponse, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponse, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractErrors, EvidenceEditContractResponse, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponse, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponse, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordErrors, EvidenceGetRecordResponse, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponse, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsErrors, EvidenceListContractsResponse, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsErrors, EvidenceListDocumentsResponse, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponse, EvidenceListRegistryExtractsResponses, EvidencePointer, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponse, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeResponses, EvidenceType, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsResponses, ExceptionDisposition, ExtractionEdit, ExtractionRecord, Fees, FieldSource, FinancialYearChange, GateDecision, GateDecisionIn, GateEdit, GateId, GatesGetGateData, GatesGetGateError, GatesGetGateErrors, GatesGetGateResponse, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponse, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileError, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, GateVerdict, GateView, Governance, GovernanceMember, GroupTitle, HealthHealthData, HealthHealthResponse, HealthHealthResponses, HttpValidationError, IdBody, ImportBatch, ImportCommit, ImportPreview, ImportResult, ImportSheet, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, IntegrationsXeroCallbackErrors, Judgment, JudgmentDetail, JudgmentRef, KeyPerson, LlmSettingsView, LlmSlotIn, LlmSlotView, LlmTestResult, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksErrors, ManualListManualTasksResponse, ManualListManualTasksResponses, ManualRequest, ManualResult, ManualTaskView, MaterialityCandidate, MaterialityCandidates, MaterialityChoice, Milestone, Misstatement, MisstatementDraft, MisstatementReport, MisstatementStatus, MisstatementType, MisstatementUpdate, MonthlyFigures, NeitherAction, NotExecuted, Officeholder, OpinionType, ParseFailure, PeriodSource, Phase, PhaseProgress, PlanConfirmation, PlanItem, PlanMaterial, PlanningMaterial, PlanRow, PlanSection, PlanStatus, PlanView, PresentedEvidence, PresentedFailure, PresentedSide, PriorEstimateOutcome, PriorMisstatement, Procedure, ProcedureDetail, ProcedureNote, ProcedureRun, ProcedureStatus, ProcedureSummary, ProfileSource, ProfileVersionInfo, ProposedAction, ReasoningStep, ReceiptChannel, RecordsDetail, RegisterIn, RegistryCheck, RegistryExtraction, RegistryExtractView, Reliability, ReportBundle, ReportMaterial, ReportSection, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponse, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsErrors, ReportsGetReportsResponse, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailErrors, ReportsGetTrailResponse, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailError, ReportsListTrailErrors, ReportsListTrailResponse, ReportsListTrailResponses, ReportStatus, RequestUnavailableIn, RerunIn, Retention, ReviewRecord, ReviewRecordIn, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponse, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureErrors, ReviewsGetProcedureResponse, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsErrors, ReviewsListExceptionsResponse, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponse, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponse, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponse, ReviewsSubmitReviewRecordResponses, ReviewStatus, ReviewTask, ReviewTaskView, ReviewTier, RiskItem, RiskLevel, RowRule, RuleOutcome, RunStatus, RunTrigger, ServiceOrganisation, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponse, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotResponses, ShareholderDirection, Shareholding, SheetReading, StandardFragment, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardErrors, StandardsGetStandardResponse, StandardsGetStandardResponses, StepKind, StepStatus, TableColumn, TableField, TableKind, TablePage, TablePlan, TableSchema, TableSummary, TargetType, TaskKind, TaskPresentation, TaskStatus, TermsCheck, TermsCheckStatus, TermsItem, TermType, Token, TrailEntry, TrailKind, UncorrectedItem, UncorrectedSchedule, User, UsersMeData, UsersMeResponse, UsersMeResponses, ValidationError, WorkingLanguageIn, XeroAuthorize, XeroDisconnected, XeroProfileCheck, XeroProfileCheckIn, XeroSource, XeroSyncResult, XeroSyncStarted, XeroTenant, XeroTenantIn } from './types.gen';
++export { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, conversationStreamConcierge, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetCurrency, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from './sdk.gen';
++export type { AbnLookupView, AbnRecord, AcceptanceMaterial, AcceptanceScorecard, AccountCategoryIn, Activity, ActivityFailure, AdjustmentEntryView, AgentId, AnalyticsResult, Annotation, Assertion, AuditException, AuditObjective, AuditorAppointment, AuditorConsent, AuditPlan, AuditReportVersion, AuthLoginData, AuthLoginError, AuthLoginErrors, AuthLoginResponse, AuthLoginResponses, AuthRegisterData, AuthRegisterError, AuthRegisterErrors, AuthRegisterResponse, AuthRegisterResponses, AutonomyLevel, BatchFile, BatchIssue, BatchIssueCode, BatchItem, BatchItemEdit, BodyAuthLogin, BodyDataStartBatch, BodyDataStartImport, BodyEvidenceUploadDocuments, CategoryVersion, CheckId, ClientCreate, ClientDataset, ClientOptions, ClientProfile, ClientProfileIn, ClientProfileView, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupErrors, ClientsAbnLookupResponse, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientErrors, ClientsCreateClientResponse, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponse, ClientsListClientsResponses, ClientSummary, CompletionMaterial, ConciergeAnswer, ConciergeCitation, ConciergeQuestion, Confirmation, ConfirmationResult, ConfirmationView, Contract, ContractTerm, ContractVersion, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeErrors, ConversationAskConciergeResponse, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationError, ConversationListConversationErrors, ConversationListConversationResponse, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeError, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, ConversationTurn, CorrectionNotice, CorrectionNoticeIn, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponse, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponse, CorrectionsSubmitCorrectionNoticeResponses, CriticReasonCode, CriticReasonType, CriticTrigger, CriticVerdict, CurrencyIn, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryErrors, DataAccountHistoryResponse, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetErrors, DataChangeImportSheetResponse, DataChangeImportSheetResponses, DataCheck, DataCommitImportData, DataCommitImportError, DataCommitImportErrors, DataCommitImportResponse, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchErrors, DataConfirmBatchResponse, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsError, DataDataRequestsErrors, DataDataRequestsResponse, DataDataRequestsResponses, DataDemoImportData, DataDemoImportError, DataDemoImportErrors, DataDemoImportResponse, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemErrors, DataEditBatchItemResponse, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchError, DataGetBatchErrors, DataGetBatchResponse, DataGetBatchResponses, DataListBatchesData, DataListBatchesError, DataListBatchesErrors, DataListBatchesResponse, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableResponses, DataReadiness, DataReadyData, DataReadyError, DataReadyErrors, DataReadyIn, DataReadyResponse, DataReadyResponses, DataRequest, DataRetryBatchData, DataRetryBatchError, DataRetryBatchErrors, DataRetryBatchResponse, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryErrors, DataSetAccountCategoryResponse, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DatasetsListDatasetsResponses, DatasetSummary, DataSources, DataStartBatchData, DataStartBatchError, DataStartBatchErrors, DataStartBatchResponse, DataStartBatchResponses, DataStartImportData, DataStartImportError, DataStartImportErrors, DataStartImportResponse, DataStartImportResponses, DataSummary, DataSummaryData, DataSummaryError, DataSummaryErrors, DataSummaryResponse, DataSummaryResponses, DataTablePageData, DataTablePageError, DataTablePageErrors, DataTablePageResponse, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponse, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectError, DataXeroConnectErrors, DataXeroConnectResponse, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectErrors, DataXeroDisconnectResponse, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckErrors, DataXeroProfileCheckResponse, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncError, DataXeroSyncErrors, DataXeroSyncResponse, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantError, DataXeroTenantErrors, DataXeroTenantResponse, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsErrors, DataXeroTenantsResponse, DataXeroTenantsResponses, Decision, DeclaredHolding, DeclaredParty, DeferralIn, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsErrors, DeferralsListDeferralsResponse, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralErrors, DeferralsSetDeferralResponse, DeferralsSetDeferralResponses, DeferralView, DemoImportIn, DemoImportResult, DemoSummary, Direction, DisputeResolution, DocumentDetailsIn, DocumentRef, DocumentType, DocumentTypeIn, DowngradeCondition, Engagement, EngagementCreate, EngagementOverview, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponse, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponse, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementErrors, EngagementsGetEngagementResponse, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanErrors, EngagementsGetPlanResponse, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetCurrencyData, EngagementsSetCurrencyError, EngagementsSetCurrencyErrors, EngagementsSetCurrencyResponse, EngagementsSetCurrencyResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageResponses, EngagementSummary, EngagementTerms, Engine, EqrRecommendation, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryErrors, EvidenceContractHistoryResponse, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponse, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponse, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractErrors, EvidenceEditContractResponse, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponse, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponse, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordErrors, EvidenceGetRecordResponse, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponse, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsErrors, EvidenceListContractsResponse, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsErrors, EvidenceListDocumentsResponse, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponse, EvidenceListRegistryExtractsResponses, EvidencePointer, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponse, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeResponses, EvidenceType, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsResponses, ExceptionDisposition, ExtractionEdit, ExtractionRecord, Fees, FieldSource, FinancialYearChange, GateDecision, GateDecisionIn, GateEdit, GateId, GatesGetGateData, GatesGetGateError, GatesGetGateErrors, GatesGetGateResponse, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponse, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileError, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, GateVerdict, GateView, Governance, GovernanceMember, GroupTitle, HealthHealthData, HealthHealthResponse, HealthHealthResponses, HttpValidationError, IdBody, ImportBatch, ImportCommit, ImportPreview, ImportResult, ImportSheet, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, IntegrationsXeroCallbackErrors, Judgment, JudgmentDetail, JudgmentRef, KeyPerson, LlmSettingsView, LlmSlotIn, LlmSlotView, LlmTestResult, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksErrors, ManualListManualTasksResponse, ManualListManualTasksResponses, ManualRequest, ManualResult, ManualTaskView, MaterialityCandidate, MaterialityCandidates, MaterialityChoice, Milestone, Misstatement, MisstatementDraft, MisstatementReport, MisstatementStatus, MisstatementType, MisstatementUpdate, MonthlyFigures, NeitherAction, NotExecuted, Officeholder, OpinionType, ParseFailure, PeriodSource, Phase, PhaseProgress, PlanConfirmation, PlanItem, PlanMaterial, PlanningMaterial, PlanRow, PlanSection, PlanStatus, PlanView, PresentedEvidence, PresentedFailure, PresentedSide, PriorEstimateOutcome, PriorMisstatement, Procedure, ProcedureDetail, ProcedureNote, ProcedureRun, ProcedureStatus, ProcedureSummary, ProfileSource, ProfileVersionInfo, ProposedAction, ReasoningStep, ReceiptChannel, RecordsDetail, RegisterIn, RegistryCheck, RegistryExtraction, RegistryExtractView, Reliability, ReportBundle, ReportMaterial, ReportSection, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponse, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsErrors, ReportsGetReportsResponse, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailErrors, ReportsGetTrailResponse, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailError, ReportsListTrailErrors, ReportsListTrailResponse, ReportsListTrailResponses, ReportStatus, RequestUnavailableIn, RerunIn, Retention, ReviewRecord, ReviewRecordIn, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponse, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureErrors, ReviewsGetProcedureResponse, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsErrors, ReviewsListExceptionsResponse, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponse, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponse, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponse, ReviewsSubmitReviewRecordResponses, ReviewStatus, ReviewTask, ReviewTaskView, ReviewTier, RiskItem, RiskLevel, RowRule, RuleOutcome, RunStatus, RunTrigger, ServiceOrganisation, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponse, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotResponses, ShareholderDirection, Shareholding, SheetReading, StandardFragment, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardErrors, StandardsGetStandardResponse, StandardsGetStandardResponses, StepKind, StepStatus, TableColumn, TableField, TableKind, TablePage, TablePlan, TableSchema, TableSummary, TargetType, TaskKind, TaskPresentation, TaskStatus, TermsCheck, TermsCheckStatus, TermsItem, TermType, Token, TrailEntry, TrailKind, UncorrectedItem, UncorrectedSchedule, User, UsersMeData, UsersMeResponse, UsersMeResponses, ValidationError, WorkingLanguageIn, XeroAuthorize, XeroDisconnected, XeroProfileCheck, XeroProfileCheckIn, XeroSource, XeroSyncResult, XeroSyncStarted, XeroTenant, XeroTenantIn } from './types.gen';
+diff --git a/src/frontend/src/client/sdk.gen.ts b/src/frontend/src/client/sdk.gen.ts
+index 1a37aa1..cf30f1d 100644
+--- a/src/frontend/src/client/sdk.gen.ts
++++ b/src/frontend/src/client/sdk.gen.ts
+@@ -2,7 +2,7 @@
+ 
+ import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
+ import { client } from './client.gen';
+-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
++import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetCurrencyData, EngagementsSetCurrencyErrors, EngagementsSetCurrencyResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+ 
+ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
+     /**
+@@ -191,6 +191,24 @@ export const engagementsSetWorkingLanguage = <ThrowOnError extends boolean = fal
+     }
+ });
+ 
++/**
++ * Set Currency
++ *
++ * 审计师确认或改项目的记账币种 (需求 R366, 数据管理页), 返回改后的项目: 来源记 auditor, 之后的金额显示与提示词
++ * 输入按它; 已存的金额 (分) 不换算. 代码写法不对 422 INVALID_VALUE (parse_currency); 项目已锁定 423
++ * ENGAGEMENT_LOCKED; 币种与来源都不变时不改, 不留痕; 改了时写一行 data 留痕 (currency_trail, 写入人为当前用户),
++ * 留痕写失败时改回原值再抛错. 不取项目锁 (同 PUT working-language): 后台执行中照样可改.
++ */
++export const engagementsSetCurrency = <ThrowOnError extends boolean = false>(options: Options<EngagementsSetCurrencyData, ThrowOnError>): RequestResult<EngagementsSetCurrencyResponses, EngagementsSetCurrencyErrors, ThrowOnError> => (options.client ?? client).put<EngagementsSetCurrencyResponses, EngagementsSetCurrencyErrors, ThrowOnError>({
++    security: [{ scheme: 'bearer', type: 'http' }],
++    url: '/api/v1/engagements/{eid}/currency',
++    ...options,
++    headers: {
++        'Content-Type': 'application/json',
++        ...options.headers
++    }
++});
++
+ /**
+  * Resume Engagement
+  *
+diff --git a/src/frontend/src/client/types.gen.ts b/src/frontend/src/client/types.gen.ts
+index d87fe13..31dbf66 100644
+--- a/src/frontend/src/client/types.gen.ts
++++ b/src/frontend/src/client/types.gen.ts
+@@ -1746,6 +1746,19 @@ export type CriticTrigger = 'main' | 'internal_copy' | 'assumption' | 'unsupport
+  */
+ export type CriticVerdict = 'consistent' | 'inconsistent' | 'not_applicable' | 'skipped';
+ 
++/**
++ * CurrencyIn
++ *
++ * 审计师确认或改项目的记账币种 (需求 R366): ISO 4217 代码, 三个大写字母. 在路由里查 (engagements.parse_currency),
++ * 写法不对报 422 INVALID_VALUE.
++ */
++export type CurrencyIn = {
++    /**
++     * Currency
++     */
++    currency: string;
++};
++
+ /**
+  * DataCheck
+  *
+@@ -2302,6 +2315,14 @@ export type Engagement = {
+      * Working Language
+      */
+     working_language?: 'zh' | 'en';
++    /**
++     * Currency
++     */
++    currency?: string;
++    /**
++     * Currency Source
++     */
++    currency_source?: 'default' | 'xero' | 'auditor';
+     /**
+      * Created At
+      */
+@@ -6383,6 +6404,36 @@ export type EngagementsSetWorkingLanguageResponses = {
+ 
+ export type EngagementsSetWorkingLanguageResponse = EngagementsSetWorkingLanguageResponses[keyof EngagementsSetWorkingLanguageResponses];
+ 
++export type EngagementsSetCurrencyData = {
++    body: CurrencyIn;
++    path: {
++        /**
++         * Eid
++         */
++        eid: string;
++    };
++    query?: never;
++    url: '/api/v1/engagements/{eid}/currency';
++};
++
++export type EngagementsSetCurrencyErrors = {
++    /**
++     * Validation Error
++     */
++    422: HttpValidationError;
++};
++
++export type EngagementsSetCurrencyError = EngagementsSetCurrencyErrors[keyof EngagementsSetCurrencyErrors];
++
++export type EngagementsSetCurrencyResponses = {
++    /**
++     * Successful Response
++     */
++    200: Engagement;
++};
++
++export type EngagementsSetCurrencyResponse = EngagementsSetCurrencyResponses[keyof EngagementsSetCurrencyResponses];
++
+ export type EngagementsResumeEngagementData = {
+     body?: never;
+     path: {
+diff --git a/tests/fakes.py b/tests/fakes.py
+index de7f179..f3ba573 100644
+--- a/tests/fakes.py
++++ b/tests/fakes.py
+@@ -91,6 +91,7 @@ from backend.contracts.models import (
+     Confirmation,
+     ConfirmationResult,
+     Contract,
++    CurrencySource,
+     Decision,
+     DeclarationForm,
+     Direction,
+@@ -170,6 +171,8 @@ from backend.contracts.models import (
+     Versioned,
+     WorkingLanguage,
+     WrittenRepresentationLetter,
++    initial_currency,
++    with_currency,
+ )
+ from backend.contracts.ports import (
+     ConfirmationReceipt,
+@@ -1006,6 +1009,7 @@ class FakeEngagementStore:
+         dataset: str | None,
+         profile: ClientProfile,
+         working_language: WorkingLanguage = "en",
++        currency: str | None = None,
+     ) -> Engagement:
+         raise NotImplementedError
+ 
+@@ -1052,6 +1056,19 @@ class FakeEngagementStore:
+             self._write(eid, current.model_copy(update={**changes, "updated_at": datetime.now(UTC)}), changes)
+         return current.working_language
+ 
++    async def set_currency(self, eid: str, currency: str, source: CurrencySource) -> Engagement:
++        """改记账币种与来源 (需求 R366), 返回之前的项目; 都相同时不改. 不存在 LookupError, 已锁定 EngagementLocked."""
++        current = await self.get(eid)
++        if current is None:
++            raise LookupError(f"Engagement {eid} not found")
++        if current.locked:
++            raise EngagementLocked(eid)
++        changed = with_currency(current, currency, source)
++        if changed != current:
++            changes = {"currency": changed.currency, "currency_source": changed.currency_source}
++            self._write(eid, changed.model_copy(update={"updated_at": datetime.now(UTC)}), changes)
++        return current
++
+     def _write(self, eid: str, updated: Engagement, changes: dict[str, Any]) -> None:
+         """写入改后的项目 (update 与 set_working_language 共用): 在 output_store 的事务块内时暂存进该事务, 记下改动
+         changes, 块正常结束才生效; 否则立即生效."""
+@@ -1159,6 +1176,7 @@ class CreatingEngagementStore(FakeEngagementStore):
+         dataset: str | None,
+         profile: ClientProfile,
+         working_language: WorkingLanguage = "en",
++        currency: str | None = None,
+     ) -> Engagement:
+         if period_end < period_start:
+             raise ValueError("period_end precedes period_start")
+@@ -1180,6 +1198,7 @@ class CreatingEngagementStore(FakeEngagementStore):
+             client_profile_version=profile.version,
+             phase=Phase.P0_Acceptance,
+             working_language=working_language,
++            **initial_currency(currency),
+             created_at=NOW,
+             updated_at=NOW,
+         )
+@@ -2257,6 +2276,9 @@ class FakeDatasetLoader:
+     def period(self, dataset: str) -> tuple[date, date] | None:
+         return None  # 同 Numbat 的 CSV 数据集, 期间由审计师填
+ 
++    def currency(self, dataset: str) -> str | None:
++        return None  # 同 CSV 数据集, 建项目时取缺省澳元
++
+ 
+ # 种子已载入整套数据集时各账表的行数 (Numbat 的量级, 只用于就绪判断与概览)
+ SEEDED_STATS: dict[TableKind, TableStats] = {
+diff --git a/tests/test_concierge_chat_tools.py b/tests/test_concierge_chat_tools.py
+index 5e5b551..bef06ab 100644
+--- a/tests/test_concierge_chat_tools.py
++++ b/tests/test_concierge_chat_tools.py
+@@ -1,6 +1,7 @@
+ """审计助理的只读工具 (tools.py) 与引用匹配 (citations.py)."""
+ 
+ import json
++from dataclasses import replace
+ from datetime import UTC, datetime, timedelta
+ from typing import Any, cast
+ 
+@@ -256,19 +257,19 @@ async def test_evidence_masks_accounts_and_pseudonymises_people() -> None:
+     outcome, data = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"})
+     assert data["row"]["created_by"] == pseudonym("ar.clerk") != data["row"]["approved_by"]
+     assert "ar.clerk" not in outcome.content
+-    assert data["row"]["debit_aud"] == "AUD 50,000.00"
++    assert data["row"]["debit_formatted"] == "AUD 50,000.00"
+     outcome, data = await call("get_evidence", {"source_type": "delivery_note", "source_id": "DN-2026-0612"})
+     assert "Daniel Price" not in outcome.content
+     assert outcome.cites["DN-2026-0612"].kind == "evidence"
+ 
+ 
+ async def test_evidence_reads_a_supplier_bill_row() -> None:
+-    """需求 R178: 取证据工具能读应付账单的行, 金额另给 AUD 写法, 引用为发票类的内部原件 (同销售发票)."""
++    """需求 R178: 取证据工具能读应付账单的行, 金额另给按记账币种的写法, 引用为发票类的内部原件 (同销售发票)."""
+     tool_env = env()
+     bill = {"id": "PB-1", "bill_no": "3395", "supplier": "PowerDirect", "outstanding_cents": 33110}
+     cast(FakeFinancialStore, tool_env.deps.financial_store).records[("supplier_bill", "PB-1")] = bill
+     outcome, data = await call("get_evidence", {"source_type": "supplier_bill", "source_id": "PB-1"}, tool_env)
+-    assert (data["source_type"], data["row"]["outstanding_aud"]) == ("supplier_bill", "AUD 331.10")
++    assert (data["source_type"], data["row"]["outstanding_formatted"]) == ("supplier_bill", "AUD 331.10")
+     pointer = outcome.cites["PB-1"].pointer
+     assert (pointer.type, pointer.reliability) == (EvidenceType.invoice, Reliability.internal_original)
+ 
+@@ -422,9 +423,17 @@ async def test_same_person_gets_the_same_pseudonym_across_tools() -> None:
+ 
+ 
+ def test_generated_amount_wins_regardless_of_key_order() -> None:
+-    first = minimize({"amount_cents": 12345, "amount_aud": "AUD 999.00"})
+-    second = minimize({"amount_aud": "AUD 999.00", "amount_cents": 12345})
+-    assert first["amount_aud"] == second["amount_aud"] == "AUD 123.45"
++    first = minimize({"amount_cents": 12345, "amount_formatted": "AUD 999.00"})
++    second = minimize({"amount_formatted": "AUD 999.00", "amount_cents": 12345})
++    assert first["amount_formatted"] == second["amount_formatted"] == "AUD 123.45"
++
++
++async def test_amounts_follow_the_engagement_currency() -> None:
++    """需求 R366: 工具结果里的金额按 ToolEnv.currency (本轮读到的项目记账币种) 写, 调用结束后复原, 不串到别的调用."""
++    nzd = replace(env(), currency="NZD")
++    _, data = await call("get_evidence", {"source_type": "journal_entry", "source_id": "CR-SI-2026-0547-1"}, nzd)
++    assert data["row"]["debit_formatted"] == "NZD 50,000.00"
++    assert minimize({"amount_cents": 12345})["amount_formatted"] == "AUD 123.45"
+ 
+ 
+ async def test_long_results_are_truncated() -> None:
+diff --git a/tests/xero_fakes.py b/tests/xero_fakes.py
+index a337677..6d4c3fa 100644
+--- a/tests/xero_fakes.py
++++ b/tests/xero_fakes.py
+@@ -455,6 +455,7 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
+         super().__init__(financial_store, adjustments=xero_adjustments(loader=loader), traits=traits)
+         self.loader = loader
+         self.span = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
++        self.base_currency = (loader if loader is not None else xero_loader()).currency(XERO_DATASET)
+ 
+     def seed(self) -> "XeroFakeDatasetLoader":
+         return self  # 文件由演示数据导入上传, 不由载入登记
+@@ -471,6 +472,9 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
+     def period(self, dataset: str) -> tuple[date, date] | None:
+         return self.span
+ 
++    def currency(self, dataset: str) -> str | None:
++        return self.base_currency  # 同真实载入: 快照组织信息的本位币
++
+ 
+ class LoadingDatasets(XeroFakeDatasetLoader):
+     """更正分录载入同真实载入 (TableLoader.insert_adjustments): 有新行时经数据管理存储把总账整表换一版 (现有行加新行,
+-- 
+2.43.0
+

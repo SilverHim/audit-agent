@@ -1,0 +1,2674 @@
+From 154e74360d749f57ab3a64edbb57bcb7857ed6ce Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:34:43 +0000
+Subject: [PATCH] =?UTF-8?q?wip:=20R330=20=E6=9A=82=E5=81=9C=E6=97=B6?=
+ =?UTF-8?q?=E7=9A=84=E8=BF=9B=E5=BA=A6=20(=E6=9C=AA=E5=AE=8C=E6=88=90)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ ...45\345\217\243\346\226\207\346\241\243.md" |  48 +-
+ src/backend/api/routes/__init__.py            |   2 +
+ src/backend/api/routes/workpapers.py          |  73 +++
+ src/backend/api/schemas.py                    |  21 +
+ src/backend/contracts/knowledge.py            |  17 +-
+ src/backend/contracts/models.py               |  74 +++
+ src/backend/orchestration/decisions.py        |  11 +-
+ src/backend/orchestration/nodes.py            |  14 +
+ src/backend/persistence/models.py             |   3 +-
+ src/backend/services/procedure_library.py     |   2 +-
+ src/backend/services/workpapers.py            | 564 +++++++++++++++++
+ src/frontend/openapi.json                     | 574 ++++++++++++++++++
+ .../src/client/@tanstack/react-query.gen.ts   |  84 ++-
+ src/frontend/src/client/index.ts              |   4 +-
+ src/frontend/src/client/sdk.gen.ts            |  61 +-
+ src/frontend/src/client/types.gen.ts          | 330 ++++++++++
+ tests/test_api.py                             |   5 +-
+ tests/test_workpapers.py                      | 344 +++++++++++
+ 18 files changed, 2204 insertions(+), 27 deletions(-)
+ create mode 100644 src/backend/api/routes/workpapers.py
+ create mode 100644 src/backend/services/workpapers.py
+ create mode 100644 tests/test_workpapers.py
+
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index adcc8f9..dc1bdd8 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -25,6 +25,7 @@ A：智能体与编排；B：数据库与数据；C：前端与 API。这是早
+ | Procedure | 程序编号，如 `REV-02` |
+ | ProcedureRun | `RUN-{procedure_id}-{run_no}` |
+ | RunPopulation（被测总体，需求 R324） | `POP-{run_id}`，如 `POP-RUN-REV-08-1`；每次执行至多一份，只写第 1 版 |
++| Workpaper（底稿记录，需求 R330） | `WP-{索引号}`，如 `WP-D-3`；每个程序底稿一份，刷新与审计师的操作各出一版 |
+ | AuditException | `X-{procedure_id}-{run_no}-{rule_id}-{n}`，n 按 SQL 结果顺序，如 GEN-07 第 1 次执行 S01 的第 1 条为 `X-GEN-07-1-S01-1`（需求 R177）；ACC-08 的核对不过为 `X-ACC-08-{run_no}-T0n-1`（每项至多一条，需求 R198） |
+ | Judgment | `J-{procedure_id}-{run_no}-{subject_id}`；人工建的加后缀 `-H{n}`，run_no 取任务 run_id 的编号；ACC-08 的建议判断为 `J-ACC-08-{run_no}-TERMS` |
+ | ReviewTask | `T-{target_id}-v{target_version}`；带 subject_id 的 failed 任务为 `T-{target_id}-{subject_id}-v{target_version}` |
+@@ -66,6 +67,7 @@ A：智能体与编排；B：数据库与数据；C：前端与 API。这是早
+ | 过期判定与当前结果（stale_procedures、rerunnable、current_results，需求 R274） | `services/staleness.py` | A | A、C |
+ | 被测总体与对象清单（total_cents、distinct_items、judged_subjects、extracted_documents，需求 R324） | `services/populations.py`（纯函数，第 5 节） | B | A、C |
+ | 意见类型的候选与可选范围（allowed_opinions、OpinionOptions，需求 R184） | `services/opinion.py` | A | A |
++| 底稿记录（refresh、WorkpaperService，需求 R330；规则见第 7 节"底稿记录"） | `services/workpapers.py`（刷新与结论模板以纯函数为主） | B | A（编排刷新）、C（接口 tag workpapers） |
+ | 判断呈递（assemble、record_presentation，GEN-11，需求 R152；复核停留时长 dwell_seconds，需求 R153） | `services/presentation.py`（组装视图与算停留时长的纯函数，写呈递留痕的入口） | A | C |
+ | Xero 网页连接（XeroLink、StoredXeroConnections，需求 R279；组织信息与客户画像的核对，需求 R291） | 服务在 `services/xero_link.py`，核对的纯函数在 `services/xero_profile.py`；接口 XeroConnections、XeroConnectionStore 在 `contracts/ports.py`，存储实现在 `persistence/xero_connections.py` | A；存储 B | C |
+ | EngagementRunner、StateQuery、DecisionSubmit | `orchestration/` | A | C |
+@@ -142,6 +144,8 @@ DocumentChannel = Literal["auditor_upload", "bank_direct", "xero", "registry"]
+ class TermType(StrEnum):         payment, control_transfer, return_right, rebate, termination, guarantee, related_party
+ class ReportSection(StrEnum):    opinion, basis_for_opinion, directors_responsibilities, auditor_responsibilities, other_legal_and_regulatory, signature
+ class ReportStatus(StrEnum):     draft, signed   # s307C 独立性声明的签字状态同此（随报告签字，需求 R215）
++class WorkpaperStatus(StrEnum):  draft, signed, needs_rereview, final   # 底稿记录（需求 R330）：未签署、已签署、签署后依据或内容变了须重新复核、归档定稿（R337）
++class ReviewScope(StrEnum):      full, sample, conclusion_only   # 底稿签署的复核范围（ASA 230 第 9(c) 段）：全部明细、抽查、只看结论
+ class RepresentationStatus(StrEnum): requested, obtained, refused, unreliable   # 管理层声明书（ASA 580；refused 第 19、20 段，unreliable 第 16 至 18 段）
+ class ClauseStatus(StrEnum):     present, refused_accepted, missing   # 声明书中一项声明：写了、不提供而审计师接受、没写
+ class CheckItemStatus(StrEnum):  passed, failed, attention   # 合规检查一项（FIN-10、FIN-18）；attention 不判不通过，须审计师关注
+@@ -1032,8 +1036,37 @@ class IndependenceDeclaration(Versioned):  # id 固定 S307C；A10 RPT-08 起草
+     report_id: str | None = None    # 随之交给董事的报告（s307C(5)(a)(i)），如 REPORT-1；草稿为空
+     signed_by: str | None = None    # 签字人的用户 ID；草稿为空
+     run_id: str                     # 起草它的那次执行
++
++class WorkpaperNote(BaseModel):      # 底稿的一条补充说明（需求 R330）
++    text: str
++    item: str | None = None          # 补齐的必填项代号（须是该底稿可由补充说明补齐的，底稿配置 supplementable）；只是补充时为空
++    added_by: str                    # 用户 ID
++    added_at: datetime
++
++class WorkpaperSignoff(BaseModel):   # 底稿的一次签署（ASA 230 第 9(c) 段：复核人、复核日期与范围）
++    signed_by: str                   # 签署人的用户 ID
++    signed_at: datetime
++    scope: ReviewScope
++    opinion: str = ""                # 复核意见，选填（Issue #61 的口径）
++
++class Workpaper(Versioned):          # 一份程序底稿的记录（需求 R330，Issue #50），ID 为 WP-{索引号}（如 WP-D-3）；只在 Store
++    ref: str                         # 索引号（程序 YAML 的 workpaper）
++    area: str                        # 所属区
++    procedure_id: str
++    status: WorkpaperStatus = WorkpaperStatus.draft
++    basis: list[ObjectRef]           # 所依据的对象及版本（services.workpapers.basis_of），按类名与 ID 排序；变了即内容变了
++    conclusion_draft: LocalizedText | None = None   # 结论草稿（中英两种，下载时按工作语言取）：规则与判断程序按模板拼（Q27），其余为空
++    conclusion: str | None = None    # 审计师改写的结论；没改为空，草稿照留
++    conclusion_by: str | None = None
++    conclusion_at: datetime | None = None
++    notes: list[WorkpaperNote] = []
++    signoff: WorkpaperSignoff | None = None       # 当前有效的签署；未签署或须重新复核时为空
++    last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署
++    missing: list[str] = []          # 缺的必填项代号（底稿配置 required，按配置顺序），空为齐全
+ ```
+ 
++LocalizedText（中英两种写法，见第 8.1 节）定义在 contracts/models.py，contracts/knowledge.py 引入使用，底稿记录与知识文件共用。
++
+ ### 2.7 其他
+ 
+ ```python
+@@ -3214,6 +3247,13 @@ collab 关闭时两条都不查。校验之后存下的咨询记录按 `decision
+ - recover 补做时（`orchestration/recovery.py`），闸门效果从 Store 与该决定重建，不重算、不写 Store（项目可能已锁定）：程序包、风险清单、审计目标按检查点中的顺序换成 Store 最新版，阶段取 engagements 表，RPT-01 通过时报告取 Store 中的签字版，PLN-15 通过时计划取 Store 中的批准版，材料取决定绑定的 (target_id, target_version)（PLN-15 驳回与信息不足只补决定与绑定的计划，驳回补做后由路由回 plan_draft 起草下一修订，需求 R206）；只在图状态中的重要性三项按 GateDecision.materiality 与该版 MaterialityCandidates 重算，opinion_route 取 disposition。检查点中没有的闸门决定按 decided_at 逐个补，决定不是检查点当前停着的闸门的，不补做并报错（记入 run_error）。每个决定先按 find_success 补写缺失的 decision 留痕与 transition 留痕（同键跳过），再以该闸门节点身份 `aupdate_state`：留痕写失败时决定仍不在检查点里，下次恢复照样补做。客户画像：项目采用的版本高于检查点的，先补写留痕，再以 gate_acc01 身份写入 client_profile_version，路由回 p0_inputs 重跑；补写的留痕键为 `{client_id}-v{version}`，画像不记更新人，actor 记 A1。复核决定：检查点（含等待载荷 records）中没有的 ReviewRecord，补写其留痕后按节点读回的顺序逐个以 `Command(resume=record_id)` 交给节点（每交一个停在下一次等待）。顺序不靠时间：键为（程序在该图节点内的执行次序（`nodes.node_table`，按项目的功能集，功能 misstatement 打开时含完成阶段的错报闭环节点；节点也按它执行，只取程序包中有的，见 `nodes.node_procedures`），0，任务 ID）排 rerun 以外的决定（节点每次等待前按 Store 判断，读回后从 Store 整体并入，交回顺序不影响等待次数与结果），（次序，1，决定所针对任务所属 Run 的 run_no）排 rerun 决定（同一程序每次失败只对应一个 rerun 决定，一轮失败算一组，下一轮由它触发）；同一程序同一轮有两个 rerun 决定时报错。manual 任务（人工程序，需求 R93）的决定按（次序，1，任务所属 Run 的 run_no，任务 ID）排：节点读回它时即调 owner 的 collect，要看到它所属的那次派发，故排在触发该次派发的 rerun（上一轮的 run_no）之后（派发失败再 rerun 后提交的结果，先交它会落到上一轮的等待上）。P2 的等复核（await_events）每次只交一个决定：读回后节点从 Store 整体读回，与交哪个无关。等待中的节点带着错误（读回某个决定后出错）时，检查点留着那次运行的错误与恢复值，节点再停下等待时错误仍在，DecisionSubmit 会按卡住的等待拒绝后续决定：此时先以 `aupdate_state(config, None, as_node="__copy__")` 复制检查点丢掉这些待写记录，节点从头执行，本节点已读回的决定也一并按上述顺序重新交回。补写的 decision 留痕与提交时一致：rerun 一并关闭的同组任务从 Store 推回（同程序、同一次执行、已 decided 而没有自己的复核决定的可重跑任务：failed、unattributed）。顺序每次从 Store 重算，复制后或只交回一部分时中断，下次补做接着交。图停在闸门，或既不在等待也没有待执行的节点时报错。过期重跑请求（`recovery.catch_up_rerun`）：检查点中没有的 RerunRequest 按 requested_at 逐个补，图须停在可重跑的位置（同提交时，`runner.at_rerun_point`），否则报错；先按 find_success 补写缺失的 decision 留痕（`decisions.rerun_trail`）与 transition 留痕（阶段键的重跑次数计入这个请求），再以 fan_in 身份写入提交时的同样字段：请求、程序包（Store 最新版）、请求关闭的任务（Store 最新版，缺任何一个报错）、Store 中函证的最新版本与阶段（engagements 表），之后由 after_fan_in 派发。依次补闸门决定、画像、过期重跑请求、复核决定、更正通知（见上文更正通知）；再补做一次不改检查点与 Store。
+ - 节点读回决定后出错（下一次等待还没登记），LangGraph 在之后的每次运行里都会把那次的恢复值再交给一个 `interrupt()`：重放时第一次等待取到它，下一次等待又取到它。P2 以外程序的节点内等待因此跳过已读回过的决定 ID（等待载荷 records 中的），接着再等；再次以同一决定补做也不会被当成新决定。
+ 
++**底稿记录**（需求 R330，Issue #50，`services/workpapers.py`）。程序包中每个有底稿索引号的程序（第 8.1 节 workpaper；GEN-09 没有）一份 Workpaper（第 2.6 节，ID `WP-{索引号}`），只在 Store。
++- 刷新（`workpapers.refresh(deps, eid)`）：读 Store 中各对象的最新版本，逐份算依据、结论草稿与缺项，变了的在一个事务内写出新版本（写入者为程序的执行智能体），不写留痕；项目不存在或已锁定（签字、拒绝承接）时不刷新。调用点：`GraphNodes` 在程序执行终态（attempt、fan_in、增量实例 scan_increment、人工程序整理结果 collect）提交并写完留痕之后，`GraphDecisionSubmit._deciding` 在决定提交之后、交给 runner 之前（仍持项目锁）；出错只记日志，图照常推进，下一次刷新补上。外面的数据操作（上传即处理等）不刷新，下一次刷新带上。
++- 依据（`basis_of`）：本程序的终态执行；当前执行（最后一次非增量执行与其后的增量执行）的被测总体与例外；本程序的判断（含人工判断）；本程序闸门的决定（PLN-01、PLN-03 共用 PLN-01/03）；模板 outputs 中材料类字段的全部对象（`OUTPUT_BASIS`：评分卡、约定核对、重要性候选、分析结果、总体审计计划、函证、关系图、汇总表、错报、报告版本）。各为 ObjectRef（类名、ID、版本），按类名与 ID 排序；没有依据时不建记录。
++- 版本：第 1 版为 draft。之后依据、结论草稿或缺项任一变了才出新版本（同一依据再刷新不写，幂等）；依据变了而已签署时改为 needs_rereview，signoff 移到 last_signoff。审计师的三种操作（第 10 节）持项目锁，先刷新再在最新一版上改：改结论与补充说明在已签署时同样改为 needs_rereview；签署出 signed，同一人以同样的范围与意见再签已签署的不再写。各操作提交后写一行 decision 留痕（procedure_id 为所属程序，payload `{action, ref, version, ...}`，防重复键 `{eid}:workpaper:{索引号}:v{版本}`）。签署不阻塞 FIN-01 与 RPT-01；归档定稿 final 见 R337。
++- 结论草稿（Q27 选项 1，模板拼，中英两种）：规则程序（`workpaper_kind` 为 rule）取最后一次成功执行：范围（模板 scope 按参数快照渲染）；被测对象数与金额（去重，`populations.distinct_items`）；各执行了的规则一句：有检查项名称（规则 check）用它，没有时中文用规则名、英文为 Rule {编号}；emit rows 的规则写返回行数；emit exception 的写总体项数、其中出了例外的项数（按例外的第一个 source_id 去重）与不在该规则总体中的不作判断项数，总体未记录的只写例外数；没有执行的规则与原因；例外数、待处理数（open 或 unattributed）与已由判断解释数。判断程序（judgment）列各对象模型最后一次的判断（人工 -H 不算）：建议、置信度（两位小数）与复核状态，待复核几项，末句"最终结论待审计师复核后确定"。其余程序为空（R332、R333 补）。
++- 缺项（`missing_of`）：该底稿的必填项（`ProcedureLibrary.required_items`）逐项按 `SATISFIED` 判断，可由补充说明补齐的另看补充说明的 item。编制人与完成日期、程序与结果：有终态执行或闸门决定；复核人、复核日期与范围：有有效签署；结论：有审计师结论或草稿；被测项目：规则程序当前执行的总体都记录了，判断程序有判断；A-2 的金额：PLN-01/03 最后一次通过带重要性，考虑因素：该决定写了理由；X 的临界值与累计错报：有汇总表，结论：FIN-01 最后一次通过写了理由；A-1 的策略与计划：有已批准的计划，修改：没有修订（只有第 1 修订）或各修订写了理由（ASA 300 第 12(c) 段、ASA 320 第 14 段的修订是有条件的要求，没有修订算已记录）。
++
+ ## 8. 知识文件格式（knowledge/）
+ 
+ ### 8.1 程序 YAML
+@@ -3224,7 +3264,7 @@ class Trigger(BaseModel):
+     assertions: list[Assertion]
+     level: list[RiskLevel]
+ 
+-class LocalizedText(BaseModel):      # 中英两种写法（需求 R324），两种都须给出，去掉首尾空白后不为空
++class LocalizedText(BaseModel):      # 中英两种写法（需求 R324），两种都须给出，去掉首尾空白后不为空；定义在 contracts/models.py（底稿记录共用，R330），knowledge.py 引入
+     zh: str
+     en: str
+ 
+@@ -3777,7 +3817,7 @@ CREATE INDEX ix_audit_trail_engagement_key ON audit_trail (engagement_id, idempo
+ |---|---|
+ | audit_objectives | AuditObjective |
+ | risk_register | RiskItem |
+-| procedures | Procedure、ProcedureRun、RunPopulation（被测总体，需求 R324；kind 为字符串列，不需迁移；不在编排状态中） |
++| procedures | Procedure、ProcedureRun、RunPopulation（被测总体，需求 R324）、Workpaper（底稿记录，需求 R330）；后两种 kind 为字符串列，不需迁移，不在编排状态中 |
+ | exceptions | AuditException |
+ | judgments | Judgment |
+ | review_tasks | ReviewTask |
+@@ -3927,6 +3967,10 @@ PostgreSQL 检查点把顶层 `StrEnum` 作为 JSON 字符串存储；`AuditPost
+ | `GET /engagements/{eid}/conversation` | — | `list[ConversationTurn]`：审计助理的历史问答，按时间升序；规则见下 |
+ | `POST /engagements/{eid}/conversation` | ConciergeQuestion | ConciergeAnswer：一次性返回回答 |
+ | `POST /engagements/{eid}/conversation/stream` | ConciergeQuestion | `text/event-stream`：delta、tool、citations、done，出错为 error |
++| `GET /engagements/{eid}/workpapers` | — | `list[Workpaper]`：底稿记录（各最新版本），按档案顺序（`ProcedureLibrary.workpaper_order`）；程序还没执行、闸门还没决定的没有记录。规则见第 7 节"底稿记录"。OpenAPI tag 为 workpapers |
++| `POST /engagements/{eid}/workpapers/{ref}/conclusion` | WorkpaperConclusionIn `{text}` | Workpaper（新版本）：审计师改写结论，草稿照留，已签署的改为 needs_rereview；decision 留痕（action workpaper_conclusion）。text 为空 422 MISSING_FIELD；底稿没有记录 404；锁定 423；忙 409 |
++| `POST /engagements/{eid}/workpapers/{ref}/notes` | WorkpaperNoteIn `{text, item}` | Workpaper（新版本）：补充说明；item 补齐该底稿可由补充说明补齐的必填项（之后不在 missing），不是可补齐的 422 INVALID_VALUE；decision 留痕（action workpaper_note）。text 为空 422 MISSING_FIELD；404、423、409 同上 |
++| `POST /engagements/{eid}/workpapers/{ref}/signoff` | WorkpaperSignoffIn `{scope, opinion}` | Workpaper（新版本，status signed，signoff 记签署人、时间、范围与意见）；opinion 选填；scope 不认识 422（请求体校验）；decision 留痕（action workpaper_signoff）。不阻塞 FIN-01 与 RPT-01；404、423、409 同上 |
+ | `GET /standards/{fragment_id}` | — | StandardFragment |
+ | `GET /settings/llm` | — | LlmSettingsView：primary、review 两套 LlmSlotView；规则见下 |
+ | `PUT /settings/llm/{slot}` | LlmSlotIn | LlmSlotView（保存后的）；slot 为 primary 或 review |
+diff --git a/src/backend/api/routes/__init__.py b/src/backend/api/routes/__init__.py
+index b46ba06..5da7b21 100644
+--- a/src/backend/api/routes/__init__.py
++++ b/src/backend/api/routes/__init__.py
+@@ -19,6 +19,7 @@ from backend.api.routes import (
+     settings,
+     standards,
+     users,
++    workpapers,
+ )
+ 
+ api_router = APIRouter()
+@@ -41,6 +42,7 @@ for module in (
+     standards,
+     settings,
+     integrations,
++    workpapers,
+ ):
+     api_router.include_router(module.router)
+ api_router.include_router(data.schemas_router)
+diff --git a/src/backend/api/routes/workpapers.py b/src/backend/api/routes/workpapers.py
+new file mode 100644
+index 0000000..173b300
+--- /dev/null
++++ b/src/backend/api/routes/workpapers.py
+@@ -0,0 +1,73 @@
++"""工作底稿的记录 (需求 R330, Issue #50): 列表, 审计师改写结论, 补充说明与签署. 规则见 services.workpapers."""
++
++from typing import Annotated
++
++from fastapi import APIRouter, Depends
++
++from backend.agents.base import AgentDeps
++from backend.api.deps import current_user, get_deps, get_runner, owned_engagement
++from backend.api.errors import catch_api
++from backend.api.schemas import WorkpaperConclusionIn, WorkpaperNoteIn, WorkpaperSignoffIn
++from backend.contracts.models import Engagement, User, Workpaper
++from backend.orchestration.runner import GraphRunner
++from backend.services.workpapers import WorkpaperService
++
++router = APIRouter(prefix="/engagements/{eid}", tags=["workpapers"])
++
++
++def get_workpapers(
++    deps: Annotated[AgentDeps, Depends(get_deps)], runner: Annotated[GraphRunner, Depends(get_runner)]
++) -> WorkpaperService:
++    return WorkpaperService(deps, runner)
++
++
++@router.get("/workpapers")
++async def list_workpapers(
++    engagement: Annotated[Engagement, Depends(owned_engagement)],
++    service: Annotated[WorkpaperService, Depends(get_workpapers)],
++) -> list[Workpaper]:
++    """项目的底稿记录 (各最新版本), 按档案顺序; 程序还没执行 (闸门还没决定) 的没有记录."""
++    async with catch_api():
++        return await service.list(engagement.id)
++
++
++@router.post("/workpapers/{ref}/conclusion")
++async def conclude_workpaper(
++    ref: str,
++    body: WorkpaperConclusionIn,
++    engagement: Annotated[Engagement, Depends(owned_engagement)],
++    user: Annotated[User, Depends(current_user)],
++    service: Annotated[WorkpaperService, Depends(get_workpapers)],
++) -> Workpaper:
++    """改写底稿结论, 返回新版本 (草稿照留; 已签署的改为须重新复核), 写 decision 留痕. 文字为空 422 MISSING_FIELD;
++    底稿没有记录 404; 锁定 423; 忙 409."""
++    async with catch_api():
++        return await service.conclude(engagement.id, ref, body.text, user.id)
++
++
++@router.post("/workpapers/{ref}/notes")
++async def note_workpaper(
++    ref: str,
++    body: WorkpaperNoteIn,
++    engagement: Annotated[Engagement, Depends(owned_engagement)],
++    user: Annotated[User, Depends(current_user)],
++    service: Annotated[WorkpaperService, Depends(get_workpapers)],
++) -> Workpaper:
++    """补充底稿说明, 返回新版本; item 补齐该底稿可由补充说明补齐的必填项 (之后不再列在 missing). 文字为空 422
++    MISSING_FIELD; item 不是可补齐的 422 INVALID_VALUE; 底稿没有记录 404; 锁定 423; 忙 409."""
++    async with catch_api():
++        return await service.note(engagement.id, ref, body.text, body.item, user.id)
++
++
++@router.post("/workpapers/{ref}/signoff")
++async def sign_workpaper(
++    ref: str,
++    body: WorkpaperSignoffIn,
++    engagement: Annotated[Engagement, Depends(owned_engagement)],
++    user: Annotated[User, Depends(current_user)],
++    service: Annotated[WorkpaperService, Depends(get_workpapers)],
++) -> Workpaper:
++    """签署底稿, 返回新版本 (status signed, 记签署人, 时间, 复核范围与意见), 写 decision 留痕. 不阻塞 FIN-01 与
++    RPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409."""
++    async with catch_api():
++        return await service.sign(engagement.id, ref, body.scope, body.opinion, user.id)
+diff --git a/src/backend/api/schemas.py b/src/backend/api/schemas.py
+index fe485b4..1dafdde 100644
+--- a/src/backend/api/schemas.py
++++ b/src/backend/api/schemas.py
+@@ -54,6 +54,7 @@ from backend.contracts.models import (
+     ReportingFramework,
+     Retention,
+     ReviewRecord,
++    ReviewScope,
+     ReviewTask,
+     ReviewTier,
+     ServiceOrganisation,
+@@ -482,6 +483,26 @@ class XeroDisconnected(Model):
+     revoked: bool  # Xero 侧是否已撤销授权; 为 false 时本地令牌已删, 须到 Xero 后台的 Connected apps 手动移除
+ 
+ 
++class WorkpaperConclusionIn(Model):
++    """审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330)."""
++
++    text: str  # 结论, 去首尾空白后不能为空 (MISSING_FIELD)
++
++
++class WorkpaperNoteIn(Model):
++    """审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330)."""
++
++    text: str  # 说明, 去首尾空白后不能为空 (MISSING_FIELD)
++    item: str | None = None  # 补齐的必填项代号 (须是该底稿可由补充说明补齐的), 只是补充时不给
++
++
++class WorkpaperSignoffIn(Model):
++    """审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."""
++
++    scope: ReviewScope  # 复核范围: full 全部明细, sample 抽查, conclusion_only 只看结论
++    opinion: str = ""  # 复核意见, 选填 (Issue #61)
++
++
+ class XeroProfileCheckIn(Model):
+     """审计师对 Xero 组织信息与客户画像核对的选择 (POST /data/xero/profile-check, 需求 R291)."""
+ 
+diff --git a/src/backend/contracts/knowledge.py b/src/backend/contracts/knowledge.py
+index 82cfab4..a369fab 100644
+--- a/src/backend/contracts/knowledge.py
++++ b/src/backend/contracts/knowledge.py
+@@ -2,7 +2,7 @@
+ 
+ from typing import Any, Literal, Self
+ 
+-from pydantic import Field, field_validator, model_validator
++from pydantic import Field, model_validator
+ 
+ from backend.contracts.data import DataInput, TableKind
+ from backend.contracts.models import (
+@@ -14,6 +14,7 @@ from backend.contracts.models import (
+     Engine,
+     EvidenceType,
+     GateId,
++    LocalizedText,
+     MisstatementUpdateKind,
+     Model,
+     OpinionType,
+@@ -44,20 +45,6 @@ class ProcedureInputs(Model):
+     documents: list[DocumentType] = []  # 文件类型: 有一份该类型的文件即算有
+ 
+ 
+-class LocalizedText(Model):
+-    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改)."""
+-
+-    zh: str  # 中文
+-    en: str  # 英文
+-
+-    @field_validator("zh", "en")
+-    @classmethod
+-    def not_blank(cls, value: str) -> str:
+-        if not value.strip():
+-            raise ValueError("不能为空或只有空白")
+-        return value
+-
+-
+ class RulePopulationSpec(Model):
+     """emit exception 的规则的被测总体 (需求 R324): 另一段 SQL 取该规则核对的全部对象 (例外只是其中没通过的).
+ 
+diff --git a/src/backend/contracts/models.py b/src/backend/contracts/models.py
+index d45c662..30bdc2d 100644
+--- a/src/backend/contracts/models.py
++++ b/src/backend/contracts/models.py
+@@ -32,6 +32,21 @@ def not_blank(text: str) -> str:
+ NonBlank = Annotated[str, AfterValidator(not_blank)]  # 必填文字: 去首尾空白后非空
+ 
+ 
++class LocalizedText(Model):
++    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)
++    与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."""
++
++    zh: str  # 中文
++    en: str  # 英文
++
++    @field_validator("zh", "en")
++    @classmethod
++    def not_blank(cls, value: str) -> str:
++        if not value.strip():
++            raise ValueError("不能为空或只有空白")
++        return value
++
++
+ # ── 2.1 枚举 ──────────────────────────────────────────────
+ 
+ 
+@@ -447,6 +462,23 @@ class ReportStatus(StrEnum):
+     signed = "signed"  # 已签字
+ 
+ 
++class WorkpaperStatus(StrEnum):
++    """底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01."""
++
++    draft = "draft"  # 未签署
++    signed = "signed"  # 已签署, 依据与内容在签署后没变
++    needs_rereview = "needs_rereview"  # 签署后依据或内容变了 (重跑, 新的决定, 改了结论或补充说明), 须重新复核
++    final = "final"  # 归档定稿 (需求 R337)
++
++
++class ReviewScope(StrEnum):
++    """底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330)."""
++
++    full = "full"  # 全部明细
++    sample = "sample"  # 抽查
++    conclusion_only = "conclusion_only"  # 只看结论
++
++
+ class RepresentationStatus(StrEnum):
+     """管理层书面声明书的状态 (ASA 580, 需求 R215)."""
+ 
+@@ -2007,6 +2039,48 @@ class IndependenceDeclaration(Versioned):
+         return self
+ 
+ 
++class WorkpaperNote(Model):
++    """底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,
++    底稿配置 supplementable), 只是补充时为空."""
++
++    text: str  # 说明
++    item: str | None = None  # 补齐的必填项代号, 如 materiality_factors
++    added_by: str  # 用户 ID
++    added_at: datetime  # 时间
++
++
++class WorkpaperSignoff(Model):
++    """底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."""
++
++    signed_by: str  # 签署人的用户 ID
++    signed_at: datetime  # 签署时间
++    scope: ReviewScope  # 复核范围
++    opinion: str = ""  # 复核意见, 选填 (Issue #61 的口径), 没写为空串
++
++
++class Workpaper(Versioned):
++    """一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
++    services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
++    只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."""
++
++    ref: str  # 索引号, 如 D-3 (程序 YAML 的 workpaper)
++    area: str  # 所属区, 如 D
++    procedure_id: str  # 所属程序
++    status: WorkpaperStatus = WorkpaperStatus.draft  # 状态
++    # 所依据的对象及其版本 (执行记录, 被测总体, 例外, 判断, 闸门决定与程序产出的材料; services.workpapers.basis_of),
++    # 按类名与 ID 排序; 刷新时与上一版比, 变了即内容变了
++    basis: list[ObjectRef]
++    # 结论草稿 (中英两种, 下载时按工作语言取): 规则与判断程序按模板拼出 (Q27), 其余为空 (R332, R333 补)
++    conclusion_draft: LocalizedText | None = None
++    conclusion: str | None = None  # 审计师改写的结论, 没改为空 (草稿照留)
++    conclusion_by: str | None = None  # 改写人的用户 ID
++    conclusion_at: datetime | None = None  # 改写时间
++    notes: list[WorkpaperNote] = []  # 补充说明, 按时间顺序
++    signoff: WorkpaperSignoff | None = None  # 当前有效的签署, 未签署或须重新复核时为空
++    last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署 (须重新复核时可见原签署), 没有为空
++    missing: list[str] = []  # 缺的必填项代号 (底稿配置的 required, 按配置顺序), 空为齐全
++
++
+ # ── 2.7 其他 ───────────────────────────────────────────────
+ 
+ 
+diff --git a/src/backend/orchestration/decisions.py b/src/backend/orchestration/decisions.py
+index f06b833..6012dbd 100644
+--- a/src/backend/orchestration/decisions.py
++++ b/src/backend/orchestration/decisions.py
+@@ -3,6 +3,7 @@
+ 校验顺序, 必填表, 决定的效果与恢复机制见 开发接口文档.md 第 7 节.
+ """
+ 
++import logging
+ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+ from contextlib import asynccontextmanager
+ from dataclasses import dataclass
+@@ -98,6 +99,9 @@ from backend.services.procedure_library import ProcedureLibrary
+ from backend.services.review_queue import RERUNNABLE, attribute_exceptions, draft_rule, misstatement_updates
+ from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
+ from backend.services.trail_pages import all_of_kind
++from backend.services.workpapers import refresh as refresh_workpapers
++
++logger = logging.getLogger(__name__)
+ 
+ LOCKING_PHASES = (Phase.Declined, Phase.Archived)  # 进入后项目置 locked, 拒绝一切写入
+ # 效果中会出新版本的对象列表
+@@ -935,7 +939,8 @@ class GraphDecisionSubmit:
+ 
+         进入时: 查项目锁定, 取项目锁, 重读项目再查一次锁定, 查功能集 (FEATURES_MISMATCH), 读检查点, 查 RESUME_REQUIRED.
+         块内出错: 释放项目锁后抛出 (写入时的 VersionConflict 转为 DecisionRejected("VERSION_MISMATCH")).
+-        块正常结束: 交给 runner 从检查点在后台继续执行, 锁由后台任务结束时释放. resume 为复核决定 ID 时以
++        块正常结束: 刷新底稿记录 (需求 R330, 出错只记日志), 再交给 runner 从检查点在后台继续执行, 锁由后台任务结束时
++        释放. resume 为复核决定 ID 时以
+         Command(resume=resume) 恢复停在节点内 interrupt() 的节点; 闸门决定, 更新客户资料与过期重跑为 None (已越过闸门
+         或已以 fan_in 身份写入).
+         """
+@@ -960,6 +965,10 @@ class GraphDecisionSubmit:
+         except BaseException:
+             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
+             raise
++        try:  # 底稿记录随决定刷新 (需求 R330): 决定已提交, 仍持项目锁; 出错只记日志, 不影响决定与之后的推进
++            await refresh_workpapers(self.deps, eid)
++        except Exception:
++            logger.exception("刷新底稿记录失败: %s", eid)
+         self.runner.launch(eid, None if resume is None else Command(resume=resume))
+ 
+     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
+diff --git a/src/backend/orchestration/nodes.py b/src/backend/orchestration/nodes.py
+index 9d2c1c8..43f5677 100644
+--- a/src/backend/orchestration/nodes.py
++++ b/src/backend/orchestration/nodes.py
+@@ -86,6 +86,7 @@ from backend.services.procedure_library import ProcedureLibrary, highest_risk, m
+ from backend.services.review_queue import RERUNNABLE, ReviewQueue
+ from backend.services.run_summary import run_result
+ from backend.services.staleness import current_results
++from backend.services.workpapers import refresh as refresh_workpapers
+ 
+ logger = logging.getLogger(__name__)
+ DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
+@@ -783,6 +784,7 @@ class GraphNodes:
+             if problems:
+                 raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
+             await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, own, stored.id)])
++            await self.refresh_workpapers(eid)
+             return own
+         self.start_activity(state, eid, template, run)
+         agent = self.agents[procedure_id]
+@@ -801,6 +803,7 @@ class GraphNodes:
+             if population is not None:
+                 await self.deps.output_store.put(eid, [population], actor=writer)
+         await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, saved, run.id)])
++        await self.refresh_workpapers(eid)
+         return saved
+ 
+     async def attempt(
+@@ -855,8 +858,17 @@ class GraphNodes:
+                 engagement.id, state["phase"], phase, procedure_id, reruns=len(state["rerun_requests"])
+             )
+         await record_transitions(self.deps.trail, entries)
++        await self.refresh_workpapers(engagement.id)
+         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+ 
++    async def refresh_workpapers(self, eid: str) -> None:
++        """刷新底稿记录 (需求 R330, services.workpapers.refresh): 程序执行终态 (含人工程序整理的结果) 提交并写完留痕
++        之后调; 出错只记日志, 图照常推进, 下一次刷新补上."""
++        try:
++            await refresh_workpapers(self.deps, eid)
++        except Exception:
++            logger.exception("刷新底稿记录失败: %s", eid)
++
+     async def record_started(
+         self, eid: str, template: ProcedureTemplate, run: ProcedureRun, stored: ProcedureRun | None
+     ) -> None:
+@@ -1140,6 +1152,7 @@ class GraphNodes:
+             if clashes:
+                 detail = ", ".join(clashes)
+                 raise VersionConflict(f"{procedure_id} 整理出的对象与 Store 中已有的同版本内容不同: {detail}")
++        await self.refresh_workpapers(engagement.id)
+         return written
+ 
+     async def run_node(self, state: EngagementState, node: str, phase: Phase | None = None) -> StatePatch:
+@@ -1475,6 +1488,7 @@ class GraphNodes:
+         library = self.deps.library
+         entries = [await self.run_finished_entry(eid, library.load(pid), saved, rid) for pid, saved, rid in finished]
+         await record_transitions(self.deps.trail, [*entries, *await procedure_transitions(store, eid, stored)])
++        await self.refresh_workpapers(eid)
+         saved_versions = {p.id: cast(Procedure, p) for p in stored}
+         pack = [saved_versions.get(p.id, p) for p in pack]
+         return {**result, "procedure_pack": pack, "staged_results": None}
+diff --git a/src/backend/persistence/models.py b/src/backend/persistence/models.py
+index c55cf40..69dd95c 100644
+--- a/src/backend/persistence/models.py
++++ b/src/backend/persistence/models.py
+@@ -247,7 +247,8 @@ import_batches = table(
+ OUTPUT_KINDS = {
+     "audit_objectives": ["AuditObjective"],
+     "risk_register": ["RiskItem"],
+-    "procedures": ["Procedure", "ProcedureRun", "RunPopulation"],  # RunPopulation 需求 R324; kind 为字符串列, 不需迁移
++    # RunPopulation 需求 R324, Workpaper (底稿记录) 需求 R330; kind 为字符串列, 不需迁移
++    "procedures": ["Procedure", "ProcedureRun", "RunPopulation", "Workpaper"],
+     "exceptions": ["AuditException"],
+     "judgments": ["Judgment"],
+     "review_tasks": ["ReviewTask"],
+diff --git a/src/backend/services/procedure_library.py b/src/backend/services/procedure_library.py
+index a38ae0f..e41bada 100644
+--- a/src/backend/services/procedure_library.py
++++ b/src/backend/services/procedure_library.py
+@@ -21,7 +21,6 @@ from pydantic_core import to_jsonable_python
+ from backend.contracts import llm_outputs
+ from backend.contracts.data import DataInput
+ from backend.contracts.knowledge import (
+-    LocalizedText,
+     ProcedureTemplate,
+     ReportTemplate,
+     RequiredItem,
+@@ -39,6 +38,7 @@ from backend.contracts.models import (
+     DocumentType,
+     Engagement,
+     Engine,
++    LocalizedText,
+     OpinionType,
+     Phase,
+     Procedure,
+diff --git a/src/backend/services/workpapers.py b/src/backend/services/workpapers.py
+new file mode 100644
+index 0000000..33d648b
+--- /dev/null
++++ b/src/backend/services/workpapers.py
+@@ -0,0 +1,564 @@
++"""底稿记录 (需求 R330, Issue #50; 接口文档第 7 节 "底稿记录"): 每个程序底稿索引号一个 Workpaper (ID WP-{索引号}),
++随程序执行终态与相关决定刷新; 审计师改结论, 补充说明与签署各出一版并写 decision 留痕.
++
++- 依据 (basis_of): 本程序的执行记录 (终态), 当前执行的被测总体与例外, 本程序的判断, 本程序闸门的决定, 模板 outputs
++  中材料类字段的对象 (OUTPUT_BASIS), 各取最新版本. 刷新时依据变了 (或结论草稿, 缺项变了) 才出新版本, 否则不写
++  (幂等); 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff.
++- 结论草稿 (Q27 选项 1, 模板拼): 规则程序列范围, 被测对象数与金额, 各检查项的结果与例外; 判断程序列各对象的建议,
++  置信度与复核状态, 待复核几项, 末句 "最终结论待审计师复核后确定"; 其余程序为空 (R332, R333 补). 中英两种都写.
++- 必填项 (missing_of): 底稿配置 required 中该底稿的各项 (ProcedureLibrary.required_items) 逐项按 SATISFIED 判断;
++  可由补充说明补齐的 (supplementable) 另看补充说明的 item. 签署不阻塞 FIN-01 与 RPT-01.
++
++刷新 (refresh) 在程序执行终态与决定提交之后由编排调用 (orchestration/nodes, decisions), 出错只记日志; 项目已锁定
++(签字或拒绝承接) 时不刷新 (归档见 R337). 刷新本身不写留痕: 每一版都在 Store 中 (写入者为程序的执行智能体)."""
++
++from collections.abc import AsyncIterator, Callable, Iterable, Sequence
++from contextlib import asynccontextmanager
++from dataclasses import dataclass, field
++from datetime import UTC, datetime
++from decimal import Decimal
++from typing import TYPE_CHECKING
++
++from backend.contracts.errors import DataRejected
++from backend.contracts.knowledge import ProcedureTemplate, RequiredItem
++from backend.contracts.models import (
++    AcceptanceScorecard,
++    AnalyticsResult,
++    AuditException,
++    AuditPlan,
++    AuditReportVersion,
++    Confirmation,
++    EngagementTerms,
++    ExceptionDisposition,
++    GateDecision,
++    GateId,
++    GateVerdict,
++    Judgment,
++    LocalizedText,
++    MaterialityCandidates,
++    Misstatement,
++    ObjectRef,
++    OwnershipGraph,
++    PlanStatus,
++    Procedure,
++    ProcedureRun,
++    ProposedAction,
++    ReviewScope,
++    ReviewStatus,
++    RunPopulation,
++    RunStatus,
++    RunTrigger,
++    TrailEntry,
++    TrailKind,
++    UncorrectedSchedule,
++    Versioned,
++    Workpaper,
++    WorkpaperNote,
++    WorkpaperSignoff,
++    WorkpaperStatus,
++)
++from backend.services.populations import distinct_items, total_cents
++from backend.services.procedure_library import render_text, workpaper_kind
++
++if TYPE_CHECKING:
++    from backend.agents.base import AgentDeps
++    from backend.orchestration.runner import GraphRunner
++
++# 模板 outputs 中这些字段的对象全部计入依据 (材料类产出; 例外, 判断与执行记录另取, 任务与文件不计)
++OUTPUT_BASIS: dict[str, type[Versioned]] = {
++    "acceptance_scorecard": AcceptanceScorecard,
++    "engagement_terms": EngagementTerms,
++    "materiality_candidates": MaterialityCandidates,
++    "analytics": AnalyticsResult,
++    "audit_plans": AuditPlan,
++    "confirmations": Confirmation,
++    "ownership_graph": OwnershipGraph,
++    "uncorrected_schedule": UncorrectedSchedule,
++    "misstatements": Misstatement,
++    "report_versions": AuditReportVersion,
++}
++PENDING = frozenset({ExceptionDisposition.open, ExceptionDisposition.unattributed})  # 例外待处理
++FINAL_SENTENCE = LocalizedText(
++    zh="最终结论待审计师复核后确定.", en="The final conclusion will be determined after review."
++)
++ACTIONS = {  # 建议动作的写法
++    ProposedAction.accept: ("接受", "accept"),
++    ProposedAction.close: ("关闭事项", "close"),
++    ProposedAction.misstatement: ("认定错报", "misstatement"),
++    ProposedAction.more_evidence: ("补充证据", "more evidence"),
++}
++REVIEWS = {  # 复核状态的写法
++    ReviewStatus.pending: ("待复核", "pending review"),
++    ReviewStatus.confirmed: ("已确认", "confirmed"),
++    ReviewStatus.overridden: ("已推翻", "overridden"),
++    ReviewStatus.superseded: ("已取代", "superseded"),
++}
++SCOPES = {ReviewScope.full: "全部明细", ReviewScope.sample: "抽查", ReviewScope.conclusion_only: "只看结论"}
++
++
++def workpaper_id(ref: str) -> str:
++    """底稿记录的 ID: WP-{索引号}."""
++    return f"WP-{ref}"
++
++
++@dataclass(frozen=True)
++class Sources:
++    """一次刷新读到的 Store 内容, 都是各对象的最新版本. outputs 为 OUTPUT_BASIS 的字段 → 对象 (只读程序包用到的)."""
++
++    runs: list[ProcedureRun] = field(default_factory=list)
++    populations: list[RunPopulation] = field(default_factory=list)
++    exceptions: list[AuditException] = field(default_factory=list)
++    judgments: list[Judgment] = field(default_factory=list)
++    decisions: list[GateDecision] = field(default_factory=list)
++    outputs: dict[str, list[Versioned]] = field(default_factory=dict)
++
++
++@dataclass(frozen=True)
++class View:
++    """一份底稿看到的内容: 程序的终态执行 (按 run_no), 当前执行 (最后一次非增量执行与其后的增量执行), 当前执行的
++    被测总体与例外, 本程序的判断, 本程序闸门的决定 (按决定时间), 材料类产出."""
++
++    template: ProcedureTemplate
++    runs: list[ProcedureRun]
++    current: list[ProcedureRun]
++    populations: list[RunPopulation]
++    exceptions: list[AuditException]
++    judgments: list[Judgment]
++    decisions: list[GateDecision]
++    outputs: list[Versioned]
++
++
++def view_of(template: ProcedureTemplate, sources: Sources) -> View:
++    """template 的底稿从 sources 里看到的内容 (见 View), 纯函数."""
++    pid = template.id
++    runs = sorted(
++        (r for r in sources.runs if r.procedure_id == pid and r.status is not RunStatus.running), key=lambda r: r.run_no
++    )
++    base = max((i for i, r in enumerate(runs) if r.trigger is not RunTrigger.incremental), default=None)
++    current = runs[base:] if base is not None else runs
++    ids = {r.id for r in current}
++    populations = [p for p in sources.populations if p.run_id in ids]
++    exceptions = sorted(
++        (x for x in sources.exceptions if x.procedure_id == pid and x.run_id in ids), key=lambda x: x.id
++    )
++    judgments = sorted((j for j in sources.judgments if j.procedure_id == pid), key=lambda j: j.id)
++    decisions = sorted(
++        (d for d in sources.decisions if template.gate is not None and d.gate is template.gate),
++        key=lambda d: (d.decided_at, d.id),
++    )
++    outputs = [o for name in template.outputs if name in OUTPUT_BASIS for o in sources.outputs.get(name, [])]
++    return View(template, runs, current, populations, exceptions, judgments, decisions, outputs)
++
++
++def basis_of(view: View) -> list[ObjectRef]:
++    """底稿的依据: 终态执行, 当前执行的被测总体与例外, 判断, 闸门决定, 材料类产出, 各为 (类名, ID, 版本), 按类名与 ID
++    排序. 都没有 (程序还没执行, 闸门还没决定) 为空, 不建底稿记录."""
++    objects: list[Versioned] = [
++        *view.runs,
++        *view.populations,
++        *view.exceptions,
++        *view.judgments,
++        *view.decisions,
++        *view.outputs,
++    ]
++    refs = {(type(o).__name__, o.id): o.version for o in objects}
++    return [ObjectRef(kind=kind, id=oid, version=version) for (kind, oid), version in sorted(refs.items())]
++
++
++def money(cents: int) -> str:
++    """金额的写法: 千分位, 两位小数, 如 9,900.00."""
++    return f"{Decimal(cents) / 100:,.2f}"
++
++
++def joined(parts: Iterable[LocalizedText]) -> LocalizedText | None:
++    """各句以空格接成一段 (中文同样用半角标点, 句间空一格), 一句也没有为空."""
++    found = list(parts)
++    if not found:
++        return None
++    return LocalizedText(zh=" ".join(p.zh for p in found), en=" ".join(p.en for p in found))
++
++
++def plural(n: int, word: str) -> str:
++    return f"{n} {word}" if n == 1 else f"{n} {word}s"
++
++
++def rule_draft(view: View) -> LocalizedText | None:
++    """规则程序的结论草稿 (Q27): 最后一次执行的范围 (模板 scope 按参数快照渲染), 被测对象数与金额 (去重, 见
++    services.populations), 各执行了的规则的检查结果 (总体项数, 其中出了例外的项数, 不在该规则总体中的不作判断),
++    没有执行的规则与原因, 例外数与待处理数. 没有成功的执行为空."""
++    succeeded = [r for r in view.current if r.status is RunStatus.succeeded]
++    if not succeeded:
++        return None
++    run = succeeded[-1]
++    template = view.template
++    parts: list[LocalizedText] = []
++    if template.scope is not None:
++        scope = render_text(template.scope, run.params_snapshot)
++        parts.append(LocalizedText(zh=f"范围: {scope.zh}.", en=f"Scope: {scope.en}."))
++    population = next((p for p in view.populations if p.run_id == run.id), None)
++    items = distinct_items(population) if population is not None else None
++    if items is not None:
++        amount = total_cents(i.amount_cents for i in items)
++        zh, en = f"被测对象 {len(items)} 项", f"{plural(len(items), 'item')} tested"
++        if amount is not None:
++            zh, en = f"{zh}, 合计 {money(amount)}", f"{en}, totalling {money(amount)}"
++        parts.append(LocalizedText(zh=f"{zh}.", en=f"{en}."))
++    exceptions = [x for x in view.exceptions if x.run_id == run.id]
++    specs = {r.id: r for r in template.rules}
++    for rule in population.rules if population is not None else []:
++        spec = specs.get(rule.rule_id)
++        label = spec.check if spec is not None and spec.check is not None else None
++        zh_label = label.zh if label is not None else (spec.name if spec is not None else rule.rule_id)
++        en_label = label.en if label is not None else f"Rule {rule.rule_id}"
++        failed = len({x.source_ids[0] if x.source_ids else x.id for x in exceptions if x.rule_id == rule.rule_id})
++        if spec is not None and spec.emit == "rows":
++            count = rule.count or 0
++            parts.append(LocalizedText(zh=f"{zh_label}: {count} 行.", en=f"{en_label}: {plural(count, 'row')}."))
++            continue
++        if rule.count is None:
++            zh = f"{zh_label}: 例外 {failed} 项 (被测总体未记录)."
++            en = f"{en_label}: {plural(failed, 'exception')} (population not recorded)."
++        elif failed == 0:
++            zh, en = f"{zh_label}: {rule.count} 项均符合", f"{en_label}: all {rule.count} agree"
++        else:
++            zh = f"{zh_label}: {rule.count} 项中 {failed} 项不符"
++            en = f"{en_label}: {failed} of {rule.count} do not agree"
++        if rule.count is not None:
++            unassessed = len(items) - rule.count if items is not None else 0
++            if unassessed > 0:
++                zh, en = f"{zh}, {unassessed} 项不作判断", f"{en}, {unassessed} not assessed"
++            zh, en = f"{zh}.", f"{en}."
++        parts.append(LocalizedText(zh=zh, en=en))
++    for outcome in run.rule_outcomes:
++        parts.append(
++            LocalizedText(
++                zh=f"{outcome.rule_id} 未执行: {outcome.reason}.",
++                en=f"{outcome.rule_id} not performed: {outcome.reason}.",
++            )
++        )
++    pending = sum(1 for x in exceptions if x.disposition in PENDING)
++    if not exceptions:
++        parts.append(LocalizedText(zh="未发现例外.", en="No exceptions."))
++    else:
++        zh, en = (
++            f"例外 {len(exceptions)} 条, 待处理 {pending} 条",
++            f"{plural(len(exceptions), 'exception')}, {pending} pending",
++        )
++        explained = len(exceptions) - pending
++        if explained:
++            zh, en = f"{zh}, 已由判断解释 {explained} 条", f"{en}, {explained} explained by judgments"
++        parts.append(LocalizedText(zh=f"{zh}.", en=f"{en}."))
++    return joined(parts)
++
++
++def model_judgments(judgments: Sequence[Judgment]) -> list[Judgment]:
++    """各对象模型给出的最后一次判断 (人工判断 -H 不算; 重跑过的取最后一次执行的), 按对象排序."""
++    latest: dict[str, Judgment] = {}
++    for j in sorted(judgments, key=lambda j: (j.run_id, j.version)):
++        if "-H" not in j.id:
++            latest[j.subject_id] = j
++    return [latest[s] for s in sorted(latest)]
++
++
++def judgment_draft(view: View) -> LocalizedText | None:
++    """判断程序的结论草稿 (Q27 选项 1): 判断了几个对象, 各对象的建议, 置信度与复核状态, 待复核几项, 末句 "最终结论待
++    审计师复核后确定". 没有判断为空."""
++    judged = model_judgments(view.judgments)
++    if not judged:
++        return None
++    zh_items, en_items = [], []
++    for j in judged:
++        action, review = ACTIONS[j.proposed_action], REVIEWS[j.review_status]
++        zh_items.append(f"{j.subject_id} 建议{action[0]}, 置信度 {j.confidence:.2f}, {review[0]}")
++        en_items.append(f"{j.subject_id} proposed {action[1]}, confidence {j.confidence:.2f}, {review[1]}")
++    pending = sum(1 for j in judged if j.review_status is ReviewStatus.pending)
++    head = LocalizedText(
++        zh=f"判断对象 {len(judged)} 个: {'; '.join(zh_items)}. 待复核 {pending} 项.",
++        en=f"{plural(len(judged), 'item')} judged: {'; '.join(en_items)}. {pending} pending review.",
++    )
++    return joined([head, FINAL_SENTENCE])
++
++
++def conclusion_draft(view: View) -> LocalizedText | None:
++    """按底稿类别 (procedure_library.workpaper_kind) 拼结论草稿: 规则程序 rule_draft, 判断程序 judgment_draft, 其余
++    为空."""
++    kind = workpaper_kind(view.template)
++    if kind == "rule":
++        return rule_draft(view)
++    return judgment_draft(view) if kind == "judgment" else None
++
++
++def noted(workpaper: Workpaper, item: str) -> bool:
++    return any(n.item == item for n in workpaper.notes)
++
++
++def latest_approval(decisions: Iterable[GateDecision], gate: GateId) -> GateDecision | None:
++    """某闸门最后一条通过决定, 没有为空."""
++    approved = [d for d in decisions if d.gate is gate and d.decision is GateVerdict.approve]
++    return max(approved, key=lambda d: (d.decided_at, d.id), default=None)
++
++
++def has_reason(decision: GateDecision | None) -> bool:
++    return decision is not None and bool((decision.reason or "").strip())
++
++
++def plans(sources: Sources) -> list[AuditPlan]:
++    return [p for p in sources.outputs.get("audit_plans", []) if isinstance(p, AuditPlan)]
++
++
++Check = Callable[[View, Sources, Workpaper], bool]
++# 必填项代号 → 是否已记录 (底稿配置 required 的每一项都须在这里, tests/test_workpapers 核对). 可由补充说明补齐的另看
++# 补充说明的 item (missing_of). ASA 300 第 12(c) 段与 ASA 320 第 14 段的 "修订" 是有条件的要求: 没有修订时算已记录
++SATISFIED: dict[str, Check] = {
++    "preparer": lambda v, s, w: bool(v.runs or v.decisions),  # 执行的智能体或作决定的审计师
++    "completed_on": lambda v, s, w: any(r.ended_at is not None for r in v.runs) or bool(v.decisions),
++    "reviewer": lambda v, s, w: w.signoff is not None,
++    "reviewed_on": lambda v, s, w: w.signoff is not None,
++    "review_scope": lambda v, s, w: w.signoff is not None,
++    "procedures": lambda v, s, w: bool(v.runs or v.decisions),  # 模板写明性质与范围, 执行记录写明时间
++    "results": lambda v, s, w: any(r.status is RunStatus.succeeded for r in v.runs) or bool(v.decisions),
++    "conclusions": lambda v, s, w: bool(w.conclusion or w.conclusion_draft),
++    # 规则程序: 当前执行的被测总体都记录了; 判断程序: 有判断的对象
++    "tested_items": lambda v, s, w: (
++        bool(v.populations) and all(distinct_items(p) is not None for p in v.populations)
++        if workpaper_kind(v.template) == "rule"
++        else bool(v.judgments)
++    ),
++    "materiality_amounts": lambda v, s, w: (
++        (d := latest_approval(s.decisions, GateId.PLN_01_03)) is not None and d.materiality is not None
++    ),
++    "materiality_factors": lambda v, s, w: has_reason(latest_approval(s.decisions, GateId.PLN_01_03)),
++    "clearly_trivial": lambda v, s, w: bool(s.outputs.get("uncorrected_schedule")),
++    "misstatements_accumulated": lambda v, s, w: bool(s.outputs.get("uncorrected_schedule")),
++    "uncorrected_conclusion": lambda v, s, w: has_reason(latest_approval(s.decisions, GateId.FIN_01)),
++    "audit_strategy": lambda v, s, w: any(p.status is PlanStatus.approved for p in plans(s)),
++    "audit_plan": lambda v, s, w: any(p.status is PlanStatus.approved for p in plans(s)),
++    "plan_changes": lambda v, s, w: all(p.revision == 1 or bool((p.revision_reason or "").strip()) for p in plans(s)),
++}
++
++
++def missing_of(required: Sequence[RequiredItem], view: View, sources: Sources, workpaper: Workpaper) -> list[str]:
++    """workpaper 缺的必填项代号 (按 required 的顺序): SATISFIED 判为未记录, 且不是可补齐而已由补充说明补齐的."""
++    return [
++        item.id
++        for item in required
++        if not SATISFIED[item.id](view, sources, workpaper) and not (item.supplementable and noted(workpaper, item.id))
++    ]
++
++
++def unsigned(workpaper: Workpaper) -> dict[str, object]:
++    """内容变了时签署的处理 (要并进新版本的字段): 已签署的改为 needs_rereview, 签署移到 last_signoff; 未签署的不变."""
++    if workpaper.signoff is None:
++        return {}
++    return {"status": WorkpaperStatus.needs_rereview, "signoff": None, "last_signoff": workpaper.signoff}
++
++
++def refreshed(
++    previous: Workpaper | None, template: ProcedureTemplate, required: Sequence[RequiredItem], sources: Sources
++) -> Workpaper | None:
++    """按 sources 刷新 template 的底稿记录, 返回新版本; 没有依据 (还没执行或决定) 或与上一版相同时为空 (幂等).
++    第 1 版为 draft; 依据变了时已签署的改为 needs_rereview (unsigned), 草稿与缺项照新算; 只是草稿或缺项变了 (如
++    模板改了写法) 时出新版本而状态与签署不变. 纯函数."""
++    assert template.workpaper is not None
++    view = view_of(template, sources)
++    basis = basis_of(view)
++    if not basis:
++        return None
++    draft = conclusion_draft(view)
++    if previous is None:
++        ref = template.workpaper.ref
++        new = Workpaper(
++            id=workpaper_id(ref), ref=ref, area=template.workpaper.area, procedure_id=template.id, basis=basis
++        )
++        new = new.model_copy(update={"conclusion_draft": draft})
++    else:
++        changes: dict[str, object] = {"basis": basis, "conclusion_draft": draft}
++        if basis != previous.basis:
++            changes |= unsigned(previous)
++        new = previous.model_copy(update=changes)
++    new = new.model_copy(update={"missing": missing_of(required, view, sources, new)})
++    if previous is not None:
++        if new == previous:
++            return None
++        new = new.model_copy(update={"version": previous.version + 1})
++    return new
++
++
++@dataclass(frozen=True)
++class Snapshot:
++    """刷新与审计师操作读到的: 程序包里有底稿的模板 (按程序编号), 各自的必填项, Store 内容与已有的底稿记录."""
++
++    templates: dict[str, ProcedureTemplate]
++    required: dict[str, list[RequiredItem]]
++    sources: Sources
++    workpapers: dict[str, Workpaper]
++
++
++async def load(deps: "AgentDeps", eid: str) -> Snapshot:
++    """读刷新要的 Store 内容: 程序包 (Store 中各程序的最新版本) 里有底稿的模板, 执行记录, 被测总体, 例外, 判断, 闸门
++    决定, 模板 outputs 用到的材料类产出, 已有的底稿记录."""
++    store, library = deps.output_store, deps.library
++    pack = await store.latest(eid, Procedure)
++    templates = {t.id: t for t in (library.load(p.id) for p in pack) if t.workpaper is not None}
++    needed = sorted({name for t in templates.values() for name in t.outputs if name in OUTPUT_BASIS})
++    outputs: dict[str, list[Versioned]] = {}
++    for name in needed:
++        outputs[name] = list(await store.latest(eid, OUTPUT_BASIS[name]))
++    sources = Sources(
++        runs=await store.latest(eid, ProcedureRun),
++        populations=await store.latest(eid, RunPopulation),
++        exceptions=await store.latest(eid, AuditException),
++        judgments=await store.latest(eid, Judgment),
++        decisions=await store.latest(eid, GateDecision),
++        outputs=outputs,
++    )
++    required = {pid: library.required_items(t.workpaper.ref) for pid, t in templates.items() if t.workpaper}
++    workpapers = {w.id: w for w in await store.latest(eid, Workpaper)}
++    return Snapshot(templates, required, sources, workpapers)
++
++
++def plan_refresh(snapshot: Snapshot) -> list[tuple[Workpaper, ProcedureTemplate]]:
++    """snapshot 下要写的底稿新版本 (与其模板), 按程序编号; 纯函数."""
++    planned = []
++    for pid, template in sorted(snapshot.templates.items()):
++        assert template.workpaper is not None
++        previous = snapshot.workpapers.get(workpaper_id(template.workpaper.ref))
++        new = refreshed(previous, template, snapshot.required[pid], snapshot.sources)
++        if new is not None:
++            planned.append((new, template))
++    return planned
++
++
++async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
++    """刷新项目的全部底稿记录 (见模块说明), 在一个事务内写入变了的 (写入者为程序的执行智能体), 返回写入的. 项目不存在
++    或已锁定 (签字或拒绝承接) 时不刷新, 返回空."""
++    engagement = await deps.engagement_store.get(eid)
++    if engagement is None or engagement.locked:
++        return []
++    planned = plan_refresh(await load(deps, eid))
++    written: list[Workpaper] = []
++    if planned:
++        async with deps.output_store.transaction(eid):
++            for workpaper, template in planned:
++                [stored] = await deps.output_store.put(eid, [workpaper], actor=template.owner)
++                assert isinstance(stored, Workpaper)
++                written.append(stored)
++    return written
++
++
++def workpaper_trail(
++    eid: str, workpaper: Workpaper, actor: str, action: str, summary: str, **details: object
++) -> TrailEntry:
++    """审计师对底稿一次操作的 decision 留痕: payload 为 {action, ref, version, ...details}, 记在所属程序下, 防重复键
++    {eid}:workpaper:{索引号}:v{版本}."""
++    return TrailEntry(
++        engagement_id=eid,
++        kind=TrailKind.decision,
++        actor=actor,
++        procedure_id=workpaper.procedure_id,
++        summary=summary,
++        idempotency_key=f"{eid}:workpaper:{workpaper.ref}:v{workpaper.version}",
++        payload={"action": action, "ref": workpaper.ref, "version": workpaper.version, **details},
++    )
++
++
++class WorkpaperService:
++    """底稿记录的读取与审计师的三种操作 (需求 R330, 接口 tag workpapers). 操作持项目锁 (锁定 423, 忙 409): 先刷新,
++    再在最新一版上改出新版本, 一个事务内写入, 提交后写 decision 留痕. 索引号没有底稿记录 (程序还没执行) 时 404."""
++
++    def __init__(self, deps: "AgentDeps", runner: "GraphRunner") -> None:
++        self.deps = deps
++        self.runner = runner
++
++    async def list(self, eid: str) -> list[Workpaper]:
++        """项目的底稿记录 (各最新版本), 按档案顺序 (ProcedureLibrary.workpaper_order)."""
++        found = await self.deps.output_store.latest(eid, Workpaper)
++        return sorted(found, key=lambda w: self.deps.library.workpaper_order(w.ref))
++
++    @asynccontextmanager
++    async def holding(self, eid: str) -> AsyncIterator[Snapshot]:
++        """查项目 (不存在 LookupError, 锁定 ENGAGEMENT_LOCKED), 取项目锁 (忙 ENGAGEMENT_BUSY), 刷新后交出最新的
++        snapshot; 块结束释放锁."""
++        engagement = await self.deps.engagement_store.get(eid)
++        if engagement is None:
++            raise LookupError(f"Engagement {eid} not found")
++        if engagement.locked:
++            raise DataRejected("ENGAGEMENT_LOCKED", eid)
++        self.runner.acquire(eid)
++        try:
++            await refresh(self.deps, eid)
++            yield await load(self.deps, eid)
++        finally:
++            self.runner.release(eid)
++
++    async def _write(self, eid: str, snapshot: Snapshot, new: Workpaper, actor: str, trail: TrailEntry) -> Workpaper:
++        template = snapshot.templates[new.procedure_id]
++        view = view_of(template, snapshot.sources)
++        new = new.model_copy(
++            update={"missing": missing_of(snapshot.required[template.id], view, snapshot.sources, new)}
++        )
++        async with self.deps.output_store.transaction(eid):
++            [stored] = await self.deps.output_store.put(eid, [new], actor=actor)
++        assert isinstance(stored, Workpaper)
++        await self.deps.trail.record(trail)
++        return stored
++
++    @staticmethod
++    def current(snapshot: Snapshot, ref: str) -> Workpaper:
++        found = snapshot.workpapers.get(workpaper_id(ref))
++        if found is None:
++            raise LookupError(f"底稿 {ref} 还没有记录 (程序没有执行或闸门没有决定)")
++        return found
++
++    async def conclude(self, eid: str, ref: str, text: str, actor: str) -> Workpaper:
++        """审计师改写结论 (POST .../conclusion): 新版本记结论, 改写人与时间, 草稿照留; 已签署的改为须重新复核.
++        文字去首尾空白后为空 MISSING_FIELD; 与当前结论相同时返回当前版本, 不再写."""
++        text = text.strip()
++        if not text:
++            raise DataRejected("MISSING_FIELD", "text")
++        async with self.holding(eid) as snapshot:
++            workpaper = self.current(snapshot, ref)
++            if workpaper.conclusion == text:
++                return workpaper
++            changes = {"conclusion": text, "conclusion_by": actor, "conclusion_at": datetime.now(UTC)}
++            new = workpaper.model_copy(update={**changes, **unsigned(workpaper), "version": workpaper.version + 1})
++            trail = workpaper_trail(eid, new, actor, "workpaper_conclusion", f"审计师改写底稿 {ref} 的结论", text=text)
++            return await self._write(eid, snapshot, new, actor, trail)
++
++    async def note(self, eid: str, ref: str, text: str, item: str | None, actor: str) -> Workpaper:
++        """审计师补充说明 (POST .../notes): 新版本追加一条; item 为它补齐的必填项代号, 须是该底稿可由补充说明补齐的
++        (底稿配置 supplementable), 否则 INVALID_VALUE; 补齐后该项从 missing 去掉. 已签署的改为须重新复核. 文字去首尾
++        空白后为空 MISSING_FIELD."""
++        text = text.strip()
++        if not text:
++            raise DataRejected("MISSING_FIELD", "text")
++        async with self.holding(eid) as snapshot:
++            workpaper = self.current(snapshot, ref)
++            if item is not None:
++                allowed = [r.id for r in snapshot.required[workpaper.procedure_id] if r.supplementable]
++                if item not in allowed:
++                    detail = f"{item} 不是底稿 {ref} 可由补充说明补齐的必填项 ({', '.join(allowed) or '没有'})"
++                    raise DataRejected("INVALID_VALUE", detail)
++            added = WorkpaperNote(text=text, item=item, added_by=actor, added_at=datetime.now(UTC))
++            changes = {"notes": [*workpaper.notes, added], **unsigned(workpaper), "version": workpaper.version + 1}
++            new = workpaper.model_copy(update=changes)
++            summary = f"审计师补充底稿 {ref} 的说明" + (f" (补齐 {item})" if item else "")
++            trail = workpaper_trail(eid, new, actor, "workpaper_note", summary, item=item, text=text)
++            return await self._write(eid, snapshot, new, actor, trail)
++
++    async def sign(self, eid: str, ref: str, scope: ReviewScope, opinion: str, actor: str) -> Workpaper:
++        """审计师签署 (POST .../signoff): 新版本 status signed, signoff 记签署人, 时间, 复核范围与意见 (选填, 去首尾
++        空白). 同一人以同样的范围与意见再签已签署的返回当前版本, 不再写. 缺必填项也能签 (只记录, 不阻断)."""
++        opinion = opinion.strip()
++        async with self.holding(eid) as snapshot:
++            workpaper = self.current(snapshot, ref)
++            done = workpaper.signoff
++            if done is not None and (done.signed_by, done.scope, done.opinion) == (actor, scope, opinion):
++                return workpaper
++            signoff = WorkpaperSignoff(signed_by=actor, signed_at=datetime.now(UTC), scope=scope, opinion=opinion)
++            new = workpaper.model_copy(
++                update={"status": WorkpaperStatus.signed, "signoff": signoff, "version": workpaper.version + 1}
++            )
++            summary = f"审计师签署底稿 {ref} ({SCOPES[scope]})"
++            trail = workpaper_trail(eid, new, actor, "workpaper_signoff", summary, scope=scope.value, opinion=opinion)
++            return await self._write(eid, snapshot, new, actor, trail)
+diff --git a/src/frontend/openapi.json b/src/frontend/openapi.json
+index 11d4ec2..2bcbf16 100644
+--- a/src/frontend/openapi.json
++++ b/src/frontend/openapi.json
+@@ -4541,6 +4541,259 @@
+         }
+       }
+     },
++    "/api/v1/engagements/{eid}/workpapers": {
++      "get": {
++        "tags": [
++          "workpapers"
++        ],
++        "summary": "List Workpapers",
++        "description": "项目的底稿记录 (各最新版本), 按档案顺序; 程序还没执行 (闸门还没决定) 的没有记录.",
++        "operationId": "workpapers-list_workpapers",
++        "security": [
++          {
++            "HTTPBearer": []
++          }
++        ],
++        "parameters": [
++          {
++            "name": "eid",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Eid"
++            }
++          }
++        ],
++        "responses": {
++          "200": {
++            "description": "Successful Response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "type": "array",
++                  "items": {
++                    "$ref": "#/components/schemas/Workpaper"
++                  },
++                  "title": "Response Workpapers-List Workpapers"
++                }
++              }
++            }
++          },
++          "422": {
++            "description": "Validation Error",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/HTTPValidationError"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
++    "/api/v1/engagements/{eid}/workpapers/{ref}/conclusion": {
++      "post": {
++        "tags": [
++          "workpapers"
++        ],
++        "summary": "Conclude Workpaper",
++        "description": "改写底稿结论, 返回新版本 (草稿照留; 已签署的改为须重新复核), 写 decision 留痕. 文字为空 422 MISSING_FIELD;\n底稿没有记录 404; 锁定 423; 忙 409.",
++        "operationId": "workpapers-conclude_workpaper",
++        "security": [
++          {
++            "HTTPBearer": []
++          }
++        ],
++        "parameters": [
++          {
++            "name": "ref",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Ref"
++            }
++          },
++          {
++            "name": "eid",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Eid"
++            }
++          }
++        ],
++        "requestBody": {
++          "required": true,
++          "content": {
++            "application/json": {
++              "schema": {
++                "$ref": "#/components/schemas/WorkpaperConclusionIn"
++              }
++            }
++          }
++        },
++        "responses": {
++          "200": {
++            "description": "Successful Response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/Workpaper"
++                }
++              }
++            }
++          },
++          "422": {
++            "description": "Validation Error",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/HTTPValidationError"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
++    "/api/v1/engagements/{eid}/workpapers/{ref}/notes": {
++      "post": {
++        "tags": [
++          "workpapers"
++        ],
++        "summary": "Note Workpaper",
++        "description": "补充底稿说明, 返回新版本; item 补齐该底稿可由补充说明补齐的必填项 (之后不再列在 missing). 文字为空 422\nMISSING_FIELD; item 不是可补齐的 422 INVALID_VALUE; 底稿没有记录 404; 锁定 423; 忙 409.",
++        "operationId": "workpapers-note_workpaper",
++        "security": [
++          {
++            "HTTPBearer": []
++          }
++        ],
++        "parameters": [
++          {
++            "name": "ref",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Ref"
++            }
++          },
++          {
++            "name": "eid",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Eid"
++            }
++          }
++        ],
++        "requestBody": {
++          "required": true,
++          "content": {
++            "application/json": {
++              "schema": {
++                "$ref": "#/components/schemas/WorkpaperNoteIn"
++              }
++            }
++          }
++        },
++        "responses": {
++          "200": {
++            "description": "Successful Response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/Workpaper"
++                }
++              }
++            }
++          },
++          "422": {
++            "description": "Validation Error",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/HTTPValidationError"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
++    "/api/v1/engagements/{eid}/workpapers/{ref}/signoff": {
++      "post": {
++        "tags": [
++          "workpapers"
++        ],
++        "summary": "Sign Workpaper",
++        "description": "签署底稿, 返回新版本 (status signed, 记签署人, 时间, 复核范围与意见), 写 decision 留痕. 不阻塞 FIN-01 与\nRPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409.",
++        "operationId": "workpapers-sign_workpaper",
++        "security": [
++          {
++            "HTTPBearer": []
++          }
++        ],
++        "parameters": [
++          {
++            "name": "ref",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Ref"
++            }
++          },
++          {
++            "name": "eid",
++            "in": "path",
++            "required": true,
++            "schema": {
++              "type": "string",
++              "title": "Eid"
++            }
++          }
++        ],
++        "requestBody": {
++          "required": true,
++          "content": {
++            "application/json": {
++              "schema": {
++                "$ref": "#/components/schemas/WorkpaperSignoffIn"
++              }
++            }
++          }
++        },
++        "responses": {
++          "200": {
++            "description": "Successful Response",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/Workpaper"
++                }
++              }
++            }
++          },
++          "422": {
++            "description": "Validation Error",
++            "content": {
++              "application/json": {
++                "schema": {
++                  "$ref": "#/components/schemas/HTTPValidationError"
++                }
++              }
++            }
++          }
++        }
++      }
++    },
+     "/api/v1/data/schemas": {
+       "get": {
+         "tags": [
+@@ -11207,6 +11460,26 @@
+         "title": "LlmTestResult",
+         "description": "测试连接的结果. message 已脱敏."
+       },
++      "LocalizedText": {
++        "properties": {
++          "zh": {
++            "type": "string",
++            "title": "Zh"
++          },
++          "en": {
++            "type": "string",
++            "title": "En"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "zh",
++          "en"
++        ],
++        "title": "LocalizedText",
++        "description": "中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)\n与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."
++      },
+       "ManualRequest": {
+         "properties": {
+           "instructions": {
+@@ -12109,6 +12382,32 @@
+         "title": "NotExecuted",
+         "description": "因客户无此类资料而未执行 (no_data) 的程序 (需求 R280), 列进 FIN-01 材料."
+       },
++      "ObjectRef": {
++        "properties": {
++          "kind": {
++            "type": "string",
++            "title": "Kind"
++          },
++          "id": {
++            "type": "string",
++            "title": "Id"
++          },
++          "version": {
++            "type": "integer",
++            "minimum": 1.0,
++            "title": "Version"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "kind",
++          "id",
++          "version"
++        ],
++        "title": "ObjectRef",
++        "description": "对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查."
++      },
+       "Officeholder": {
+         "properties": {
+           "name": {
+@@ -14041,6 +14340,16 @@
+         "title": "ReviewRecordIn",
+         "description": "复核决定请求体: 去掉 id, version, reviewed_by, decided_at, 以及服务端算的 dwell_seconds, presentation_id\n(需求 R153)."
+       },
++      "ReviewScope": {
++        "type": "string",
++        "enum": [
++          "full",
++          "sample",
++          "conclusion_only"
++        ],
++        "title": "ReviewScope",
++        "description": "底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330)."
++      },
+       "ReviewStatus": {
+         "type": "string",
+         "enum": [
+@@ -15663,6 +15972,271 @@
+         "title": "WorkingLanguageIn",
+         "description": "改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查\n(engagements.parse_language)."
+       },
++      "Workpaper": {
++        "properties": {
++          "id": {
++            "type": "string",
++            "title": "Id"
++          },
++          "version": {
++            "type": "integer",
++            "title": "Version",
++            "default": 1
++          },
++          "ref": {
++            "type": "string",
++            "title": "Ref"
++          },
++          "area": {
++            "type": "string",
++            "title": "Area"
++          },
++          "procedure_id": {
++            "type": "string",
++            "title": "Procedure Id"
++          },
++          "status": {
++            "$ref": "#/components/schemas/WorkpaperStatus",
++            "default": "draft"
++          },
++          "basis": {
++            "items": {
++              "$ref": "#/components/schemas/ObjectRef"
++            },
++            "type": "array",
++            "title": "Basis"
++          },
++          "conclusion_draft": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/LocalizedText"
++              },
++              {
++                "type": "null"
++              }
++            ]
++          },
++          "conclusion": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Conclusion"
++          },
++          "conclusion_by": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Conclusion By"
++          },
++          "conclusion_at": {
++            "anyOf": [
++              {
++                "type": "string",
++                "format": "date-time"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Conclusion At"
++          },
++          "notes": {
++            "items": {
++              "$ref": "#/components/schemas/WorkpaperNote"
++            },
++            "type": "array",
++            "title": "Notes",
++            "default": []
++          },
++          "signoff": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/WorkpaperSignoff"
++              },
++              {
++                "type": "null"
++              }
++            ]
++          },
++          "last_signoff": {
++            "anyOf": [
++              {
++                "$ref": "#/components/schemas/WorkpaperSignoff"
++              },
++              {
++                "type": "null"
++              }
++            ]
++          },
++          "missing": {
++            "items": {
++              "type": "string"
++            },
++            "type": "array",
++            "title": "Missing",
++            "default": []
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "id",
++          "ref",
++          "area",
++          "procedure_id",
++          "basis"
++        ],
++        "title": "Workpaper",
++        "description": "一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由\nservices.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.\n只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."
++      },
++      "WorkpaperConclusionIn": {
++        "properties": {
++          "text": {
++            "type": "string",
++            "title": "Text"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "text"
++        ],
++        "title": "WorkpaperConclusionIn",
++        "description": "审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330)."
++      },
++      "WorkpaperNote": {
++        "properties": {
++          "text": {
++            "type": "string",
++            "title": "Text"
++          },
++          "item": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Item"
++          },
++          "added_by": {
++            "type": "string",
++            "title": "Added By"
++          },
++          "added_at": {
++            "type": "string",
++            "format": "date-time",
++            "title": "Added At"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "text",
++          "added_by",
++          "added_at"
++        ],
++        "title": "WorkpaperNote",
++        "description": "底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,\n底稿配置 supplementable), 只是补充时为空."
++      },
++      "WorkpaperNoteIn": {
++        "properties": {
++          "text": {
++            "type": "string",
++            "title": "Text"
++          },
++          "item": {
++            "anyOf": [
++              {
++                "type": "string"
++              },
++              {
++                "type": "null"
++              }
++            ],
++            "title": "Item"
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "text"
++        ],
++        "title": "WorkpaperNoteIn",
++        "description": "审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330)."
++      },
++      "WorkpaperSignoff": {
++        "properties": {
++          "signed_by": {
++            "type": "string",
++            "title": "Signed By"
++          },
++          "signed_at": {
++            "type": "string",
++            "format": "date-time",
++            "title": "Signed At"
++          },
++          "scope": {
++            "$ref": "#/components/schemas/ReviewScope"
++          },
++          "opinion": {
++            "type": "string",
++            "title": "Opinion",
++            "default": ""
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "signed_by",
++          "signed_at",
++          "scope"
++        ],
++        "title": "WorkpaperSignoff",
++        "description": "底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."
++      },
++      "WorkpaperSignoffIn": {
++        "properties": {
++          "scope": {
++            "$ref": "#/components/schemas/ReviewScope"
++          },
++          "opinion": {
++            "type": "string",
++            "title": "Opinion",
++            "default": ""
++          }
++        },
++        "additionalProperties": false,
++        "type": "object",
++        "required": [
++          "scope"
++        ],
++        "title": "WorkpaperSignoffIn",
++        "description": "审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."
++      },
++      "WorkpaperStatus": {
++        "type": "string",
++        "enum": [
++          "draft",
++          "signed",
++          "needs_rereview",
++          "final"
++        ],
++        "title": "WorkpaperStatus",
++        "description": "底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01."
++      },
+       "XeroAuthorize": {
+         "properties": {
+           "authorize_url": {
+diff --git a/src/frontend/src/client/@tanstack/react-query.gen.ts b/src/frontend/src/client/@tanstack/react-query.gen.ts
+index 65c6b34..5dbca43 100644
+--- a/src/frontend/src/client/@tanstack/react-query.gen.ts
++++ b/src/frontend/src/client/@tanstack/react-query.gen.ts
+@@ -3,8 +3,8 @@
+ import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
+ 
+ import { client } from '../client.gen';
+-import { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from '../sdk.gen';
+-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse } from '../types.gen';
++import { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe, workpapersConcludeWorkpaper, workpapersListWorkpapers, workpapersNoteWorkpaper, workpapersSignWorkpaper } from '../sdk.gen';
++import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse, WorkpapersConcludeWorkpaperData, WorkpapersConcludeWorkpaperError, WorkpapersConcludeWorkpaperResponse, WorkpapersListWorkpapersData, WorkpapersListWorkpapersError, WorkpapersListWorkpapersResponse, WorkpapersNoteWorkpaperData, WorkpapersNoteWorkpaperError, WorkpapersNoteWorkpaperResponse, WorkpapersSignWorkpaperData, WorkpapersSignWorkpaperError, WorkpapersSignWorkpaperResponse } from '../types.gen';
+ 
+ export type QueryKey<TOptions extends Options> = [
+     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
+@@ -1754,6 +1754,86 @@ export const integrationsXeroCallbackOptions = (options?: Options<IntegrationsXe
+     queryKey: integrationsXeroCallbackQueryKey(options)
+ });
+ 
++export const workpapersListWorkpapersQueryKey = (options: Options<WorkpapersListWorkpapersData>) => createQueryKey('workpapersListWorkpapers', options);
++
++/**
++ * List Workpapers
++ *
++ * 项目的底稿记录 (各最新版本), 按档案顺序; 程序还没执行 (闸门还没决定) 的没有记录.
++ */
++export const workpapersListWorkpapersOptions = (options: Options<WorkpapersListWorkpapersData>) => queryOptions<WorkpapersListWorkpapersResponse, WorkpapersListWorkpapersError, WorkpapersListWorkpapersResponse, ReturnType<typeof workpapersListWorkpapersQueryKey>>({
++    queryFn: async ({ queryKey, signal }) => {
++        const { data } = await workpapersListWorkpapers({
++            ...options,
++            ...queryKey[0],
++            signal,
++            throwOnError: true
++        });
++        return data;
++    },
++    queryKey: workpapersListWorkpapersQueryKey(options)
++});
++
++/**
++ * Conclude Workpaper
++ *
++ * 改写底稿结论, 返回新版本 (草稿照留; 已签署的改为须重新复核), 写 decision 留痕. 文字为空 422 MISSING_FIELD;
++ * 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersConcludeWorkpaperMutation = (options?: Partial<Options<WorkpapersConcludeWorkpaperData>>): UseMutationOptions<WorkpapersConcludeWorkpaperResponse, WorkpapersConcludeWorkpaperError, Options<WorkpapersConcludeWorkpaperData>> => {
++    const mutationOptions: UseMutationOptions<WorkpapersConcludeWorkpaperResponse, WorkpapersConcludeWorkpaperError, Options<WorkpapersConcludeWorkpaperData>> = {
++        mutationFn: async (fnOptions) => {
++            const { data } = await workpapersConcludeWorkpaper({
++                ...options,
++                ...fnOptions,
++                throwOnError: true
++            });
++            return data;
++        }
++    };
++    return mutationOptions;
++};
++
++/**
++ * Note Workpaper
++ *
++ * 补充底稿说明, 返回新版本; item 补齐该底稿可由补充说明补齐的必填项 (之后不再列在 missing). 文字为空 422
++ * MISSING_FIELD; item 不是可补齐的 422 INVALID_VALUE; 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersNoteWorkpaperMutation = (options?: Partial<Options<WorkpapersNoteWorkpaperData>>): UseMutationOptions<WorkpapersNoteWorkpaperResponse, WorkpapersNoteWorkpaperError, Options<WorkpapersNoteWorkpaperData>> => {
++    const mutationOptions: UseMutationOptions<WorkpapersNoteWorkpaperResponse, WorkpapersNoteWorkpaperError, Options<WorkpapersNoteWorkpaperData>> = {
++        mutationFn: async (fnOptions) => {
++            const { data } = await workpapersNoteWorkpaper({
++                ...options,
++                ...fnOptions,
++                throwOnError: true
++            });
++            return data;
++        }
++    };
++    return mutationOptions;
++};
++
++/**
++ * Sign Workpaper
++ *
++ * 签署底稿, 返回新版本 (status signed, 记签署人, 时间, 复核范围与意见), 写 decision 留痕. 不阻塞 FIN-01 与
++ * RPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersSignWorkpaperMutation = (options?: Partial<Options<WorkpapersSignWorkpaperData>>): UseMutationOptions<WorkpapersSignWorkpaperResponse, WorkpapersSignWorkpaperError, Options<WorkpapersSignWorkpaperData>> => {
++    const mutationOptions: UseMutationOptions<WorkpapersSignWorkpaperResponse, WorkpapersSignWorkpaperError, Options<WorkpapersSignWorkpaperData>> = {
++        mutationFn: async (fnOptions) => {
++            const { data } = await workpapersSignWorkpaper({
++                ...options,
++                ...fnOptions,
++                throwOnError: true
++            });
++            return data;
++        }
++    };
++    return mutationOptions;
++};
++
+ export const dataTableSchemasQueryKey = (options?: Options<DataTableSchemasData>) => createQueryKey('dataTableSchemas', options);
+ 
+ /**
+diff --git a/src/frontend/src/client/index.ts b/src/frontend/src/client/index.ts
+index ddb79ae..ce96327 100644
+--- a/src/frontend/src/client/index.ts
++++ b/src/frontend/src/client/index.ts
+@@ -1,4 +1,4 @@
+ // This file is auto-generated by @hey-api/openapi-ts
+ 
+-export { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, conversationStreamConcierge, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe } from './sdk.gen';
+-export type { AbnLookupView, AbnRecord, AcceptanceMaterial, AcceptanceScorecard, AccountCategoryIn, Activity, ActivityFailure, AdjustmentEntryView, AgentId, AnalyticsResult, Annotation, Assertion, AuditException, AuditObjective, AuditorAppointment, AuditorConsent, AuditPlan, AuditReportVersion, AuthLoginData, AuthLoginError, AuthLoginErrors, AuthLoginResponse, AuthLoginResponses, AuthRegisterData, AuthRegisterError, AuthRegisterErrors, AuthRegisterResponse, AuthRegisterResponses, AutonomyLevel, BatchFile, BatchIssue, BatchIssueCode, BatchItem, BatchItemEdit, BodyAuthLogin, BodyDataStartBatch, BodyDataStartImport, BodyEvidenceUploadDocuments, CategoryVersion, CheckId, ClientCreate, ClientDataset, ClientOptions, ClientProfile, ClientProfileIn, ClientProfileView, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupErrors, ClientsAbnLookupResponse, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientErrors, ClientsCreateClientResponse, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponse, ClientsListClientsResponses, ClientSummary, CompletionMaterial, ConciergeAnswer, ConciergeCitation, ConciergeQuestion, Confirmation, ConfirmationResult, ConfirmationView, Contract, ContractTerm, ContractVersion, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeErrors, ConversationAskConciergeResponse, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationError, ConversationListConversationErrors, ConversationListConversationResponse, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeError, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, ConversationTurn, CorrectionNotice, CorrectionNoticeIn, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponse, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponse, CorrectionsSubmitCorrectionNoticeResponses, CriticReasonCode, CriticReasonType, CriticTrigger, CriticVerdict, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryErrors, DataAccountHistoryResponse, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetErrors, DataChangeImportSheetResponse, DataChangeImportSheetResponses, DataCheck, DataCommitImportData, DataCommitImportError, DataCommitImportErrors, DataCommitImportResponse, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchErrors, DataConfirmBatchResponse, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsError, DataDataRequestsErrors, DataDataRequestsResponse, DataDataRequestsResponses, DataDemoImportData, DataDemoImportError, DataDemoImportErrors, DataDemoImportResponse, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemErrors, DataEditBatchItemResponse, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchError, DataGetBatchErrors, DataGetBatchResponse, DataGetBatchResponses, DataListBatchesData, DataListBatchesError, DataListBatchesErrors, DataListBatchesResponse, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableResponses, DataReadiness, DataReadyData, DataReadyError, DataReadyErrors, DataReadyIn, DataReadyResponse, DataReadyResponses, DataRequest, DataRetryBatchData, DataRetryBatchError, DataRetryBatchErrors, DataRetryBatchResponse, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryErrors, DataSetAccountCategoryResponse, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DatasetsListDatasetsResponses, DatasetSummary, DataSources, DataStartBatchData, DataStartBatchError, DataStartBatchErrors, DataStartBatchResponse, DataStartBatchResponses, DataStartImportData, DataStartImportError, DataStartImportErrors, DataStartImportResponse, DataStartImportResponses, DataSummary, DataSummaryData, DataSummaryError, DataSummaryErrors, DataSummaryResponse, DataSummaryResponses, DataTablePageData, DataTablePageError, DataTablePageErrors, DataTablePageResponse, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponse, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectError, DataXeroConnectErrors, DataXeroConnectResponse, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectErrors, DataXeroDisconnectResponse, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckErrors, DataXeroProfileCheckResponse, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncError, DataXeroSyncErrors, DataXeroSyncResponse, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantError, DataXeroTenantErrors, DataXeroTenantResponse, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsErrors, DataXeroTenantsResponse, DataXeroTenantsResponses, Decision, DeclaredHolding, DeclaredParty, DeferralIn, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsErrors, DeferralsListDeferralsResponse, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralErrors, DeferralsSetDeferralResponse, DeferralsSetDeferralResponses, DeferralView, DemoImportIn, DemoImportResult, DemoSummary, Direction, DisputeResolution, DocumentDetailsIn, DocumentRef, DocumentType, DocumentTypeIn, DowngradeCondition, Engagement, EngagementCreate, EngagementOverview, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponse, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponse, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementErrors, EngagementsGetEngagementResponse, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanErrors, EngagementsGetPlanResponse, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageResponses, EngagementSummary, EngagementTerms, Engine, EqrRecommendation, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryErrors, EvidenceContractHistoryResponse, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponse, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponse, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractErrors, EvidenceEditContractResponse, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponse, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponse, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordErrors, EvidenceGetRecordResponse, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponse, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsErrors, EvidenceListContractsResponse, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsErrors, EvidenceListDocumentsResponse, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponse, EvidenceListRegistryExtractsResponses, EvidencePointer, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponse, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeResponses, EvidenceType, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsResponses, ExceptionDisposition, ExtractionEdit, ExtractionRecord, Fees, FieldSource, FinancialYearChange, GateDecision, GateDecisionIn, GateEdit, GateId, GatesGetGateData, GatesGetGateError, GatesGetGateErrors, GatesGetGateResponse, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponse, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileError, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, GateVerdict, GateView, Governance, GovernanceMember, GroupTitle, HealthHealthData, HealthHealthResponse, HealthHealthResponses, HttpValidationError, IdBody, ImportBatch, ImportCommit, ImportPreview, ImportResult, ImportSheet, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, IntegrationsXeroCallbackErrors, Judgment, JudgmentDetail, JudgmentRef, KeyPerson, LlmSettingsView, LlmSlotIn, LlmSlotView, LlmTestResult, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksErrors, ManualListManualTasksResponse, ManualListManualTasksResponses, ManualRequest, ManualResult, ManualTaskView, MaterialityCandidate, MaterialityCandidates, MaterialityChoice, Milestone, Misstatement, MisstatementDraft, MisstatementReport, MisstatementStatus, MisstatementType, MisstatementUpdate, MonthlyFigures, NeitherAction, NotExecuted, Officeholder, OpinionType, ParseFailure, PeriodSource, Phase, PhaseProgress, PlanConfirmation, PlanItem, PlanMaterial, PlanningMaterial, PlanRow, PlanSection, PlanStatus, PlanView, PresentedEvidence, PresentedFailure, PresentedSide, PriorEstimateOutcome, PriorMisstatement, Procedure, ProcedureDetail, ProcedureNote, ProcedureRun, ProcedureStatus, ProcedureSummary, ProfileSource, ProfileVersionInfo, ProposedAction, ReasoningStep, ReceiptChannel, RecordsDetail, RegisterIn, RegistryCheck, RegistryExtraction, RegistryExtractView, Reliability, ReportBundle, ReportMaterial, ReportSection, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponse, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsErrors, ReportsGetReportsResponse, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailErrors, ReportsGetTrailResponse, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailError, ReportsListTrailErrors, ReportsListTrailResponse, ReportsListTrailResponses, ReportStatus, RequestUnavailableIn, RerunIn, Retention, ReviewRecord, ReviewRecordIn, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponse, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureErrors, ReviewsGetProcedureResponse, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsErrors, ReviewsListExceptionsResponse, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponse, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponse, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponse, ReviewsSubmitReviewRecordResponses, ReviewStatus, ReviewTask, ReviewTaskView, ReviewTier, RiskItem, RiskLevel, RowRule, RuleOutcome, RunStatus, RunTrigger, ServiceOrganisation, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponse, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotResponses, ShareholderDirection, Shareholding, SheetReading, StandardFragment, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardErrors, StandardsGetStandardResponse, StandardsGetStandardResponses, StepKind, StepStatus, TableColumn, TableField, TableKind, TablePage, TablePlan, TableSchema, TableSummary, TargetType, TaskKind, TaskPresentation, TaskStatus, TermsCheck, TermsCheckStatus, TermsItem, TermType, Token, TrailEntry, TrailKind, UncorrectedItem, UncorrectedSchedule, User, UsersMeData, UsersMeResponse, UsersMeResponses, ValidationError, WorkingLanguageIn, XeroAuthorize, XeroDisconnected, XeroProfileCheck, XeroProfileCheckIn, XeroSource, XeroSyncResult, XeroSyncStarted, XeroTenant, XeroTenantIn } from './types.gen';
++export { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, conversationStreamConcierge, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditRegistryExtract, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListRegistryExtracts, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe, workpapersConcludeWorkpaper, workpapersListWorkpapers, workpapersNoteWorkpaper, workpapersSignWorkpaper } from './sdk.gen';
++export type { AbnLookupView, AbnRecord, AcceptanceMaterial, AcceptanceScorecard, AccountCategoryIn, Activity, ActivityFailure, AdjustmentEntryView, AgentId, AnalyticsResult, Annotation, Assertion, AuditException, AuditObjective, AuditorAppointment, AuditorConsent, AuditPlan, AuditReportVersion, AuthLoginData, AuthLoginError, AuthLoginErrors, AuthLoginResponse, AuthLoginResponses, AuthRegisterData, AuthRegisterError, AuthRegisterErrors, AuthRegisterResponse, AuthRegisterResponses, AutonomyLevel, BatchFile, BatchIssue, BatchIssueCode, BatchItem, BatchItemEdit, BodyAuthLogin, BodyDataStartBatch, BodyDataStartImport, BodyEvidenceUploadDocuments, CategoryVersion, CheckId, ClientCreate, ClientDataset, ClientOptions, ClientProfile, ClientProfileIn, ClientProfileView, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupErrors, ClientsAbnLookupResponse, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientErrors, ClientsCreateClientResponse, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponse, ClientsListClientsResponses, ClientSummary, CompletionMaterial, ConciergeAnswer, ConciergeCitation, ConciergeQuestion, Confirmation, ConfirmationResult, ConfirmationView, Contract, ContractTerm, ContractVersion, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeErrors, ConversationAskConciergeResponse, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationError, ConversationListConversationErrors, ConversationListConversationResponse, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeError, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, ConversationTurn, CorrectionNotice, CorrectionNoticeIn, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponse, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponse, CorrectionsSubmitCorrectionNoticeResponses, CriticReasonCode, CriticReasonType, CriticTrigger, CriticVerdict, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryErrors, DataAccountHistoryResponse, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetErrors, DataChangeImportSheetResponse, DataChangeImportSheetResponses, DataCheck, DataCommitImportData, DataCommitImportError, DataCommitImportErrors, DataCommitImportResponse, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchErrors, DataConfirmBatchResponse, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsError, DataDataRequestsErrors, DataDataRequestsResponse, DataDataRequestsResponses, DataDemoImportData, DataDemoImportError, DataDemoImportErrors, DataDemoImportResponse, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemErrors, DataEditBatchItemResponse, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchError, DataGetBatchErrors, DataGetBatchResponse, DataGetBatchResponses, DataListBatchesData, DataListBatchesError, DataListBatchesErrors, DataListBatchesResponse, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponse, DataMarkRequestUnavailableResponses, DataReadiness, DataReadyData, DataReadyError, DataReadyErrors, DataReadyIn, DataReadyResponse, DataReadyResponses, DataRequest, DataRetryBatchData, DataRetryBatchError, DataRetryBatchErrors, DataRetryBatchResponse, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryErrors, DataSetAccountCategoryResponse, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DatasetsListDatasetsResponses, DatasetSummary, DataSources, DataStartBatchData, DataStartBatchError, DataStartBatchErrors, DataStartBatchResponse, DataStartBatchResponses, DataStartImportData, DataStartImportError, DataStartImportErrors, DataStartImportResponse, DataStartImportResponses, DataSummary, DataSummaryData, DataSummaryError, DataSummaryErrors, DataSummaryResponse, DataSummaryResponses, DataTablePageData, DataTablePageError, DataTablePageErrors, DataTablePageResponse, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponse, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectError, DataXeroConnectErrors, DataXeroConnectResponse, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectErrors, DataXeroDisconnectResponse, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckErrors, DataXeroProfileCheckResponse, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncError, DataXeroSyncErrors, DataXeroSyncResponse, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantError, DataXeroTenantErrors, DataXeroTenantResponse, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsErrors, DataXeroTenantsResponse, DataXeroTenantsResponses, Decision, DeclaredHolding, DeclaredParty, DeferralIn, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsErrors, DeferralsListDeferralsResponse, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralErrors, DeferralsSetDeferralResponse, DeferralsSetDeferralResponses, DeferralView, DemoImportIn, DemoImportResult, DemoSummary, Direction, DisputeResolution, DocumentDetailsIn, DocumentRef, DocumentType, DocumentTypeIn, DowngradeCondition, Engagement, EngagementCreate, EngagementOverview, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponse, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponse, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementErrors, EngagementsGetEngagementResponse, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanErrors, EngagementsGetPlanResponse, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageResponses, EngagementSummary, EngagementTerms, Engine, EqrRecommendation, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryErrors, EvidenceContractHistoryResponse, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponse, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponse, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractErrors, EvidenceEditContractResponse, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponse, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponse, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordErrors, EvidenceGetRecordResponse, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponse, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsErrors, EvidenceListContractsResponse, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsErrors, EvidenceListDocumentsResponse, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponse, EvidenceListRegistryExtractsResponses, EvidencePointer, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponse, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponse, EvidenceSetDocumentTypeResponses, EvidenceType, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponse, EvidenceUploadDocumentsResponses, ExceptionDisposition, ExtractionEdit, ExtractionRecord, Fees, FieldSource, FinancialYearChange, GateDecision, GateDecisionIn, GateEdit, GateId, GatesGetGateData, GatesGetGateError, GatesGetGateErrors, GatesGetGateResponse, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponse, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileError, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, GateVerdict, GateView, Governance, GovernanceMember, GroupTitle, HealthHealthData, HealthHealthResponse, HealthHealthResponses, HttpValidationError, IdBody, ImportBatch, ImportCommit, ImportPreview, ImportResult, ImportSheet, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, IntegrationsXeroCallbackErrors, Judgment, JudgmentDetail, JudgmentRef, KeyPerson, LlmSettingsView, LlmSlotIn, LlmSlotView, LlmTestResult, LocalizedText, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksErrors, ManualListManualTasksResponse, ManualListManualTasksResponses, ManualRequest, ManualResult, ManualTaskView, MaterialityCandidate, MaterialityCandidates, MaterialityChoice, Milestone, Misstatement, MisstatementDraft, MisstatementReport, MisstatementStatus, MisstatementType, MisstatementUpdate, MonthlyFigures, NeitherAction, NotExecuted, ObjectRef, Officeholder, OpinionType, ParseFailure, PeriodSource, Phase, PhaseProgress, PlanConfirmation, PlanItem, PlanMaterial, PlanningMaterial, PlanRow, PlanSection, PlanStatus, PlanView, PresentedEvidence, PresentedFailure, PresentedSide, PriorEstimateOutcome, PriorMisstatement, Procedure, ProcedureDetail, ProcedureNote, ProcedureRun, ProcedureStatus, ProcedureSummary, ProfileSource, ProfileVersionInfo, ProposedAction, ReasoningStep, ReceiptChannel, RecordsDetail, RegisterIn, RegistryCheck, RegistryExtraction, RegistryExtractView, Reliability, ReportBundle, ReportMaterial, ReportSection, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponse, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsErrors, ReportsGetReportsResponse, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailErrors, ReportsGetTrailResponse, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailError, ReportsListTrailErrors, ReportsListTrailResponse, ReportsListTrailResponses, ReportStatus, RequestUnavailableIn, RerunIn, Retention, ReviewRecord, ReviewRecordIn, ReviewScope, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponse, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureErrors, ReviewsGetProcedureResponse, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsErrors, ReviewsListExceptionsResponse, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponse, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponse, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponse, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponse, ReviewsSubmitReviewRecordResponses, ReviewStatus, ReviewTask, ReviewTaskView, ReviewTier, RiskItem, RiskLevel, RowRule, RuleOutcome, RunStatus, RunTrigger, ServiceOrganisation, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponse, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponse, SettingsUpdateLlmSlotResponses, ShareholderDirection, Shareholding, SheetReading, StandardFragment, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardErrors, StandardsGetStandardResponse, StandardsGetStandardResponses, StepKind, StepStatus, TableColumn, TableField, TableKind, TablePage, TablePlan, TableSchema, TableSummary, TargetType, TaskKind, TaskPresentation, TaskStatus, TermsCheck, TermsCheckStatus, TermsItem, TermType, Token, TrailEntry, TrailKind, UncorrectedItem, UncorrectedSchedule, User, UsersMeData, UsersMeResponse, UsersMeResponses, ValidationError, WorkingLanguageIn, Workpaper, WorkpaperConclusionIn, WorkpaperNote, WorkpaperNoteIn, WorkpapersConcludeWorkpaperData, WorkpapersConcludeWorkpaperError, WorkpapersConcludeWorkpaperErrors, WorkpapersConcludeWorkpaperResponse, WorkpapersConcludeWorkpaperResponses, WorkpaperSignoff, WorkpaperSignoffIn, WorkpapersListWorkpapersData, WorkpapersListWorkpapersError, WorkpapersListWorkpapersErrors, WorkpapersListWorkpapersResponse, WorkpapersListWorkpapersResponses, WorkpapersNoteWorkpaperData, WorkpapersNoteWorkpaperError, WorkpapersNoteWorkpaperErrors, WorkpapersNoteWorkpaperResponse, WorkpapersNoteWorkpaperResponses, WorkpapersSignWorkpaperData, WorkpapersSignWorkpaperError, WorkpapersSignWorkpaperErrors, WorkpapersSignWorkpaperResponse, WorkpapersSignWorkpaperResponses, WorkpaperStatus, XeroAuthorize, XeroDisconnected, XeroProfileCheck, XeroProfileCheckIn, XeroSource, XeroSyncResult, XeroSyncStarted, XeroTenant, XeroTenantIn } from './types.gen';
+diff --git a/src/frontend/src/client/sdk.gen.ts b/src/frontend/src/client/sdk.gen.ts
+index 1a37aa1..78f49b1 100644
+--- a/src/frontend/src/client/sdk.gen.ts
++++ b/src/frontend/src/client/sdk.gen.ts
+@@ -2,7 +2,7 @@
+ 
+ import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
+ import { client } from './client.gen';
+-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
++import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses, WorkpapersConcludeWorkpaperData, WorkpapersConcludeWorkpaperErrors, WorkpapersConcludeWorkpaperResponses, WorkpapersListWorkpapersData, WorkpapersListWorkpapersErrors, WorkpapersListWorkpapersResponses, WorkpapersNoteWorkpaperData, WorkpapersNoteWorkpaperErrors, WorkpapersNoteWorkpaperResponses, WorkpapersSignWorkpaperData, WorkpapersSignWorkpaperErrors, WorkpapersSignWorkpaperResponses } from './types.gen';
+ 
+ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
+     /**
+@@ -1096,6 +1096,65 @@ export const settingsTestLlmSlot = <ThrowOnError extends boolean = false>(option
+  */
+ export const integrationsXeroCallback = <ThrowOnError extends boolean = false>(options?: Options<IntegrationsXeroCallbackData, ThrowOnError>): RequestResult<unknown, IntegrationsXeroCallbackErrors, ThrowOnError> => (options?.client ?? client).get<unknown, IntegrationsXeroCallbackErrors, ThrowOnError>({ url: '/api/v1/integrations/xero/callback', ...options });
+ 
++/**
++ * List Workpapers
++ *
++ * 项目的底稿记录 (各最新版本), 按档案顺序; 程序还没执行 (闸门还没决定) 的没有记录.
++ */
++export const workpapersListWorkpapers = <ThrowOnError extends boolean = false>(options: Options<WorkpapersListWorkpapersData, ThrowOnError>): RequestResult<WorkpapersListWorkpapersResponses, WorkpapersListWorkpapersErrors, ThrowOnError> => (options.client ?? client).get<WorkpapersListWorkpapersResponses, WorkpapersListWorkpapersErrors, ThrowOnError>({
++    security: [{ scheme: 'bearer', type: 'http' }],
++    url: '/api/v1/engagements/{eid}/workpapers',
++    ...options
++});
++
++/**
++ * Conclude Workpaper
++ *
++ * 改写底稿结论, 返回新版本 (草稿照留; 已签署的改为须重新复核), 写 decision 留痕. 文字为空 422 MISSING_FIELD;
++ * 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersConcludeWorkpaper = <ThrowOnError extends boolean = false>(options: Options<WorkpapersConcludeWorkpaperData, ThrowOnError>): RequestResult<WorkpapersConcludeWorkpaperResponses, WorkpapersConcludeWorkpaperErrors, ThrowOnError> => (options.client ?? client).post<WorkpapersConcludeWorkpaperResponses, WorkpapersConcludeWorkpaperErrors, ThrowOnError>({
++    security: [{ scheme: 'bearer', type: 'http' }],
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/conclusion',
++    ...options,
++    headers: {
++        'Content-Type': 'application/json',
++        ...options.headers
++    }
++});
++
++/**
++ * Note Workpaper
++ *
++ * 补充底稿说明, 返回新版本; item 补齐该底稿可由补充说明补齐的必填项 (之后不再列在 missing). 文字为空 422
++ * MISSING_FIELD; item 不是可补齐的 422 INVALID_VALUE; 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersNoteWorkpaper = <ThrowOnError extends boolean = false>(options: Options<WorkpapersNoteWorkpaperData, ThrowOnError>): RequestResult<WorkpapersNoteWorkpaperResponses, WorkpapersNoteWorkpaperErrors, ThrowOnError> => (options.client ?? client).post<WorkpapersNoteWorkpaperResponses, WorkpapersNoteWorkpaperErrors, ThrowOnError>({
++    security: [{ scheme: 'bearer', type: 'http' }],
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/notes',
++    ...options,
++    headers: {
++        'Content-Type': 'application/json',
++        ...options.headers
++    }
++});
++
++/**
++ * Sign Workpaper
++ *
++ * 签署底稿, 返回新版本 (status signed, 记签署人, 时间, 复核范围与意见), 写 decision 留痕. 不阻塞 FIN-01 与
++ * RPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409.
++ */
++export const workpapersSignWorkpaper = <ThrowOnError extends boolean = false>(options: Options<WorkpapersSignWorkpaperData, ThrowOnError>): RequestResult<WorkpapersSignWorkpaperResponses, WorkpapersSignWorkpaperErrors, ThrowOnError> => (options.client ?? client).post<WorkpapersSignWorkpaperResponses, WorkpapersSignWorkpaperErrors, ThrowOnError>({
++    security: [{ scheme: 'bearer', type: 'http' }],
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/signoff',
++    ...options,
++    headers: {
++        'Content-Type': 'application/json',
++        ...options.headers
++    }
++});
++
+ /**
+  * Table Schemas
+  *
+diff --git a/src/frontend/src/client/types.gen.ts b/src/frontend/src/client/types.gen.ts
+index d87fe13..bca60ac 100644
+--- a/src/frontend/src/client/types.gen.ts
++++ b/src/frontend/src/client/types.gen.ts
+@@ -3416,6 +3416,23 @@ export type LlmTestResult = {
+     message: string;
+ };
+ 
++/**
++ * LocalizedText
++ *
++ * 中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)
++ * 与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入.
++ */
++export type LocalizedText = {
++    /**
++     * Zh
++     */
++    zh: string;
++    /**
++     * En
++     */
++    en: string;
++};
++
+ /**
+  * ManualRequest
+  *
+@@ -3888,6 +3905,26 @@ export type NotExecuted = {
+     requests: Array<DataRequest>;
+ };
+ 
++/**
++ * ObjectRef
++ *
++ * 对某个对象某一版本的引用 (需求 R215): 声明书附表对应的汇总表, 检查所针对的对象, 独立性声明所依据的检查.
++ */
++export type ObjectRef = {
++    /**
++     * Kind
++     */
++    kind: string;
++    /**
++     * Id
++     */
++    id: string;
++    /**
++     * Version
++     */
++    version: number;
++};
++
+ /**
+  * Officeholder
+  *
+@@ -4955,6 +4992,13 @@ export type ReviewRecordIn = {
+     consultation_record?: string | null;
+ };
+ 
++/**
++ * ReviewScope
++ *
++ * 底稿签署时的复核范围 (ASA 230 第 9(c) 段, 需求 R330).
++ */
++export type ReviewScope = 'full' | 'sample' | 'conclusion_only';
++
+ /**
+  * ReviewStatus
+  *
+@@ -5840,6 +5884,158 @@ export type WorkingLanguageIn = {
+     language: string;
+ };
+ 
++/**
++ * Workpaper
++ *
++ * 一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
++ * services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
++ * 只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff.
++ */
++export type Workpaper = {
++    /**
++     * Id
++     */
++    id: string;
++    /**
++     * Version
++     */
++    version?: number;
++    /**
++     * Ref
++     */
++    ref: string;
++    /**
++     * Area
++     */
++    area: string;
++    /**
++     * Procedure Id
++     */
++    procedure_id: string;
++    status?: WorkpaperStatus;
++    /**
++     * Basis
++     */
++    basis: Array<ObjectRef>;
++    conclusion_draft?: LocalizedText | null;
++    /**
++     * Conclusion
++     */
++    conclusion?: string | null;
++    /**
++     * Conclusion By
++     */
++    conclusion_by?: string | null;
++    /**
++     * Conclusion At
++     */
++    conclusion_at?: string | null;
++    /**
++     * Notes
++     */
++    notes?: Array<WorkpaperNote>;
++    signoff?: WorkpaperSignoff | null;
++    last_signoff?: WorkpaperSignoff | null;
++    /**
++     * Missing
++     */
++    missing?: Array<string>;
++};
++
++/**
++ * WorkpaperConclusionIn
++ *
++ * 审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330).
++ */
++export type WorkpaperConclusionIn = {
++    /**
++     * Text
++     */
++    text: string;
++};
++
++/**
++ * WorkpaperNote
++ *
++ * 底稿的一条补充说明 (需求 R330): 审计师补写的文字; item 为它补齐的必填项代号 (只能是该底稿可由补充说明补齐的,
++ * 底稿配置 supplementable), 只是补充时为空.
++ */
++export type WorkpaperNote = {
++    /**
++     * Text
++     */
++    text: string;
++    /**
++     * Item
++     */
++    item?: string | null;
++    /**
++     * Added By
++     */
++    added_by: string;
++    /**
++     * Added At
++     */
++    added_at: string;
++};
++
++/**
++ * WorkpaperNoteIn
++ *
++ * 审计师补充底稿说明 (POST /workpapers/{ref}/notes, 需求 R330).
++ */
++export type WorkpaperNoteIn = {
++    /**
++     * Text
++     */
++    text: string;
++    /**
++     * Item
++     */
++    item?: string | null;
++};
++
++/**
++ * WorkpaperSignoff
++ *
++ * 底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围).
++ */
++export type WorkpaperSignoff = {
++    /**
++     * Signed By
++     */
++    signed_by: string;
++    /**
++     * Signed At
++     */
++    signed_at: string;
++    scope: ReviewScope;
++    /**
++     * Opinion
++     */
++    opinion?: string;
++};
++
++/**
++ * WorkpaperSignoffIn
++ *
++ * 审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330).
++ */
++export type WorkpaperSignoffIn = {
++    scope: ReviewScope;
++    /**
++     * Opinion
++     */
++    opinion?: string;
++};
++
++/**
++ * WorkpaperStatus
++ *
++ * 底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01.
++ */
++export type WorkpaperStatus = 'draft' | 'signed' | 'needs_rereview' | 'final';
++
+ /**
+  * XeroAuthorize
+  *
+@@ -8582,6 +8778,140 @@ export type IntegrationsXeroCallbackErrors = {
+ 
+ export type IntegrationsXeroCallbackError = IntegrationsXeroCallbackErrors[keyof IntegrationsXeroCallbackErrors];
+ 
++export type WorkpapersListWorkpapersData = {
++    body?: never;
++    path: {
++        /**
++         * Eid
++         */
++        eid: string;
++    };
++    query?: never;
++    url: '/api/v1/engagements/{eid}/workpapers';
++};
++
++export type WorkpapersListWorkpapersErrors = {
++    /**
++     * Validation Error
++     */
++    422: HttpValidationError;
++};
++
++export type WorkpapersListWorkpapersError = WorkpapersListWorkpapersErrors[keyof WorkpapersListWorkpapersErrors];
++
++export type WorkpapersListWorkpapersResponses = {
++    /**
++     * Response Workpapers-List Workpapers
++     *
++     * Successful Response
++     */
++    200: Array<Workpaper>;
++};
++
++export type WorkpapersListWorkpapersResponse = WorkpapersListWorkpapersResponses[keyof WorkpapersListWorkpapersResponses];
++
++export type WorkpapersConcludeWorkpaperData = {
++    body: WorkpaperConclusionIn;
++    path: {
++        /**
++         * Ref
++         */
++        ref: string;
++        /**
++         * Eid
++         */
++        eid: string;
++    };
++    query?: never;
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/conclusion';
++};
++
++export type WorkpapersConcludeWorkpaperErrors = {
++    /**
++     * Validation Error
++     */
++    422: HttpValidationError;
++};
++
++export type WorkpapersConcludeWorkpaperError = WorkpapersConcludeWorkpaperErrors[keyof WorkpapersConcludeWorkpaperErrors];
++
++export type WorkpapersConcludeWorkpaperResponses = {
++    /**
++     * Successful Response
++     */
++    200: Workpaper;
++};
++
++export type WorkpapersConcludeWorkpaperResponse = WorkpapersConcludeWorkpaperResponses[keyof WorkpapersConcludeWorkpaperResponses];
++
++export type WorkpapersNoteWorkpaperData = {
++    body: WorkpaperNoteIn;
++    path: {
++        /**
++         * Ref
++         */
++        ref: string;
++        /**
++         * Eid
++         */
++        eid: string;
++    };
++    query?: never;
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/notes';
++};
++
++export type WorkpapersNoteWorkpaperErrors = {
++    /**
++     * Validation Error
++     */
++    422: HttpValidationError;
++};
++
++export type WorkpapersNoteWorkpaperError = WorkpapersNoteWorkpaperErrors[keyof WorkpapersNoteWorkpaperErrors];
++
++export type WorkpapersNoteWorkpaperResponses = {
++    /**
++     * Successful Response
++     */
++    200: Workpaper;
++};
++
++export type WorkpapersNoteWorkpaperResponse = WorkpapersNoteWorkpaperResponses[keyof WorkpapersNoteWorkpaperResponses];
++
++export type WorkpapersSignWorkpaperData = {
++    body: WorkpaperSignoffIn;
++    path: {
++        /**
++         * Ref
++         */
++        ref: string;
++        /**
++         * Eid
++         */
++        eid: string;
++    };
++    query?: never;
++    url: '/api/v1/engagements/{eid}/workpapers/{ref}/signoff';
++};
++
++export type WorkpapersSignWorkpaperErrors = {
++    /**
++     * Validation Error
++     */
++    422: HttpValidationError;
++};
++
++export type WorkpapersSignWorkpaperError = WorkpapersSignWorkpaperErrors[keyof WorkpapersSignWorkpaperErrors];
++
++export type WorkpapersSignWorkpaperResponses = {
++    /**
++     * Successful Response
++     */
++    200: Workpaper;
++};
++
++export type WorkpapersSignWorkpaperResponse = WorkpapersSignWorkpaperResponses[keyof WorkpapersSignWorkpaperResponses];
++
+ export type DataTableSchemasData = {
+     body?: never;
+     path?: never;
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 7cb50f0..a74f57d 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -332,8 +332,9 @@ def test_missing_token(api: SimpleNamespace) -> None:
+         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
+     ],
+ )
+-def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
+-    response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
++@pytest.mark.parametrize("suffix", ["", "/workpapers"])  # 底稿记录 (需求 R330) 同样经 owned_engagement
++def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str, suffix: str) -> None:
++    response = api.client.get(f"/api/v1/engagements/{path}{suffix}", headers=_auth(api))
+     assert response.status_code == 404
+     assert response.json()["detail"]["code"] == code
+ 
+diff --git a/tests/test_workpapers.py b/tests/test_workpapers.py
+new file mode 100644
+index 0000000..41c18b0
+--- /dev/null
++++ b/tests/test_workpapers.py
+@@ -0,0 +1,344 @@
++"""需求 R330 (Issue #50): 底稿记录. 程序执行终态与决定之后刷新 (依据, 结论草稿, 缺项), 审计师改结论, 补充说明与签署,
++依据变了改为须重新复核, 不阻塞 FIN-01 与 RPT-01, 锁定后不能改, 刷新失败只记日志.
++
++两种走法: 演示配置的离线走通 (tests/test_demo_walkthrough.walk, 编排里的刷新照常发生) 看各底稿的版本历史; 假存储里
++直接放 Xero 演示 REV-08 第 1 次执行的执行记录, 被测总体与例外 (tests.xero_fakes) 与 PLN-01/03 的通过决定, 经接口
++做审计师的三种操作."""
++
++from collections.abc import AsyncIterator
++from datetime import date
++from typing import Any
++
++import httpx
++import pytest
++import pytest_asyncio
++
++from backend.contracts.models import (
++    ExceptionDisposition,
++    GateDecision,
++    GateId,
++    GateVerdict,
++    ObjectRef,
++    Phase,
++    ProcedureRun,
++    RunPopulation,
++    TrailKind,
++    Workpaper,
++    WorkpaperStatus,
++)
++from backend.core.config import get_settings
++from backend.orchestration.decisions import GraphDecisionSubmit
++from backend.orchestration.runner import GraphRunner
++from backend.services import workpapers
++from backend.services.procedure_library import ProcedureLibrary
++from backend.services.workpapers import SATISFIED, refresh
++from tests.fakes import (
++    DECIDED_AT,
++    ENGAGEMENT,
++    NUMBAT_AUDITOR,
++    FakeEngagementStore,
++    FakeOutputStore,
++    FakeTrail,
++    acc01_decision,
++    api_client,
++    finished,
++    make_procedure,
++    make_run,
++    make_runner,
++    wait_idle,
++)
++from tests.fixture_sets import XERO
++from tests.test_demo_walkthrough import Session, Walk, walk
++from tests.xero_fakes import XERO17_MATERIALITY, xero_rev08_exception, xero_rev08_populations
++from tests.xero_flow import demo_offline
++from tests.xero_harness import LayeredMockLLMClient
++
++EID = ENGAGEMENT.id
++BASE = f"/api/v1/engagements/{EID}/workpapers"
++REV08_PARAMS = {"window_days": 20, "period_end": date(2026, 9, 30)}  # 特别风险的窗口 (同 tests.xero_fakes)
++# 验收 1: REV-08 第 1 次执行之后的结论草稿 (Xero 演示: 窗口内 6 张发票, 其中 5 张找得到收款, ORC1026 收款不符)
++D3_DRAFT = {
++    "zh": "范围: 期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票. 被测对象 6 项, 合计 9,900.00. "
++    "入账期间正确: 6 项均符合. 有服务完成记录: 6 项均符合. 收款金额相符: 5 项中 1 项不符, 1 项不作判断. "
++    "例外 1 条, 待处理 1 条.",
++    "en": "Scope: Sales invoices posted in the 20 days before period end (2026-09-10 to 2026-09-30). "
++    "6 items tested, totalling 9,900.00. Recorded in the correct period: all 6 agree. "
++    "Service completion record exists: all 6 agree. "
++    "Receipts agree to the invoice: 1 of 5 do not agree, 1 not assessed. 1 exception, 1 pending.",
++}
++UNSIGNED = ["reviewer", "reviewed_on", "review_scope"]  # 未签署时缺的通用三项 (ASA 230 第 9(c) 段)
++
++
++def test_every_required_item_has_a_check() -> None:
++    """底稿配置的每个必填项都有判断是否已记录的规则, 规则表里也没有配置之外的代号."""
++    library = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
++    assert {r.id for r in library.workpapers.required} == set(SATISFIED)
++
++
++# ── 走通里的刷新 (验收 1, 2, 6, 7) ──
++
++shared_loop = pytest.mark.asyncio(loop_scope="module")
++
++
++@pytest_asyncio.fixture(scope="module", loop_scope="module")
++async def walked() -> AsyncIterator[tuple[Walk, httpx.AsyncClient]]:
++    """演示配置离线走通一次 (同 tests/test_demo_walkthrough 的 walked, 工作语言 en), 走完不关接口客户端."""
++    XERO.ready()
++    llm = LayeredMockLLMClient([XERO.runtime])
++    async with demo_offline(llm) as (runner, service, client):
++        yield await walk(Session(client, runner, service), llm), client
++
++
++async def history(w: Walk, ref: str) -> list[Workpaper]:
++    return await w.x.runner.deps.output_store.history(w.x.eid, Workpaper, f"WP-{ref}")
++
++
++@pytest.mark.external
++@shared_loop
++async def test_rule_workpaper_after_first_run(walked: tuple[Walk, httpx.AsyncClient]) -> None:
++    """验收 1: REV-08 第 1 次执行之后 WP-D-3 第 1 版为 draft, 依据为执行记录, 被测总体与例外, 结论草稿按模板; 之后
++    ORC1026 的判断确认, 例外归因 (第 2 版), 草稿改写为已由判断解释."""
++    w, _ = walked
++    first, second, *rest = await history(w, "D-3")
++    assert (first.version, first.status, first.procedure_id, first.area) == (1, WorkpaperStatus.draft, "REV-08", "D")
++    assert first.basis == [
++        ObjectRef(kind="AuditException", id="X-REV-08-1-R03-1", version=1),
++        ObjectRef(kind="ProcedureRun", id="RUN-REV-08-1", version=1),
++        ObjectRef(kind="RunPopulation", id="POP-RUN-REV-08-1", version=1),
++    ]
++    assert first.conclusion_draft is not None and first.conclusion_draft.model_dump() == D3_DRAFT
++    assert first.missing == UNSIGNED
++    assert ObjectRef(kind="AuditException", id="X-REV-08-1-R03-1", version=2) in second.basis
++    assert second.conclusion_draft is not None
++    assert second.conclusion_draft.zh.endswith("例外 1 条, 待处理 0 条, 已由判断解释 1 条.")
++    assert rest == []
++
++
++@pytest.mark.external
++@shared_loop
++async def test_judgment_workpaper_follows_reviews(walked: tuple[Walk, httpx.AsyncClient]) -> None:
++    """验收 2: REV-03 的 WP-D-2 第 1 版列 3 份合同的建议与置信度, 待复核 3 项, 末句同 Q27; 三个复核决定各出一版,
++    最后一版待复核 0 项."""
++    w, _ = walked
++    versions = await history(w, "D-2")
++    drafts = [v.conclusion_draft.zh if v.conclusion_draft else "" for v in versions]
++    assert drafts[0] == (
++        "判断对象 3 个: CON-X01 建议接受, 置信度 0.84, 待复核; CON-X02 建议接受, 置信度 0.84, 待复核; "
++        "CON-X03 建议接受, 置信度 0.82, 待复核. 待复核 3 项. 最终结论待审计师复核后确定."
++    )
++    assert [d.split("待复核 ")[-1][0] for d in drafts] == ["3", "2", "1", "0"]
++    assert all(d.endswith("最终结论待审计师复核后确定.") for d in drafts)
++
++
++@pytest.mark.external
++@shared_loop
++async def test_unsigned_workpapers_do_not_block_and_lock_after_archive(walked: tuple[Walk, httpx.AsyncClient]) -> None:
++    """验收 6, 7: 走通时没有签署任何底稿, FIN-01 与 RPT-01 照常通过到归档; 列表按档案顺序, 各程序底稿都有记录且都是
++    draft; 归档 (锁定) 后三种操作都报 423 ENGAGEMENT_LOCKED, 刷新不再写."""
++    w, client = walked
++    base = f"/api/v1/engagements/{w.x.eid}/workpapers"
++    listed = (await client.get(base)).json()
++    assert [r["ref"] for r in listed] == [
++        *("A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "C-1", "C-2", "C-3", "C-4", "D-1", "D-2", "D-3", "D-4"),
++        *("G-1", "G-2", "X", "X-A", "X-B", "X-C", "Z-1", "Z-2", "Z-3"),
++    ]
++    assert {r["status"] for r in listed} == {"draft"}
++    posts = [
++        ("D-3/conclusion", {"text": "x"}),
++        ("D-3/notes", {"text": "x"}),
++        ("D-3/signoff", {"scope": "full"}),
++    ]
++    for path, body in posts:
++        response = await client.post(f"{base}/{path}", json=body)
++        assert (response.status_code, response.json()["detail"]["code"]) == (423, "ENGAGEMENT_LOCKED")
++    assert await refresh(w.x.runner.deps, w.x.eid) == []
++
++
++# ── 审计师的三种操作 (验收 3, 4, 5, 7) ──
++
++
++def rev08_run(run_no: int) -> ProcedureRun:
++    return finished(make_run("REV-08", run_no, dict(REV08_PARAMS)))
++
++
++def rev08_outputs(run: ProcedureRun) -> list[Any]:
++    """REV-08 一次执行的执行记录, 被测总体与例外 (Xero 演示)."""
++    population = RunPopulation(id=f"POP-{run.id}", run_id=run.id, procedure_id="REV-08", rules=xero_rev08_populations())
++    return [run, population, xero_rev08_exception(run)]
++
++
++PLN_APPROVE = GateDecision(
++    id="D-PLN",
++    gate=GateId.PLN_01_03,
++    target_id="MATERIALITY",
++    target_version=1,
++    decision=GateVerdict.approve,
++    materiality=XERO17_MATERIALITY,
++    decided_by=NUMBAT_AUDITOR.id,
++    decided_at=DECIDED_AT,
++)
++
++
++async def seeded() -> tuple[GraphRunner, FakeOutputStore]:
++    """程序包有 REV-08 与 PLN-01, Store 里有 REV-08 第 1 次执行的产出与 PLN-01/03 的通过决定 (没写理由), 刷新一次:
++    WP-D-3 与 WP-A-2 各第 1 版."""
++    runner, store = make_runner()
++    pack = [make_procedure("REV-08", Phase.P2_Executing), make_procedure("PLN-01", Phase.P1_Planning)]
++    await store.put(EID, [*pack, *rev08_outputs(rev08_run(1)), PLN_APPROVE], actor="A6")
++    assert [w.id for w in await refresh(runner.deps, EID)] == ["WP-A-2", "WP-D-3"]
++    return runner, store
++
++
++def decisions(runner: GraphRunner) -> list[dict[str, Any]]:
++    trail = runner.deps.trail
++    assert isinstance(trail, FakeTrail)
++    return [e.payload | {"procedure_id": e.procedure_id} for e in trail.entries if e.kind is TrailKind.decision]
++
++
++async def test_conclusion_and_notes() -> None:
++    """验收 3: 改结论出新版本 (草稿照留), decision 留痕一行; 补充说明补齐 A-2 的选择理由 (materiality_factors, 可由
++    补充说明补齐) 后它从 missing 去掉; 不可补齐的项, 不认识的项与空文字被拒, 不写."""
++    runner, store = await seeded()
++    async with api_client(runner) as client:
++        before = await store.get(EID, Workpaper, "WP-A-2")
++        assert before is not None and "materiality_factors" in before.missing
++        concluded = await client.post(f"{BASE}/D-3/conclusion", json={"text": " Agreed, see D-4 for ORC1026. "})
++        noted = await client.post(
++            f"{BASE}/A-2/notes", json={"text": "Revenue is the stable benchmark.", "item": "materiality_factors"}
++        )
++        rejected = [
++            await client.post(f"{BASE}/A-2/notes", json={"text": "x", "item": "reviewer"}),  # 签署才能补
++            await client.post(f"{BASE}/A-2/notes", json={"text": "x", "item": "nope"}),
++            await client.post(f"{BASE}/A-2/notes", json={"text": "  "}),
++            await client.post(f"{BASE}/D-3/conclusion", json={"text": ""}),
++        ]
++    assert concluded.status_code == 200, concluded.text
++    body = concluded.json()
++    assert (body["version"], body["conclusion"], body["conclusion_by"]) == (2, "Agreed, see D-4 for ORC1026.", "U-1")
++    assert body["conclusion_draft"]["en"] == D3_DRAFT["en"]
++    assert noted.status_code == 200, noted.text
++    assert (
++        noted.json()["notes"][0]["item"] == "materiality_factors"
++        and "materiality_factors" not in noted.json()["missing"]
++    )
++    codes = [(r.status_code, r.json()["detail"]["code"]) for r in rejected]
++    assert codes == [(422, "INVALID_VALUE"), (422, "INVALID_VALUE"), (422, "MISSING_FIELD"), (422, "MISSING_FIELD")]
++    assert [(d["action"], d["procedure_id"], d["version"]) for d in decisions(runner)] == [
++        ("workpaper_conclusion", "REV-08", 2),
++        ("workpaper_note", "PLN-01", 2),
++    ]
++
++
++async def test_signoff() -> None:
++    """验收 4: 签署出新版本 status signed, signoff 记签署人, 时间, 范围与意见, 未签署缺的三项随之去掉, decision 留痕;
++    意见选填; 范围不认识 422 (请求体校验); 同一人同样再签不出新版本."""
++    runner, _ = await seeded()
++    async with api_client(runner) as client:
++        signed = await client.post(
++            f"{BASE}/D-3/signoff", json={"scope": "full", "opinion": "Agreed to supporting records."}
++        )
++        again = await client.post(
++            f"{BASE}/D-3/signoff", json={"scope": "full", "opinion": "Agreed to supporting records."}
++        )
++        plain = await client.post(f"{BASE}/A-2/signoff", json={"scope": "conclusion_only"})
++        bad = await client.post(f"{BASE}/D-3/signoff", json={"scope": "glance"})
++    assert signed.status_code == 200, signed.text
++    body = signed.json()
++    assert (body["version"], body["status"], body["missing"]) == (2, "signed", [])
++    signoff = body["signoff"]
++    assert (signoff["signed_by"], signoff["scope"], signoff["opinion"]) == (
++        "U-1",
++        "full",
++        "Agreed to supporting records.",
++    )
++    assert again.json()["version"] == 2
++    assert (plain.status_code, plain.json()["signoff"]["opinion"]) == (200, "")
++    assert bad.status_code == 422
++    assert [(d["action"], d["scope"], d["version"]) for d in decisions(runner)] == [
++        ("workpaper_signoff", "full", 2),
++        ("workpaper_signoff", "conclusion_only", 2),
++    ]
++
++
++def rerun(run: ProcedureRun) -> list[Any]:
++    return rev08_outputs(rev08_run(2))
++
++
++def attributed(run: ProcedureRun) -> list[Any]:
++    exception = xero_rev08_exception(run)
++    update = {"version": 2, "disposition": ExceptionDisposition.attributed, "attributed_by": "J-REV-02-1-ORC1026"}
++    return [exception.model_copy(update=update)]
++
++
++@pytest.mark.parametrize("change", [rerun, attributed], ids=["rerun", "exception_decided"])
++async def test_signed_workpaper_needs_rereview_when_basis_changes(change: Any) -> None:
++    """验收 5: 已签署的 WP-D-3 在 REV-08 重跑 (RUN-REV-08-2) 或其例外有新决定 (归因, 第 2 版) 之后刷新出新版本,
++    status needs_rereview, last_signoff 为原签署, signoff 清空; 依据没变的刷新不出新版本."""
++    runner, store = await seeded()
++    async with api_client(runner) as client:
++        signed = (await client.post(f"{BASE}/D-3/signoff", json={"scope": "sample"})).json()
++    assert await refresh(runner.deps, EID) == []  # 依据没变
++    await store.put(EID, change(rev08_run(1)), actor="A6")
++    [refreshed] = await refresh(runner.deps, EID)
++    assert (refreshed.id, refreshed.version, refreshed.status) == ("WP-D-3", 3, WorkpaperStatus.needs_rereview)
++    assert refreshed.signoff is None and refreshed.last_signoff is not None
++    assert refreshed.last_signoff.model_dump(mode="json") == signed["signoff"]
++    assert refreshed.missing == UNSIGNED
++    assert await refresh(runner.deps, EID) == []
++
++
++async def test_edit_after_signoff_needs_rereview() -> None:
++    """签署后改结论也算内容变了: 新版本 needs_rereview, 签署移到 last_signoff."""
++    runner, _ = await seeded()
++    async with api_client(runner) as client:
++        await client.post(f"{BASE}/D-3/signoff", json={"scope": "full"})
++        edited = (await client.post(f"{BASE}/D-3/conclusion", json={"text": "Revised."})).json()
++    assert (edited["status"], edited["signoff"], edited["last_signoff"]["scope"]) == ("needs_rereview", None, "full")
++
++
++@pytest.mark.parametrize(
++    ("setup", "path", "code"),
++    [
++        ({"locked": True}, "D-3/conclusion", (423, "ENGAGEMENT_LOCKED")),
++        ({"locked": True}, "D-3/notes", (423, "ENGAGEMENT_LOCKED")),
++        ({"locked": True}, "D-3/signoff", (423, "ENGAGEMENT_LOCKED")),
++        ({}, "C-3/conclusion", (404, "NOT_FOUND")),  # CSH-05 没有执行, 没有记录
++        ({"busy": True}, "D-3/conclusion", (409, "ENGAGEMENT_BUSY")),
++    ],
++)
++async def test_operations_rejected(setup: dict[str, bool], path: str, code: tuple[int, str]) -> None:
++    """验收 7: 项目锁定 (签字或拒绝承接) 后三种操作 423; 没有记录的底稿 404; 项目锁被占 409. 都不写."""
++    runner, store = await seeded()
++    engagements = runner.deps.engagement_store
++    assert isinstance(engagements, FakeEngagementStore)
++    if setup.get("locked"):
++        await engagements.update(EID, locked=True)
++    if setup.get("busy"):
++        runner.acquire(EID)
++    body = {"scope": "full"} if path.endswith("signoff") else {"text": "x"}
++    async with api_client(runner) as client:
++        response = await client.post(f"{BASE}/{path}", json=body)
++    assert (response.status_code, response.json()["detail"]["code"]) == code
++    assert {w.version for w in await store.latest(EID, Workpaper)} == {1}
++
++
++# ── 刷新失败只记日志 (验收 8) ──
++
++
++async def test_refresh_failure_only_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
++    """刷新出错 (构造的异常) 时程序执行与图照常推进, 只记日志; ACC-01 决定之后的刷新补上 B-2 (ACC-04) 与 B-1."""
++    runner, store = make_runner()
++    real = workpapers.load
++
++    async def broken(*args: Any, **kwargs: Any) -> Any:
++        raise RuntimeError("构造的刷新失败")
++
++    monkeypatch.setattr(workpapers, "load", broken)
++    await runner.start(EID)
++    await wait_idle(runner, EID)
++    assert runner.run_error(EID) is None and await store.latest(EID, Workpaper) == []
++    assert "刷新底稿记录失败" in caplog.text
++    monkeypatch.setattr(workpapers, "load", real)
++    await GraphDecisionSubmit(runner.app, runner.deps, runner).submit(EID, acc01_decision(GateVerdict.approve))
++    await wait_idle(runner, EID)
++    assert {"WP-B-1", "WP-B-2"} <= {w.id for w in await store.latest(EID, Workpaper)}
+-- 
+2.43.0
+

@@ -2395,6 +2395,10 @@ export type EngagementOverview = {
      */
     can_rerun?: boolean;
     /**
+     * Can Withdraw
+     */
+    can_withdraw?: boolean;
+    /**
      * Pending Tasks
      */
     pending_tasks: number;
@@ -3771,7 +3775,7 @@ export type MisstatementReport = {
  * 错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement
  * 关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写.
  */
-export type MisstatementStatus = 'identified' | 'communicated' | 'verifying' | 'corrected' | 'partially_corrected' | 'uncorrected' | 'evaluated' | 'closed';
+export type MisstatementStatus = 'identified' | 'communicated' | 'verifying' | 'corrected' | 'partially_corrected' | 'uncorrected' | 'evaluated' | 'closed' | 'withdrawn';
 
 /**
  * MisstatementType
@@ -5048,6 +5052,10 @@ export type ReviewTaskView = {
      * Update Decisions
      */
     update_decisions?: Array<Decision>;
+    /**
+     * Withdrawable Record Id
+     */
+    withdrawable_record_id?: string | null;
 };
 
 /**
@@ -5056,6 +5064,18 @@ export type ReviewTaskView = {
  * 复核档位 (规格书 9.1 节): 复核任务按金额与置信度分档, 决定审计师要看到什么程度.
  */
 export type ReviewTier = 'full_review' | 'check_evidence' | 'read_reasoning' | 'batch_eligible';
+
+/**
+ * ReviewWithdrawalIn
+ *
+ * 撤回复核决定的请求体 (需求 R363): 理由选填; 撤回 ID, 撤回人与时间由服务端填写.
+ */
+export type ReviewWithdrawalIn = {
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
 
 /**
  * RiskItem
@@ -5777,6 +5797,71 @@ export type UncorrectedSchedule = {
      */
     materiality_cents: number;
     candidate_opinion: OpinionType;
+    /**
+     * Unrecognised
+     */
+    unrecognised?: Array<UnrecognisedSuggestion>;
+};
+
+/**
+ * UnrecognisedSuggestion
+ *
+ * AI 建议为错报但审计师没有认定的一条判断 (需求 R363): FIN-04 列在汇总表里, 随 FIN-01 闸门材料呈报, 只提示不
+ * 阻塞. 当前结果中 AI 判断 (不是人工判断) 的建议动作为 misstatement, 已复核 (confirmed 或 overridden), 而它与取代
+ * 它的人工判断都没有当前结果的错报.
+ */
+export type UnrecognisedSuggestion = {
+    /**
+     * Judgment Id
+     */
+    judgment_id: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    /**
+     * Task Id
+     */
+    task_id?: string | null;
+    /**
+     * Record Id
+     */
+    record_id?: string | null;
+    decision?: Decision | null;
+    /**
+     * Reviewed By
+     */
+    reviewed_by?: string | null;
+    /**
+     * Decided At
+     */
+    decided_at?: string | null;
+    /**
+     * Account
+     */
+    account: string;
+    /**
+     * Account Code
+     */
+    account_code?: string | null;
+    assertion: Assertion;
+    /**
+     * Amount Cents
+     */
+    amount_cents: number;
+    direction: Direction;
+    /**
+     * Level
+     */
+    level: 'trivial' | 'above_trivial' | 'above_performance' | 'material';
+    /**
+     * Would Qualify
+     */
+    would_qualify: boolean;
 };
 
 /**
@@ -6635,6 +6720,40 @@ export type ReviewsSubmitReviewRecordResponses = {
 };
 
 export type ReviewsSubmitReviewRecordResponse = ReviewsSubmitReviewRecordResponses[keyof ReviewsSubmitReviewRecordResponses];
+
+export type ReviewsWithdrawReviewRecordData = {
+    body: ReviewWithdrawalIn;
+    path: {
+        /**
+         * Record Id
+         */
+        record_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/review-records/{record_id}/withdraw';
+};
+
+export type ReviewsWithdrawReviewRecordErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsWithdrawReviewRecordError = ReviewsWithdrawReviewRecordErrors[keyof ReviewsWithdrawReviewRecordErrors];
+
+export type ReviewsWithdrawReviewRecordResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type ReviewsWithdrawReviewRecordResponse = ReviewsWithdrawReviewRecordResponses[keyof ReviewsWithdrawReviewRecordResponses];
 
 export type ReviewsGetProcedureData = {
     body?: never;

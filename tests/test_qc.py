@@ -2,25 +2,35 @@
 合成数据集设计第 7 节第 14 行); R166 按错报状态累计 (规格书 12.3 子状态机注, Xero 设计稿 v2.1 第 5.6 节 FIN-04 行;
 重要性 32431, 明显微小 1622). 错报都是测试里合成的; 功能 misstatement 关闭时新建错报为 uncorrected, 这里显式写出."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 
 from backend.agents.base import RunContext
-from backend.agents.qc import QCAgent
+from backend.agents.qc import QCAgent, suggestion_level, unrecognised_suggestions
 from backend.contracts.models import (
     Assertion,
+    AutonomyLevel,
     Decision,
     Direction,
+    Judgment,
     Misstatement,
+    MisstatementDraft,
     MisstatementStatus,
     MisstatementType,
     OpinionType,
     Phase,
     ProcedureStatus,
+    ProposedAction,
+    ReviewRecord,
+    ReviewStatus,
+    ReviewTask,
+    ReviewWithdrawal,
     RunStatus,
+    TargetType,
     TaskKind,
+    TaskStatus,
     UncorrectedItem,
     UncorrectedSchedule,
 )
@@ -35,10 +45,10 @@ NOW = datetime(2026, 11, 2, tzinfo=UTC)
 
 
 def misstatement(n: int | str, amount: int, direction: Direction = Direction.overstated, **fields: Any) -> Misstatement:
-    """一条错报 M-D-{n}: 缺省为未更正 (功能 misstatement 关闭时的旧口径); fields 另给状态及其字段."""
+    """一条错报 M-D-{n}: 缺省为未更正 (功能 misstatement 关闭时的旧口径), 来源判断 J-{n}; fields 另给状态及其字段 (也可
+    改来源判断)."""
     return Misstatement(
         id=f"M-D-{n}",
-        judgment_id=f"J-{n}",
         exception_id=None,
         review_record_id=f"D-{n}",
         type=MisstatementType.factual,
@@ -46,7 +56,7 @@ def misstatement(n: int | str, amount: int, direction: Direction = Direction.ove
         assertion=Assertion.Cutoff,
         amount_cents=amount,
         direction=direction,
-        **{"status": MisstatementStatus.uncorrected, **fields},
+        **{"judgment_id": f"J-{n}", "status": MisstatementStatus.uncorrected, **fields},
     )
 
 
@@ -295,3 +305,137 @@ async def test_string_status_from_checkpoint_fallback_fails_whole_run() -> None:
     as_strings = [Misstatement.model_construct(**{**m.model_dump(), "status": m.status.value}) for m in settled]
     with pytest.raises(ValueError, match=r"M-D-XJ499 \(corrected\), M-D-CSH02-091 \(partially_corrected\)"):
         await xero_fin04(as_strings)
+
+
+async def test_withdrawn_misstatement_is_neither_accumulated_nor_blocking() -> None:
+    """需求 R363: 认定它的复核决定已撤回 (withdrawn) 的错报不是当前结果: 不进汇总表的任何一栏, 也不让 FIN-04 失败."""
+    withdrawn = misstatement(XJ499, 75000, status=MisstatementStatus.withdrawn)
+    schedule = await xero_fin04([withdrawn, refused(CSH091, 4853, Direction.understated)])
+    assert [i.misstatement_id for i in schedule.items] == ["M-D-CSH02-091"]
+    assert (schedule.excluded_trivial_ids, schedule.corrected_ids, schedule.total_cents) == ([], [], 4853)
+
+
+# ── 需求 R363: AI 建议为错报但未认定的一节 (Xero 演示的门槛: 整体 32431, 执行 16216, 明显微小 1622) ──
+
+XERO_PERFORMANCE = 16216
+
+
+@pytest.mark.parametrize(
+    ("amount", "performance", "level"),
+    [
+        (XERO_TRIVIAL, XERO_PERFORMANCE, "trivial"),
+        (XERO_TRIVIAL + 1, XERO_PERFORMANCE, "above_trivial"),
+        (XERO_PERFORMANCE, XERO_PERFORMANCE, "above_trivial"),
+        (XERO_PERFORMANCE + 1, XERO_PERFORMANCE, "above_performance"),
+        (XERO_PERFORMANCE + 1, None, "above_trivial"),  # 执行重要性未定 (之前的参数快照) 时跳过这一档
+        (XERO_MATERIALITY - 1, XERO_PERFORMANCE, "above_performance"),
+        (XERO_MATERIALITY, XERO_PERFORMANCE, "material"),
+    ],
+)
+def test_suggestion_level_against_the_three_thresholds(amount: int, performance: int | None, level: str) -> None:
+    """等于明显微小或执行重要性不算超过; 不低于整体重要性为 material (同金额路径的保留意见口径)."""
+    assert suggestion_level(amount, XERO_MATERIALITY, performance, XERO_TRIVIAL) == level
+
+
+def judged(subject: str, proposed: ProposedAction, status: ReviewStatus, **changes: Any) -> Judgment:
+    """GEN-02 对 subject 的判断 (AI 判断的 ID 写法); 建议错报时带 750.00 高估的草稿. changes 覆盖任意字段."""
+    draft = MisstatementDraft(
+        type=MisstatementType.factual, account="Office equipment", assertion="Existence", amount_cents=75000,
+        direction=Direction.overstated, account_code="710",
+    )  # fmt: skip
+    base = Judgment(
+        id=f"J-GEN-02-1-{subject}",
+        procedure_id="GEN-02",
+        run_id="RUN-GEN-02-1",
+        subject_id=subject,
+        conclusion="",
+        confidence=0.9,
+        confidence_parts={},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="",
+        proposed_action=proposed,
+        misstatement_draft=draft if proposed is ProposedAction.misstatement else None,
+        autonomy_level=AutonomyLevel.L2,
+        review_status=status,
+        performed_by="A6",
+        created_at=NOW,
+    )
+    return base.model_copy(update=changes)
+
+
+def decided(n: int, subject: str, decision: Decision, minutes: int = 0) -> tuple[ReviewTask, ReviewRecord]:
+    """对 subject 的判断的任务与第 n 条决定 D-{n} (U-1, NOW 之后 minutes 分钟)."""
+    task = ReviewTask(
+        id=f"T-J-GEN-02-1-{subject}-v1",
+        kind=TaskKind.normal,
+        procedure_id="GEN-02",
+        target_type=TargetType.Judgment,
+        target_id=f"J-GEN-02-1-{subject}",
+        target_version=1,
+        run_id="RUN-GEN-02-1",
+        status=TaskStatus.decided,
+        created_at=NOW,
+    )
+    record = ReviewRecord(
+        id=f"D-{n}",
+        task_id=task.id,
+        target_version=1,
+        decision=decision,
+        reviewed_by="U-1",
+        decided_at=NOW + timedelta(minutes=minutes),
+    )
+    return task, record
+
+
+def test_unrecognised_lists_reviewed_ai_misstatements_without_one() -> None:
+    """列出的: 不同意 (推翻) 的 XJ-499, 带最近一条没撤回的决定; 旧口径确认而没认定的 XJ-575; 认定后撤回 (错报作废)
+    再改为推翻的 XJ-601, 取改选的那条决定. 不列的: 认定了错报的 XJ-405, 推翻后由人工判断认定了错报的 XJ-430 (及该人工
+    判断本身), 还没复核的 XJ-449, 建议不是错报的 XJ-397. 按程序与对象排序; 合计 4853 加 75000 不低于整体重要性, 计入
+    后候选为保留."""
+    human = judged("XJ-430", ProposedAction.misstatement, ReviewStatus.confirmed, id="J-GEN-02-1-XJ-430-H1")
+    judgments = [
+        judged("XJ-499", ProposedAction.misstatement, ReviewStatus.overridden, superseded_by="J-GEN-02-1-XJ-499-H1"),
+        judged("XJ-575", ProposedAction.misstatement, ReviewStatus.confirmed),
+        judged("XJ-601", ProposedAction.misstatement, ReviewStatus.overridden, superseded_by="J-GEN-02-1-XJ-601-H2"),
+        judged("XJ-405", ProposedAction.misstatement, ReviewStatus.confirmed),
+        judged("XJ-430", ProposedAction.misstatement, ReviewStatus.overridden, superseded_by=human.id),
+        human,
+        judged("XJ-449", ProposedAction.misstatement, ReviewStatus.pending),
+        judged("XJ-397", ProposedAction.accept, ReviewStatus.confirmed),
+    ]
+    pairs = [
+        decided(1, "XJ-499", Decision.override),
+        decided(2, "XJ-575", Decision.confirm),
+        decided(3, "XJ-601", Decision.misstatement),
+        decided(4, "XJ-601", Decision.override, minutes=5),
+        decided(5, "XJ-405", Decision.misstatement),
+    ]
+    misstatements = [
+        misstatement(3, 75000, judgment_id="J-GEN-02-1-XJ-601", status=MisstatementStatus.withdrawn),
+        misstatement(5, 75000, judgment_id="J-GEN-02-1-XJ-405"),
+        misstatement(6, 75000, judgment_id=human.id),
+    ]
+    withdrawal = ReviewWithdrawal(
+        id="WD-1", record_id="D-3", task_id=pairs[2][0].id, withdrawn_by="U-1", withdrawn_at=NOW
+    )
+    state = initial_state(ENGAGEMENT, [], 1)
+    state.update(  # type: ignore[typeddict-item]
+        judgments=judgments,
+        review_tasks=[t for t, _ in pairs],
+        review_records=[r for _, r in pairs],
+        review_withdrawals=[withdrawal],
+        misstatements=misstatements,
+    )
+
+    rows = unrecognised_suggestions(state, 4853, XERO_MATERIALITY, XERO_PERFORMANCE, XERO_TRIVIAL)
+
+    assert [(r.subject_id, r.record_id, r.decision) for r in rows] == [
+        ("XJ-499", "D-1", Decision.override),
+        ("XJ-575", "D-2", Decision.confirm),
+        ("XJ-601", "D-4", Decision.override),
+    ]
+    assert {(r.amount_cents, r.direction, r.level, r.would_qualify, r.reviewed_by) for r in rows} == {
+        (75000, Direction.overstated, "material", True, "U-1")
+    }
+    assert rows[0].task_id == "T-J-GEN-02-1-XJ-499-v1" and rows[0].account_code == "710"

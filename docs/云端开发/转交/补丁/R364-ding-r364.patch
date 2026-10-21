@@ -1,0 +1,959 @@
+From b61f3915059d987343c9774d8f32bc37a00e15d3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:07:20 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?feat:=20=E5=A4=8D=E6=A0=B8=E9=80=89?=
+ =?UTF-8?q?=E9=A1=B9=E6=8C=89=20AI=20=E7=BB=93=E8=AE=BA=E7=BB=99,=20FIN-01?=
+ =?UTF-8?q?=20=E5=89=8D=E5=88=97=E5=87=BA=E6=9C=AA=E8=AE=A4=E5=AE=9A?=
+ =?UTF-8?q?=E7=9A=84=20AI=20=E5=BB=BA=E8=AE=AE=E9=94=99=E6=8A=A5,=20?=
+ =?UTF-8?q?=E5=8F=AF=E6=92=A4=E5=9B=9E=E5=A4=8D=E6=A0=B8=E5=86=B3=E5=AE=9A?=
+ =?UTF-8?q?=20(=E5=89=8D=E7=AB=AF,=20Issue=20#67)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/frontend/src/components/concierge.tsx | 79 ++++++++++++++-----
+ src/frontend/src/lib/review.ts            | 71 ++++++++++++++++-
+ src/frontend/src/locales/en.ts            | 19 ++++-
+ src/frontend/src/locales/zh.ts            | 15 +++-
+ src/frontend/tests/review-choices.test.ts | 95 +++++++++++++++++++++++
+ tests/e2e/walk.mjs                        | 39 +++++++++-
+ 6 files changed, 283 insertions(+), 35 deletions(-)
+ create mode 100644 src/frontend/tests/review-choices.test.ts
+
+diff --git a/src/frontend/src/components/concierge.tsx b/src/frontend/src/components/concierge.tsx
+index 870ab09..b59e0ad 100644
+--- a/src/frontend/src/components/concierge.tsx
++++ b/src/frontend/src/components/concierge.tsx
+@@ -58,16 +58,21 @@ import {
+   attachRule,
+   buildDisputeRecord,
+   buildRecord,
++  CHOICE_DECISIONS,
+   criticReasonText,
+   type DisputeSide,
++  defaultChoice,
+   draftFromMisstatement,
+   emptyDraft,
+   isException,
+   isJudgment,
+   isRun,
++  PREFILLED,
+   procedureName,
+   type RankedTask,
++  type ReviewChoice,
+   type ReviewDraft,
++  reviewChoices,
+   type SideProposal,
+   sideProposal,
+ } from '@/lib/review'
+@@ -673,11 +678,20 @@ export function ReviewDecisionCard({
+   const queryClient = useQueryClient()
+   const view: ReviewTaskView = ranked.view
+   const judgment = isJudgment(view.target) ? view.target : null
+-  // 只有一种决定可选 (如争议任务只能裁决分歧) 时直接选中
+-  const [decision, setDecision] = useState<Decision | null>(
++  const proposedDraft = judgment?.misstatement_draft ?? null
++  // 判断的复核选项按 AI 结论给 (需求 R364): AI 判为错报时默认 "同意, 认定为错报", 错报字段按草稿带出; 其余任务照
++  // 后端的 allowed_decisions, 只有一种决定可选 (如争议任务只能裁决分歧) 时直接选中
++  const choices = reviewChoices(view)
++  const [choice, setChoice] = useState<ReviewChoice | null>(() => defaultChoice(view, choices))
++  const [picked, setPicked] = useState<Decision | null>(
+     view.allowed_decisions.length === 1 ? view.allowed_decisions[0] : null,
+   )
+-  const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
++  const decision = choices ? (choice ? CHOICE_DECISIONS[choice] : null) : picked
++  const [draft, setDraft] = useState<ReviewDraft>(() =>
++    choice && PREFILLED.has(choice) && proposedDraft
++      ? draftFromMisstatement(emptyDraft(), proposedDraft)
++      : emptyDraft(),
++  )
+   // 人给的错报更新载荷 (需求 R159, R163): 以判断带的 AI 载荷为起点, 可改
+   const carried = judgment?.misstatement_update ?? null
+   const [updateDraft, setUpdateDraft] = useState<UpdateDraft>(() =>
+@@ -693,6 +707,16 @@ export function ReviewDecisionCard({
+   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
+   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
+   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
++  // 改了错报字段的 "同意" 即 "修改后认定为错报"
++  const setFigures = (patch: Partial<ReviewDraft>) => {
++    set(patch)
++    if (choice === 'agree_misstatement') setChoice('amend_misstatement')
++  }
++  const pick = (next: ReviewChoice) => {
++    setChoice(next)
++    if (next === 'agree_misstatement' && proposedDraft)
++      setDraft((current) => draftFromMisstatement(current, proposedDraft))
++  }
+   const updateKind = updateKindFor(view, decision)
+   // 失败与无归因任务的载荷依据错报的当前版本, 从错报列表取; 判断带载荷时不用
+   const misstatements = useQuery({
+@@ -780,18 +804,31 @@ export function ReviewDecisionCard({
+     >
+       <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
+         <legend className="sr-only">{t.card.decision}</legend>
+-        {view.allowed_decisions.map((item) => (
+-          <OptionCard
+-            key={item}
+-            name={`decision-${view.task.id}`}
+-            value={item}
+-            checked={decision === item}
+-            onSelect={() => setDecision(item)}
+-            label={t.decisions[item] ?? item}
+-            hint={t.decisionHints[item]}
+-            disabled={busy}
+-          />
+-        ))}
++        {choices
++          ? choices.map((item) => (
++              <OptionCard
++                key={item}
++                name={`decision-${view.task.id}`}
++                value={item}
++                checked={choice === item}
++                onSelect={() => pick(item)}
++                label={t.card.choices[item].label}
++                hint={t.card.choices[item].hint}
++                disabled={busy}
++              />
++            ))
++          : view.allowed_decisions.map((item) => (
++              <OptionCard
++                key={item}
++                name={`decision-${view.task.id}`}
++                value={item}
++                checked={picked === item}
++                onSelect={() => setPicked(item)}
++                label={t.decisions[item] ?? item}
++                hint={t.decisionHints[item]}
++                disabled={busy}
++              />
++            ))}
+       </fieldset>
+ 
+       {collabDispute ? (
+@@ -885,7 +922,7 @@ export function ReviewDecisionCard({
+                 id={`ms-type-${view.task.id}`}
+                 className={SELECT}
+                 value={draft.kind}
+-                onChange={(event) => set({ kind: event.target.value as MisstatementType })}
++                onChange={(event) => setFigures({ kind: event.target.value as MisstatementType })}
+               >
+                 {MISSTATEMENT_TYPES.map((item) => (
+                   <option key={item} value={item}>
+@@ -899,7 +936,7 @@ export function ReviewDecisionCard({
+                 id={`ms-account-${view.task.id}`}
+                 className="h-10"
+                 value={draft.account}
+-                onChange={(event) => set({ account: event.target.value })}
++                onChange={(event) => setFigures({ account: event.target.value })}
+               />
+             </Field>
+             <Field id={`ms-code-${view.task.id}`} label={t.card.msFields.accountCode}>
+@@ -907,7 +944,7 @@ export function ReviewDecisionCard({
+                 id={`ms-code-${view.task.id}`}
+                 className={SELECT}
+                 value={draft.accountCode}
+-                onChange={(event) => set({ accountCode: event.target.value })}
++                onChange={(event) => setFigures({ accountCode: event.target.value })}
+               >
+                 <option value="">{t.card.msFields.noAccountCode}</option>
+                 {codes.map((item) => (
+@@ -922,7 +959,7 @@ export function ReviewDecisionCard({
+                 id={`ms-assertion-${view.task.id}`}
+                 className={SELECT}
+                 value={draft.assertion}
+-                onChange={(event) => set({ assertion: event.target.value as Assertion })}
++                onChange={(event) => setFigures({ assertion: event.target.value as Assertion })}
+               >
+                 {ASSERTIONS.map((item) => (
+                   <option key={item} value={item}>
+@@ -937,7 +974,7 @@ export function ReviewDecisionCard({
+                 className="h-10 font-mono"
+                 inputMode="decimal"
+                 value={draft.amount}
+-                onChange={(event) => set({ amount: event.target.value })}
++                onChange={(event) => setFigures({ amount: event.target.value })}
+               />
+             </Field>
+             <Field id={`ms-direction-${view.task.id}`} label={t.card.msFields.direction}>
+@@ -945,7 +982,7 @@ export function ReviewDecisionCard({
+                 id={`ms-direction-${view.task.id}`}
+                 className={SELECT}
+                 value={draft.direction}
+-                onChange={(event) => set({ direction: event.target.value as Direction })}
++                onChange={(event) => setFigures({ direction: event.target.value as Direction })}
+               >
+                 {DIRECTIONS.map((item) => (
+                   <option key={item} value={item}>
+diff --git a/src/frontend/src/lib/review.ts b/src/frontend/src/lib/review.ts
+index 34aa700..6d8c2f4 100644
+--- a/src/frontend/src/lib/review.ts
++++ b/src/frontend/src/lib/review.ts
+@@ -58,13 +58,21 @@ export function taskAmount(view: ReviewTaskView, exceptions: Map<string, AuditEx
+   return null
+ }
+ 
++// 批量确认只用于 AI 判为不是错报的判断 (需求 R364): 其余落在可批量一档的 (后端给的或这里算的) 改为阅读推理链
+ export function taskTier(
+   view: ReviewTaskView,
+   amount: number | null,
+   overview: EngagementOverview | undefined,
+ ): ReviewTier {
+-  const own = (view as WithTier).tier
+-  if (own) return own
++  const tier = (view as WithTier).tier ?? computedTier(view, amount, overview)
++  return tier === 'batch_eligible' && aiVerdict(view) !== 'clear' ? 'read_reasoning' : tier
++}
++
++function computedTier(
++  view: ReviewTaskView,
++  amount: number | null,
++  overview: EngagementOverview | undefined,
++): ReviewTier {
+   const target = view.target
+   if (!isJudgment(target)) return 'check_evidence'
+   const performance = overview?.performance_materiality_cents
+@@ -110,6 +118,61 @@ export function rankTasks(
+     })
+ }
+ 
++// AI 对判断对象的结论 (需求 R364, Issue #67): 判为错报 (proposed_action misstatement), 不是错报 (accept, close), 暂时
++// 判断不了 (more_evidence). 复核卡片按它给选项; 不是判断, 不是 normal 任务, 或判断带错报更新载荷 (FIN-03 分类, FIN-09
++// 验证, 对象是已有的错报) 时为 null, 卡片照后端的 allowed_decisions 逐项给
++export type AiVerdict = 'misstatement' | 'clear' | 'undetermined'
++
++export function aiVerdict(view: ReviewTaskView): AiVerdict | null {
++  const target = view.target
++  if (!isJudgment(target) || view.task.kind !== 'normal' || view.misstatement_update_kind) return null
++  if (target.proposed_action === 'misstatement') return 'misstatement'
++  return target.proposed_action === 'more_evidence' ? 'undetermined' : 'clear'
++}
++
++export type ReviewChoice =
++  | 'agree_misstatement'
++  | 'disagree_not_misstatement'
++  | 'amend_misstatement'
++  | 'agree_clear'
++  | 'disagree_misstatement'
++  | 'misstatement'
++  | 'not_misstatement'
++
++// 各选项提交的决定: 认定错报的带错报草稿; 与 AI 不同而 "不是错报" 的为推翻 (须写结论)
++export const CHOICE_DECISIONS: Record<ReviewChoice, Decision> = {
++  agree_misstatement: 'misstatement',
++  disagree_not_misstatement: 'override',
++  amend_misstatement: 'misstatement',
++  agree_clear: 'confirm',
++  disagree_misstatement: 'misstatement',
++  misstatement: 'misstatement',
++  not_misstatement: 'override',
++}
++
++// 按 AI 结论给的选项; 暂时判断不了时的 "要求补充证据" 待 R369
++const CHOICES: Record<AiVerdict, ReviewChoice[]> = {
++  misstatement: ['agree_misstatement', 'disagree_not_misstatement', 'amend_misstatement'],
++  clear: ['agree_clear', 'disagree_misstatement'],
++  undetermined: ['misstatement', 'not_misstatement'],
++}
++
++// 预填 AI 草稿的选项 (agree 为默认选中的那项)
++export const PREFILLED: ReadonlySet<ReviewChoice> = new Set(['agree_misstatement', 'amend_misstatement'])
++
++// 复核卡片的选项: 按 AI 结论, 只留后端允许的决定; aiVerdict 为 null 时为 null
++export function reviewChoices(view: ReviewTaskView): ReviewChoice[] | null {
++  const verdict = aiVerdict(view)
++  if (!verdict) return null
++  return CHOICES[verdict].filter((choice) => view.allowed_decisions.includes(CHOICE_DECISIONS[choice]))
++}
++
++// 默认选中的选项: AI 判为错报且有草稿时为 "同意, 认定为错报"; 其余不预选
++export function defaultChoice(view: ReviewTaskView, choices: ReviewChoice[] | null): ReviewChoice | null {
++  const draft = isJudgment(view.target) ? view.target.misstatement_draft : null
++  return draft && choices?.includes('agree_misstatement') ? 'agree_misstatement' : null
++}
++
+ export type ReviewDraft = {
+   reason: string
+   conclusion: string
+@@ -136,8 +199,8 @@ export function emptyDraft(): ReviewDraft {
+   }
+ }
+ 
+-// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 只有人点"复制建议数据"才填入, 不预填; 例外:
+-// 功能 collab 打开时仲裁采纳的一方建议错报, 选中即按该方的草稿预填 (见 attachRule)
++// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 预填的只有: AI 判为错报时 "同意" 与 "修改后认定"
++// 两项按判断的草稿 (需求 R364), 功能 collab 打开时仲裁采纳的一方建议错报 (见 attachRule); 其余由人点 "复制建议数据"
+ export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
+   return {
+     ...draft,
+diff --git a/src/frontend/src/locales/en.ts b/src/frontend/src/locales/en.ts
+index 08a0005..c1ae085 100644
+--- a/src/frontend/src/locales/en.ts
++++ b/src/frontend/src/locales/en.ts
+@@ -181,7 +181,7 @@ export const en = {
+     no_data: 'Not performed (no data)',
+   },
+   decisions: {
+-    confirm: 'Confirm',
++    confirm: 'Agree',
+     override: 'Override',
+     misstatement: 'Record misstatement',
+     rerun: 'Run again',
+@@ -189,7 +189,7 @@ export const en = {
+     dispute_resolution: 'Resolve the disagreement',
+   } as Record<string, string>,
+   decisionHints: {
+-    confirm: 'Accept the conclusion as stated',
++    confirm: "Adopt the AI's conclusion",
+     override: 'Replace the conclusion with yours',
+     misstatement: 'Record the amount as a misstatement',
+     rerun: 'Run the procedure again',
+@@ -225,7 +225,7 @@ export const en = {
+     full_review: 'above performance materiality',
+     check_evidence: 'confidence below 0.70',
+     read_reasoning: 'confidence 0.70 to 0.90',
+-    batch_eligible: 'confidence above 0.90 and a low amount',
++    batch_eligible: 'confidence above 0.90, a low amount, and the AI found no misstatement',
+   },
+   status: { pending: 'Pending auditor review', deferred: 'Deferred', decided: 'Decided', confirmed: 'Confirmed' },
+   checks: {
+@@ -569,6 +569,19 @@ export const en = {
+       a7_upheld: "Adopt the independent review's conclusion",
+       neither: 'Neither; give your own conclusion',
+     } as Record<string, string>,
++    // 判断的复核选项, 按 AI 的结论给 (lib/review 的 reviewChoices, 需求 R364)
++    choices: {
++      agree_misstatement: {
++        label: 'Agree, record the misstatement',
++        hint: "The AI's amount, account, direction and assertion are filled in; you can edit them",
++      },
++      disagree_not_misstatement: { label: 'Disagree, not a misstatement', hint: 'Give your conclusion' },
++      amend_misstatement: { label: 'Record the misstatement with changes', hint: "Change the AI's figures first" },
++      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's conclusion" },
++      disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
++      misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
++      not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
++    },
+   },
+   judgment: {
+     subject: 'Subject',
+diff --git a/src/frontend/src/locales/zh.ts b/src/frontend/src/locales/zh.ts
+index 220da14..b5cb77a 100644
+--- a/src/frontend/src/locales/zh.ts
++++ b/src/frontend/src/locales/zh.ts
+@@ -170,7 +170,7 @@ export const zh: Messages = {
+     no_data: '未执行（无数据）',
+   },
+   decisions: {
+-    confirm: '确认',
++    confirm: '同意',
+     override: '推翻',
+     misstatement: '认定为错报',
+     rerun: '重新执行',
+@@ -178,7 +178,7 @@ export const zh: Messages = {
+     dispute_resolution: '裁决分歧',
+   },
+   decisionHints: {
+-    confirm: '按原结论接受',
++    confirm: '采用 AI 的结论',
+     override: '用你的结论替换',
+     misstatement: '将该金额记为错报',
+     rerun: '重新执行该程序',
+@@ -214,7 +214,7 @@ export const zh: Messages = {
+     full_review: '超过实际执行的重要性',
+     check_evidence: '置信度低于 0.70',
+     read_reasoning: '置信度 0.70 至 0.90',
+-    batch_eligible: '置信度高于 0.90 且金额较小',
++    batch_eligible: '置信度高于 0.90、金额较小且判为不是错报',
+   },
+   status: { pending: '待人工处理', deferred: '稍后处理', decided: '已决定', confirmed: '已确认' },
+   checks: {
+@@ -518,6 +518,15 @@ export const zh: Messages = {
+       a7_upheld: '采用独立复核的结论',
+       neither: '都不采用，由你给出结论',
+     },
++    choices: {
++      agree_misstatement: { label: '同意，认定为错报', hint: '金额、科目、方向与认定按 AI 的草稿带出，可以修改' },
++      disagree_not_misstatement: { label: '不同意，不是错报', hint: '写出你的结论' },
++      amend_misstatement: { label: '修改后认定为错报', hint: '先改动 AI 草稿的数据' },
++      agree_clear: { label: '同意，不是错报', hint: '采用 AI 的结论' },
++      disagree_misstatement: { label: '不同意，认定为错报', hint: '填写错报的数据' },
++      misstatement: { label: '认定为错报', hint: '填写错报的数据' },
++      not_misstatement: { label: '不是错报', hint: '写出你的结论' },
++    },
+   },
+   judgment: {
+     subject: '对象',
+diff --git a/src/frontend/tests/review-choices.test.ts b/src/frontend/tests/review-choices.test.ts
+new file mode 100644
+index 0000000..38c9b7c
+--- /dev/null
++++ b/src/frontend/tests/review-choices.test.ts
+@@ -0,0 +1,95 @@
++// 复核选项按 AI 结论给 (lib/review 的 reviewChoices, defaultChoice, 需求 R364, Issue #67) 与批量确认的范围 (taskTier)
++// 的测试, bun test 运行. 数据是合成的: 任务与判断只填用到的字段.
++import { describe, expect, test } from 'bun:test'
++import type { EngagementOverview, ReviewTaskView } from '../src/client/types.gen'
++import {
++  buildRecord,
++  CHOICE_DECISIONS,
++  defaultChoice,
++  draftFromMisstatement,
++  emptyDraft,
++  reviewChoices,
++  taskTier,
++} from '../src/lib/review'
++import { en } from '../src/locales/en'
++
++const DRAFT = {
++  type: 'factual',
++  account: 'Office equipment (710)',
++  assertion: 'Existence',
++  amount_cents: 75000,
++  direction: 'overstated',
++  account_code: '710',
++}
++const NORMAL = ['confirm', 'override', 'misstatement']
++
++type Options = { kind?: string; draft?: object | null; update?: string; allowed?: string[]; tier?: string }
++
++function view(action: string, { kind = 'normal', draft = null, update, allowed = NORMAL, tier }: Options = {}) {
++  return {
++    task: { id: 'T-1', kind, procedure_id: 'GEN-02', target_version: 2, status: 'pending' },
++    target: {
++      id: 'J-1',
++      subject_id: 'XJ-499',
++      conclusion: 'synthetic',
++      proposed_action: action,
++      misstatement_draft: draft,
++    },
++    allowed_decisions: allowed,
++    misstatement_update_kind: update ?? null,
++    tier,
++  } as unknown as ReviewTaskView
++}
++
++describe('reviewChoices', () => {
++  test('判为错报: 同意即认定错报, 不同意为不是错报, 另可修改后认定; 没有一项是确认', () => {
++    const choices = reviewChoices(view('misstatement', { draft: DRAFT }))
++    expect(choices).toEqual(['agree_misstatement', 'disagree_not_misstatement', 'amend_misstatement'])
++    expect(choices?.map((choice) => CHOICE_DECISIONS[choice])).toEqual(['misstatement', 'override', 'misstatement'])
++  })
++
++  test('判为不是错报 (accept, close): 同意为确认, 不同意为认定错报; 暂时判断不了: 认定错报或不是错报', () => {
++    for (const action of ['accept', 'close']) {
++      expect(reviewChoices(view(action))).toEqual(['agree_clear', 'disagree_misstatement'])
++    }
++    const undetermined = reviewChoices(view('more_evidence'))
++    expect(undetermined).toEqual(['misstatement', 'not_misstatement'])
++    expect(undetermined?.map((choice) => CHOICE_DECISIONS[choice])).toEqual(['misstatement', 'override'])
++  })
++
++  test('只留后端允许的决定; 不是 normal 任务或判断带错报更新载荷 (FIN-03, FIN-09) 时照 allowed_decisions', () => {
++    expect(reviewChoices(view('misstatement', { allowed: ['misstatement'] }))).toEqual([
++      'agree_misstatement',
++      'amend_misstatement',
++    ])
++    expect(reviewChoices(view('misstatement', { kind: 'dispute', allowed: ['dispute_resolution'] }))).toBeNull()
++    expect(reviewChoices(view('accept', { update: 'classification' }))).toBeNull()
++  })
++})
++
++describe('defaultChoice', () => {
++  test('判为错报且有草稿时默认 "同意", 提交的是带 AI 草稿的认定错报', () => {
++    const task = view('misstatement', { draft: DRAFT })
++    const choice = defaultChoice(task, reviewChoices(task))
++    expect(choice).toBe('agree_misstatement')
++    if (!choice) throw new Error('没有默认选项')
++    const body = buildRecord(task, CHOICE_DECISIONS[choice], draftFromMisstatement(emptyDraft(), DRAFT as never), en)
++    expect(body).toMatchObject({ decision: 'misstatement', misstatement_draft: DRAFT })
++  })
++
++  test('其余不预选: 判为不是错报, 暂时判断不了, 判为错报而没有草稿', () => {
++    for (const task of [view('accept'), view('more_evidence'), view('misstatement')]) {
++      expect(defaultChoice(task, reviewChoices(task))).toBeNull()
++    }
++  })
++})
++
++describe('批量确认的范围', () => {
++  const overview = {} as EngagementOverview
++  test('后端给可批量一档时, 只有判为不是错报的留在这一档, 其余改为阅读推理链', () => {
++    const tier = (action: string) => taskTier(view(action, { tier: 'batch_eligible' }), null, overview)
++    expect(tier('accept')).toBe('batch_eligible')
++    expect(tier('misstatement')).toBe('read_reasoning')
++    expect(tier('more_evidence')).toBe('read_reasoning')
++  })
++})
+diff --git a/tests/e2e/walk.mjs b/tests/e2e/walk.mjs
+index 2954a48..09df7a1 100644
+--- a/tests/e2e/walk.mjs
++++ b/tests/e2e/walk.mjs
+@@ -388,6 +388,31 @@ function reviewPlan(view, pending) {
+   return { error: `驱动不认得的任务类型 ${task.kind}` }
+ }
+ 
++// 判断的复核卡片按 AI 结论给选项 (需求 R364): 决定表的决定 → 卡片上的选项. 判为错报时认定错报用默认的 "同意" (草稿
++// 由 AI 带出, 不另填), 其余 "不是错报" 的为推翻 (须写结论); 卡片照 allowed_decisions 给选项时 (争议, 例外, 带错报更新
++// 载荷的判断) 选项即决定本身
++const CHOICES = {
++  misstatement: { misstatement: 'agree_misstatement', override: 'disagree_not_misstatement' },
++  accept: { confirm: 'agree_clear', misstatement: 'disagree_misstatement' },
++  close: { confirm: 'agree_clear', misstatement: 'disagree_misstatement' },
++  more_evidence: { misstatement: 'misstatement', override: 'not_misstatement' },
++}
++
++async function optionFor(view, plan) {
++  const id = view.task.id
++  if (await page.locator(`[id="decision-${id}-${plan.decision}"]`).count()) return { option: plan.decision, plan }
++  const byAction = CHOICES[view.target.proposed_action] ?? {}
++  // AI 判为错报或暂时判断不了时没有 "确认": 决定表的确认改为推翻, 结论同其余推翻
++  const conclusion = config.confirm_conclusion
++  const want =
++    plan.decision === 'confirm' && !byAction.confirm
++      ? { ...plan, decision: 'override', conclusion, reason: plan.reason ?? conclusion }
++      : plan
++  const option = byAction[want.decision]
++  if (!option) throw new Error(`${id} 的卡片没有对应 ${plan.decision} 的选项 (AI 结论 ${view.target.proposed_action})`)
++  return { option, plan: want }
++}
++
+ async function fillDraft(id, draft) {
+   await selectById(`ms-type-${id}`, draft.type)
+   await fillById(`ms-account-${id}`, draft.account)
+@@ -398,25 +423,31 @@ async function fillDraft(id, draft) {
+ 
+ async function decideTask(view, pending) {
+   const id = view.task.id
+-  const plan = reviewPlan(view, pending)
++  let plan = reviewPlan(view, pending)
+   if (plan.error) {
+     issue(plan.error, '每个对象至多重跑一次, 任务类型在决定表的范围内')
+     throw new Stuck(plan.error)
+   }
+-  result.decisions.push([id, plan.decision])
+   await goto(`${base}/engagements/${result.eid}/reviews/${encodeURIComponent(id)}`)
+   await recordButton().waitFor()
++  let byDefault = false
+   if (view.allowed_decisions.length > 1 || plan.decision !== 'dispute_resolution') {
+     if (!view.allowed_decisions.includes(plan.decision)) throw new Error(`${id} 不能选 ${plan.decision} (可选 ${view.allowed_decisions})`)
+-    await choose(`decision-${id}-${plan.decision}`)
++    const chosen = await optionFor(view, plan)
++    plan = chosen.plan
++    byDefault = chosen.option === 'agree_misstatement'
++    const radio = page.locator(`[id="decision-${id}-${chosen.option}"]`)
++    if (byDefault && !(await radio.isChecked())) issue(`${id} 的 "同意, 认定为错报" 没有默认选中`, 'AI 判为错报时默认选中同意 (需求 R364)')
++    if (!byDefault) await choose(`decision-${id}-${chosen.option}`)
+   }
++  result.decisions.push([id, plan.decision])
+   if (plan.choice) await choose(`dispute-${id}-${plan.choice}`)
+   if (plan.draft && plan.decision === 'dispute_resolution') {
+     const attach = page.locator(`[id="attach-ms-${id}"]`)
+     if ((await attach.count()) && !(await attach.isChecked())) await attach.check()
+   }
+   if (plan.conclusion && plan.decision !== 'confirm') await fillById(`conclusion-${id}`, plan.conclusion)
+-  if (plan.draft) await fillDraft(id, plan.draft)
++  if (plan.draft && !byDefault) await fillDraft(id, plan.draft)
+   if (plan.reason) await fillById(`reason-${id}`, plan.reason)
+   await snap('form')
+   const button = recordButton()
+-- 
+2.43.0
+
+
+From 169a90b3d7709ba0393561f9519d711107a2a20c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 14:28:35 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?wip:=20R364=20=E6=9A=82=E5=81=9C=E6=97=B6?=
+ =?UTF-8?q?=E7=9A=84=E8=BF=9B=E5=BA=A6=20(=E6=9C=AA=E5=AE=8C=E6=88=90)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 撤回复核决定入口 (withdraw-decision.tsx, 表单视图的已决定任务) 与 FIN-01 材料 "AI 建议为错报但未认定" 一节 (unrecognised-suggestions.tsx), 按甲的 R363 接口写, 客户端未重新生成, 未经 typecheck 与走查
+- "不是错报" (推翻) 预填一句结论; 中英文案: 该节, 撤回, 状态 withdrawn, 错误码 NOT_WITHDRAWABLE
+---
+ src/frontend/src/components/concierge.tsx     |  3 +
+ src/frontend/src/components/gate-form.tsx     |  2 +
+ .../components/unrecognised-suggestions.tsx   | 96 +++++++++++++++++++
+ .../src/components/withdraw-decision.tsx      | 67 +++++++++++++
+ src/frontend/src/locales/en.ts                | 32 +++++++
+ src/frontend/src/locales/zh.ts                | 25 +++++
+ .../engagements/$eid/reviews/$taskId.tsx      | 17 +++-
+ 7 files changed, 239 insertions(+), 3 deletions(-)
+ create mode 100644 src/frontend/src/components/unrecognised-suggestions.tsx
+ create mode 100644 src/frontend/src/components/withdraw-decision.tsx
+
+diff --git a/src/frontend/src/components/concierge.tsx b/src/frontend/src/components/concierge.tsx
+index b59e0ad..4b27b9a 100644
+--- a/src/frontend/src/components/concierge.tsx
++++ b/src/frontend/src/components/concierge.tsx
+@@ -712,10 +712,13 @@ export function ReviewDecisionCard({
+     set(patch)
+     if (choice === 'agree_misstatement') setChoice('amend_misstatement')
+   }
++  // 选 "同意" 时错报字段回到 AI 草稿; 选 "不是错报" (推翻) 时结论为空则预填一句, 可改
+   const pick = (next: ReviewChoice) => {
+     setChoice(next)
+     if (next === 'agree_misstatement' && proposedDraft)
+       setDraft((current) => draftFromMisstatement(current, proposedDraft))
++    if (CHOICE_DECISIONS[next] === 'override')
++      setDraft((current) => (current.conclusion.trim() ? current : { ...current, conclusion: t.card.notMisstatementConclusion }))
+   }
+   const updateKind = updateKindFor(view, decision)
+   // 失败与无归因任务的载荷依据错报的当前版本, 从错报列表取; 判断带载荷时不用
+diff --git a/src/frontend/src/components/gate-form.tsx b/src/frontend/src/components/gate-form.tsx
+index f0c2428..079db9e 100644
+--- a/src/frontend/src/components/gate-form.tsx
++++ b/src/frontend/src/components/gate-form.tsx
+@@ -47,6 +47,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
+ import { Button } from '@/components/ui/button'
+ import { Input } from '@/components/ui/input'
+ import { Textarea } from '@/components/ui/textarea'
++import { UnrecognisedSuggestions } from '@/components/unrecognised-suggestions'
+ import { useContentLanguage } from '@/components/working-language'
+ import { abnProblem, normalizeAbn } from '@/lib/abn'
+ import { requestTitle } from '@/lib/data-api'
+@@ -285,6 +286,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
+           <dd className="m-0 font-mono">{formatAud(material.schedule.materiality_cents)}</dd>
+         </dl>
+         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
++        <UnrecognisedSuggestions eid={eid} items={material.schedule.unrecognised ?? []} />
+         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
+         <MisstatementList items={material.misstatements} />
+         {material.not_executed?.length ? (
+diff --git a/src/frontend/src/components/unrecognised-suggestions.tsx b/src/frontend/src/components/unrecognised-suggestions.tsx
+new file mode 100644
+index 0000000..85e5a7d
+--- /dev/null
++++ b/src/frontend/src/components/unrecognised-suggestions.tsx
+@@ -0,0 +1,96 @@
++import { Link, useNavigate } from '@tanstack/react-router'
++import { cn } from 'cn'
++import type { UnrecognisedSuggestion } from '@/client/types.gen'
++import { Code, StatusPill } from '@/components/chrome'
++import { WithdrawDecision } from '@/components/withdraw-decision'
++import { useActorName } from '@/lib/actor'
++import { decisionsDisabled } from '@/lib/engagement'
++import { useI18n } from '@/lib/i18n'
++import { formatAud } from '@/lib/money'
++import { procedureName } from '@/lib/review'
++import { useOverview } from '@/lib/use-engagement'
++
++// FIN-01 闸门材料的 "AI 建议为错报但未认定" 一节 (需求 R364, 后端 R363 的 schedule.unrecognised): 只提示, 不阻塞.
++// 金额超过明显微小临界值的醒目, 超过实际执行的重要性或达到重要性水平的标红, 并写对候选意见可能的影响 (would_qualify).
++// 要改判时撤回那条复核决定 (总览 can_withdraw 为真时), 再到该任务的表单视图重新选择
++const LEVEL_TONES = {
++  trivial: 'neutral',
++  above_trivial: 'warn',
++  above_performance: 'risk',
++  material: 'risk',
++} as const
++
++export function UnrecognisedSuggestions({ eid, items }: { eid: string; items: UnrecognisedSuggestion[] }) {
++  const { t, formatDateTime } = useI18n()
++  const actorName = useActorName()
++  const overview = useOverview(eid)
++  const navigate = useNavigate()
++  const labels = t.completion.unrecognised
++  if (!items.length) return null
++  return (
++    <section className="flex flex-col gap-2" data-testid="unrecognised-suggestions">
++      <h3 className="m-0 font-semibold text-[14px] text-risk">{labels.title(items.length)}</h3>
++      <span className="text-[13px] text-muted-foreground">{labels.intro}</span>
++      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
++        {items.map((item) => {
++          const red = LEVEL_TONES[item.level] === 'risk'
++          return (
++            <li
++              key={item.judgment_id}
++              className={cn(
++                'flex flex-col gap-2 rounded-lg border px-3.5 py-2.5 text-[14px]',
++                red && 'border-risk bg-risk-soft',
++              )}
++              data-testid={`unrecognised-${item.subject_id}`}
++            >
++              <div className="flex flex-wrap items-center gap-2">
++                <Code className="font-semibold">{item.procedure_id}</Code>
++                <span>{procedureName(t, item.procedure_id)}</span>
++                <Code>{item.subject_id}</Code>
++                <StatusPill tone={LEVEL_TONES[item.level]}>{labels.levels[item.level]}</StatusPill>
++                <span className="flex-1" />
++                <Code className={cn('font-semibold', red && 'text-risk')}>{formatAud(item.amount_cents)}</Code>
++              </div>
++              <span>
++                {item.account}
++                {item.account_code ? <Code className="ml-1.5">{item.account_code}</Code> : null} ·{' '}
++                {t.assertions[item.assertion]} · {t.directions[item.direction]}
++              </span>
++              <span className="text-[13px] text-muted-foreground">
++                {labels.reviewed(
++                  t.decisions[item.decision] ?? item.decision,
++                  [actorName(item.reviewed_by), formatDateTime(item.decided_at)].filter(Boolean).join(' · '),
++                )}
++              </span>
++              {red ? (
++                <span className="font-semibold text-[13px] text-risk">
++                  {item.would_qualify ? labels.wouldQualify : labels.wouldNotQualify}
++                </span>
++              ) : null}
++              <div className="flex flex-wrap items-start gap-2">
++                <Link
++                  to="/engagements/$eid/reviews/$taskId"
++                  params={{ eid, taskId: item.task_id }}
++                  className="self-center text-[13px] text-primary hover:underline"
++                >
++                  {labels.open}
++                </Link>
++                {overview?.can_withdraw ? (
++                  <WithdrawDecision
++                    eid={eid}
++                    recordId={item.record_id}
++                    label={labels.redecide}
++                    disabled={decisionsDisabled(overview)}
++                    onDone={() =>
++                      void navigate({ to: '/engagements/$eid/reviews/$taskId', params: { eid, taskId: item.task_id } })
++                    }
++                  />
++                ) : null}
++              </div>
++            </li>
++          )
++        })}
++      </ul>
++    </section>
++  )
++}
+diff --git a/src/frontend/src/components/withdraw-decision.tsx b/src/frontend/src/components/withdraw-decision.tsx
+new file mode 100644
+index 0000000..622a795
+--- /dev/null
++++ b/src/frontend/src/components/withdraw-decision.tsx
+@@ -0,0 +1,67 @@
++import { useMutation, useQueryClient } from '@tanstack/react-query'
++import { useState } from 'react'
++import { toast } from 'sonner'
++import { reviewsWithdrawReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
++import { ReasonField } from '@/components/concierge'
++import { Button } from '@/components/ui/button'
++import { invalidateEngagement } from '@/lib/engagement'
++import { apiMessage } from '@/lib/errors'
++import { useI18n } from '@/lib/i18n'
++
++// 撤回复核决定 (需求 R364, 后端 R363): FIN-01 通过前, 已决定任务上最近的那条决定 (ReviewTaskView.withdrawable_record_id)
++// 可以撤回, 理由选填. 撤回后任务与判断回到待复核, 认定的错报作废并重新累计; 原决定与撤回都留痕. onDone 在撤回成功后调
++export function WithdrawDecision({
++  eid,
++  recordId,
++  label,
++  disabled,
++  onDone,
++}: {
++  eid: string
++  recordId: string
++  label?: string
++  disabled?: boolean
++  onDone?: () => void
++}) {
++  const { t } = useI18n()
++  const queryClient = useQueryClient()
++  const [open, setOpen] = useState(false)
++  const [reason, setReason] = useState('')
++  const withdraw = useMutation({
++    ...reviewsWithdrawReviewRecordMutation(),
++    onSuccess: async () => {
++      toast.success(t.withdraw.done)
++      setOpen(false)
++      await invalidateEngagement(queryClient, eid)
++      onDone?.()
++    },
++    onError: (error) => toast.error(apiMessage(error)),
++  })
++  if (!open) {
++    return (
++      <Button type="button" variant="outline" disabled={disabled} onClick={() => setOpen(true)}>
++        {label ?? t.withdraw.action}
++      </Button>
++    )
++  }
++  return (
++    <div className="flex flex-col gap-2.5 rounded-[10px] border p-3.5" data-testid={`withdraw-${recordId}`}>
++      <span className="text-[13px] text-secondary-foreground">{t.withdraw.intro}</span>
++      <ReasonField id={`withdraw-reason-${recordId}`} value={reason} onChange={setReason} />
++      <div className="flex flex-wrap gap-2">
++        <Button type="button" variant="outline" onClick={() => setOpen(false)}>
++          {t.withdraw.cancel}
++        </Button>
++        <Button
++          type="button"
++          disabled={disabled || withdraw.isPending}
++          onClick={() =>
++            withdraw.mutate({ path: { eid, record_id: recordId }, body: { reason: reason.trim() || null } })
++          }
++        >
++          {t.withdraw.confirm}
++        </Button>
++      </div>
++    </div>
++  )
++}
+diff --git a/src/frontend/src/locales/en.ts b/src/frontend/src/locales/en.ts
+index c1ae085..b4aebd3 100644
+--- a/src/frontend/src/locales/en.ts
++++ b/src/frontend/src/locales/en.ts
+@@ -273,6 +273,7 @@ export const en = {
+     uncorrected: 'Uncorrected',
+     evaluated: 'Evaluated',
+     closed: 'Closed',
++    withdrawn: 'Withdrawn',
+   } as Record<string, string>,
+   // 工作语言 (需求 R339): 建项目与项目页的选择, 生成语言的标注, 对话流里的修改记录
+   workingLanguage: {
+@@ -570,6 +571,7 @@ export const en = {
+       neither: 'Neither; give your own conclusion',
+     } as Record<string, string>,
+     // 判断的复核选项, 按 AI 的结论给 (lib/review 的 reviewChoices, 需求 R364)
++    notMisstatementConclusion: 'On review, this is not a misstatement.',
+     choices: {
+       agree_misstatement: {
+         label: 'Agree, record the misstatement',
+@@ -686,6 +688,34 @@ export const en = {
+     count: (n: number) => `${n} misstatement${n === 1 ? '' : 's'} recorded`,
+     notExecuted: (n: number) => `${n} procedure${n === 1 ? '' : 's'} not performed (no data)`,
+     via: (ids: string) => `Its prerequisite ${ids} was not performed`,
++    // AI 建议为错报但未认定 (需求 R364): FIN-01 材料的提示, 不阻塞
++    unrecognised: {
++      title: (n: number) => `AI proposed a misstatement but it was not recorded (${n})`,
++      intro:
++        'For information only; this does not block the decision. To change a decision, withdraw it and decide again.',
++      levels: {
++        trivial: 'Clearly trivial',
++        above_trivial: 'Above the clearly trivial threshold',
++        above_performance: 'Above performance materiality',
++        material: 'At or above overall materiality',
++      },
++      reviewed: (decision: string, by: string) => `Reviewed: ${decision}${by ? ` · ${by}` : ''}`,
++      wouldQualify:
++        'If this is a misstatement and stays uncorrected, uncorrected misstatements reach overall materiality and the candidate opinion would become qualified.',
++      wouldNotQualify:
++        'Even if it is counted, uncorrected misstatements stay below overall materiality and the candidate opinion would not change.',
++      open: 'View the judgment',
++      redecide: 'Withdraw and decide again',
++    },
++  },
++  // 撤回复核决定 (需求 R364): FIN-01 通过前, 理由选填
++  withdraw: {
++    action: 'Withdraw this decision',
++    intro:
++      'The judgment returns to review and you decide again. The original decision and the withdrawal both stay in the audit trail; a misstatement it recorded is withdrawn and the totals are recalculated.',
++    confirm: 'Withdraw',
++    cancel: 'Cancel',
++    done: 'Decision withdrawn; the judgment is back in review',
+   },
+   reportCard: {
+     revision: (n: number, opinion: string) => `Revision ${n} · ${opinion}`,
+@@ -711,6 +741,8 @@ export const en = {
+       NOT_EDITABLE:
+         'Confirmation reply fields can only be changed while the engagement waits at a stage decision or for review.',
+       REQUEST_NOT_OPEN: 'This request has already been received or withdrawn.',
++      NOT_WITHDRAWABLE:
++        'A review decision can only be withdrawn while the engagement waits for review in fieldwork or at FIN-01, before FIN-01 is approved.',
+       IMPORT_PARSE_ERROR: 'Some cells could not be read. Check the column matches and the date format.',
+       FILE_TOO_LARGE: 'Each file must be 50 MB or smaller.',
+       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
+diff --git a/src/frontend/src/locales/zh.ts b/src/frontend/src/locales/zh.ts
+index b5cb77a..3480907 100644
+--- a/src/frontend/src/locales/zh.ts
++++ b/src/frontend/src/locales/zh.ts
+@@ -258,6 +258,7 @@ export const zh: Messages = {
+     uncorrected: '未更正',
+     evaluated: '已评价',
+     closed: '已结束',
++    withdrawn: '已撤回',
+   },
+   workingLanguage: {
+     label: '工作语言',
+@@ -518,6 +519,7 @@ export const zh: Messages = {
+       a7_upheld: '采用独立复核的结论',
+       neither: '都不采用，由你给出结论',
+     },
++    notMisstatementConclusion: '经复核，这不是错报。',
+     choices: {
+       agree_misstatement: { label: '同意，认定为错报', hint: '金额、科目、方向与认定按 AI 的草稿带出，可以修改' },
+       disagree_not_misstatement: { label: '不同意，不是错报', hint: '写出你的结论' },
+@@ -615,6 +617,28 @@ export const zh: Messages = {
+     count: (n) => `共记录 ${n} 项错报`,
+     notExecuted: (n) => `${n} 项程序未执行（无数据）`,
+     via: (ids) => `前置程序 ${ids} 未执行`,
++    unrecognised: {
++      title: (n) => `AI 建议为错报但未认定（${n}）`,
++      intro: '只作提示，不影响作出决定。要改判时先撤回该复核决定，再重新选择。',
++      levels: {
++        trivial: '明显微小',
++        above_trivial: '超过明显微小临界值',
++        above_performance: '超过实际执行的重要性',
++        material: '达到重要性水平',
++      },
++      reviewed: (decision, by) => `复核：${decision}${by ? ` · ${by}` : ''}`,
++      wouldQualify: '若确为错报且未更正，计入后未更正错报合计达到重要性水平，候选意见会变为保留意见。',
++      wouldNotQualify: '即使计入，未更正错报合计仍低于重要性水平，候选意见不变。',
++      open: '查看判断',
++      redecide: '撤回并改判',
++    },
++  },
++  withdraw: {
++    action: '撤回复核决定',
++    intro: '撤回后该判断回到待复核，由你重新选择；原决定与撤回都留痕。认定的错报随之作废，并重新累计。',
++    confirm: '撤回',
++    cancel: '取消',
++    done: '已撤回，该判断回到待复核',
+   },
+   reportCard: {
+     revision: (n, opinion) => `第 ${n} 稿 · ${opinion}`,
+@@ -639,6 +663,7 @@ export const zh: Messages = {
+       NOT_AWAITING_CORRECTION: '当前不在等待更正。',
+       NOT_EDITABLE: '只有在项目停在阶段决定或等待复核时，才能修改回函抽取结果。',
+       REQUEST_NOT_OPEN: '这项补交请求已收到或已撤回。',
++      NOT_WITHDRAWABLE: '只有在执行阶段等待复核或停在 FIN-01、且 FIN-01 尚未通过时，才能撤回复核决定。',
+       IMPORT_PARSE_ERROR: '有单元格无法解析，请核对列对应与日期格式。',
+       FILE_TOO_LARGE: '单个文件不能超过 50 MB。',
+       ENGAGEMENT_BUSY: '项目正在处理中，请稍后再试。',
+diff --git a/src/frontend/src/routes/engagements/$eid/reviews/$taskId.tsx b/src/frontend/src/routes/engagements/$eid/reviews/$taskId.tsx
+index d08d68d..b8c5597 100644
+--- a/src/frontend/src/routes/engagements/$eid/reviews/$taskId.tsx
++++ b/src/frontend/src/routes/engagements/$eid/reviews/$taskId.tsx
+@@ -8,6 +8,7 @@ import { Code, PageHeader, StatusPill } from '@/components/chrome'
+ import { JudgmentCard, ReviewDecisionCard } from '@/components/concierge'
+ import { QueryState } from '@/components/query-state'
+ import { buttonVariants } from '@/components/ui/button'
++import { WithdrawDecision } from '@/components/withdraw-decision'
+ import { decisionsDisabled } from '@/lib/engagement'
+ import { apiMessage } from '@/lib/errors'
+ import { useI18n } from '@/lib/i18n'
+@@ -88,9 +89,19 @@ function ReviewTaskPage() {
+                   }
+                 />
+               ) : (
+-                <StatusPill tone="ok" className="self-start">
+-                  {t.formView.alreadyDecided}
+-                </StatusPill>
++                <div className="flex flex-col gap-3">
++                  <StatusPill tone="ok" className="self-start">
++                    {t.formView.alreadyDecided}
++                  </StatusPill>
++                  {/* FIN-01 通过前可撤回这条任务最近的决定 (需求 R364); 撤回后任务回到待复核, 本页换成决定卡 */}
++                  {ranked.view.withdrawable_record_id ? (
++                    <WithdrawDecision
++                      eid={eid}
++                      recordId={ranked.view.withdrawable_record_id}
++                      disabled={decisionsDisabled(overview)}
++                    />
++                  ) : null}
++                </div>
+               )}
+             </>
+           ) : (
+-- 
+2.43.0
+
