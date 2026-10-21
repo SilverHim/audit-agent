@@ -19,6 +19,7 @@ from backend.agents.judging import (
     earlier_findings,
     judge_all,
     judgments_patch,
+    open_findings,
     unchanged,
 )
 from backend.contracts.knowledge import DowngradeRule, ProcedureTemplate
@@ -494,3 +495,36 @@ def test_earlier_findings_takes_unattributed_of_procedure_rule_and_subject() -> 
 
     found = earlier_findings(state, "CSH-02", ("D01", "D04"), "BA-01", lambda x: x.source_ids)  # type: ignore[arg-type]
     assert found == [d01, d04]
+
+
+def test_open_findings_takes_unattributed_of_the_procedures_by_id() -> None:
+    """open_findings (审核 R179-02; REV-02, GEN-03, CSH-02, GEN-02, GEN-06 取前置程序的例外与 earlier_findings 共用):
+    当前结果中给定程序 (可多个) 未归因的例外 (open 与 unattributed 都算), 不分规则与对象, 按 ID 排序 (不按规则);
+    已归因的, 别的程序的, 被过期重跑取代的执行的都不算; 没有给程序时为空."""
+    base = numbat_csh05_exception(make_run("CSH-05"))
+
+    def made(oid: str, procedure_id: str, run_no: int, rule_id: str, **changes: Any) -> AuditException:
+        update = {"procedure_id": procedure_id, "run_id": f"RUN-{procedure_id}-{run_no}", "rule_id": rule_id}
+        return base.model_copy(update={"id": oid, **update, **changes})
+
+    b02 = made("X-CSH-05-1-B02-1", "CSH-05", 1, "B02", source_ids=["BA-02"])
+    b01 = made("X-CSH-05-1-B01-1", "CSH-05", 1, "B01", disposition=ExceptionDisposition.unattributed)
+    r03 = made("X-REV-08-1-R03-1", "REV-08", 1, "R03")
+    others = [
+        made("X-CSH-05-1-B01-2", "CSH-05", 1, "B01", disposition=ExceptionDisposition.attributed),
+        made("X-CSH-02-1-D01-1", "CSH-02", 1, "D01"),  # 别的程序
+        made("X-CSH-05-2-B01-1", "CSH-05", 2, "B01"),  # 被过期重跑取代
+    ]
+    rerun = RerunRequest(
+        id="RR-1",
+        procedure_ids=["CSH-05"],
+        superseded_run_ids=["RUN-CSH-05-2"],
+        data_version=2,
+        requested_by="U-1",
+        requested_at=NOW,
+    )
+    state = initial_state(ENGAGEMENT, [], 1) | {"exceptions": [r03, b02, *others, b01], "rerun_requests": [rerun]}
+
+    assert open_findings(state, ["CSH-05"]) == [b01, b02]  # type: ignore[arg-type]
+    assert open_findings(state, {"CSH-05", "REV-08"}) == [b01, b02, r03]  # type: ignore[arg-type]
+    assert open_findings(state, []) == []  # type: ignore[arg-type]

@@ -1,5 +1,11 @@
 id: FIN-09
 name: 更正验证
+workpaper: {ref: X-C, area: X}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 管理层同意更正而待验证的错报, 与凭证号以 {{ adjustment_prefix }} 开头的审计更正分录
+  en: >-
+    Misstatements management agreed to correct, awaiting verification, and audit adjustment entries
+    numbered with the prefix {{ adjustment_prefix }}
 # 规格书 6.1.2 (FIN-09 在 FIN-08 与 GEN-05 增量之后), 7.2 (L2 混合), UC-06 第 3 步 (规则核对调整分录与错报, 大模型判断
 # 是否完整更正及是否影响其他科目); ASA 450 第 7 段 (管理层按审计师要求更正后, 审计师执行追加程序确定是否仍有错报).
 # 需求 R164 定模板, A8 的执行由 R165 加 (agents/workpaper.py, 口径见接口文档第 6 节 FIN-09 段).

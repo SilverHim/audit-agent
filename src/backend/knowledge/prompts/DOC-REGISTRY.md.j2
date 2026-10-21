@@ -40,3 +40,6 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
 - `paid_up_cents`: the total amount paid on issued shares, in integer cents; null when the extract does not show it.
 - `evidence`: one pointer for each non-null field above, with the field name as `locator`; `acn`, `name`, `status` and `officeholders` always need one (for `officeholders`, the page listing them):
   `{"type": "external", "source_type": "document", "source_id": "{{ document.id }}", "locator": "<field name>", "page": <page>, "reliability": "{{ document.reliability }}"}`
+
+{% from "_output_language.md.j2" import extraction_language with context %}
+{{ extraction_language([]) }}

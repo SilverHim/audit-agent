@@ -31,18 +31,17 @@ from tests.test_xero_injections import (
     t4_rules,
 )
 from tests.test_xero_rules_db import (
-    build_xero_project,
     check_acc04,
     check_cash,
     check_csh02_fieldwork,
     check_planning,
     check_revenue,
     check_versions,
-    database_url,
     offline,
     run_rule_programs,
 )
 from tests.tools.live_budget import Budget, report
+from tests.xero_db import build_xero_project, database_url
 from tests.xero_fakes import (
     ORC1026,
     SNAPSHOT_NAME,
@@ -143,8 +142,9 @@ async def test_t1_rev02_request_carries_the_completion_date(xero_case: Any) -> N
 
 async def test_t4_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
     """R123 验收 3: T4 副本上真实 SQL 的 CSH-05 恰有 B01 一条 (BA-090, -55000 = 对账单 -1090044 减账面 -1035044), 与
-    离线预置相同; CSH-02 的候选行与按副本派生的相同, D02 含 BT-090-0081, D03 含 XJ-637-2; REV-08 (R03) 同 T0; PLN-07
-    A01 为 8 条, 不再有 090 (变动 -164724 不到期初绝对值的 20%), 610 为 964950."""
+    离线预置相同, 总体的 090 账面也是 -1035044 (需求 R327); CSH-02 的候选行与按副本派生的相同, D02 含 BT-090-0081,
+    D03 含 XJ-637-2; REV-08 (R03) 同 T0; PLN-07 A01 为 8 条, 不再有 090 (变动 -164724 不到期初绝对值的 20%), 610 为
+    964950."""
     case = xero_case("T4")
     project = await build_xero_project(database_url(), case.snapshot, case.supplements, tmp_path / "rules")
     results = await run_rule_programs(project)
@@ -152,8 +152,14 @@ async def test_t4_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
     for procedure_id in ("CSH-05", "CSH-02"):
         run, found = results[procedure_id]
         assert by_rule(found) == by_rule(rules[procedure_id](run)), procedure_id
-    _, csh05 = results["CSH-05"]
+    run, csh05 = results["CSH-05"]
     assert [(x.rule_id, x.source_ids, x.amount_cents) for x in csh05.exceptions] == [("B01", ["BA-090"], -55000)]
+    [b01] = csh05.populations  # 需求 R327: 总体与副本派生的相同, 090 的账面为调过的数, 对账单余额不变
+    assert csh05.populations == rules["CSH-05"](run).populations
+    assert [(i.source_id, i.amount_cents, i.fields["statement_balance_cents"]) for i in b01.items] == [
+        ("BA-090", -1035044, -1090044),
+        ("BA-091", 1158123, 1158123),
+    ]
     _, csh02 = results["CSH-02"]
     assert "BT-090-0081" in {r["id"] for r in csh02.rows["D02"]}
     assert "XJ-637-2" in {r["id"] for r in csh02.rows["D03"]}

@@ -178,3 +178,6 @@ Evidence pointers. Every pointer must include `source_type`.
 | Bank transaction | bank | bank_transaction | transaction `id` | column name, e.g. amount_cents | null | external_copy |
 | Sales invoice | invoice | sales_invoice | invoice `id` | column name, e.g. amount_cents | null | internal_original |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

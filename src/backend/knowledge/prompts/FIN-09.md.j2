@@ -98,7 +98,7 @@ Standards (cite only these IDs):
 - `evidence`: every pointer used in reasoning_chain, without duplicates.
 - `counter_argument`: the specific fact that, if it existed, would show that a misstatement remains.
 - `proposed_action`: as above.
-- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise. Its `account` as it appears in the inputs.
 - `self_confidence`: 0 to 1, your confidence in the verification given the inputs.
 - `fully_corrected`: true or false, per criterion 1.
 - `other_accounts`: per criterion 2.
@@ -109,3 +109,6 @@ Evidence pointers. Every pointer must include `source_type`.
 |---|---|---|---|---|---|---|
 | Adjustment line | voucher | journal_entry | row `id` | column name, e.g. credit_cents | null | internal_original |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

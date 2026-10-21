@@ -99,3 +99,6 @@ Evidence pointers. Every pointer must include `source_type`.
 |---|---|---|---|---|---|---|
 | Document page | contract for an engagement letter, voucher for any other document | document | document ID | field or item name | page | the document's reliability |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

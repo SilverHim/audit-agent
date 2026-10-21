@@ -52,4 +52,7 @@ Standards (cite only these IDs):
   - `assumption`: a premise the evidence does not establish. `limitation`: a gap in the evidence that affects the conclusion.
   - Leave `status` unset. The last step is an inference that states the conclusion.
 - `proposed_action`: what you would do with this subject on this evidence: `accept` (no issue), `close` (the matter is resolved), `misstatement` (the evidence shows a misstatement), or `more_evidence` (the evidence is not enough to decide).
-- `misstatement_draft`: required when `proposed_action` is `misstatement`, otherwise null. `type` (factual, judgmental or projected), `account`, `assertion`, `amount_cents` (an amount in cents taken from the evidence above: a row amount or the difference between two rows) and `direction` (overstated or understated).
+- `misstatement_draft`: required when `proposed_action` is `misstatement`, otherwise null. `type` (factual, judgmental or projected), `account` (as it appears in the inputs), `assertion`, `amount_cents` (an amount in cents taken from the evidence above: a row amount or the difference between two rows) and `direction` (overstated or understated).
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

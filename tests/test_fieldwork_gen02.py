@@ -14,7 +14,8 @@ import pytest
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import RunContext
-from backend.agents.fieldwork import FieldworkAgent, entry_order
+from backend.agents.fieldwork import FieldworkAgent
+from backend.agents.journals import entry_order
 from backend.contracts.models import (
     Decision,
     ExceptionDisposition,
@@ -37,6 +38,7 @@ from tests.fakes import (
     FakeRuleEngine,
     FakeTrail,
     failed,
+    ids,
     make_ctx,
     make_deps,
     make_run,
@@ -84,10 +86,6 @@ def flow() -> Flow:
     """7 笔凭证都判断成功 (accept, L2) 的一次 GEN-02."""
     patch, ctx, engine = asyncio.run(run_gen02({no: passed() for no in VOUCHERS}))
     return Flow(patch, ctx, {c.subject_id: c for _, c, _ in engine.calls})
-
-
-def ids(rows: list[dict[str, Any]], key: str = "id") -> list[Any]:
-    return [r[key] for r in rows]
 
 
 @pytest.mark.external

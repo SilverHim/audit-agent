@@ -176,6 +176,21 @@ def in_scope(ctx: RunContext, subject_id: str) -> bool:
     return (not only or subject_id in only) and subject_id not in subjects_awaiting_review(ctx)
 
 
+def open_findings(state: EngagementState, procedure_ids: Collection[str]) -> list[AuditException]:
+    """当前结果中这些程序尚未归因的例外 (第 1 版 open, 或判断失败时置的 unattributed 版本; 过期重跑取代的执行的例外
+    不在当前结果里, services.staleness), 按 ID 排序. 判断程序取前置程序 (depends_on) 的例外 (REV-02, GEN-03, CSH-02,
+    GEN-02 的判断对象, GEN-06) 与沿用本程序此前的例外 (earlier_findings) 都经它, agents 里不另写这一过滤. 纯函数."""
+    wanted = set(procedure_ids)
+    return sorted(
+        (
+            x
+            for x in current_results(state).exceptions
+            if x.procedure_id in wanted and x.disposition is not ExceptionDisposition.attributed
+        ),
+        key=lambda x: x.id,
+    )
+
+
 def earlier_findings(
     state: EngagementState,
     procedure_id: str,
@@ -183,22 +198,14 @@ def earlier_findings(
     subject_id: str,
     subjects_of: Callable[[AuditException], Collection[str]],
 ) -> list[AuditException]:
-    """对象 subject_id 沿用的规则例外 (需求 R347, R165): 当前结果中本程序此前执行出的, 规则编号在 rule_ids 中, 涉及
-    该对象 (subjects_of 给出例外涉及的对象, 只对本程序这些规则的例外调用) 而尚未归因的例外 (第 1 版 open, 或判断失败
-    时置的 unattributed 版本; 已归因的不带回, 再失败时不会被改回 unattributed), 按规则编号与 ID 排序. 有就沿用, 不再
-    按本次比对新建: 若照常新建 (ID 带 run_no), 此前判断失败时已置 unattributed 的那条就没有任务再指向它 (重跑不取代
-    旧执行, 两条都在当前结果里). 沿用的不是 judgments_patch 的 created, 确认时出 attributed 新版本, 再失败时出
-    unattributed 新版本. CSH-02 (D01, D04 的 source_ids, 账户) 与 FIN-09 (V02 的 detail.misstatement_id, 错报) 共用.
-    纯函数."""
+    """对象 subject_id 沿用的规则例外 (需求 R347, R165): 本程序尚未归因的例外 (open_findings; 已归因的不带回, 再失败时
+    不会被改回 unattributed) 中规则编号在 rule_ids 中, 涉及该对象 (subjects_of 给出例外涉及的对象, 只对本程序这些
+    规则的例外调用) 的, 按规则编号与 ID 排序. 有就沿用, 不再按本次比对新建: 若照常新建 (ID 带 run_no), 此前判断失败
+    时已置 unattributed 的那条就没有任务再指向它 (重跑不取代旧执行, 两条都在当前结果里). 沿用的不是 judgments_patch
+    的 created, 确认时出 attributed 新版本, 再失败时出 unattributed 新版本. CSH-02 (D01, D04 的 source_ids, 账户) 与
+    FIN-09 (V02 的 detail.misstatement_id, 错报) 共用. 纯函数."""
     return sorted(
-        (
-            x
-            for x in current_results(state).exceptions
-            if x.procedure_id == procedure_id
-            and x.rule_id in rule_ids
-            and subject_id in subjects_of(x)
-            and x.disposition is not ExceptionDisposition.attributed
-        ),
+        (x for x in open_findings(state, [procedure_id]) if x.rule_id in rule_ids and subject_id in subjects_of(x)),
         key=lambda x: (x.rule_id, x.id),
     )
 

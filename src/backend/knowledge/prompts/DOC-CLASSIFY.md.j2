@@ -45,3 +45,6 @@ File name: {{ file_name }} ({{ media_type }})
 
 - `document_type`: one of the types above, or null.
 - `reason`: one short sentence naming what in the file name or first page decided the type.
+
+{% from "_output_language.md.j2" import extraction_language with context %}
+{{ extraction_language(["reason"]) }}

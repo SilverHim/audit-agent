@@ -46,3 +46,6 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
 | related_party | statement that the parties are related |
 
   Each entry: `term_type`; `text` = the clause's sub-clauses copied verbatim with their numbers (e.g. "5.1 ..."), without the clause heading; `page` = the page on which the clause starts.
+
+{% from "_output_language.md.j2" import extraction_language with context %}
+{{ extraction_language([]) }}

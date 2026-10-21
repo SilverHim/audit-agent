@@ -18,6 +18,7 @@ from backend.contracts.models import (
     OpinionType,
     RuleOutcome,
     RulePopulation,
+    WorkingLanguage,
 )
 
 T = TypeVar("T")
@@ -73,6 +74,9 @@ class ValidationContext(Model):
     required_refs: list[str] = []  # FIN-02 的 judgment_refs 必须含的判断 ID (当前有效的持续经营评价判断, 需求 R183)
     confirmation: Confirmation | None = None  # DOC-06 本次抽取的函证 (CSH-04 所建), 核对回函账号与回函渠道
     opinion: OpinionType | None = None  # RPT-03 应出的意见类型 (FIN-01 选定), 核对两段的标题
+    # 输出的语言 (需求 R341): JudgmentEngine.call_llm 按执行记录的 language 填, 调用方不填; RPT-03 按它取两段的标题
+    # (templates/report.yaml). 不经 call_llm 直接校验时缺省 en
+    language: WorkingLanguage = "en"
     # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页, 画像还须同字段), 否则该步
     # unsupported
     allowed_evidence: list[EvidencePointer] | None = None

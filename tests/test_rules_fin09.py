@@ -9,7 +9,7 @@ import pytest
 
 from backend.orchestration.nodes import build_run
 from tests.external import snapshot_dir, supplements_dir
-from tests.test_xero_rules_db import XeroProject, build_xero_project, database_url, procedure_of
+from tests.xero_db import XeroProject, build_xero_project, database_url, procedure_of
 from tests.xero_fakes import SNAPSHOT_NAME, xero_v01_rows
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]

@@ -20,7 +20,7 @@ from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.db import bind_engagement
 from tests.external import snapshot_dir, supplements_dir
-from tests.test_xero_rules_db import build_xero_project, database_url, procedure_of
+from tests.xero_db import build_xero_project, database_url, procedure_of
 from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES, xero_gen03_rows, xero_tables
 
 pytestmark = [pytest.mark.slow, pytest.mark.asyncio(loop_scope="module")]  # 用例与 module 级项目同一个事件循环

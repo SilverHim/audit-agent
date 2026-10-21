@@ -3,7 +3,7 @@
 import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -1169,10 +1169,13 @@ def confirmed_judgment(version: int = 2, status: ReviewStatus = ReviewStatus.con
 
 
 async def check_report(
-    draft: ReportDraft, judgments: list[Judgment], opinion: OpinionType | None = OpinionType.qualified
+    draft: ReportDraft,
+    judgments: list[Judgment],
+    opinion: OpinionType | None = OpinionType.qualified,
+    language: Literal["zh", "en"] = "en",
 ) -> Any:
     validator, _ = make_validator()
-    ctx = ValidationContext(judgments=judgments, opinion=opinion, standards_of=None)
+    ctx = ValidationContext(judgments=judgments, opinion=opinion, standards_of=None, language=language)
     return await validator.validate(EID, LIBRARY.load("RPT-03"), respond(draft), ctx)
 
 
@@ -1218,6 +1221,34 @@ async def test_report_reference_failures(judgments: list[Judgment], error: str) 
 async def test_report_semantic_failures(changes: dict[str, Any], opinion: OpinionType, error: str) -> None:
     report = await check_report(QUALIFIED_DRAFT.model_copy(update=changes), [confirmed_judgment()], opinion)
     assert report.level_failed == "semantic" and report.retryable and error in report.errors
+
+
+@pytest.mark.parametrize("opinion", [OpinionType.unqualified, OpinionType.qualified])
+@pytest.mark.parametrize(
+    ("language", "written"),
+    [("zh", "zh"), ("zh", "en"), ("en", "en"), ("en", "zh")],
+    ids=["zh", "zh_with_english_headings", "en", "en_with_chinese_headings"],
+)
+async def test_report_headings_follow_the_language(
+    language: Literal["zh", "en"], written: Literal["zh", "en"], opinion: OpinionType
+) -> None:
+    """需求 R341 验收 2: 两段首行的标题按校验上下文的语言取 report.yaml 的一份 (call_llm 按执行记录的语言填); 写成另一种
+    语言的标题判 semantic. 两种语言的标题各是什么由 test_knowledge 核对."""
+    opinion_heading, basis_heading = LIBRARY.report_headings(written)[opinion]
+    draft = QUALIFIED_DRAFT.model_copy(
+        update={
+            "opinion": f"{opinion_heading}\n\n...",
+            "basis_for_opinion": f"{basis_heading}\n\n...",
+            "judgment_keys": QUALIFIED_DRAFT.judgment_keys if opinion is OpinionType.qualified else [],
+        }
+    )
+    report = await check_report(draft, [confirmed_judgment()], opinion, language)
+    if written == language:
+        assert (report.level_failed, report.errors) == (None, [])
+    else:
+        expected = LIBRARY.report_headings(language)[opinion]
+        assert report.level_failed == "semantic"
+        assert report.errors == [f"意见段首行应为 {expected[0]}", f"基础段首行应为 {expected[1]}"]
 
 
 async def test_report_needs_opinion_type() -> None:
@@ -1881,3 +1912,108 @@ async def test_fin09_missing_context_fails_before_calling_the_model(
     with pytest.raises(ValueError, match="expected_residual_cents, entry_account_codes"):
         await engine.judge(EID, FIN09, make_run("FIN-09"), fin09_judge_context(residual, codes), "U-1")
     assert llm.requests == []
+
+
+# ── R340: 中文正文与其中的英文引文 ──
+
+# 各程序一份固定输出改成中文的结论, 推理与反方论证 (步骤数与指针不变), 引号里是原件的英文原文 (需求 R340 验收 2)
+CON002_QUOTE = (
+    "“Title to and risk in the Goods pass to the Customer when the Customer's authorised representative signs the "
+    "delivery note at the Delivery Address.”"
+)  # CON-002 第 5.1 条
+BA01_QUOTE = "“Balance at 30 June 2026: AUD 1,208,400.00 (credit)”"  # 12345601.pdf 第 1 页
+CONX02_QUOTE = (
+    "“The Supplier will issue a tax invoice for the Monthly Fee of each calendar month on or about the 17th day of "
+    "that month.”"
+)  # CON-X02 第 5.1 条
+IN_CHINESE: dict[str, tuple[str, list[str], str]] = {  # 程序 → (结论, 各步, 反方论证)
+    "REV-03": (
+        f"合同 CON-002 第 5.1 条约定 {CON002_QUOTE} 货物的控制权在 Quoll Automation Pty Ltd 的授权代表于交货地址签收"
+        "发运单时转移 (CON-002-T1); 付款期为签收后 30 天 (CON-002-T2), 合同没有退货权与返利条款.",
+        [
+            f"第 5.1 条 (CON-002-T1): {CON002_QUOTE} 签收之前卖方无权收款.",
+            "客户取得所承诺商品的控制权时确认收入 (AASB 15 第 31 段).",
+            "在某一时点履行的履约义务, 控制权转移的迹象包括现时收款权, 法定所有权与所有权上的主要风险和报酬"
+            " (AASB 15 第 38 段).",
+            "法定所有权, 风险与收款权都在签收发运单时转移, 所以控制权在这一时点转移, 收入在这一时点确认.",
+        ],
+        "若另有安排让客户在签收前取得控制权 (如 bill-and-hold 安排), 转移时点会不同.",
+    ),
+    "CSH-02": (
+        f"银行回函写明 {BA01_QUOTE}, 账面余额为 AUD 1,258,400.00. 差额 AUD 50,000.00 是在途存款: 收款 CR-SI-2026-0547 "
+        "于 2026-06-30 入账, 银行于 2026-07-02 入账 (BT-01-20260702-01). 属时间性差异, 不是错报.",
+        [
+            f"回函确认账户 12345601 截至 2026-06-30 的余额: {BA01_QUOTE}.",
+            "总账科目 1010 截至 2026-06-30 的余额为 AUD 1,258,400.00, 回函减账面为 -AUD 50,000.00.",
+            "来自 Echidna Controls 的收款 CR-SI-2026-0547 计 AUD 50,000.00, 于 2026-06-30 借记科目 1010.",
+            "银行于 2026-07-02 入账来自 Echidna Controls 的 AUD 50,000.00, 附言 SI-2026-0547.",
+            "审计师应调查函证中的不符事项, 判断是否表明存在错报 (ASA 505 第 14 段).",
+            "这笔收款在年末前入账, 银行在年末后入账, 金额与附言相同, 是在途存款.",
+            "在途存款恰好解释了全部差额, 所以这一例外是时间性差异, 不是错报.",
+        ],
+        "若 7 月 2 日的入账对应另一笔收款, 或银行没有 6 月这笔汇款的记录, 差额就没有得到解释.",
+    ),
+    "GEN-02": (
+        "发票 ORC1003 (分录 XJ-405) 与 ORC1008 (XJ-408) 都在 2026-07-17 开给 Hamilton Smith Pty, 金额都是 AUD 550.00; "
+        f"CON-X02 约定 {CONX02_QUOTE} 所以 ORC1003 与 ORC1008 重复. ORC1003 没有服务完成记录, ORC1008 有 7 月的服务"
+        "记录 SR-ORC1008. 重复的发票已由贷项通知单 CR1003 (XJ-430) 于 2026-07-26 全额冲销, 这笔分录没有净影响.",
+        [
+            "XJ-405 记录 2026-07-17 开给 Hamilton Smith Pty 的发票 ORC1003: 收入 AUD 500.00 (XJ-405-1), GST AUD 50.00 "
+            "(XJ-405-3), 应收 AUD 550.00 (XJ-405-2).",
+            "XJ-408 记录同一天开给同一客户的发票 ORC1008, 金额同为 AUD 550.00.",
+            f"CON-X02 第 5.1 条: {CONX02_QUOTE}",
+            "ORC1008 有 2026-07-01 至 2026-07-31 的服务记录 SR-ORC1008; ORC1003 没有服务完成记录.",
+            "贷项通知单 CR1003 (XJ-430) 于 2026-07-26 冲回 Hamilton Smith Pty 的收入 AUD 500.00, GST AUD 50.00 与应收 "
+            "AUD 550.00.",
+            "非正常业务过程中处理的分录, 以及没有或几乎没有说明的分录, 应检查其支持性证据 (ASA 240 第 A44 段).",
+            "同一月的服务费开了两张 7 月发票, 只有一张有服务记录, 说明 ORC1003 与 ORC1008 重复.",
+            "重复的 ORC1003 已由 CR1003 全额冲销, 所以 XJ-405 对收入, GST 与应收没有净影响, 不产生错报.",
+        ],
+        "若 7 月另有一份服务记录, 或合同变更约定了两份月费, ORC1003 就是有效发票而被错误冲销.",
+    ),
+}
+QUOTES = {"REV-03": CON002_QUOTE, "CSH-02": BA01_QUOTE, "GEN-02": CONX02_QUOTE}
+
+
+def in_chinese(procedure: str, raw: str) -> str:
+    """固定输出 raw 换成 IN_CHINESE 中该程序的中文正文 (步骤数须相同), 其余照旧."""
+    conclusion, texts, counter = IN_CHINESE[procedure]
+    value = json.loads(raw)
+    assert len(texts) == len(value["reasoning_chain"]), procedure
+    steps = [{**step, "text": text} for step, text in zip(value["reasoning_chain"], texts, strict=True)]
+    return json.dumps({**value, "conclusion": conclusion, "reasoning_chain": steps, "counter_argument": counter})
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize(
+    ("procedure", "path", "validator"),
+    [
+        ("REV-03", FIXTURES / "REV-03" / "CON-002.json", lambda: make_validator()[0]),
+        ("CSH-02", FIXTURES / "CSH-02" / "BA-01.json", lambda: make_validator(documents=list(NUMBAT_REPLIES))[0]),
+        pytest.param(
+            "GEN-02", XERO.fixtures / "GEN-02" / "XJ-405.json", xero_validator, marks=pytest.mark.external, id="GEN-02"
+        ),
+    ],
+    ids=["REV-03", "CSH-02", "GEN-02"],
+)
+async def test_chinese_text_with_english_quotes_passes_four_levels(
+    procedure: str, path: Any, validator: Any, language: str
+) -> None:
+    """R340 验收 2: 结论, 推理与反方论证为中文, 引号里是合同或回函英文原文的构造输出 (REV-03, CSH-02, GEN-02 各一份,
+    改自固定输出) 四级校验一次通过, 正文原样留在输出里; 原来的英文固定输出照旧通过. 语义级不按英文词判断."""
+    raw = path.read_text(encoding="utf-8")
+    raw = in_chinese(procedure, raw) if language == "zh" else raw
+    report = await validator().validate(
+        EID, LIBRARY.load(procedure), respond(None, raw), ValidationContext(standards_of=procedure)
+    )
+    assert (report.level_failed, report.errors, report.unsupported_steps) == (None, [], [])
+    draft = report.output
+    assert isinstance(draft, JudgmentDraft)
+    if language == "zh":
+        conclusion, texts, counter = IN_CHINESE[procedure]
+        assert (draft.conclusion, [s.text for s in draft.reasoning_chain], draft.counter_argument) == (
+            conclusion,
+            texts,
+            counter,
+        )
+        assert QUOTES[procedure] in draft.conclusion

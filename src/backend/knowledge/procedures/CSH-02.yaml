@@ -1,5 +1,15 @@
 id: CSH-02
 name: 函证差异评价
+workpaper: {ref: C-4, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: >-
+    有回函的银行账户: 回函余额与 {{ period_end }} 总账余额的差异, 回函所列应计利息在期末前 {{ lookback_days }}
+    天的全部分录中是否入账, 期后 {{ subsequent_days }} 天的银行流水, 期末前 {{ lookback_days }} 天的银行科目分录
+  en: >-
+    Bank accounts with confirmation replies: differences between confirmed balances and the general
+    ledger at {{ period_end }}, whether the accrued interest on the replies was booked in any journal line
+    in the {{ lookback_days }} days before period end, bank transactions in the {{ subsequent_days }} days
+    after period end and bank journal lines in the {{ lookback_days }} days before it
 phase: P2_Executing
 cycle: Cash
 owner: A6

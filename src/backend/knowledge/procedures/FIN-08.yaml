@@ -1,5 +1,11 @@
 id: FIN-08
 name: 错报沟通与回复记录
+workpaper: {ref: X-B, area: X}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 已分类待沟通的错报, 与更正分录对不上而须重新沟通的错报
+  en: >-
+    Classified misstatements to be communicated, and misstatements to be communicated again because the
+    adjustments did not match
 # 规格书 6.1.2 (FIN-08 ← FIN-03, manual), 第 10 节 P3 人员行 (FIN-08 与管理层沟通错报) 与拒绝更正记 uncorrected 并保留
 # 回复原文, UC-06 第 1 步; ASA 450 第 8 段 (及时沟通累计的错报并请管理层更正), 第 9 段 (拒绝更正时了解理由). 需求 R161.
 # 人工程序 (需求 R92, R93): communicate 节点中由 A10 派发, 模板 owner A8 的 prepare 列出待沟通的错报 (当前结果中已分类的

@@ -30,10 +30,12 @@ from backend.contracts.models import (
     ReportStatus,
     TrailKind,
 )
+from backend.core.config import get_settings
 from backend.orchestration.runner import GraphRunner
 from backend.services import review_queue
 from backend.services.data_service import DataService
-from backend.services.judgment_engine import MAX_ATTEMPTS, REPORT_HEADINGS, PointerResolver
+from backend.services.judgment_engine import MAX_ATTEMPTS, PointerResolver
+from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import evidence_pointers, wait_idle
 from tests.fixture_sets import XERO
 from tests.tools.live_budget import Budget, summary
@@ -353,7 +355,9 @@ def assert_hard(data: dict[str, Any]) -> None:
     assert data["missing_subjects"] == [], data["missing_subjects"]
     assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
     assert data["pointers"] > 30
-    heading = REPORT_HEADINGS[OpinionType(data["fin_disposition"])][0]
+    # 走查的项目是英文工作语言 (中文项目的真实模型走查归 R343), 标题取 report.yaml 的英文一份
+    headings = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT).report_headings("en")
+    heading = headings[OpinionType(data["fin_disposition"])][0]
     assert (data["report_opinion"], data["report_heading"]) == ([data["fin_disposition"]], [[heading]])
     assert (data["contracts"], data["confirmations"]) == (3, 2)
     assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]

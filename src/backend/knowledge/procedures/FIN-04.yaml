@@ -1,5 +1,9 @@
 id: FIN-04
 name: 错报累计
+workpaper: {ref: X, area: X}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 本项目当前的全部错报
+  en: All current misstatements of the engagement
 phase: P3_Completion
 cycle: Completion
 owner: A9

@@ -79,3 +79,6 @@ Evidence pointers. Every pointer must include `source_type`.
 | Contract term | contract | document | {{ doc_id }} | term ID | the term's `page` | {{ data.document.reliability }} |
 | Contract field (counterparty, amount_cents, sign_date) | contract | document | {{ doc_id }} | field name | page in `data.contract.evidence` | {{ data.document.reliability }} |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

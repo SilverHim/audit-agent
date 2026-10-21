@@ -1,0 +1,153 @@
+{#
+GEN-06 期后事项研判 → JudgmentDraft，GEN-07 尚未归因的例外所指的每一行（银行流水或分录行）调用一次（需求 R179）。
+渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")，行数据带 source_type。
+变量：
+  subject_id              判断对象：GEN-07 例外所指的行 ID（银行流水 BT-…，或分录行 XJ-…-n）
+  task.params             period_start、period_end、subsequent_days、data_as_of、performance_materiality_cents、
+                          clearly_trivial_cents、counterparty_prefixes、entity_suffixes、reference_token_min_length 等
+                          （GEN-06.yaml）
+  task.risks              本程序覆盖的 RiskItem；GEN-06 是固定集，没有审计目标，为空
+  data.subject            例外所指的行：source_type 为 bank_transaction（BankTransaction 各列：id、bank_account_id、txn_date、
+                          amount_cents（存入为正）、balance_after_cents、description（收款人或付款人）、reference）或
+                          journal_entry（JournalEntry 各列）
+  data.voucher_lines      分录对象为同一凭证的全部分录行（source_type journal_entry，按行 ID）；流水对象为空列表
+  data.related_entries    按 match_keys 在本期起至窗口上限的总账中找到的其他凭证的全部分录行（剔除作废对与对象自身的
+                          凭证），列同 voucher_lines；按（入账日，凭证号自然序，行 ID）排序
+  data.related_invoices   相关销售发票，每项为 {invoice, delivery_notes}：invoice 为 sales_invoice 行（id、invoice_no、
+                          customer、customer_abn、contract_id、invoice_date、posting_date、amount_cents、journal_entry_id）；
+                          delivery_notes 为其 delivery_note 行（发运或服务完成记录：shipped_date、signed_date 等，按 ID，
+                          没有为空列表）。流水对象：journal_entry_id 落在 related_entries 中的发票，加客户名（规范化后）
+                          等于 match_keys.name 的本期发票；分录对象：客户名（规范化后）在本凭证行中整词出现的本期发票
+  data.documents          对对象 ID、本凭证号、related_entries 的凭证号与 related_invoices 的 ID 逐个取到的已登记文件
+                          （登记摘录除外），按文件 ID 去重排序，每项为 {document, pages}：document 为 DocumentRef（id、
+                          type、file_name、page_count、reliability、document_date 等），pages 为各页文字（第 1 页在前）
+  data.trial_balance      对象行（流水取其银行账户的总账科目）、voucher_lines 与 related_entries 涉及的科目，按代码：
+                          source_type trial_balance、account_code、account_name、account_category（科目表里没有为 null）、
+                          balance_cents（本期期末余额，借方为正；试算表没有该科目为 null）
+  data.window             期后窗口：from（期末次日）、to（期末加 subsequent_days 天，截到 data_as_of）
+  data.match_keys         找 related_entries 用的键：tokens（参考号中含数字的词，小写）、name（流水的对方名称规范化后，
+                          分录对象为 null）
+  rule_findings           本对象上 GEN-07 尚未归因的 AuditException：id、rule_id、severity、amount_cents、detail；按 ID
+  standards               StandardFragment 列表：id、standard、paragraph、text
+#}
+{% set p = task.params %}
+{% set s = data.subject %}
+{% set bank = s.source_type == "bank_transaction" %}
+You assist a registered company auditor with the audit of an Australian financial report for the period {{ p.period_start }} to {{ p.period_end }}. The subsequent-events scan has flagged {% if bank %}bank statement line{% else %}journal line{% endif %} {{ subject_id }}, dated after the period end, within the subsequent-events window {{ data.window["from"] }} to {{ data.window["to"] }}.
+
+## Task
+
+Decide whether the flagged item is, or reveals, an event after the reporting period that requires adjustment of, or disclosure in, the financial report for the period ended {{ p.period_end }}, and whether that report appropriately reflects it (ASA560-P06, ASA560-P08).
+
+## Inputs
+
+Rule findings on this item:
+{% for x in rule_findings %}
+- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, amount {{ x.amount_cents }} cents, detail {{ x.detail | tojson }}
+{% endfor %}
+
+The flagged item:
+```json
+{{ s | tojson(indent=2) }}
+```
+
+{% if not bank %}
+All lines of journal entry {{ s.entry_no }}:
+```json
+{{ data.voucher_lines | tojson(indent=2) }}
+```
+
+{% endif %}
+Ledger entries found by the item's reference numbers {{ data.match_keys.tokens | tojson }}{% if data.match_keys.name %} and counterparty name "{{ data.match_keys.name }}"{% endif %}, posted from {{ p.period_start }} to {{ data.window["to"] }} (reversed and reversing pairs excluded):
+{% if data.related_entries %}
+```json
+{{ data.related_entries | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Related sales invoices (with shipping or service-completion records):
+{% if data.related_invoices %}
+```json
+{{ data.related_invoices | tojson(indent=2) }}
+```
+{% else %}
+None.
+{% endif %}
+
+Period-end balances ({{ p.period_end }}, debit positive; null where the trial balance has no balance) of the accounts involved:
+```json
+{{ data.trial_balance | tojson(indent=2) }}
+```
+
+Documents linked to this item, its entry, the related entries or invoices:
+{% for d in data.documents %}
+Document {{ d.document.id }} ({{ d.document.type }}, {{ d.document.file_name }}, {{ d.document.page_count }} page(s), reliability {{ d.document.reliability }}, dated {{ d.document.document_date or "unknown" }}):
+{% for page in d.pages %}
+Page {{ loop.index }}:
+```text
+{{ page | trim }}
+```
+{% endfor %}
+{% else %}
+None.
+{% endfor %}
+
+Performance materiality: {{ p.performance_materiality_cents }} cents. Clearly trivial: {{ p.clearly_trivial_cents }} cents.
+
+Standards (cite only these IDs):
+{% for f in standards %}
+- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
+{% endfor %}
+
+## Criteria
+
+1. Address every rule finding in the reasoning chain: say what the rule flagged and whether the inputs explain it. A bank line flagged because no ledger line of the same amount was found nearby may still be recorded elsewhere in the ledger; use the related entries, invoices and documents to identify the transaction behind it.
+2. Establish the dates that matter and compare each with the period end {{ p.period_end }}: when the goods or services were delivered or the obligation arose, the invoice and posting dates, the date of the agreement or correspondence, and the date of the cash movement.
+3. Classify the event (AASB110-P03): an adjusting event provides evidence of conditions that existed at {{ p.period_end }} (examples in AASB110-P09 include (c) the determination after the period end of the cost of assets purchased before it, and (a) the settlement after the period end of a court case that confirms a present obligation at the period end). A payment after the period end for goods or services received before it is evidence of an obligation that existed at {{ p.period_end }}, so it is an adjusting event (AASB110-P03 (a)). A non-adjusting event is indicative of conditions that arose after {{ p.period_end }}, such as a new agreement, an order or deposit for future work, an asset bought after the period end, a loan received after the period end, or a change in the transaction price agreed after the period end for a performance obligation already satisfied (AASB15-P88: recognised in the period in which the price changes). An ordinary transaction of the new period that tells nothing about the position at {{ p.period_end }} is neither.
+4. For an adjusting event, decide whether the period-end balances already reflect it (AASB110-P08): for example, a payment after the period end for services received before it is reflected when a ledger entry posted on or before {{ p.period_end }} recognised the liability. A ledger entry for the same transaction posted after the period end does not reflect it at {{ p.period_end }}.
+5. A non-adjusting event is not adjusted (AASB110-P10). State whether it is material enough to be disclosed and whether the inputs show the disclosure.
+
+## proposed_action
+
+- `accept`: the item is an ordinary transaction of the new period, a non-adjusting event, or an adjusting event already reflected in the period-end balances.
+- `misstatement`: the inputs show an adjusting event that the period-end balances do not reflect. Fill `misstatement_draft`: `type` factual; `account` the misstated account as `<name> (<code>)`; `assertion` Completeness when a liability or expense is missing, Existence or Occurrence when an amount should not have been recorded, Valuation when an asset's carrying amount is wrong, Accuracy when the amount recorded is wrong; `direction` overstated or understated; `amount_cents` equal to a referenced row's amount, the difference between two referenced rows, or a finding's amount. Cite the row the amount comes from. State in `conclusion` the other accounts the error affects.
+- `more_evidence`: the inputs do not show what the item is, or whether the condition existed at {{ p.period_end }}, so it cannot be classified without further documents or enquiry.
+- Do not use `close`.
+
+## Output (JudgmentDraft)
+
+- `conclusion`: one to three sentences: what the item is, how it is classified, and for a misstatement the account, amount and direction.
+- `reasoning_chain`: ordered steps, indexed from 0.
+  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
+  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
+  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
+  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
+  - Leave `status` unset. The last step is an inference that states the conclusion.
+- `evidence`: every pointer used in reasoning_chain, without duplicates.
+- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
+- `proposed_action`: as above.
+- `misstatement_draft`: required when proposed_action is `misstatement`; null otherwise.
+- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
+
+Evidence pointers. Every pointer must include `source_type`.
+
+| Source | type | source_type | source_id | locator | page | reliability |
+|---|---|---|---|---|---|---|
+{% if bank %}
+| The flagged bank statement line | bank | bank_transaction | {{ subject_id }} | column name, e.g. amount_cents | null | external_copy |
+{% endif %}
+| Journal line (this entry or a related entry) | voucher | journal_entry | line `id` | column name, e.g. credit_cents | null | internal_original |
+| Account balance | voucher | trial_balance | `account_code` | balance_cents | null | internal_original |
+{% if data.related_invoices %}
+| Invoice row | invoice | sales_invoice | invoice `id` | column name, e.g. invoice_date | null | internal_original |
+| Shipping or service-completion record | delivery | delivery_note | record `id` | column name, e.g. signed_date | null | internal_original |
+{% endif %}
+{% for d in data.documents %}
+| Document {{ d.document.file_name }} | contract for agreements, invoice for invoices, voucher otherwise | document | {{ d.document.id }} | a short quote from the page | page number, 1 to {{ d.document.page_count }} | {{ d.document.reliability }} |
+{% endfor %}
+| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

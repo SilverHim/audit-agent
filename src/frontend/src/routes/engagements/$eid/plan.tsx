@@ -16,6 +16,7 @@ import { formatAud } from '@/lib/money'
 import { currentPlan, extentLabel, methodLabel, planTable, revisionHistory } from '@/lib/plan'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
+import { contentLanguage, type WorkingLanguage } from '@/lib/working-language'
 
 export const Route = createFileRoute('/engagements/$eid/plan')({ component: Plan })
 
@@ -50,6 +51,7 @@ function Plan() {
   const gate = useGate(eid, atGate)
   const view = plan.data
   const current = view ? currentPlan(view) : undefined
+  const lang = contentLanguage(overview, current?.run_id) // 计划正文的语言: 起草它的那次执行的 (需求 R340)
   return (
     <>
       <PageHeader
@@ -85,10 +87,10 @@ function Plan() {
               ) : null}
               <Revisions view={view} />
               <Panel title={t.planPage.strategy}>
-                <PlanNarrative plan={current} />
+                <PlanNarrative eid={eid} plan={current} />
               </Panel>
-              <Facts plan={current} view={view} />
-              <ProcedureTable eid={eid} view={view} />
+              <Facts plan={current} view={view} lang={lang} />
+              <ProcedureTable eid={eid} view={view} lang={lang} />
             </>
           ) : (
             // 功能 planning 关闭的项目永远不会起草计划 (导航里也没有这一项, 只有直接打开地址才到这里)
@@ -133,7 +135,7 @@ function Revisions({ view }: { view: PlanView }) {
   )
 }
 
-function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
+function Facts({ plan, view, lang }: { plan: AuditPlan; view: PlanView; lang: WorkingLanguage }) {
   const { t } = useI18n()
   return (
     <div className="grid gap-5 md:grid-cols-2">
@@ -158,7 +160,7 @@ function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
         </ul>
       </Panel>
       <Panel title={t.planPage.timetable}>
-        <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[14px]" lang="en">
+        <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1.5 text-[14px]" lang={lang}>
           {plan.timetable.map((item) => (
             <div key={`${item.due}:${item.milestone}`} className="contents">
               <dt className="font-mono">{item.due}</dt>
@@ -169,11 +171,11 @@ function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
       </Panel>
       <Panel title={t.planPage.eqr}>
         <p className="m-0 text-[14px]">{t.planPage.eqrSuggested(plan.eqr_recommendation.required)}</p>
-        <p className="m-0 text-[14px]" lang="en">
+        <p className="m-0 text-[14px]" lang={lang}>
           {plan.eqr_recommendation.basis}
         </p>
         <h3 className="m-0 font-semibold text-[13px] text-muted-foreground">{t.planPage.expert}</h3>
-        <p className="m-0 text-[14px]" lang="en">
+        <p className="m-0 text-[14px]" lang={lang}>
           {plan.expert_assessment}
         </p>
         {plan.status === 'approved' ? (
@@ -192,7 +194,7 @@ function Facts({ plan, view }: { plan: AuditPlan; view: PlanView }) {
   )
 }
 
-function ProcedureTable({ eid, view }: { eid: string; view: PlanView }) {
+function ProcedureTable({ eid, view, lang }: { eid: string; view: PlanView; lang: WorkingLanguage }) {
   const { t } = useI18n()
   const overview = useEngagement(eid).data
   const rows = planTable(view, overview?.procedures ?? [])
@@ -240,7 +242,7 @@ function ProcedureTable({ eid, view }: { eid: string; view: PlanView }) {
                 {row.note ? (
                   <details className="mt-1 max-w-[28rem] text-[13px]">
                     <summary className="cursor-pointer text-muted-foreground">{t.planPage.note}</summary>
-                    <p className="m-0 mt-1 whitespace-pre-wrap" lang="en">
+                    <p className="m-0 mt-1 whitespace-pre-wrap" lang={lang}>
                       {row.note}
                     </p>
                   </details>

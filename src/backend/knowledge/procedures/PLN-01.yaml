@@ -1,5 +1,11 @@
 id: PLN-01
 name: 重要性水平
+workpaper: {ref: A-2, area: A}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: >-
+    本期试算表中的重要性基准: 收入, 总资产与税前利润
+  en: >-
+    Materiality benchmarks from the current trial balance: revenue, total assets and profit before tax
 phase: P1_Planning
 cycle: Planning
 owner: A4

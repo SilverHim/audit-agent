@@ -426,7 +426,8 @@ async def test_failed_executions_write_no_population() -> None:
 
 async def test_attempt_writes_population_with_the_terminal_run() -> None:
     """验收 3 (P2 以外): PLN-07 由真实的 A4 执行 (attempt), 总体 POP-RUN-PLN-07-1 与执行记录终态, 程序新版本同一次
-    提交, 写入者为执行它的 A4; A01 没写总体 SQL 记为未记录, A02, A03 以返回行为总体; 返回的片段不带总体."""
+    提交, 写入者为执行它的 A4; A01 为参与比较的 23 个科目 (需求 R327 起写了总体 SQL), A02, A03 以返回行为总体; 返回的
+    片段不带总体."""
     nodes, store, state = await assembled()
     nodes.agents["PLN-07"] = RiskAssessorAgent(nodes.deps)
     engagement = ENGAGEMENT.model_copy(update={"client_profile_version": NUMBAT_PROFILE.version})
@@ -438,6 +439,6 @@ async def test_attempt_writes_population_with_the_terminal_run() -> None:
     [population] = [o for o in commit if isinstance(o, RunPopulation)]
     assert (population.id, population.run_id) == ("POP-RUN-PLN-07-1", "RUN-PLN-07-1")
     assert writers == [("POP-RUN-PLN-07-1", AgentId.A4)]
-    assert [(r.rule_id, r.count) for r in population.rules] == [("A01", None), ("A02", 2), ("A03", 12)]
+    assert [(r.rule_id, r.count) for r in population.rules] == [("A01", 23), ("A02", 2), ("A03", 12)]
     assert {type(o).__name__ for o in commit} >= {"ProcedureRun", "Procedure", "AnalyticsResult"}
     assert no_population(patch)

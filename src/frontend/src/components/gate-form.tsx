@@ -46,6 +46,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { useContentLanguage } from '@/components/working-language'
 import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
@@ -323,16 +324,17 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           </Link>
         }
       >
-        <PlanNarrative plan={material.plan} />
+        <PlanNarrative eid={eid} plan={material.plan} />
       </Panel>
     )
   }
-  return <ReportPreview report={material.report} decisions={material.previous_decisions} />
+  return <ReportPreview eid={eid} report={material.report} decisions={material.previous_decisions} />
 }
 
-// 计划叙述各段 (计划页与 PLN-15 闸门材料共用): 段名本地化, 正文为 AI 写的英文
-export function PlanNarrative({ plan }: { plan: AuditPlan }) {
+// 计划叙述各段 (计划页与 PLN-15 闸门材料共用): 段名本地化, 正文为 AI 写的, lang 取计划那次执行的语言 (需求 R340)
+export function PlanNarrative({ eid, plan }: { eid: string; plan: AuditPlan }) {
   const { t } = useI18n()
+  const lang = useContentLanguage(eid, plan.run_id)
   return (
     <div className="flex flex-col gap-3 text-[14px]">
       {plan.narrative.map((part) => (
@@ -340,7 +342,7 @@ export function PlanNarrative({ plan }: { plan: AuditPlan }) {
           <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
             {t.planPage.sections[part.section] ?? part.section}
           </h3>
-          <p className="m-0 whitespace-pre-wrap" lang="en">
+          <p className="m-0 whitespace-pre-wrap" lang={lang}>
             {part.text}
           </p>
         </section>
@@ -351,14 +353,18 @@ export function PlanNarrative({ plan }: { plan: AuditPlan }) {
 
 type ReportMaterial = Extract<GateView['material'], { kind: 'RPT-01' }>
 
+// 报告各段; 正文的 lang 取起草它的那次 RPT-03 执行的语言 (需求 R340; 报告按语言出正文归 R341)
 export function ReportPreview({
+  eid,
   report,
   decisions,
 }: {
+  eid: string
   report: ReportMaterial['report']
   decisions: ReportMaterial['previous_decisions']
 }) {
   const { t } = useI18n()
+  const lang = useContentLanguage(eid, report.run_id)
   return (
     <div className="flex flex-col gap-3">
       <Panel
@@ -367,7 +373,7 @@ export function ReportPreview({
       >
         <div
           className="flex flex-col gap-4 rounded-md border bg-white px-6 py-5 font-serif text-[14px] leading-relaxed"
-          lang="en"
+          lang={lang}
         >
           {REPORT_SECTIONS.map((section) => {
             const part = reportPart(section, report.sections[section] ?? '', t.reportSections[section])

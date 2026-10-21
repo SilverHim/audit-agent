@@ -1,16 +1,17 @@
-"""程序库: 加载程序 YAML 与准则片段, trigger 匹配, 依赖闭包, 参数解析 (A 负责)."""
+"""程序库: 加载程序 YAML, 准则片段与底稿配置, trigger 匹配, 依赖闭包, 参数解析 (A 负责)."""
 
 import copy
 import hashlib
 import json
 import os
 import re
+import string
 import subprocess
 import types
 from collections.abc import Callable, Iterable, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn, TypeGuard, Union, get_args, get_origin
+from typing import Any, NoReturn, TypeGuard, Union, cast, get_args, get_origin
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError, Undefined, meta, nodes
@@ -19,7 +20,16 @@ from pydantic_core import to_jsonable_python
 
 from backend.contracts import llm_outputs
 from backend.contracts.data import DataInput
-from backend.contracts.knowledge import LocalizedText, ProcedureTemplate, StandardFragment
+from backend.contracts.knowledge import (
+    LocalizedText,
+    ProcedureTemplate,
+    ReportTemplate,
+    RequiredItem,
+    StandardFragment,
+    StandardRequirement,
+    WorkpaperConfig,
+    WorkpaperKind,
+)
 from backend.contracts.llm_outputs import JudgmentDraft
 from backend.contracts.manual_results import RESULT_MODELS, ManagementResponses
 from backend.contracts.models import (
@@ -36,6 +46,7 @@ from backend.contracts.models import (
     RiskItem,
     RiskLevel,
     TaskKind,
+    WorkingLanguage,
 )
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import EngagementState
@@ -220,6 +231,10 @@ class ProcedureLibrary:
         wrong = document_read_problems(templates)
         if wrong:
             raise ValueError(f"程序读文件登记的写法不对 (过期判断要用): {'; '.join(wrong)}")
+        self.workpapers = load_workpapers(root / "workpapers.yaml")  # 底稿配置 (需求 R329)
+        wrong = workpaper_problems(templates, self.workpapers)
+        if wrong:
+            raise ValueError(f"底稿索引号或底稿配置不对: {'; '.join(wrong)}")
         enabled = {t.id for t in templates if t.feature is None or t.feature in self.features}
         disabled = {t.id for t in templates} - enabled
         self._templates = {  # 程序编号 -> 启用的模板 (启用视图: depends_on 去掉未启用的程序)
@@ -236,11 +251,7 @@ class ProcedureLibrary:
             for f in doc["fragments"]:
                 self._fragments[f["id"]] = StandardFragment(standard=doc["standard"], **f)
         self.commit = _git_commit(root)  # knowledge 目录当前的 git commit, 有未提交改动时加 -dirty
-        report = yaml.safe_load((root / "templates" / "report.yaml").read_text(encoding="utf-8"))
-        self._report: dict[OpinionType, dict[ReportSection, str]] = {  # 意见类型 -> 报告固定段落 (含占位符)
-            OpinionType(opinion): {ReportSection(name): text for name, text in sections.items()}
-            for opinion, sections in report.items()
-        }
+        self._report = report_templates(root / "templates" / "report.yaml")  # 工作语言 -> 报告的固定部分
 
     def load(self, procedure_id: str) -> ProcedureTemplate:
         """取模板, 含未启用的 (旧项目的程序包与留痕可能引用它们); 启用的取启用视图. 没有该程序抛 KeyError."""
@@ -361,15 +372,72 @@ class ProcedureLibrary:
         risks = json.loads((directory / "risk_register.json").read_text(encoding="utf-8"))
         return [AuditObjective.model_validate(o) for o in objectives], [RiskItem.model_validate(r) for r in risks]
 
+    def workpaper_refs(self) -> list[str]:
+        """全部底稿的索引号: 各程序 (含未启用的) 的与系统底稿的, 按档案顺序 (workpaper_order)."""
+        refs = [t.workpaper.ref for t in self._all.values() if t.workpaper is not None]
+        return sorted([*refs, *(w.ref for w in self.workpapers.system)], key=self.workpaper_order)
+
+    def workpaper_order(self, ref: str) -> tuple[int, int, int, str]:
+        """索引号的档案顺序键 (R330, R334 的底稿与档案按它排): 属区的按区的顺序, 区字母本身 (导引表, 错报汇总) 在前,
+        序号按该区的写法比较 (数字按数值, 字母先比长度再比字母, 即 A..Z, AA..). 不属任何区的系统底稿按配置 system
+        列表的顺序: 列在第一份属区的系统底稿之前的排在全部区之前 (如索引 00), 之后的排在全部区之后 (如准则对照 S).
+        不在配置里的索引号排在最后."""
+        areas = {a.id: (i, a) for i, a in enumerate(self.workpapers.areas)}
+        system = self.workpapers.system
+        position = next((i for i, w in enumerate(system) if w.ref == ref and w.area is None), None)
+        if position is not None:
+            first = next((i for i, w in enumerate(system) if w.area is not None), len(system))
+            return (-1 if position < first else len(areas), 0, position, ref)
+        area_id, _, suffix = ref.partition("-")
+        if area_id not in areas:
+            return (len(areas) + 1, 0, 0, ref)
+        index, area = areas[area_id]
+        if not suffix:
+            return (index, 0, 0, "")
+        number = int(suffix) if area.numbering == "digits" and suffix.isdigit() else len(suffix)
+        return (index, 1, number, suffix)
+
+    def required_items(self, ref: str) -> list[RequiredItem]:
+        """该索引号的底稿必须记录的内容 (底稿配置的 required, 按配置顺序): 不限范围的 (全部底稿), kinds 含该程序的
+        底稿类别的 (workpaper_kind; 系统底稿没有类别), refs 含它的. 例: A-2 为通用八项加 ASA 320 第 14 段两项; D-3
+        (规则程序) 另有被测项目的识别特征. 索引号不存在抛 KeyError."""
+        if ref not in self.workpaper_refs():
+            raise KeyError(ref)
+        template = next((t for t in self._all.values() if t.workpaper is not None and t.workpaper.ref == ref), None)
+        kind = workpaper_kind(template) if template is not None else None
+        return [
+            r
+            for r in self.workpapers.required
+            if (not r.kinds and not r.refs) or (kind is not None and kind in r.kinds) or ref in r.refs
+        ]
+
+    def standard_refs(self, requirement: StandardRequirement) -> list[str]:
+        """准则对照一行对应的底稿索引号: refs 加 areas 中各区的全部底稿 (程序底稿与导引表), 去重后按档案顺序."""
+        refs = {*requirement.refs, *(r for r in self.workpaper_refs() if r.partition("-")[0] in requirement.areas)}
+        return sorted(refs, key=self.workpaper_order)
+
     def fragment(self, fragment_id: str) -> StandardFragment | None:
         return self._fragments.get(fragment_id)
 
-    def report_sections(self, opinion: OpinionType) -> dict[ReportSection, str]:
-        """templates/report.yaml 中该意见类型的固定段落 (董事责任, 审计师责任, 其他法律法规要求, 签名块).
+    def report_sections(self, opinion: OpinionType, language: WorkingLanguage) -> dict[ReportSection, str]:
+        """templates/report.yaml 中该语言, 该意见类型的固定段落 (董事责任, 审计师责任, 其他法律法规要求, 签名块).
 
         正文含占位符 {entity_name}, {period_end}, {auditor_name}, 由 RPT-03 代入.
         """
-        return dict(self._report[opinion])
+        return dict(self._report[language].sections[opinion])
+
+    def report_headings(self, language: WorkingLanguage) -> dict[OpinionType, tuple[str, str]]:
+        """该语言各意见类型的两段标题: 意见类型 → (意见段, 形成意见的基础段), RPT-03 的提示词与校验共用 (需求 R341)."""
+        return {o: (h.opinion, h.basis_for_opinion) for o, h in self._report[language].headings.items()}
+
+    def report_date(self, day: date, language: WorkingLanguage) -> str:
+        """报告正文里的日期写法 (需求 R341), 如 en 的 30 June 2026."""
+        return self._report[language].date.format(d=day)
+
+    def report_terms(self, language: WorkingLanguage) -> dict[str, str]:
+        """该语言下模型写两段时的名称 (键 → 写法, 与固定段落相同, R341 审核 03); 两种语言的键相同, 按 report.yaml
+        的顺序."""
+        return dict(self._report[language].terms)
 
     def prompts_sha256(self) -> str:
         """prompts/*.j2 按文件名排序后, 各文件内容依次拼接的 sha256. 每次调用重新读文件, 改任一 prompt 即变化."""
@@ -377,6 +445,41 @@ class ProcedureLibrary:
         for p in sorted((self.root / "prompts").glob("*.j2"), key=lambda p: p.name):
             digest.update(p.read_bytes())
         return digest.hexdigest()
+
+
+def report_templates(path: Path) -> dict[WorkingLanguage, ReportTemplate]:
+    """读 templates/report.yaml (需求 R341): 每种工作语言一份 ReportTemplate, 结构相同 (段落一一对应). 程序库载入时即
+    核对, 不过抛 ValueError (消息含文件名与语言): 缺语言; 每种语言有标题的意见类型与有固定段落的相同, 标题与名称
+    (terms) 去掉首尾空白后不为空; 各语言的意见类型, 段落, 标题与名称的键相同; 同一意见类型, 同一段的占位符
+    (str.format 的字段名) 各语言相同."""
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    languages = get_args(WorkingLanguage)
+    if sorted(doc) != sorted(languages):
+        raise ValueError(f"{path.name}: 须按 {', '.join(languages)} 各给一份, 现为 {', '.join(doc)}")
+    templates = {cast(WorkingLanguage, language): ReportTemplate.model_validate(part) for language, part in doc.items()}
+    for language, template in templates.items():
+        if set(template.headings) != set(template.sections):
+            raise ValueError(f"{path.name} {language}: 有标题的意见类型与有固定段落的须相同")
+        headings = [t for h in template.headings.values() for t in (h.opinion, h.basis_for_opinion)]
+        texts = [*headings, *template.terms.values()]
+        if not all(text.strip() for text in texts):
+            raise ValueError(f"{path.name} {language}: 标题与名称不能为空")
+    shapes = {
+        language: (
+            {o: {name: placeholders(text) for name, text in t.items()} for o, t in template.sections.items()},
+            sorted(template.headings),
+            sorted(template.terms),
+        )
+        for language, template in templates.items()
+    }
+    if len({repr(shape) for shape in shapes.values()}) != 1:
+        raise ValueError(f"{path.name}: 各语言的意见类型, 段落, 占位符, 标题与名称须相同: {shapes}")
+    return templates
+
+
+def placeholders(text: str) -> list[str]:
+    """str.format 模板里的字段名, 去重排序, 如 "{auditor_name}\n..." 得 ["auditor_name"]."""
+    return sorted({field for _, field, _, _ in string.Formatter().parse(text) if field})
 
 
 def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:
@@ -454,6 +557,76 @@ def load_template(path: Path) -> ProcedureTemplate:
     except ValidationError as e:
         pid = raw.get("id") if isinstance(raw, dict) else None
         raise ValueError(f"程序模板 {pid or path.stem} ({path.name}) 写法不对: {e}") from e
+
+
+def load_workpapers(path: Path) -> WorkpaperConfig:
+    """读底稿配置 (knowledge/workpapers.yaml, 需求 R329). 字段校验不过时抛 ValueError, 消息带文件名."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        return WorkpaperConfig.model_validate(raw)
+    except ValidationError as e:
+        raise ValueError(f"底稿配置 ({path.name}) 写法不对: {e}") from e
+
+
+# 程序底稿索引号的序号写法 (WorkpaperArea.numbering) → (正则, 说明)
+WORKPAPER_NUMBERING = {"digits": (r"[1-9][0-9]*", "1 起的数字"), "letters": (r"[A-Z]+", "A 起的大写字母")}
+
+
+def workpaper_kind(template: ProcedureTemplate) -> WorkpaperKind | None:
+    """程序的底稿类别 (底稿配置必填项的 kinds): 规则程序 (engine rule) 为 rule, 判断程序 (judging_program) 为
+    judgment, 其余 (人工程序, 闸门决定, 抽取与起草) 为空."""
+    if template.engine is Engine.rule:
+        return "rule"
+    return "judgment" if judging_program(template) else None
+
+
+def workpaper_problems(templates: Iterable[ProcedureTemplate], config: WorkpaperConfig) -> list[str]:
+    """底稿索引号与底稿配置的问题 (需求 R329; 含未启用的模板, 消息含程序编号或索引号): 区, 必填项代号与准则对照的
+    准则各不重复; 程序 workpaper 与导引表的区须在 areas 中, 索引号为区字母本身或 {区}-{序号}, 序号按该区的
+    numbering (错报区 X 为 letters: X-A 起, X-数字留给错报汇总表中的错报编号); 有 categories 的系统底稿 (导引表)
+    须属一个区; 不属区的系统底稿 (索引, 准则对照) 的索引号不能归到某区 (区字母本身或以 {区}- 开头, 与 standard_refs
+    归区的口径相同); 程序与系统底稿的
+    索引号不重复; 必填项与准则对照所引的索引号与区都在."""
+    templates = list(templates)
+    areas = {a.id: a for a in config.areas}
+    problems: list[str] = []
+    for what, values in (
+        ("区", [a.id for a in config.areas]),
+        ("必填项代号", [r.id for r in config.required]),
+        ("准则对照的准则", [s.standard for s in config.standards]),
+    ):
+        problems += [f"{what} {v} 重复" for v in sorted({v for v in values if values.count(v) > 1})]
+
+    def index_problem(owner: str, ref: str, area_id: str) -> str | None:
+        area = areas.get(area_id)
+        if area is None:
+            return f"{owner}: 区 {area_id} 不在底稿配置的 areas 中"
+        pattern, hint = WORKPAPER_NUMBERING[area.numbering]
+        if re.fullmatch(rf"{re.escape(area_id)}(?:-(?:{pattern}))?", ref) is None:
+            return f"{owner}: 索引号 {ref} 应为 {area_id} 或 {area_id}-序号 ({area.name.zh}区的序号为 {hint})"
+        return None
+
+    owners: dict[str, list[str]] = {}  # 索引号 → 用它的底稿 (程序编号, 或 "系统底稿")
+    for t in templates:
+        if t.workpaper is not None:
+            problems += [p for p in [index_problem(t.id, t.workpaper.ref, t.workpaper.area)] if p is not None]
+            owners.setdefault(t.workpaper.ref, []).append(t.id)
+    for w in config.system:
+        owner = f"系统底稿 {w.ref}"
+        if w.area is not None:
+            problems += [p for p in [index_problem(owner, w.ref, w.area)] if p is not None]
+        elif w.categories:
+            problems.append(f"{owner}: 导引表 (有 categories) 须属一个区")
+        elif (like := w.ref.partition("-")[0]) in areas:
+            problems.append(f"{owner}: 不属任何区, 索引号却归到 {like} 区 ({like} 或以 {like}- 开头)")
+        owners.setdefault(w.ref, []).append("系统底稿")
+    problems += [f"索引号 {ref} 重复: {', '.join(who)}" for ref, who in owners.items() if len(who) > 1]
+    for r in config.required:
+        problems += [f"必填项 {r.id}: 索引号 {ref} 不存在" for ref in r.refs if ref not in owners]
+    for s in config.standards:
+        problems += [f"准则对照 {s.standard}: 索引号 {ref} 不存在" for ref in s.refs if ref not in owners]
+        problems += [f"准则对照 {s.standard}: 区 {a} 不在 areas 中" for a in s.areas if a not in areas]
+    return problems
 
 
 def manual_program(template: ProcedureTemplate) -> bool:

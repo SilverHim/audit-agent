@@ -3,7 +3,7 @@ import re
 import shutil
 from bisect import bisect_left
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from functools import cache, cached_property
@@ -40,6 +40,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementStatus,
     Model,
+    OpinionType,
     Phase,
     Procedure,
     ReportingFramework,
@@ -58,7 +59,14 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
 from backend.services.features import FEATURES
 from backend.services.judgment_engine import output_model
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, prompt_env, ref_problem, render_text
+from backend.services.procedure_library import (
+    ProcedureLibrary,
+    highest_risk,
+    prompt_env,
+    ref_problem,
+    render_text,
+    report_templates,
+)
 from tests.external import optional, supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
@@ -123,7 +131,8 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
     shutil.copytree(ROOT, root)
     template = yaml.safe_load((root / "procedures" / "REV-02.yaml").read_text(encoding="utf-8"))
     for pid, feature in (("X-J", "journals"), ("X-B", None)):
-        extra = {k: v for k, v in template.items() if k not in ("triggers", "depends_on", "feature")}
+        # 底稿索引号不复制 (需求 R329: 索引号不能重复)
+        extra = {k: v for k, v in template.items() if k not in ("triggers", "depends_on", "feature", "workpaper")}
         extra |= {"id": pid, **({"feature": feature} if feature else {})}
         (root / "procedures" / f"{pid}.yaml").write_text(yaml.safe_dump(extra, allow_unicode=True), encoding="utf-8")
         assert count_guards(root) == (set(), set() if feature else {"X-B"}), pid
@@ -132,11 +141,11 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
     """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131), GEN-03, GEN-08
-    (功能 related_parties, 需求 R139, R137) 与 GEN-07 (功能 going_concern, 需求 R177), 基线下都不启用; 非 P2 模板写
-    fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
-    ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
+    (功能 related_parties, 需求 R139, R137) 与 GEN-07, GEN-06 (功能 going_concern, 需求 R177, R179), 基线下都不启用;
+    非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时,
+    ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"} <= {
+    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-06", "GEN-07", "GEN-08"} <= {
         t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed
     }  # 集合包含
     root = tmp_path / "knowledge"
@@ -1813,8 +1822,11 @@ def test_procedure_standards_have_text(procedure_id: str) -> None:
 REPORT_SECTIONS = ["directors_responsibilities", "auditor_responsibilities", "other_legal_and_regulatory", "signature"]
 
 
-def report_template() -> dict[str, Any]:
-    return yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+def report_template(language: str = "en") -> dict[str, Any]:
+    """report.yaml 中该语言的固定段落: 意见类型 → 段落 (需求 R341 起按语言各一份)."""
+    doc = yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+    sections: dict[str, Any] = doc[language]["sections"]
+    return sections
 
 
 @cache
@@ -1829,8 +1841,9 @@ def illustration_1a() -> str:
 
 
 @pytest.mark.parametrize("opinion", ["unqualified", "qualified"])
-def test_report_template_sections(opinion: str) -> None:
-    sections = report_template()[opinion]
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_report_template_sections(opinion: str, language: str) -> None:
+    sections = report_template(language)[opinion]
     assert list(sections) == REPORT_SECTIONS
     for name in ("directors_responsibilities", "auditor_responsibilities", "signature"):
         assert sections[name].strip(), name
@@ -1871,6 +1884,87 @@ def test_report_template_placeholders_and_listed_entity_content() -> None:
         "auasb.gov.au",
     ):
         assert listed_only not in lowered, listed_only
+
+
+def test_chinese_report_template_follows_the_english_one() -> None:
+    """需求 R341: report.yaml 的中文一份与英文逐段对应 (按 ASA 700 Illustration 1A 译出, 不加减内容; 段号对照见确认
+    材料 R341.md): 两种意见类型同一份; 各段的段数, 条目 (•) 数与占位符都与英文相同; 董事责任与审计师责任两段里没有
+    英文字母; 签名块的姓名, 事务所与地址是名称, 不译, 与英文相同. 两段标题为验收写明的中文, 日期写法如 2026年6月30日."""
+    zh, en = report_template("zh"), report_template("en")
+    assert zh["qualified"] == zh["unqualified"]
+
+    def shape(text: str) -> tuple[int, int, list[str]]:
+        return len(text.split("\n\n")), text.count("•"), sorted(re.findall(r"{(\w+)}", text))
+
+    assert {name: shape(text) for name, text in zh["unqualified"].items()} == {
+        name: shape(text) for name, text in en["unqualified"].items()
+    }
+    for name in ("directors_responsibilities", "auditor_responsibilities"):
+        assert not re.search(r"[A-Za-z]", zh["unqualified"][name]), name
+    assert zh["unqualified"]["signature"] == en["unqualified"]["signature"]
+    library = ProcedureLibrary(ROOT)
+    assert library.report_headings("zh") == {
+        OpinionType.unqualified: ("审计意见", "形成审计意见的基础"),
+        OpinionType.qualified: ("保留意见", "形成保留意见的基础"),
+    }
+    assert [library.report_date(date(2026, 6, 30), language) for language in ("zh", "en")] == [
+        "2026年6月30日",
+        "30 June 2026",
+    ]
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_report_terms_are_written_as_in_the_fixed_sections(language: Literal["zh", "en"]) -> None:
+    """R341 审核 03: 模型写两段时用的名称 (terms) 与固定段落的写法相同, 每个都出现在该语言的固定段落里."""
+    library = ProcedureLibrary(ROOT)
+    text = "\n".join(library.report_sections(OpinionType.unqualified, language).values())
+    assert [term for term in library.report_terms(language).values() if term not in text] == []
+
+
+SAME = "各语言的意见类型, 段落, 占位符, 标题与名称须相同"
+HEADED = "有标题的意见类型与有固定段落的须相同"
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        (lambda doc: doc.pop("zh"), "须按 zh, en 各给一份"),
+        (lambda doc: doc["zh"]["sections"]["qualified"].pop("signature"), SAME),
+        (lambda doc: doc["zh"]["headings"].pop("qualified"), f"zh: {HEADED}"),
+        (lambda doc: [doc[x]["headings"].pop("qualified") for x in ("zh", "en")], HEADED),
+        (lambda doc: doc["zh"]["headings"]["qualified"].update(opinion=" "), "zh: 标题与名称不能为空"),
+        (lambda doc: doc["zh"]["terms"].update(auditor=""), "zh: 标题与名称不能为空"),
+        (lambda doc: doc["zh"]["terms"].pop("auditor"), SAME),
+        (
+            lambda doc: doc["zh"]["sections"]["qualified"].update(
+                signature=doc["zh"]["sections"]["qualified"]["signature"].replace("{auditor_name}", "{auditor}")
+            ),
+            SAME,
+        ),
+    ],
+    ids=[
+        "missing_language",
+        "missing_section",
+        "missing_heading",
+        "headings_without_sections",
+        "empty_heading",
+        "empty_term",
+        "missing_term",
+        "placeholder_typo",
+    ],
+)
+def test_report_template_languages_must_match(
+    tmp_path: Path, change: Callable[[dict[str, Any]], Any], error: str
+) -> None:
+    """report.yaml 载入即核对, 不过报 ValueError (R341, 审核 04): 缺一种语言; 一种语言里有标题的意见类型与有固定段落的
+    不同 (两种语言都缺同一类标题也报); 标题或名称为空; 两种语言的意见类型, 段落, 名称的键或同一段的占位符不同."""
+    doc = yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
+    doc["zh"]["sections"]["qualified"] = dict(doc["zh"]["sections"]["qualified"])  # 拆开别名, 只改 qualified
+    change(doc)
+    path = tmp_path / "report.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        report_templates(path)
 
 
 def test_assembly_and_layers() -> None:
@@ -2705,8 +2799,8 @@ def voided_cte(sql: str) -> str | None:
 
 def test_voided_pair_cte_is_one_text_everywhere() -> None:
     """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
-    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139) 与 GEN-07 的 S01-S03 (需求
-    R177)). 防只改一处使几个程序认的作废对不同."""
+    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139), GEN-07 的 S01-S03 (需求
+    R177) 与 GEN-06 的 E01 (需求 R179)). 防只改一处使几个程序认的作废对不同."""
     marked = {
         (t.id, rule.id): voided_cte(rule.sql)
         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
@@ -2720,6 +2814,7 @@ def test_voided_pair_cte_is_one_text_everywhere() -> None:
         ("GEN-03", "C01"),
         ("GEN-03", "C02"),
         *(("GEN-07", r) for r in ("S01", "S02", "S03")),
+        ("GEN-06", "E01"),
     }
     assert expected <= set(marked)
     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
@@ -2851,6 +2946,12 @@ DATASET_REFS = {
     },
     "GEN-07": {  # 期后窗口截到数据截止日, 作废对 (需求 R177)
         "data_as_of": "data_as_of",
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
+    },
+    "GEN-06": {  # 同 GEN-07, 另加对方名称的前缀 (需求 R179)
+        "data_as_of": "data_as_of",
+        "counterparty_prefixes": "counterparty_prefixes",
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
     },
@@ -3435,3 +3536,383 @@ def test_rev08_scope_checks_and_population_descriptions(period_end: date | str) 
     ]
     with pytest.raises(UndefinedError, match="window_days"):
         render_text(template.scope, {"period_end": period_end})
+
+
+# ── 需求 R329: 底稿索引号, 所属区, 必填项与准则对照 (knowledge/workpapers.yaml) ──
+
+WORKPAPERS = {  # 程序 → 底稿索引号 (验收 1); GEN-09 不出底稿
+    "PLN-15": "A-1",
+    "PLN-01": "A-2",
+    "PLN-03": "A-3",
+    "PLN-07": "A-4",
+    "ACC-01": "B-1",
+    "ACC-04": "B-2",
+    "ACC-08": "B-3",
+    "CSH-04": "C-1",
+    "DOC-06": "C-2",
+    "CSH-05": "C-3",
+    "CSH-02": "C-4",
+    "DOC-04": "D-1",
+    "REV-03": "D-2",
+    "REV-08": "D-3",
+    "REV-02": "D-4",
+    "GEN-05": "G-1",
+    "GEN-02": "G-2",
+    "GEN-08": "G-3",
+    "GEN-03": "G-4",
+    "GEN-07": "G-5",
+    "GEN-06": "G-6",
+    "FIN-04": "X",
+    "FIN-03": "X-A",
+    "FIN-08": "X-B",
+    "FIN-09": "X-C",
+    "FIN-01": "Z-1",
+    "RPT-03": "Z-2",
+    "RPT-01": "Z-3",
+}
+WORKPAPER_FILE = "workpapers.yaml"
+
+
+def test_workpaper_refs_of_programs() -> None:
+    """验收 1: 每条程序 (含功能未启用的) 的底稿索引号与区, 区即索引号的首字母; GEN-09 不出底稿. 系统底稿 00, C, D
+    (导引表: 现金 cash, 收入 revenue 与 other_income, Q29), S 不对应程序. 全部底稿按档案顺序: 00 在前, 区按 A, B,
+    C, D, G, X, Z, 区字母本身 (导引表 C, D, 错报汇总 X) 在该区序号之前, S 在最后."""
+    library = knowledge_library(ROOT)
+    found = {t.id: t.workpaper for t in library.all(include_disabled=True)}
+    assert {pid: w.ref for pid, w in found.items() if w is not None} == WORKPAPERS
+    assert [pid for pid, w in found.items() if w is None] == ["GEN-09"]
+    assert all(w.area == w.ref[0] for w in found.values() if w is not None)
+    config = library.workpapers
+    assert [(a.id, a.name.zh, a.numbering) for a in config.areas] == [
+        ("A", "计划", "digits"),
+        ("B", "承接", "digits"),
+        ("C", "现金", "digits"),
+        ("D", "收入", "digits"),
+        ("G", "一般", "digits"),
+        ("X", "错报", "letters"),
+        ("Z", "完成与报告", "digits"),
+    ]
+    assert all(a.name.en for a in config.areas)
+    assert [(w.ref, w.area, w.categories) for w in config.system] == [
+        ("00", None, []),
+        ("C", "C", ["cash"]),
+        ("D", "D", ["revenue", "other_income"]),
+        ("S", None, []),
+    ]
+    refs = library.workpaper_refs()
+    assert (refs[0], refs[-1], len(refs)) == ("00", "S", len(WORKPAPERS) + 4)
+    assert refs[refs.index("C") : refs.index("D")] == ["C", "C-1", "C-2", "C-3", "C-4"]
+    assert refs[refs.index("X") : refs.index("Z-1")] == ["X", "X-A", "X-B", "X-C"]
+
+
+def edited_knowledge(tmp_path: Path, procedure: dict[str, str] | None = None, config: Any = None) -> Path:
+    """knowledge 目录的副本: procedure 为程序编号 → 新的 workpaper 一行 (空串删去该行), config 改写底稿配置 (收解析后的
+    字典, 原地改)."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(ROOT, root)
+    for pid, line in (procedure or {}).items():
+        path = root / "procedures" / f"{pid}.yaml"
+        text = re.sub(r"^workpaper: .*\n", line + ("\n" if line else ""), path.read_text(encoding="utf-8"), flags=re.M)
+        path.write_text(text, encoding="utf-8")
+    if config is not None:
+        data = yaml.safe_load((root / WORKPAPER_FILE).read_text(encoding="utf-8"))
+        config(data)
+        (root / WORKPAPER_FILE).write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    return root
+
+
+def drop_area(area: str) -> Any:
+    def edit(data: dict[str, Any]) -> None:
+        data["areas"] = [a for a in data["areas"] if a["id"] != area]
+
+    return edit
+
+
+def test_workpaper_order_follows_config(tmp_path: Path) -> None:
+    """ProcedureLibrary.workpaper_order (审核 R329-06): 区内数字序号按数值 (G-2 在 G-10 之前), 字母序号先比长度再比
+    字母 (X-Z 在 X-AA 之前), 区字母本身在该区序号之前; 不属区的系统底稿按配置 system 列表的顺序, 列在第一份属区的
+    系统底稿之前的排在全部区之前, 之后的排在全部区之后 (不写死 00): 把 S 挪到列表最前, 00 挪到最后, 档案顺序随之."""
+    library = knowledge_library(ROOT)
+    assert sorted(["G-10", "G-2", "G", "G-1"], key=library.workpaper_order) == ["G", "G-1", "G-2", "G-10"]
+    assert sorted(["X-AA", "X-B", "X-Z", "X", "X-A"], key=library.workpaper_order) == ["X", "X-A", "X-B", "X-Z", "X-AA"]
+
+    def swap(data: dict[str, Any]) -> None:
+        index, *leads, criteria = data["system"]
+        data["system"] = [criteria, *leads, index]
+
+    refs = ProcedureLibrary(edited_knowledge(tmp_path, config=swap)).workpaper_refs()
+    assert (refs[0], refs[-1]) == ("S", "00")
+
+
+@pytest.mark.parametrize(
+    ("procedure", "config", "message"),
+    [
+        ({"REV-08": "workpaper: {ref: D-2, area: D}"}, None, "索引号 D-2 重复: REV-03, REV-08"),
+        ({"REV-08": "workpaper: {ref: C, area: C}"}, None, "索引号 C 重复: REV-08, 系统底稿"),  # 与导引表 C 重复
+        ({"REV-08": "workpaper: {ref: D-3, area: Q}"}, None, "REV-08: 区 Q 不在底稿配置的 areas 中"),
+        ({"REV-08": "workpaper: {ref: C-9, area: D}"}, None, "REV-08: 索引号 C-9 应为 D 或 D-序号"),  # 不以区字母开头
+        ({"REV-08": "workpaper: {ref: D-0, area: D}"}, None, "REV-08: 索引号 D-0 应为 D 或 D-序号"),
+        # 错报区按配置为字母序号: X-数字留给错报编号; 功能未启用 (misstatement) 的 FIN-03 照样校验
+        (
+            {"FIN-03": "workpaper: {ref: X-1, area: X}"},
+            None,
+            "FIN-03: 索引号 X-1 应为 X 或 X-序号 (错报区的序号为 A 起",
+        ),
+        (
+            {"REV-08": "workpaper: {ref: D-A, area: D}"},
+            None,
+            "REV-08: 索引号 D-A 应为 D 或 D-序号 (收入区的序号为 1 起",
+        ),
+        (None, drop_area("G"), "GEN-05: 区 G 不在底稿配置的 areas 中"),
+        (None, lambda d: d["required"][-1]["refs"].append("A-9"), "必填项 plan_changes: 索引号 A-9 不存在"),
+        (None, lambda d: d["standards"][0]["refs"].append("B-9"), "准则对照 ASA 210: 索引号 B-9 不存在"),
+        (None, lambda d: d["standards"][0].update(areas=["Q"]), "准则对照 ASA 210: 区 Q 不在 areas 中"),
+        (None, lambda d: d["areas"].append(d["areas"][0]), "区 A 重复"),
+        (None, lambda d: d["required"].append(d["required"][0]), "必填项代号 preparer 重复"),
+        (None, lambda d: d["system"][1].pop("area"), "系统底稿 C: 导引表 (有 categories) 须属一个区"),
+        # 不属区的系统底稿 (S 准则对照, 00 索引) 的索引号不能归到某区, 按前缀归区同 standard_refs (审核 R329-08, 09)
+        (None, lambda d: d["system"][3].update(ref="B"), "系统底稿 B: 不属任何区, 索引号却归到 B 区 (B 或以 B- 开头)"),
+        (None, lambda d: d["system"][0].update(ref="A-9"), "系统底稿 A-9: 不属任何区, 索引号却归到 A 区"),
+        (None, lambda d: d["system"][0].update(ref="D-A"), "系统底稿 D-A: 不属任何区, 索引号却归到 D 区"),
+    ],
+    ids=[
+        "duplicate",
+        "system_duplicate",
+        "unknown_area",
+        "wrong_letter",
+        "zero",
+        "x_digits_reserved",
+        "letters_elsewhere",
+        "area_removed",
+        "required_ref",
+        "standard_ref",
+        "standard_area",
+        "area_repeated",
+        "item_repeated",
+        "lead_without_area",
+        "system_area_letter",
+        "system_area_number",
+        "system_area_prefix",
+    ],
+)
+def test_workpaper_problems_rejected_on_load(
+    tmp_path: Path, procedure: dict[str, str] | None, config: Any, message: str
+) -> None:
+    """验收 2: ProcedureLibrary 加载时与程序模板一起校验底稿索引号与配置 (同 params, triggers 的校验): 索引号不重复
+    (程序之间, 与系统底稿之间), 区在配置里, 索引号为区字母或 {区}-序号, 序号按配置的写法 (错报区为 A 起的字母, X-数字
+    留给错报编号; 其余区为 1 起的数字); 必填项与准则对照所引的索引号与区都在. 功能未启用的程序照样校验. 消息含程序
+    编号或索引号."""
+    root = edited_knowledge(tmp_path, procedure, config)
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ProcedureLibrary(root)
+
+
+def test_workpaper_config_must_parse(tmp_path: Path) -> None:
+    """底稿配置的字段写错 (如必填项的 supplementable 不是布尔, 导引表的分类不是标准分类) 时加载即报错, 消息带文件名."""
+    root = edited_knowledge(tmp_path, config=lambda d: d["system"][1].update(categories=["cash_at_bank"]))
+    with pytest.raises(ValueError, match=r"底稿配置 \(workpapers.yaml\) 写法不对"):
+        ProcedureLibrary(root)
+
+
+GENERAL_ITEMS = [  # 全部底稿的必填项: (代号, 出处段号, 可否由补充说明补齐)
+    ("preparer", "9(b)", False),
+    ("completed_on", "9(b)", False),
+    ("reviewer", "9(c)", False),
+    ("reviewed_on", "9(c)", False),
+    ("review_scope", "9(c)", False),
+    ("procedures", "8(a)", False),
+    ("results", "8(b)", False),
+    ("conclusions", "8(c)", True),
+]
+
+
+def test_required_items_by_workpaper() -> None:
+    """验收 3: 必填项. 全部底稿为 ASA 230 第 9(b) 段编制人与完成日期, 第 9(c) 段复核人, 复核日期与范围, 第 8(a)(b)(c)
+    段程序的性质时间范围, 结果与结论; 规则与判断类 (workpaper_kind) 另加第 9(a) 段被测项目的识别特征; A-2 另加 ASA 320
+    第 14 段的金额与考虑因素 (含选择理由, 可补齐); X 另加 ASA 450 第 15(a)-(c) 段 (结论可补齐); A-1 另加 ASA 300 第 12
+    段. 每项有代号, 名称 (zh, en), 出处与是否可补齐."""
+    library = knowledge_library(ROOT)
+    items = library.workpapers.required
+    assert all(i.name.zh and i.name.en for i in items)
+    general = [(i.id, i.paragraph, i.supplementable) for i in items if not i.kinds and not i.refs]
+    assert general == GENERAL_ITEMS and {i.standard for i in items if not i.kinds and not i.refs} == {"ASA 230"}
+
+    def extra(ref: str) -> list[tuple[str, str, str, bool]]:
+        found = library.required_items(ref)
+        assert [(i.id, i.paragraph, i.supplementable) for i in found[:8]] == GENERAL_ITEMS, ref
+        return [(i.id, i.standard, i.paragraph, i.supplementable) for i in found[8:]]
+
+    tested = ("tested_items", "ASA 230", "9(a)", False)
+    assert extra("D-3") == extra("G-1") == extra("D-2") == extra("G-2") == extra("X-A") == [tested]  # 规则, 判断
+    assert extra("B-1") == extra("D-1") == extra("Z-2") == extra("00") == extra("C") == []  # 人工, 抽取, 起草, 系统
+    assert extra("A-2") == [
+        ("materiality_amounts", "ASA 320", "14", False),
+        ("materiality_factors", "ASA 320", "14", True),
+    ]
+    assert extra("X") == [
+        tested,
+        ("clearly_trivial", "ASA 450", "15(a)", False),
+        ("misstatements_accumulated", "ASA 450", "15(b)", False),
+        ("uncorrected_conclusion", "ASA 450", "15(c)", True),
+    ]
+    assert extra("A-1") == [
+        ("audit_strategy", "ASA 300", "12(a)", False),
+        ("audit_plan", "ASA 300", "12(b)", False),
+        ("plan_changes", "ASA 300", "12(c)", True),
+    ]
+    with pytest.raises(KeyError):
+        library.required_items("A-9")
+
+
+STANDARD_PARAGRAPHS = [  # 准则对照: 准则与现行段号 (需求 R329 依据一行, 已对 docs/参考资料 原文)
+    ("ASA 210", "10-12"),
+    ("ASA 220", "41"),
+    ("ASA 240", "45-48"),
+    ("ASA 250", "30"),
+    ("ASA 260", "24"),
+    ("ASA 300", "12"),
+    ("ASA 315", "38"),
+    ("ASA 320", "14"),
+    ("ASA 330", "28-30"),
+    ("ASA 450", "15"),
+    ("ASA 540", "39"),
+    ("ASA 550", "28"),
+    ("ASA 600", "59"),
+    ("ASA 610", "36"),
+    ("ASA 720", "25"),
+]
+
+
+# 准则对照各行对应的底稿 (验收 4, ProcedureLibrary.standard_refs, 按档案顺序): refs 加 areas 中各区的全部底稿; ASA 330
+# 第 28-30 段为 A-1 (第 28(a) 段的总体应对记在总体审计策略) 与现金, 收入, 一般三区的程序底稿及导引表 C, D; 空的为
+# 本版没有对应底稿 (ASA 250, 260, 540, 720 待相应程序, ASA 600, 610 不适用)
+STANDARD_REFS = {
+    "ASA 210": ["B-1", "B-2", "B-3"],
+    "ASA 220": ["B-1", "B-3", "Z-1"],
+    "ASA 240": ["A-3", "D-3", "G-1", "G-2"],
+    "ASA 250": [],
+    "ASA 260": [],
+    "ASA 300": ["A-1"],
+    "ASA 315": ["A-3", "A-4"],
+    "ASA 320": ["A-2"],
+    "ASA 330": [
+        "A-1",
+        "C",
+        "C-1",
+        "C-2",
+        "C-3",
+        "C-4",
+        "D",
+        "D-1",
+        "D-2",
+        "D-3",
+        "D-4",
+        "G-1",
+        "G-2",
+        "G-3",
+        "G-4",
+        "G-5",
+        "G-6",
+    ],
+    "ASA 450": ["X", "X-A", "X-B", "X-C", "Z-1"],
+    "ASA 540": [],
+    "ASA 550": ["G-3", "G-4"],
+    "ASA 600": [],
+    "ASA 610": [],
+    "ASA 720": [],
+}
+
+
+def test_standards_cross_reference() -> None:
+    """验收 4: 准则对照 15 条, 准则与段号同依据一行 (现行段号); 每条有要求记录的内容 (zh, en); 说明一行写明附录 1 中
+    ASA 240, 250, 260 为修订前编号. 各行对应的底稿见 STANDARD_REFS, 都是现有底稿. ASA 330 的说明写明第 28(a) 段记在
+    A-1, 第 29 段不适用 (本版不依赖以前审计测试过的控制), 第 30 段由导引表 C, D 与试算表的勾稽支持 (报表以账套为准,
+    Issue #46); 标了不适用条件的为 ASA 600, 610 (单一主体, 没有内部审计)."""
+    library = knowledge_library(ROOT)
+    config = library.workpapers
+    assert [(s.standard, s.paragraphs) for s in config.standards] == STANDARD_PARAGRAPHS
+    assert all(s.content.zh and s.content.en for s in config.standards)
+    assert "ASA 240, 250, 260 的段号为修订前编号 (分别为 44-47, 29, 23)" in config.standards_note.zh
+    assert {s.standard: library.standard_refs(s) for s in config.standards} == STANDARD_REFS
+    programs = sorted(w for w in WORKPAPERS.values() if w[0] in "CDG")
+    assert set(STANDARD_REFS["ASA 330"]) == {"A-1", "C", "D", *programs}
+    rows = {s.standard: s for s in config.standards}
+    note = rows["ASA 330"].note
+    assert note is not None and all(part in note.zh for part in ("28(a)", "A-1", "第 29 段", "第 30 段", "Issue #46"))
+    assert {k for k, s in rows.items() if s.not_applicable is not None} == {"ASA 600", "ASA 610"}
+    known = set(library.workpaper_refs())
+    assert all(set(refs) <= known for refs in STANDARD_REFS.values())
+
+
+# ── 需求 R327: 现有程序的范围说明, 被测总体与检查项名称 ──
+
+# R328 补这五条 (GEN-05, GEN-07 的范围说明, 总体与检查项; GEN-02, GEN-03, GEN-08 的范围说明), R328 合入后删去
+AWAITING_R328 = frozenset({"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"})
+
+
+def documentation_gaps(template: ProcedureTemplate) -> list[str]:
+    """程序缺的说明: 没写 scope, emit exception 的规则没写 population 或 check (emit rows 的以返回行为总体, 不写)."""
+    gaps = [] if template.scope is not None else ["scope"]
+    for rule in template.rules:
+        if rule.emit == "exception":
+            gaps += [f"{rule.id}.{name}" for name in ("population", "check") if getattr(rule, name) is None]
+    return gaps
+
+
+def test_every_procedure_has_scope_population_and_check() -> None:
+    """验收 3: 每条程序 (含功能未启用的) 都写了 scope, 每条 emit exception 的规则都写了 population 与 check.
+    AWAITING_R328 的程序暂不查, 但须仍有缺项: R328 补齐后这一句不过, 提醒删去名单."""
+    gaps = {t.id: documentation_gaps(t) for t in knowledge_library(ROOT).all(include_disabled=True)}
+    assert {pid: found for pid, found in gaps.items() if found and pid not in AWAITING_R328} == {}
+    assert all(gaps[pid] for pid in AWAITING_R328)
+
+
+XERO_PARAMS = {  # Xero 演示 (本期 2026-07-01 至 09-30, 收入目标为特别风险) 的参数快照中 scope 用到的几项
+    "period_start": date(2026, 7, 1),
+    "period_end": date(2026, 9, 30),
+    "as_of": date(2026, 9, 30),
+    "window_days": 20,
+    "subsequent_days": 10,
+    "lookback_days": 5,
+    "adjustment_prefix": "AJE-",
+}
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "exact", "values"),
+    [
+        ("REV-03", "项目内全部收入合同", []),  # 验收点名的两条逐字核对
+        ("DOC-06", "收到的银行回函", []),
+        (  # days_before 过滤器推出窗口起点
+            "REV-02",
+            "期末前 20 天 (2026-09-10 至 2026-09-30) 入账且不低于执行重要性的销售发票,"
+            " 及 REV-08 尚未归因的例外所指的发票",
+            [],
+        ),
+        ("CSH-04", None, ["2026-09-30"]),
+        ("CSH-05", None, ["2026-09-30"]),
+        ("PLN-07", None, ["2026-07-01", "2026-09-30"]),
+        ("CSH-02", None, ["2026-09-30", "10 ", "5 "]),
+        ("FIN-09", None, ["AJE-"]),
+    ],
+)
+def test_existing_scopes_render(procedure_id: str, exact: str | None, values: list[str]) -> None:
+    """验收 3: 范围说明按参数快照渲染, 占位都填上, 折行的 YAML 读回为一行; 中英文都有."""
+    template = knowledge_library(ROOT, FEATURES).load(procedure_id)
+    assert template.scope is not None
+    rendered = render_text(template.scope, XERO_PARAMS)
+    assert exact is None or rendered.zh == exact
+    for text in (rendered.zh, rendered.en):
+        assert all(v in text for v in values) and "{{" not in text and "\n" not in text
+
+
+def test_csh05_and_pln07_checks() -> None:
+    """验收 1, 2: CSH-05 B01 与 PLN-07 A01 的检查项名称; A02, A03 为 emit rows, 不写总体与检查项."""
+    library = knowledge_library(ROOT)
+    checks = {(t, r.id): (r.check.zh if r.check else None) for t in ("CSH-05", "PLN-07") for r in library.load(t).rules}
+    assert checks == {
+        ("CSH-05", "B01"): "对账单期末余额与总账一致",
+        ("PLN-07", "A01"): "变动未超阈值",
+        ("PLN-07", "A02"): None,
+        ("PLN-07", "A03"): None,
+    }

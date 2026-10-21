@@ -1,5 +1,9 @@
 id: DOC-06
 name: 函证回函抽取
+workpaper: {ref: C-2, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 收到的银行回函
+  en: Bank confirmation replies received
 phase: P2_Executing
 cycle: Cash
 owner: A3

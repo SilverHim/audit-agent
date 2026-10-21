@@ -1,9 +1,11 @@
 """A10 的 RPT-03: 起草审计报告初稿, RPT-01 退回后按批注修订. 返回字段: report_versions, review_tasks, procedure_runs.
 
-模型只写意见段与形成意见的基础段, 其余段落取 templates/report.yaml 中该意见类型的固定文本, 代入占位符. 由
+模型只写意见段与形成意见的基础段, 其余段落取 templates/report.yaml 中该语言 (执行记录的 language, 需求 R341), 该意见
+类型的固定文本, 代入占位符; 两段的标题, 日期写法与名称同取这一份. 由
 ConciergeAgent 按程序编号分派到 draft (执行) 与 report_patch (解读), 见 agents/concierge/agent.py.
 """
 
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any, cast
 
@@ -19,21 +21,19 @@ from backend.contracts.models import (
     OpinionType,
     ReportSection,
     ReviewStatus,
+    WorkingLanguage,
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
 from backend.services.judgment_engine import citation_keys
 from backend.services.staleness import current_results
 
-
-def report_date_text(day: date) -> str:
-    """报告中的日期写法 (RPT-03 提示词: Australian English, 如 "30 June 2026")."""
-    return f"{day.day} {day:%B %Y}"
+DATE_EXAMPLE = date(2025, 7, 1)  # 提示词里日期写法的示例 (按报告语言写出, 如 1 July 2025)
 
 
 async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     """RPT-03 的执行: 起草下一修订 REPORT-{revision} (revision 为状态中最大修订号 + 1), 草稿第 1 版; 修订时带上一稿
-    与退回批注.
+    与退回批注, 上一稿的语言与本次不同时另告诉模型 (previous_language, 按本次的语言重写全文, R341 审核 01).
 
     意见类型取 FIN-01 选定的 opinion_route; 模型输入见 RPT-03.md.j2 头注释, fixture_key 为 r{revision}.
     模型按提示词列出的引用键引用判断 (judgment_keys), 校验只认这些键 (当前结果中错报所依据的已确认判断, 过期重跑
@@ -45,7 +45,7 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     if opinion is None:
         raise ValueError("RPT-03 需要 FIN-01 选定的意见类型 (opinion_route)")
     revision = max((r.revision for r in state["report_versions"]), default=0) + 1
-    previous, annotations, addresses = revision_inputs(ctx, revision)
+    inputs = revision_inputs(ctx, revision)
     engagement = ctx.engagement
     version = state["client_profile_version"]
     profile = await deps.engagement_store.client_profile(engagement.client_id, version)
@@ -54,15 +54,27 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     owner = await deps.users.get(engagement.owner_id)
     if owner is None:
         raise LookupError(f"项目负责人 {engagement.owner_id} 不存在, 报告签名缺审计师姓名")
+    language = ctx.run.language  # 报告的语言: 执行记录的 (需求 R341), 不读项目当前的值
+    library = deps.library
+    opinion_heading, basis_heading = library.report_headings(language)[opinion]
+    templates = library.report_sections(opinion, language)
+    english, terms = library.report_terms("en"), library.report_terms(language)
     variables = {
         "client_name": profile.legal_name,
         "task": {"params": ctx.run.model_dump(mode="json")["params_snapshot"]},
         "revision": revision,
         "opinion_type": opinion.value,
         "fin01_reason": fin01_reason(ctx),
-        "previous": previous,
-        "annotations": annotations,
+        "previous": inputs.previous,
+        "previous_language": inputs.language if inputs.language != language else None,
+        "annotations": inputs.annotations,
         "standards": deps.judgments.standards(ctx.template),
+        "headings": {"opinion": opinion_heading, "basis_for_opinion": basis_heading},
+        # 审计师责任段的标题 (固定段落首行), 基础段里要指向它; 日期写法的示例
+        "responsibilities_heading": templates[ReportSection.auditor_responsibilities].splitlines()[0],
+        "date_example": library.report_date(DATE_EXAMPLE, language),
+        # 名称的写法 (同固定段落): 提示词正文的英文叫法 → 本语言的写法
+        "terms": [{"en": english[key], "text": text} for key, text in terms.items()],
         **misstatement_inputs(ctx),
     }
     cited = citable(ctx)
@@ -84,10 +96,10 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     refs = [JudgmentRef(id=keys[key].id, version=keys[key].version) for key in output.judgment_keys]
     values = {
         "entity_name": profile.legal_name,
-        "period_end": report_date_text(engagement.period_end),
+        "period_end": library.report_date(engagement.period_end, language),
         "auditor_name": owner.full_name,
     }
-    fixed = {section: text.format(**values) for section, text in deps.library.report_sections(opinion).items()}
+    fixed = {section: text.format(**values) for section, text in templates.items()}
     return AuditReportVersion(
         id=f"REPORT-{revision}",
         revision=revision,
@@ -98,21 +110,30 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
             **fixed,
         },
         judgment_refs=refs,
-        addresses_decision_id=addresses,
+        addresses_decision_id=inputs.addresses,
         run_id=ctx.run.id,
     )
 
 
-def revision_inputs(ctx: RunContext, revision: int) -> tuple[dict[str, str] | None, list[dict[str, Any]], str | None]:
-    """修订的输入: (上一稿的意见段与基础段, 上一稿最近一次被 RPT-01 退回的批注, 该退回决定 ID); 首稿为 (None, [], None).
+@dataclass(frozen=True)
+class RevisionInputs:
+    """修订的输入 (revision_inputs); 首稿为 RevisionInputs()."""
+
+    previous: dict[str, str] | None = None  # 上一稿的意见段与基础段
+    language: WorkingLanguage | None = None  # 上一稿的语言: 起草它的执行记录的 (drafted_in)
+    annotations: list[dict[str, Any]] = field(default_factory=list)  # 上一稿最近一次被 RPT-01 退回的批注
+    addresses: str | None = None  # 该退回决定 ID
+
+
+def revision_inputs(ctx: RunContext, revision: int) -> RevisionInputs:
+    """修订的输入: 上一稿的意见段与基础段及其语言, 上一稿最近一次被 RPT-01 退回的批注与该退回决定 ID.
 
     上一稿取状态中修订号为 revision - 1 的报告的当前版本; 退回决定须针对上一稿 (target_id), 信息不足的决定不算退回.
     不是退回引起的重拟 (需求 R274: 上一稿之后有过期重跑, 请求的 report_revision 为上一稿的修订号, 重跑完重新经过
-    FIN-01) 时为 (上一稿的两段, [], None). 修订时找不到上一稿, 或既没有针对它的退回决定也没有这样的重跑请求,
-    抛 LookupError.
+    FIN-01) 时没有批注与退回决定. 修订时找不到上一稿, 或既没有针对它的退回决定也没有这样的重跑请求, 抛 LookupError.
     """
     if revision == 1:
-        return None, [], None
+        return RevisionInputs()
     state = ctx.state
     earlier = [r for r in state["report_versions"] if r.revision == revision - 1]
     if not earlier:
@@ -127,12 +148,24 @@ def revision_inputs(ctx: RunContext, revision: int) -> tuple[dict[str, str] | No
         "opinion": last.sections[ReportSection.opinion],
         "basis_for_opinion": last.sections[ReportSection.basis_for_opinion],
     }
+    language = drafted_in(ctx, last)
     if rejects:
         reject = rejects[-1]
-        return previous, [a.model_dump(mode="json") for a in reject.annotations], reject.id
+        return RevisionInputs(previous, language, [a.model_dump(mode="json") for a in reject.annotations], reject.id)
     if any(r.report_revision == last.revision for r in state["rerun_requests"]):
-        return previous, [], None  # 重跑后重拟: 没有批注, 不针对哪个退回决定
+        return RevisionInputs(previous, language)  # 重跑后重拟: 没有批注, 不针对哪个退回决定
     raise LookupError(f"RPT-03 第 {revision} 稿找不到 RPT-01 对 {last.id} 的退回决定, 也没有其后的过期重跑")
+
+
+def drafted_in(ctx: RunContext, report: AuditReportVersion) -> WorkingLanguage:
+    """该稿的语言: 起草它的执行记录 (run_id) 的 language. 没有 run_id 的旧稿 (需求 R339 之前) 为 en, 当时只出英文;
+    执行记录不在状态中抛 LookupError."""
+    if report.run_id is None:
+        return "en"
+    run = next((r for r in ctx.state["procedure_runs"] if r.id == report.run_id), None)
+    if run is None:
+        raise LookupError(f"{report.id} 的执行记录 {report.run_id} 不在状态中")
+    return run.language
 
 
 def fin01_reason(ctx: RunContext) -> str:

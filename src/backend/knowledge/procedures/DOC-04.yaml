@@ -1,5 +1,9 @@
 id: DOC-04
 name: 合同要素抽取
+workpaper: {ref: D-1, area: D}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 上传的收入合同
+  en: Uploaded revenue contracts
 phase: P1_Planning
 cycle: Revenue
 owner: A3

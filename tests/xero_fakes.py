@@ -18,9 +18,9 @@ XeroFakeDatasetLoader.load 只记调用, 不登记文件, 与真实载入器只�
 
 import functools
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -64,7 +64,7 @@ from backend.contracts.models import (
     RuleOutcome,
     RulePopulation,
 )
-from backend.contracts.records import DatasetTraits, Employee, JournalEntry
+from backend.contracts.records import DatasetTraits, Employee, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.decisions import GraphDecisionSubmit
@@ -90,9 +90,12 @@ from tests.fakes import (
     FakeTrail,
     csh02_subsequent_rows,
     csh02_window_rows,
+    csh05_population,
     engine_result,
     gen05_exception,
+    gen06_rows,
     make_deps,
+    pln07_a01_population,
     rev08_populations,
     wait_idle,
 )
@@ -719,6 +722,24 @@ def xero_rev08_populations() -> list[RulePopulation]:
     )
 
 
+@functools.cache
+def xero_csh05_population() -> RulePopulation:
+    """CSH-05 B01 对 Xero 演示的被测总体 (需求 R327): 两个银行账户 090, 091, 由演示数据导入之后的表 (xero_tables) 按
+    总体 SQL 的口径算出; 两户对账单期末余额都等于试算表 (没有例外)."""
+    tables = xero_tables()
+    return csh05_population(
+        tables["bank_accounts"], tables["bank_transactions"], tables["trial_balance"], XERO_PERIOD[1]
+    )
+
+
+@functools.cache
+def xero_pln07_a01_population() -> RulePopulation:
+    """PLN-07 A01 对 Xero 演示的被测总体 (需求 R327): 本期三个月, 上期起始日 (数据集声明) 2025-07-01 起一年, 两期不等长,
+    只比较资产负债类科目 (对期初)."""
+    tables = xero_tables()
+    return pln07_a01_population(tables["accounts"], tables["trial_balance"], same_length=False)
+
+
 # GEN-05 R10 两笔贷项凭证配到的同额发票 (07-17 的 550.00 五张, ORC1003, 1008, 1009, 1010, 1011), 按 (开票日, ID)
 XERO_SAME_AMOUNT_INVOICES = [
     "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",  # ORC1008
@@ -993,12 +1014,41 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
     ]
 
 
+GEN06_SUBSEQUENT_DAYS = 31  # GEN-06 期后窗口的天数, 同 GEN-06.yaml (与 GEN-07 相同)
+
+
+def xero_gen06_derived(
+    lines: Iterable[JournalEntry], invoices: Iterable[SalesInvoice], loader: XeroDatasetLoader | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """给定的分录行与销售发票按 GEN-06 E01, E02 的口径派生的行 (tests.fakes 的 gen06_rows): 区间为本期起 (快照的期间)
+    至窗口上限 (期末加 GEN06_SUBSEQUENT_DAYS 天截到数据集声明的 data_as_of, 即 GEN07_WINDOW_END), 作废对按数据集声明
+    剔除. 给了 loader 时期间与声明取它指向的副本 (注入场景). 改过表的用例 (如改入账日, 改流水的参考号) 用它派生."""
+    traits = xero_traits(loader)
+    period = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
+    assert period is not None
+    end = period[1] + timedelta(days=GEN06_SUBSEQUENT_DAYS)
+    if traits.data_as_of is not None:
+        end = min(end, traits.data_as_of)
+    return gen06_rows(
+        lines, invoices, period[0], end, traits.reversal_reference_pattern, traits.reversal_entry_no_template
+    )
+
+
+def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[dict[str, Any]]]:
+    """GEN-06 E01, E02 的行 (需求 R179): 演示数据导入之后的表 (xero_tables) 经 xero_gen06_derived 派生. 读快照, 规则
+    引擎取 GEN-06 时才算, 每次新建; 与连库结果整行相同由 tests/test_rule_sql_gen06.py 核对. 给了 loader 时取它指向的
+    副本 (注入场景)."""
+    tables = xero_tables(loader)
+    return xero_gen06_derived(tables["journal_entries"], tables["sales_invoices"], loader)
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
     "PLN-07": lambda run: engine_result(
         "PLN-07",
         RuleResult(exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}),
+        [xero_pln07_a01_population()],
     ),
     "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS})),
     "REV-08": lambda run: engine_result(
@@ -1006,7 +1056,7 @@ XERO_RULES: dict[
     ),
     "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS})),
     # 两个账户对账单的期末余额都等于试算表
-    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={})),
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={}), [xero_csh05_population()]),
     "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
     "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
@@ -1015,6 +1065,8 @@ XERO_RULES: dict[
     ),
     # 功能 going_concern 打开时才执行
     "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
+    # 同上; 只出行, 由表派生
+    "GEN-06": lambda run: engine_result("GEN-06", RuleResult(exceptions=[], rows=xero_gen06_rows())),
 }
 
 

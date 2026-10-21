@@ -2,6 +2,5 @@
 agents/concierge_chat."""
 
 from backend.agents.concierge.agent import ConciergeAgent
-from backend.agents.concierge.report import report_date_text
 
-__all__ = ["ConciergeAgent", "report_date_text"]
+__all__ = ["ConciergeAgent"]

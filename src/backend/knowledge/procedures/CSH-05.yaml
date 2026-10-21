@@ -1,5 +1,9 @@
 id: CSH-05
 name: 流水账面核对
+workpaper: {ref: C-3, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 全部银行账户在 {{ period_end }} 的对账单余额与总账余额
+  en: Statement and general ledger balances of all bank accounts at {{ period_end }}
 phase: P2_Executing
 cycle: Cash
 owner: A6
@@ -29,3 +33,21 @@ rules:
       LEFT JOIN trial_balance t ON t.engagement_id=b.engagement_id AND t.account_code=b.gl_account_code AND t.period='current'
       WHERE b.engagement_id=:eid AND (s.balance_after_cents IS NULL OR t.balance_cents IS NULL OR s.balance_after_cents<>t.balance_cents)
       ORDER BY b.id
+    check: {zh: 对账单期末余额与总账一致, en: Statement balance agrees to the general ledger}
+    # 被测总体 (需求 R327): 全部银行账户, 每户一行; 金额为该户总账科目的本期末余额 (被核对的账面数), 另带期末对账单
+    # 余额与最后一笔流水 (取法同规则 SQL); 没有流水或没有试算表行的对应列为空
+    population:
+      description:
+        zh: 全部银行账户 ({{ period_end }} 的对账单余额与总账余额)
+        en: All bank accounts (statement and general ledger balances at {{ period_end }})
+      sql: |
+        SELECT 'bank_account' AS source_type, b.id AS source_id, t.balance_cents AS amount_cents,
+               b.bank_name, b.account_no, b.gl_account_code,
+               s.balance_after_cents AS statement_balance_cents, s.id AS last_bank_transaction_id
+        FROM bank_accounts b
+        LEFT JOIN LATERAL (SELECT id, balance_after_cents FROM bank_transactions
+          WHERE engagement_id=b.engagement_id AND bank_account_id=b.id AND txn_date<=CAST(:period_end AS date)
+          ORDER BY txn_date DESC, id DESC LIMIT 1) s ON true
+        LEFT JOIN trial_balance t ON t.engagement_id=b.engagement_id AND t.account_code=b.gl_account_code AND t.period='current'
+        WHERE b.engagement_id=:eid
+        ORDER BY b.id

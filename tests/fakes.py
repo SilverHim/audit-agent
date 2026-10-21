@@ -205,6 +205,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
 from backend.services.abn import normalize_abn
+from backend.services.account_mapping import with_category
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
@@ -1807,6 +1808,102 @@ def no_population(value: Any) -> bool:
     return True
 
 
+def csh05_population(
+    accounts: Iterable[BankAccount],
+    transactions: Iterable[BankTransaction],
+    trial_balance: Iterable[TrialBalanceRow],
+    period_end: date,
+) -> RulePopulation:
+    """CSH-05 B01 的被测总体, 按 CSH-05.yaml 总体 SQL 的口径由表独立算一遍 (需求 R327): 全部银行账户, 按 ID, 每户一项;
+    金额为该户总账科目的本期末余额 (没有试算表行为空); 另带开户行, 账号, 总账科目, 期末对账单余额与最后一笔流水
+    (流水日不晚于期末, 按 (流水日, ID) 取最后一笔; 没有为空)."""
+    current = {r.account_code: r.balance_cents for r in trial_balance if r.period == "current"}
+    lines = list(transactions)
+    items = []
+    for account in sorted(accounts, key=lambda a: a.id):
+        own = [t for t in lines if t.bank_account_id == account.id and t.txn_date <= period_end]
+        last = max(own, key=lambda t: (t.txn_date, t.id), default=None)
+        fields = {
+            "bank_name": account.bank_name,
+            "account_no": account.account_no,
+            "gl_account_code": account.gl_account_code,
+            "statement_balance_cents": last.balance_after_cents if last else None,
+            "last_bank_transaction_id": last.id if last else None,
+        }
+        items.append(
+            PopulationItem(source_id=account.id, amount_cents=current.get(account.gl_account_code), fields=fields)
+        )
+    return RulePopulation(
+        rule_id="B01",
+        source_type="bank_account" if items else None,
+        items=items,
+        count=len(items),
+        amount_cents=total_cents(i.amount_cents for i in items),
+    )
+
+
+def pln07_a01_population(
+    accounts: Iterable[Account], trial_balance: Iterable[TrialBalanceRow], *, same_length: bool
+) -> RulePopulation:
+    """PLN-07 A01 的被测总体, 按 PLN-07.yaml 总体 SQL 的口径由表独立算一遍 (需求 R327): 两期试算表出现过且在科目表里的
+    科目, 资产负债类都比较 (基数为期初: 上期末余额, 留存收益分类中代码最小的科目另加上期全部损益), 损益类只在两期
+    等长时比较 (基数为上期; 等长由调用方按数据集给出, SQL 的等长判定算错时连库的逐行相等能拦住). 每科目一项, 按代码;
+    没有金额 (余额有借有贷, 合计没有意义), 识别字段为科目名称, 比较口径与本期, 上期, 期初余额."""
+    chart = {a.code: a for a in accounts}
+    current: dict[str, int] = {}
+    prior: dict[str, int] = {}
+    for row in trial_balance:
+        if row.account_code in chart:
+            side = current if row.period == "current" else prior
+            side[row.account_code] = side.get(row.account_code, 0) + row.balance_cents
+    codes = sorted(current.keys() | prior.keys())
+    retained = [c for c in codes if chart[c].category == "retained_earnings"]
+    carried = sum(prior.get(c, 0) for c in codes if chart[c].type in ("revenue", "expense"))
+    items = []
+    for code in codes:
+        profit_or_loss = chart[code].type in ("revenue", "expense")
+        if profit_or_loss and not same_length:
+            continue
+        opening = prior.get(code, 0) + (carried if retained and code == retained[0] else 0)
+        fields = {
+            "account_name": chart[code].name,
+            "basis": "profit_or_loss" if profit_or_loss else "balance_sheet",
+            "current_cents": current.get(code),
+            "prior_cents": prior.get(code),
+            "opening_cents": opening,
+        }
+        items.append(PopulationItem(source_id=code, amount_cents=None, fields=fields))
+    return RulePopulation(
+        rule_id="A01",
+        source_type="trial_balance" if items else None,
+        items=items,
+        count=len(items),
+        amount_cents=total_cents(i.amount_cents for i in items),
+    )
+
+
+@functools.cache
+def numbat_csh05_population() -> RulePopulation:
+    """Numbat CSH-05 B01 的被测总体 (期末 2026-06-30), 由演示数据集的银行账户, 流水与试算表算出."""
+    return csh05_population(
+        numbat_records("bank_accounts", BankAccount),
+        numbat_bank_transactions(),
+        numbat_records("trial_balance", TrialBalanceRow),
+        ENGAGEMENT.period_end,
+    )
+
+
+@functools.cache
+def numbat_pln07_a01_population() -> RulePopulation:
+    """Numbat PLN-07 A01 的被测总体: 本期与上期等长 (没有数据集声明的上期起始日), 资产负债类与损益类都比较; 科目
+    分类同载入 (按名称映射, account_mapping.with_category)."""
+    return pln07_a01_population(
+        [with_category(a) for a in numbat_records("accounts", Account)],
+        numbat_records("trial_balance", TrialBalanceRow),
+        same_length=True,  # 没有数据集声明的上期起始日, 视为等长
+    )
+
+
 @functools.cache
 def numbat_rev08_populations() -> list[RulePopulation]:
     """Numbat REV-08 的被测总体 (期末 2026-06-30, 特别风险的窗口 20 天), 由演示数据集的发票, 发运单与流水算出."""
@@ -1823,13 +1920,16 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "PLN-07": lambda run: engine_result(
         "PLN-07",
         RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}),
+        [numbat_pln07_a01_population()],
     ),
     "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS})),
     "REV-08": lambda run: engine_result(
         "REV-08", RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}), numbat_rev08_populations()
     ),
     "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS})),
-    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={})),
+    "CSH-05": lambda run: engine_result(
+        "CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}), [numbat_csh05_population()]
+    ),
     "CSH-02": lambda run: engine_result(
         "CSH-02",
         RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),
@@ -1886,6 +1986,16 @@ class FakeJudgmentEngine:
 
 
 Outcome = Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]  # FakeJudgmentEngine 对一个对象的预置结果
+
+
+def contexts(engine: FakeJudgmentEngine) -> dict[str, JudgmentContext]:
+    """假判断引擎收到的上下文, 按判断对象 (同一对象判过多次时取最后一次)."""
+    return {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
+
+
+def ids(rows: Iterable[Mapping[str, Any]], key: str = "id") -> list[Any]:
+    """各行的 key 列 (缺省为 ID), 顺序不变."""
+    return [r[key] for r in rows]
 
 
 def judgment(ctx: JudgmentContext, run: ProcedureRun, **changes: Any) -> Judgment:
@@ -2288,6 +2398,46 @@ def csh02_subsequent_rows(
             key=lambda t: (t.bank_account_id, t.txn_date, t.id),
         )
     ]
+
+
+GEN06_E01_COLUMNS = frozenset(  # GEN-06 E01 的列
+    {"id", "entry_no", "posting_date", "account_code", "debit_cents", "credit_cents", "description", "source_doc"}
+)
+
+
+def natural_entry_no(entry_no: str) -> str:
+    """凭证号的自然序键, 同规则 SQL 的写法: 每段数字左补零到 10 位 (GEN-05, GEN-07, GEN-06 的 ORDER BY)."""
+    return re.sub(r"\d+", lambda m: m.group().rjust(10, "0"), entry_no)
+
+
+def gen06_rows(
+    lines: Iterable[JournalEntry],
+    invoices: Iterable[SalesInvoice],
+    period_start: date,
+    window_end: date,
+    pattern: str | None = None,
+    template: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """GEN-06 E01, E02 的行, 按两条规则 SQL 的口径派生 (需求 R179): E01 为入账日在 [period_start, window_end] 的分录
+    行, 作废对 (csh02_voided, 同共用段) 整张凭证剔除, 按 (入账日, 凭证号自然序, 凭证号, 行 ID); E02 为入账日在同一
+    区间的销售发票 (发票表各列), 按 (入账日, ID). 列与值的类型同 SQL (日期为 date). Xero 的离线派生
+    (xero_fakes.xero_gen06_derived) 用它; Numbat 的假规则引擎没有 GEN-06."""
+    lines = list(lines)
+    voided = csh02_voided(lines, pattern, template)
+    e01 = [
+        j.model_dump(include=GEN06_E01_COLUMNS)
+        for j in sorted(
+            (j for j in lines if period_start <= j.posting_date <= window_end and j.entry_no not in voided),
+            key=lambda j: (j.posting_date, natural_entry_no(j.entry_no), j.entry_no, j.id),
+        )
+    ]
+    e02 = [
+        i.model_dump()
+        for i in sorted(
+            (i for i in invoices if period_start <= i.posting_date <= window_end), key=lambda i: (i.posting_date, i.id)
+        )
+    ]
+    return {"E01": e01, "E02": e02}
 
 
 # CSH-02 D02, D03, D04 的行: 由 data/demo 的 CSV 按规则的口径派生 (Numbat 没有作废对), 天数同 CSH-02.yaml; D03, D04
