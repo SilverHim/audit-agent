@@ -49,7 +49,7 @@ function Report() {
                         {t.reportCard.revision(version.revision, t.opinions[version.opinion_type])}
                       </span>
                       {version.status === 'signed' ? <StatusPill tone="ok">{t.stageStatus.signed}</StatusPill> : null}
-                      <GeneratedLanguage eid={eid} language={version.language} />
+                      <GeneratedLanguage eid={eid} runId={version.run_id} />
                       {version.report_date ? (
                         <span className="text-muted-foreground">{formatDate(version.report_date)}</span>
                       ) : null}

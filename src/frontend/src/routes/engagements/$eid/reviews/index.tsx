@@ -10,6 +10,7 @@ import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { GeneratedLanguage } from '@/components/working-language'
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -270,7 +271,10 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
       {judgment ? (
         <>
           <div className="flex flex-col gap-1.5">
-            <SectionLabel>{t.judgment.conclusion}</SectionLabel>
+            <span className="flex flex-wrap items-center gap-2">
+              <SectionLabel>{t.judgment.conclusion}</SectionLabel>
+              <GeneratedLanguage eid={eid} runId={judgment.run_id} />
+            </span>
             <p className="m-0 text-[14px] leading-[1.65]" lang="en">
               {judgment.conclusion}
             </p>

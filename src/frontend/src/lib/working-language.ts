@@ -12,19 +12,11 @@ export function currentLanguage(overview: EngagementOverview | undefined): Worki
   return overview?.engagement.working_language ?? 'en'
 }
 
-// 一次执行的生成语言 (总览的 run_languages, 执行 ID → ProcedureRun.language); 没有 run_id 或查不到为 null
-export function runLanguage(
+// 要标注的生成语言: 总览的 run_languages 只列生成语言与当前工作语言不同的执行 (执行 ID → ProcedureRun.language),
+// 取到即标; 没有 run_id (如迁移前的报告稿), 查不到 (语言相同) 或总览还没取到时为 null, 不标
+export function generatedNote(
   overview: EngagementOverview | undefined,
   runId: string | null | undefined,
 ): WorkingLanguage | null {
   return (runId && overview?.run_languages?.[runId]) || null
-}
-
-// 要标注的生成语言: 与当前工作语言不同时为生成语言, 相同或不知道 (总览还没取到, 查不到执行) 时为 null
-export function generatedNote(
-  generated: WorkingLanguage | null | undefined,
-  overview: EngagementOverview | undefined,
-): WorkingLanguage | null {
-  if (!generated || !overview) return null
-  return generated === currentLanguage(overview) ? null : generated
 }

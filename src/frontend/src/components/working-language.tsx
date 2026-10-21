@@ -6,30 +6,15 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useOverview } from '@/lib/use-engagement'
-import {
-  currentLanguage,
-  generatedNote,
-  runLanguage,
-  WORKING_LANGUAGES,
-  type WorkingLanguage,
-} from '@/lib/working-language'
+import { currentLanguage, generatedNote, WORKING_LANGUAGES } from '@/lib/working-language'
 
-// 工作语言 (需求 R339): "以英文生成 / 以中文生成" 的标注 (判断, 计划, 报告三处共用) 与项目页的修改入口
+// 工作语言 (需求 R339): "以英文生成 / 以中文生成" 的标注 (判断, 计划, 报告等处共用) 与项目页的修改入口
 
-// 内容的生成语言与项目当前的工作语言不同时显示 "以英文生成" 或 "以中文生成". 判断与计划给 runId (按总览的
-// run_languages 取), 报告给 language (报告稿自带)
-export function GeneratedLanguage({
-  eid,
-  runId,
-  language,
-}: {
-  eid: string
-  runId?: string | null
-  language?: WorkingLanguage | null
-}) {
+// 内容的生成语言与项目当前的工作语言不同时显示 "以英文生成" 或 "以中文生成": 按内容的 run_id 在总览的 run_languages
+// 里取 (只列语言不同的执行), 查不到不标
+export function GeneratedLanguage({ eid, runId }: { eid: string; runId: string | null | undefined }) {
   const { t } = useI18n()
-  const overview = useOverview(eid)
-  const shown = generatedNote(language ?? runLanguage(overview, runId), overview)
+  const shown = generatedNote(useOverview(eid), runId)
   if (!shown) return null
   return (
     <span data-testid="generated-language">

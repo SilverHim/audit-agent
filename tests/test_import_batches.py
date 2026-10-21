@@ -1045,7 +1045,7 @@ async def test_xero_demo_runtime_has_the_sheet_fixtures() -> None:
     deps = replace(deps, llm=llm, judgments=JudgmentEngine(llm, validator, deps.trail, deps.library))
     name, data = raw_file("trial_balance_2026-06-30.xlsx")
     document = await env.evidence.save(EID, name, data, type=DocumentType.other, reliability=Reliability.internal_copy)
-    [reading] = await SheetIntake(deps).recognize(EID, document, data)
+    [reading] = await SheetIntake(deps).recognize(EID, document, data, xero.working_language)
     assert (reading.method, reading.plan.kind, reading.company) == ("llm", TableKind.trial_balance, "Demo Company (AU)")
 
 

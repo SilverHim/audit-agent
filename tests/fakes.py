@@ -1033,13 +1033,7 @@ class FakeEngagementStore:
             "client_profile_version": client_profile_version,
         }
         kept = {k: v for k, v in changes.items() if v is not None}
-        updated = current.model_copy(update={**kept, "updated_at": datetime.now(UTC)})
-        txn = self._txn()
-        if txn is not None:
-            txn.engagements[eid] = updated
-            txn.log.append(EngagementWrite("update", eid, kept))
-        else:
-            self._apply_engagement(updated)
+        self._write(eid, current.model_copy(update={**kept, "updated_at": datetime.now(UTC)}), kept)
 
     async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage:
         """改工作语言, 返回之前的值; 相同时不改. 不存在 LookupError, 已锁定 EngagementLocked (同 Postgres 的 writable);
@@ -1050,14 +1044,19 @@ class FakeEngagementStore:
         if current.locked:
             raise EngagementLocked(eid)
         if current.working_language != language:
-            updated = current.model_copy(update={"working_language": language, "updated_at": datetime.now(UTC)})
-            txn = self._txn()
-            if txn is not None:
-                txn.engagements[eid] = updated
-                txn.log.append(EngagementWrite("update", eid, {"working_language": language}))
-            else:
-                self._apply_engagement(updated)
+            changes = {"working_language": language}
+            self._write(eid, current.model_copy(update={**changes, "updated_at": datetime.now(UTC)}), changes)
         return current.working_language
+
+    def _write(self, eid: str, updated: Engagement, changes: dict[str, Any]) -> None:
+        """写入改后的项目 (update 与 set_working_language 共用): 在 output_store 的事务块内时暂存进该事务, 记下改动
+        changes, 块正常结束才生效; 否则立即生效."""
+        txn = self._txn()
+        if txn is not None:
+            txn.engagements[eid] = updated
+            txn.log.append(EngagementWrite("update", eid, changes))
+        else:
+            self._apply_engagement(updated)
 
     def _apply_engagement(self, engagement: Engagement) -> None:
         self.engagements = [engagement if e.id == engagement.id else e for e in self.engagements]
@@ -3475,6 +3474,7 @@ def numbat_report_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
             },
             judgment_refs=[JudgmentRef(id=j.id, version=j.version) for j in cited],
             addresses_decision_id=rejects[-1].id if revision > 1 and rejects else None,
+            run_id=ctx.run.id,
         )
         return {"procedure_runs": [finished(ctx.run)], "report_versions": [report]}
 

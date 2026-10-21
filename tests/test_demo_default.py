@@ -10,7 +10,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.contracts.models import AcceptanceScorecard, TrailKind
+from backend.contracts.models import AcceptanceScorecard, ProcedureRun, TrailKind
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.graph import compile_graph
@@ -70,13 +70,15 @@ def test_demo_dataset_defaults_to_xero() -> None:
     assert Settings.model_fields["DEMO_DATASET"].default == DEFAULT
 
 
+DEMO_BODY = {"period_start": "2024-01-01", "period_end": "2024-12-31", "dataset": "demo"}  # 与任何数据集都无关的期间
+
+
 async def test_demo_created_with_any_period() -> None:
     """验收 4, 8: demo (Numbat) 不自带期间, 不比较: 用与任何数据集都无关的期间建项目 201, 项目期间为请求值,
-    跑到 ACC-01."""
+    跑到 ACC-01. 不带 working_language 时项目与各次执行都是 en (需求 R339 验收 1, 3), 总览没有要标注的执行."""
     runner = demo_runner()
     async with api_client(runner) as client:
-        body = {"period_start": "2024-01-01", "period_end": "2024-12-31", "dataset": "demo"}
-        created = await client.post("/api/v1/engagements", json=body)
+        created = await client.post("/api/v1/engagements", json=DEMO_BODY)
         assert created.status_code == 201, created.text
         eid = created.json()["engagement"]["id"]
         await wait_idle(runner, eid)
@@ -85,6 +87,27 @@ async def test_demo_created_with_any_period() -> None:
     engagement = overview["engagement"]
     assert (engagement["period_start"], engagement["period_end"]) == ("2024-01-01", "2024-12-31")
     assert (engagement["dataset"], overview["current_gate"]) == ("demo", "ACC-01")
+    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
+    assert engagement["working_language"] == "en" and runs and {run.language for run in runs} == {"en"}
+    assert overview["run_languages"] == {}
+
+
+async def test_demo_created_in_chinese() -> None:
+    """需求 R339 验收 1, 3: 带 working_language zh 建项目, 项目与跑到 ACC-01 的各次执行都是 zh. 总览的
+    run_languages 只给生成语言与当前工作语言不同的执行 (审核 R339-09): 都是 zh 时为空, 改为 en 后列出这些执行."""
+    runner = demo_runner()
+    async with api_client(runner) as client:
+        created = await client.post("/api/v1/engagements", json={**DEMO_BODY, "working_language": "zh"})
+        assert created.status_code == 201, created.text
+        eid = created.json()["engagement"]["id"]
+        await wait_idle(runner, eid)
+        before = (await client.get(f"/api/v1/engagements/{eid}")).json()
+        changed = await client.put(f"/api/v1/engagements/{eid}/working-language", json={"language": "en"})
+        after = (await client.get(f"/api/v1/engagements/{eid}")).json()
+    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
+    assert before["engagement"]["working_language"] == "zh" and runs and {run.language for run in runs} == {"zh"}
+    assert before["run_languages"] == {} and changed.status_code == 200
+    assert after["run_languages"] == {run.id: "zh" for run in runs}
 
 
 @needs_snapshot

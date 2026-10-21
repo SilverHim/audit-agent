@@ -208,17 +208,7 @@ async def test_first_revision_report() -> None:
     assert patch["review_tasks"] == []
     [run] = patch["procedure_runs"]
     assert run.id == "RUN-RPT-03-1" and run.status is RunStatus.succeeded
-
-
-@pytest.mark.parametrize("language", ["en", "zh"])
-async def test_report_records_the_language_of_its_run(language: str) -> None:
-    """需求 R339 验收 4: 报告稿记下起草它的那次执行的工作语言 (报告不记执行 ID, 报告页据此标生成语言)."""
-    agent, ctx, _ = setup()
-    run = ctx.run.model_copy(update={"language": language})
-    [report] = (await agent.run(RunContext(ctx.engagement, ctx.procedure, ctx.template, run, ctx.state)))[
-        "report_versions"
-    ]
-    assert report.language == language
+    assert report.run_id == run.id  # 需求 R339 验收 4: 报告页按起草它的执行记录标生成语言
 
 
 async def test_sections_combine_model_text_and_fixed_template() -> None:

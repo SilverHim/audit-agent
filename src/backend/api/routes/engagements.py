@@ -33,6 +33,15 @@ from backend.orchestration.runner import GraphRunner
 router = APIRouter(prefix="/engagements", tags=["engagements"])
 
 
+def parse_language(value: str) -> WorkingLanguage:
+    """请求里的工作语言 (POST /engagements 的 working_language 与 PUT working-language 共用, 需求 R339): 须为 zh 或 en
+    (区分大小写), 否则 422 INVALID_VALUE. 请求体里是字符串, 不写成 Literal: 那样会落到请求体校验的通用 422, 没有
+    错误码."""
+    if value not in get_args(WorkingLanguage):
+        raise api_error("INVALID_VALUE", f"工作语言须为 zh 或 en, 现为 {value!r}")
+    return cast(WorkingLanguage, value)
+
+
 @router.post("", status_code=201)
 async def create_engagement(
     body: EngagementCreate,
@@ -46,11 +55,13 @@ async def create_engagement(
     数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间
     而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
     新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).
+    working_language 不在 zh, en 时 422 INVALID_VALUE (parse_language, 同 PUT working-language).
     """
     if (body.dataset is None) == (body.client_id is None):
         raise api_error("INVALID_VALUE", "dataset 与 client_id 须给且只给一个")
+    language = parse_language(body.working_language)
     if body.client_id is not None:
-        return await create_for_client(body, body.client_id, user, deps, runner, query)
+        return await create_for_client(body, body.client_id, language, user, deps, runner, query)
     assert body.dataset is not None
     try:
         profile = deps.datasets.client_profile(body.dataset)
@@ -72,7 +83,7 @@ async def create_engagement(
             period_end=body.period_end,
             dataset=body.dataset,
             profile=profile,
-            working_language=body.working_language,
+            working_language=language,
         )
     except ValueError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
@@ -84,6 +95,7 @@ async def create_engagement(
 async def create_for_client(
     body: EngagementCreate,
     client_id: str,
+    language: WorkingLanguage,
     user: User,
     deps: AgentDeps,
     runner: GraphRunner,
@@ -102,7 +114,7 @@ async def create_for_client(
             period_end=body.period_end,
             dataset=None,
             profile=profile,
-            working_language=body.working_language,
+            working_language=language,
         )
     except ValueError as exc:
         raise api_error("INVALID_VALUE", str(exc)) from exc
@@ -166,16 +178,18 @@ async def set_working_language(
     deps: Annotated[AgentDeps, Depends(get_deps)],
 ) -> Engagement:
     """改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时
-    422 INVALID_VALUE; 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值相同不改,
-    不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户). 不取项目锁: 后台执行中照样可改,
-    改之后才建的执行记录取新值."""
-    if body.language not in get_args(WorkingLanguage):
-        raise api_error("INVALID_VALUE", f"工作语言须为 zh 或 en, 现为 {body.language!r}")
-    language = cast(WorkingLanguage, body.language)
+    422 INVALID_VALUE (parse_language); 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值
+    相同不改, 不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户), 留痕写失败时把语言改回
+    原值再抛错, 不留下没有留痕的修改. 不取项目锁: 后台执行中照样可改, 改之后才建的执行记录取新值."""
+    language = parse_language(body.language)
     async with catch_api():
         before = await deps.engagement_store.set_working_language(engagement.id, language)
         if before != language:
-            await deps.trail.record(language_trail(engagement.id, user.id, before, language))
+            try:
+                await deps.trail.record(language_trail(engagement.id, user.id, before, language))
+            except Exception:
+                await deps.engagement_store.set_working_language(engagement.id, before)  # 补偿: 改回原值
+                raise
         updated = await deps.engagement_store.get(engagement.id)
         if updated is None:
             raise api_error("NOT_FOUND", engagement.id)

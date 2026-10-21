@@ -450,9 +450,9 @@ export type AuditReportVersion = {
      */
     approved_at?: string | null;
     /**
-     * Language
+     * Run Id
      */
-    language?: 'zh' | 'en';
+    run_id?: string | null;
 };
 
 /**
@@ -2260,7 +2260,7 @@ export type EngagementCreate = {
     /**
      * Working Language
      */
-    working_language?: 'zh' | 'en';
+    working_language?: string;
 };
 
 /**
@@ -5725,8 +5725,8 @@ export type ValidationError = {
 /**
  * WorkingLanguageIn
  *
- * 改项目的工作语言 (需求 R339). 取值在路由里查, 不在 zh, en 之中报 422 INVALID_VALUE (同其他决定的取值校验,
- * 不走请求体校验的通用 422).
+ * 改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查
+ * (engagements.parse_language).
  */
 export type WorkingLanguageIn = {
     /**

@@ -232,6 +232,7 @@ export const engagementsListEngagementsOptions = (options?: Options<EngagementsL
  * 数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间
  * 而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
  * 新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).
+ * working_language 不在 zh, en 时 422 INVALID_VALUE (parse_language, 同 PUT working-language).
  */
 export const engagementsCreateEngagementMutation = (options?: Partial<Options<EngagementsCreateEngagementData>>): UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> => {
     const mutationOptions: UseMutationOptions<EngagementsCreateEngagementResponse, EngagementsCreateEngagementError, Options<EngagementsCreateEngagementData>> = {
@@ -290,9 +291,9 @@ export const engagementsGetPlanOptions = (options: Options<EngagementsGetPlanDat
  * Set Working Language
  *
  * 改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时
- * 422 INVALID_VALUE; 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值相同不改,
- * 不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户). 不取项目锁: 后台执行中照样可改,
- * 改之后才建的执行记录取新值.
+ * 422 INVALID_VALUE (parse_language); 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值
+ * 相同不改, 不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户), 留痕写失败时把语言改回
+ * 原值再抛错, 不留下没有留痕的修改. 不取项目锁: 后台执行中照样可改, 改之后才建的执行记录取新值.
  */
 export const engagementsSetWorkingLanguageMutation = (options?: Partial<Options<EngagementsSetWorkingLanguageData>>): UseMutationOptions<EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageError, Options<EngagementsSetWorkingLanguageData>> => {
     const mutationOptions: UseMutationOptions<EngagementsSetWorkingLanguageResponse, EngagementsSetWorkingLanguageError, Options<EngagementsSetWorkingLanguageData>> = {

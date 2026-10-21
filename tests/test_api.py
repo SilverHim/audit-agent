@@ -19,7 +19,6 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementUpdate,
     Phase,
-    ProcedureRun,
     ReviewRecord,
     TrailEntry,
     TrailKind,
@@ -29,7 +28,7 @@ from backend.core.security import create_access_token, decode_access_token, hash
 from backend.main import create_app
 from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
 from tests.external import REPO
-from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail, api_client, wait_idle
+from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail
 
 
 @functools.cache
@@ -630,26 +629,6 @@ MISSTATEMENT = Misstatement(  # 第 1 版 (identified), 由人对判断认定; �
 # ── 工作语言 (需求 R339) ──
 
 
-@pytest.mark.parametrize(("given", "expected"), [({"working_language": "zh"}, "zh"), ({}, "en")])
-async def test_engagement_created_with_working_language(given: dict[str, str], expected: str) -> None:
-    """验收 1, 3: POST /engagements 带 working_language zh 时项目为 zh, 不带为 en (与之前的输出一致); 建项目后跑到
-    ACC-01 的各次执行都记下这个语言."""
-    from tests.test_demo_default import demo_runner
-
-    runner = demo_runner()
-    async with api_client(runner) as client:
-        body = {"period_start": "2025-07-01", "period_end": "2026-06-30", "dataset": "demo", **given}
-        created = await client.post("/api/v1/engagements", json=body)
-        assert created.status_code == 201, created.text
-        eid = created.json()["engagement"]["id"]
-        await wait_idle(runner, eid)
-        overview = (await client.get(f"/api/v1/engagements/{eid}")).json()
-    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
-    assert overview["engagement"]["working_language"] == expected
-    assert runs and {run.language for run in runs} == {expected}
-    assert overview["run_languages"] == {run.id: expected for run in runs}
-
-
 def language_store(api: SimpleNamespace, **fields: Any) -> FakeEngagementStore:
     """本人的项目 (改几个字段, 如锁定) 换成能改工作语言的假项目存储, 返回它."""
     deps = api.client.app.state.deps
@@ -678,22 +657,35 @@ def test_working_language_change_is_trailed_once(api: SimpleNamespace) -> None:
     ]
 
 
+CREATE = {"period_start": "2025-07-01", "period_end": "2026-06-30", "dataset": "demo"}  # POST /engagements 的请求体
+
+
 @pytest.mark.parametrize(
-    ("fields", "url", "language", "status", "code"),
+    ("fields", "method", "url", "body", "status", "code"),
     [
-        ({}, LANGUAGE_URL, "fr", 422, "INVALID_VALUE"),
-        ({}, LANGUAGE_URL, "ZH", 422, "INVALID_VALUE"),
-        ({"locked": True}, LANGUAGE_URL, "zh", 423, "ENGAGEMENT_LOCKED"),
-        ({}, LANGUAGE_URL.replace("001", "002"), "zh", 404, "NOT_FOUND"),  # 不是本人的项目
+        ({}, "PUT", LANGUAGE_URL, {"language": "fr"}, 422, "INVALID_VALUE"),
+        ({}, "PUT", LANGUAGE_URL, {"language": "ZH"}, 422, "INVALID_VALUE"),
+        ({"locked": True}, "PUT", LANGUAGE_URL, {"language": "zh"}, 423, "ENGAGEMENT_LOCKED"),
+        ({}, "PUT", LANGUAGE_URL.replace("001", "002"), {"language": "zh"}, 404, "NOT_FOUND"),  # 不是本人的项目
+        ({}, "POST", "/api/v1/engagements", {**CREATE, "working_language": "fr"}, 422, "INVALID_VALUE"),
     ],
-    ids=["unknown", "case", "locked", "not_mine"],
+    ids=["unknown", "case", "locked", "not_mine", "create_unknown"],
 )
 def test_working_language_change_rejected(
-    api: SimpleNamespace, fields: dict[str, Any], url: str, language: str, status: int, code: str
+    api: SimpleNamespace, fields: dict[str, Any], method: str, url: str, body: dict[str, str], status: int, code: str
 ) -> None:
-    """验收 2: 取值不在 zh, en 422 INVALID_VALUE (区分大小写); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改
-    项目, 不留痕."""
+    """验收 1, 2: 取值不在 zh, en 422 INVALID_VALUE (区分大小写; 建项目与修改同一个校验 parse_language, 建项目时
+    不建); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改项目, 不留痕."""
     store = language_store(api, **fields)
-    response = api.client.put(url, headers=_auth(api), json={"language": language})
+    response = api.client.request(method, url, headers=_auth(api), json=body)
     assert (response.status_code, response.json()["detail"]["code"]) == (status, code)
+    assert store.engagements[0].working_language == "en" and api.trail.entries == []
+
+
+def test_working_language_change_undone_when_trail_fails(api: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """审核 R339-01: 留痕写失败时把语言改回原值再抛错: 项目仍是 en, 也没有留痕, 不留下没有留痕的修改."""
+    store = language_store(api)
+    monkeypatch.setattr(api.trail, "record", AsyncMock(side_effect=RuntimeError("trail down")))
+    with pytest.raises(RuntimeError, match="trail down"):
+        api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
     assert store.engagements[0].working_language == "en" and api.trail.entries == []

@@ -47,6 +47,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailEntry,
     TrailKind,
+    WorkingLanguage,
 )
 from backend.contracts.services import ValidationContext
 from backend.contracts.state import StatePatch
@@ -460,10 +461,13 @@ FIRST_PAGE_CHARS = 4000  # 分类时送给大模型的首页文字上限
 WORD_XML = re.compile(r"<[^>]+>")
 
 
-def upload_run(procedure_id: str, document: DocumentRef, job: str | None = None) -> ProcedureRun:
+def upload_run(
+    procedure_id: str, document: DocumentRef, language: WorkingLanguage, job: str | None = None
+) -> ProcedureRun:
     """上传后直接处理时记在留痕上的执行 (不写入审计产出, 不占程序的执行序号). 分类的 ID 为 UPLOAD-{文件 ID};
     抽取另带作业号 UPLOAD-{文件 ID}-{作业号}, 作业号取定下这次类型的那条 classify 留痕的 ID: 同一作业中断后补做
-    沿用同一作业号 (save_new_contract 据此覆盖而不多出版本), 审计师重新指定类型是新的作业 (版本接着往后排)."""
+    沿用同一作业号 (save_new_contract 据此覆盖而不多出版本), 审计师重新指定类型是新的作业 (版本接着往后排).
+    language 为项目当时的工作语言 (需求 R339, 同 nodes.build_run): 调用处取处理这份文件时项目的 working_language."""
     return ProcedureRun(
         id=f"UPLOAD-{document.id}" + (f"-{job}" if job else ""),
         procedure_id=procedure_id,
@@ -472,6 +476,7 @@ def upload_run(procedure_id: str, document: DocumentRef, job: str | None = None)
         params_snapshot={},
         started_at=datetime.now(UTC),
         status=RunStatus.running,
+        language=language,
     )
 
 
@@ -608,7 +613,7 @@ class DocumentIntake:
 
     async def process(self, eid: str, document: DocumentRef, engagement: Engagement) -> DocumentRef:
         """从头处理一份文件 (读首页, 大模型分类, 按类型抽取), 返回处理后的登记."""
-        decided = await self.classify(eid, document)
+        decided = await self.classify(eid, document, engagement.working_language)
         if decided is None:
             return await self.manual(eid, document, "read")
         kind, reason = decided
@@ -617,9 +622,11 @@ class DocumentIntake:
             return await self.manual(eid, document, "classify")
         return await self.classified(eid, document, kind, engagement, job)
 
-    async def classify(self, eid: str, document: DocumentRef) -> tuple[DocumentType | None, str | None] | None:
+    async def classify(
+        self, eid: str, document: DocumentRef, language: WorkingLanguage
+    ) -> tuple[DocumentType | None, str | None] | None:
         """读首页文字, 按文件名与首页文字调大模型分类 (DOC-CLASSIFY), 返回 (类型, 理由); 判断不了 (含调用出错) 类型为
-        空, 读不出为 None. 不写留痕, 不改登记."""
+        空, 读不出为 None. 不写留痕, 不改登记. language 为项目的工作语言 (见 upload_run)."""
         try:
             text = await first_page_text(self.deps, eid, document)
         except Exception:
@@ -631,7 +638,7 @@ class DocumentIntake:
             result = await self.deps.judgments.call_llm(
                 eid,
                 CLASSIFY,
-                upload_run(CLASSIFY.id, document),
+                upload_run(CLASSIFY.id, document, language),
                 variables,
                 ValidationContext(standards_of=None),
                 self.agent,
@@ -669,7 +676,7 @@ class DocumentIntake:
             actor = document.uploaded_by or self.agent
             job = await self.record(eid, actor, document, kind, reason, requested.request_id)
         else:
-            decided = await self.classify(eid, document)
+            decided = await self.classify(eid, document, engagement.working_language)
             if decided is None:
                 return Staged(None, None, None, "read")
             kind, reason = decided
@@ -685,13 +692,13 @@ class DocumentIntake:
         try:
             if kind is DocumentType.contract:
                 profile = await client_profile(self.deps, engagement, engagement.client_profile_version)
-                run = upload_run("DOC-04", typed, job)
+                run = upload_run("DOC-04", typed, engagement.working_language, job)
                 contract = await extract_contract(self.deps, eid, self.deps.library.load("DOC-04"), run, typed, profile)
             elif kind is DocumentType.confirmation:
-                extraction = await self.extract_reply(eid, typed)
+                extraction = await self.extract_reply(eid, typed, engagement.working_language)
                 reply = extraction.model_dump(mode="json") if extraction is not None else None
             elif kind is DocumentType.registry_extract:
-                found = await self.extract_registry(eid, typed)
+                found = await self.extract_registry(eid, typed, engagement.working_language)
                 registry = found.model_dump(mode="json") if found is not None else None
         except Exception:
             logger.exception("抽取出错 %s %s", eid, document.id)
@@ -758,9 +765,9 @@ class DocumentIntake:
             if kind is DocumentType.contract:
                 done = await self.contract(eid, document, engagement, job, since)
             elif kind is DocumentType.confirmation:
-                done = await self.reply(eid, document)
+                done = await self.reply(eid, document, engagement.working_language)
             elif kind is DocumentType.registry_extract:
-                done = await self.registry(eid, document, since)
+                done = await self.registry(eid, document, engagement.working_language, since)
             else:
                 return document
         except Exception:
@@ -782,7 +789,7 @@ class DocumentIntake:
         extracted 之前, 之后可能还经审计师修改) 不重抽, 算做完; 作业开始之后被改动过 (之后的作业或审计师修改) 的也不
         重抽, 不拿旧作业覆盖: 引用的正是这份文件的算做完, 引用别的原件 (同名文件之后重新上传了) 的这份没抽成,
         转人工 (extract), 审计师可重新指定类型再抽. 其余照常抽取."""
-        run = upload_run("DOC-04", document, job)
+        run = upload_run("DOC-04", document, engagement.working_language, job)
         if since is not None:
             found = await self.deps.financial_store.contracts(eid, [contract_id(document)])
             if found and found[0].extracted_by_run == run.id:
@@ -803,27 +810,29 @@ class DocumentIntake:
             await self.deps.data.bump_version(eid, DataInput.contracts)
         return True
 
-    async def reply(self, eid: str, document: DocumentRef) -> bool:
+    async def reply(self, eid: str, document: DocumentRef, language: WorkingLanguage) -> bool:
         """DOC-06 抽取回函副本的余额与截至日, 记在抽取版本表 (reply, 文件 ID, 第 1 版; 重抽覆盖, 只留最近一次).
 
         不关联到函证 (函证由 CSH-04 发出, 回函经函证平台直达, 在编排里抽取); 这里只留副本的抽取结果供查看, 不能修改,
         所以不留历史."""
-        extraction = await self.extract_reply(eid, document)
+        extraction = await self.extract_reply(eid, document, language)
         if extraction is None:
             return False
         data = extraction.model_dump(mode="json")
         await self.deps.data.save_extraction(eid, "reply", document.id, 1, data, changed_by=AgentId.A3)
         return True
 
-    async def extract_reply(self, eid: str, document: DocumentRef) -> ConfirmationExtraction | None:
-        """DOC-06 抽取回函副本 (不写入); 校验不过为 None."""
+    async def extract_reply(
+        self, eid: str, document: DocumentRef, language: WorkingLanguage
+    ) -> ConfirmationExtraction | None:
+        """DOC-06 抽取回函副本 (不写入); 校验不过为 None. language 为项目的工作语言 (见 upload_run)."""
         template = self.deps.library.load("DOC-06")
         pages = await self.deps.evidence_store.pages(eid, document.id)
         variables = {"document": document.model_dump(mode="json"), "pages": pages}
         result = await self.deps.judgments.call_llm(
             eid,
             template,
-            upload_run("DOC-06", document),
+            upload_run("DOC-06", document, language),
             variables,
             ValidationContext(document=document, standards_of=None),
             self.agent,
@@ -833,7 +842,9 @@ class DocumentIntake:
             return None
         return cast(ConfirmationExtraction, result.report.output)
 
-    async def registry(self, eid: str, document: DocumentRef, since: datetime | None) -> bool:
+    async def registry(
+        self, eid: str, document: DocumentRef, language: WorkingLanguage, since: datetime | None
+    ) -> bool:
         """DOC-REGISTRY 抽取 ASIC 摘录 (需求 R290), 通过时在抽取版本表记新一版 (REGISTRY_TARGET, 文件 ID, 接在已有
         版本之后: 重新上传或改类型后重抽, A3 写), 同一事务内数据版本 +1, 记数据变动 registry_extracts (ACC-04 的
         reads; 承接阶段的执行不记数据版本, 按 R274 不判过期). 补做 (since 为作业开始的时间) 时已有作业开始之后的
@@ -841,7 +852,7 @@ class DocumentIntake:
         records = await self.deps.data.extraction_versions(eid, REGISTRY_TARGET, document.id)
         if since is not None and records and records[-1].changed_at > since:
             return True
-        extraction = await self.extract_registry(eid, document)
+        extraction = await self.extract_registry(eid, document, language)
         if extraction is None:
             return False
         version = records[-1].version + 1 if records else 1
@@ -852,14 +863,16 @@ class DocumentIntake:
             await self.deps.data.bump_version(eid, DataInput.registry_extracts)
         return True
 
-    async def extract_registry(self, eid: str, document: DocumentRef) -> RegistryExtraction | None:
-        """DOC-REGISTRY 抽取 ASIC 摘录 (不写入); 校验不过为 None."""
+    async def extract_registry(
+        self, eid: str, document: DocumentRef, language: WorkingLanguage
+    ) -> RegistryExtraction | None:
+        """DOC-REGISTRY 抽取 ASIC 摘录 (不写入); 校验不过为 None. language 为项目的工作语言 (见 upload_run)."""
         pages = await self.deps.evidence_store.pages(eid, document.id)
         variables = {"document": document.model_dump(mode="json"), "pages": pages}
         result = await self.deps.judgments.call_llm(
             eid,
             REGISTRY,
-            upload_run(REGISTRY.id, document),
+            upload_run(REGISTRY.id, document, language),
             variables,
             ValidationContext(document=document, standards_of=None),
             self.agent,

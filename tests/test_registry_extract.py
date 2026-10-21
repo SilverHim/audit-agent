@@ -764,7 +764,7 @@ async def test_reextraction_appends_after_the_existing_versions(since: datetime 
     )
     before = data.data_version
 
-    assert await DocumentIntake(deps).registry(EID, document, since) is True
+    assert await DocumentIntake(deps).registry(EID, document, ENGAGEMENT.working_language, since) is True
     records = await data.extraction_versions(EID, REGISTRY_TARGET, DOCUMENT)
     assert [(r.version, r.changed_by) for r in records] == [(1, NUMBAT_AUDITOR.id), *[(2, "A3")][: len(versions) - 1]]
     assert data.data_version == before + len(versions) - 1

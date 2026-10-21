@@ -88,8 +88,8 @@ class EngagementOverview(Model):
     # 项目的功能集 (services/features.frozen_features: 已启动取冻结的, 未启动取当前进程的), 按名称排序; 前端据此
     # 决定按哪个功能的规则显示 (如 collab 打开时复核队列争议在前)
     features: list[str] = []
-    # 各次执行的生成语言 (执行 ID → ProcedureRun.language, 需求 R339): 判断与计划按其 run_id 取, 与当前工作语言
-    # (engagement.working_language) 不同时页面标注 "以英文生成" 或 "以中文生成"
+    # 生成语言与当前工作语言 (engagement.working_language) 不同的执行 (执行 ID → ProcedureRun.language, 需求 R339):
+    # 判断, 计划与报告按其 run_id 取, 取到即标注 "以英文生成" 或 "以中文生成"; 查不到 (语言相同, 没有 run_id) 不标
     run_languages: dict[str, WorkingLanguage] = {}
 
 

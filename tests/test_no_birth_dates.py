@@ -242,7 +242,7 @@ async def test_a3_registry_extraction_still_reads_the_page_birth_dates() -> None
         uploaded_at=datetime(2026, 10, 20, tzinfo=UTC),
     )
     deps.financial_store.document_refs.append(document)
-    await DocumentIntake(deps).extract_registry("ENG-X", document)
+    await DocumentIntake(deps).extract_registry("ENG-X", document, "en")
     messages = [m["content"] for e in trail.entries if e.kind is TrailKind.llm_call for m in e.payload["messages"]]
     assert messages and "12 April 1979" in messages[0]
 

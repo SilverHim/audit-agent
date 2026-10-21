@@ -99,7 +99,7 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
         },
         judgment_refs=refs,
         addresses_decision_id=addresses,
-        language=ctx.run.language,
+        run_id=ctx.run.id,
     )
 
 

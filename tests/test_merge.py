@@ -916,10 +916,10 @@ def test_report_revision_is_a_new_id_not_a_lower_version() -> None:
     old = AuditReportVersion(
         id="REPORT-1", version=3, revision=1, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
     )
-    revised = AuditReportVersion(
-        id="REPORT-2", revision=2, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
-    )
     run = finished(make_run("RPT-03", run_no=2))
+    revised = AuditReportVersion(
+        id="REPORT-2", revision=2, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[], run_id=run.id
+    )
     state = initial_state(ENGAGEMENT, [make_procedure("RPT-03")], 1)
     state["report_versions"] = [old]
 

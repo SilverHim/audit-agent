@@ -993,8 +993,9 @@ class ProcedureRun(Versioned):
     data_version: int | None = None
     # 规则引擎没有执行的规则 (需求 R130), 按 YAML 顺序; 全部执行或不经规则引擎为空. 旧记录读回时为空
     rule_outcomes: list[RuleOutcome] = []
-    # 建执行记录时项目的工作语言 (需求 R339, nodes.build_run): 本次执行生成的内容所用的语言, 页面据此标注. 之前的
-    # 执行记录 (Store 与检查点里没有这个键) 读回为 en: 那时的输出都是英文
+    # 建执行记录时项目的工作语言 (需求 R339, nodes.build_run; 上传即处理的执行为 ingest.upload_run): 要求的生成语言,
+    # 提示词从 R340 起按它输出, mock 由 R343 照实记 en; 页面据此标注. 之前的执行记录 (Store 与检查点里没有这个键)
+    # 读回为 en: 那时的输出都是英文
     language: WorkingLanguage = "en"
 
 
@@ -1871,9 +1872,9 @@ class AuditReportVersion(Versioned):
     report_date: date | None = None  # 报告日, 签字当天
     approved_by: str | None = None  # 签字人的用户 ID
     approved_at: datetime | None = None  # 签字时间
-    # 起草它的那次 RPT-03 执行的工作语言 (需求 R339, 同 ProcedureRun.language; 报告不记执行 ID, 语言随稿记下), 签字等
-    # 后续版本沿用; 之前的版本读回为 en
-    language: WorkingLanguage = "en"
+    # 起草它的那次 RPT-03 执行 (需求 R339, 写法同 AuditPlan.run_id): RPT-03 起草的版本记本次执行 (合并时须为本次执行,
+    # merge.check_own_run), 签字等后续版本沿用; 页面按它取执行记录的 language 标生成语言. 之前的版本读回为空, 不标
+    run_id: str | None = None
 
 
 class RepresentationClause(Model):

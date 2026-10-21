@@ -73,7 +73,9 @@ async def recognize(
     trail = FakeTrail()
     deps = make_deps(FakeRegistry(), trail, llm=llm if llm is not None else LayeredMockLLM(UPLOAD_FIXTURES))
     data = path.read_bytes()
-    readings = await SheetIntake(deps).recognize(EID, document(name or path.name, data), data)
+    readings = await SheetIntake(deps).recognize(
+        EID, document(name or path.name, data), data, ENGAGEMENT.working_language
+    )
     return readings, trail
 
 

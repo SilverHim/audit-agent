@@ -726,24 +726,33 @@ def without_field(model: type[BaseModel], dropped: str) -> type[BaseModel]:
 
 
 REPORT = AuditReportVersion(
-    id="REPORT-1", version=1, revision=1, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
+    id="REPORT-1",
+    version=1,
+    revision=1,
+    opinion_type=OpinionType.qualified,
+    sections={},
+    judgment_refs=[],
+    run_id="RUN-RPT-03-1",
 )
 
 
 @pytest.mark.parametrize(
-    ("sample", "field"),
-    [(make_run("REV-02"), "language"), (REPORT, "language"), (ENGAGEMENT, "working_language")],
+    ("sample", "field", "default"),
+    [(make_run("REV-02"), "language", "en"), (REPORT, "run_id", None), (ENGAGEMENT, "working_language", "en")],
     ids=["run", "report", "engagement"],
 )
-def test_records_from_before_working_language_read_back_as_en(sample: BaseModel, field: str) -> None:
-    """需求 R339 验收 3: 加字段之前写进检查点的执行记录与报告稿 (没有 language) 经白名单 serde 读回为现在的类, 取
-    en (那时的输出都是英文); 存储里的旧行 (JSON 没有这个键) 读回同样是 en. 项目的 working_language 同理."""
+def test_records_from_before_working_language_read_back_with_defaults(
+    sample: BaseModel, field: str, default: str | None
+) -> None:
+    """需求 R339 验收 3: 加字段之前写进检查点的执行记录 (没有 language) 经白名单 serde 读回为现在的类, 取 en (那时的
+    输出都是英文); 存储里的旧行 (JSON 没有这个键) 读回同样是 en. 项目的 working_language 同理; 报告稿没有 run_id 的
+    读回为空 (页面查不到执行, 不标生成语言)."""
     model = type(sample)
     serde = checkpoint_serde()
     old = without_field(model, field)(**sample.model_dump(exclude={field}))
     back = serde.loads_typed(serde.dumps_typed(old))
-    assert type(back) is model and getattr(back, field) == "en"
-    assert getattr(model.model_validate(sample.model_dump(mode="json", exclude={field})), field) == "en"
+    assert type(back) is model and getattr(back, field) == default
+    assert getattr(model.model_validate(sample.model_dump(mode="json", exclude={field})), field) == default
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:
