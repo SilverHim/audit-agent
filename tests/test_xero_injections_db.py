@@ -1,8 +1,8 @@
 """注入测试的连库断言 (设计稿 v2.1 第 8 节): 副本 (xero_case) 经补造清单写入测试库, 用真实 SQL 与存储跑现有程序,
 检真实 SQL 与取数能否把注入的事实带到判断面前 (大模型仍读 fixture). T0 基线副本 (需求 R121), T1 收入截止 (需求
-R122), T2 重复开票未冲销 (需求 R252, 演示配置的功能集), T4 银行回函余额差异 (需求 R123). 例外按 (规则, 对象 ID) 比,
-不按序号. 设 TEST_DATABASE_URL 为已迁移的
-独立测试库 (没配时跳过); 要本地快照.
+R122), T2 重复开票未冲销 (需求 R252), T4 银行回函余额差异 (需求 R123), T5 与 T5' 折旧错记 (需求 R253); T2, T5 在演示
+配置的功能集上跑. 例外按 (规则, 对象 ID) 比, 不按序号. 设 TEST_DATABASE_URL 为已迁移的独立测试库 (没配时跳过);
+要本地快照.
 
 live 组 (需求 R124, 设计稿第 8.1 节): 识别能力只由真实模型证明, 同一判断对象在基线 (T0) 与注入副本上成对断言,
 两侧都必须通过. 只有被测对象交真实模型, 其余读 fixture; 另标 live (须配 LLM_MODEL 与 LLM_API_KEY, 见
@@ -30,10 +30,12 @@ from tests.test_xero_injections import (
     T2_FEATURES,
     T2_RULES,
     T4_TRANSIT,
+    T5P_RULES,
     assert_t1_pair,
     assert_t2_judgments,
     assert_t2_rules,
     assert_t4_pair,
+    assert_t5,
     paired_side,
     t2_request,
     t4_rules,
@@ -232,6 +234,24 @@ async def test_t2_on_postgres(xero_case: Any) -> None:
     assert (trivial, largest) == (1647, {"XJ-539": 9, "XJ-585": 1050})
     flagged = {str(x.detail["entry_no"]) for s in states for x in s["exceptions"] if x.procedure_id == "GEN-05"}
     assert not flagged & set(largest)
+
+
+async def test_t5_on_postgres(xero_case: Any) -> None:
+    """R253 验收 1, 3 (连库): 演示配置的功能集下, T0 (即 T5) 与 T5' 副本各经连库测试台跑 GEN-02 的依赖闭包, 大模型都读
+    运行副本: 真实 SQL 的 GEN-05 与离线预置相同 (T0 为 XERO_RULES, T5' 为 T5P_RULES), 两边的对比见 assert_t5; 重要性
+    两边都是 32431 / 16216 / 1622 (收入不变); PLN-07 A01 由 9 条变为 7 条, 少 710 与 711 (余额都为 0, 没有变动), 820
+    由 -198317 变为 -205817 (本期 -126697 减期初 79120), 其余不变."""
+    t0, t5p = xero_case("T0", base="t0"), xero_case("T5p", base="t5p")
+    base, _ = await journals_side(t0, [])
+    removed, _ = await journals_side(t5p, [])
+    for state, rules in ((base, XERO_RULES), (removed, T5P_RULES)):
+        [run] = [r for r in state["procedure_runs"] if r.procedure_id == "GEN-05"]
+        assert [x for x in state["exceptions"] if x.procedure_id == "GEN-05"] == rules["GEN-05"](run).exceptions
+        amounts = (state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"])
+        assert amounts == (32431, 16216, 1622)
+    assert_t5(base, removed, project_fields={"performed_by"})  # 两个项目各自新建的负责人
+    expected = {code: v for code, v in a01_changes(base).items() if code not in ("710", "711")} | {"820": -205817}
+    assert (len(a01_changes(base)), a01_changes(removed)) == (9, expected)
 
 
 # ── REV-08 被测总体随注入变 (需求 R324 审核 R324-02): 补丁只在副本上执行, 期望值由副本的表经 rev08_populations 算出 ──

@@ -1,0 +1,58 @@
+{
+  "scenario": "T5p",
+  "title": "Reverse control for T5: the manual office equipment depreciation (JournalNumber 499) is removed, so the non-standard entry and its misstatement disappear",
+  "ops": [
+    {
+      "op": "delete",
+      "file": "api/journals.json",
+      "match": {"JournalNumber": 499},
+      "before": {
+        "JournalID": "08c6e0fb-c77e-581e-8dc0-13ff8a1f183a",
+        "JournalDate": "/Date(1786838400000+0000)/",
+        "JournalNumber": 499,
+        "CreatedDateUTC": "/Date(1792241918677+0000)/",
+        "Reference": "Being depreciation on office equipment - Manual",
+        "JournalLines": [
+          {
+            "JournalLineID": "eeac7f01-0ebe-50c7-a404-4cf9c23df24d",
+            "AccountID": "2d69b4ee-37d4-4f67-b950-32cbdd5765ed",
+            "AccountCode": "710",
+            "AccountType": "FIXED",
+            "AccountName": "Office Equipment",
+            "Description": "Office equipment depreciation",
+            "NetAmount": 750.0,
+            "GrossAmount": 750.0,
+            "TaxAmount": 0.0
+          },
+          {
+            "JournalLineID": "46bcc55b-3aa2-54a5-938e-d609a37ba0ae",
+            "AccountID": "24d010bf-5e4b-42dd-9aa3-a5484dd0686f",
+            "AccountCode": "711",
+            "AccountType": "FIXED",
+            "AccountName": "Less Accumulated Depreciation on Office Equipment",
+            "Description": "Office equipment depreciation",
+            "NetAmount": -825.0,
+            "GrossAmount": -825.0,
+            "TaxAmount": 0.0
+          },
+          {
+            "JournalLineID": "508b9224-f59c-538b-8f24-d02e6e3bb50e",
+            "AccountID": "66e60a82-99d8-47d1-956b-5baea404acba",
+            "AccountCode": "820",
+            "AccountType": "CURRLIAB",
+            "AccountName": "GST",
+            "Description": "",
+            "NetAmount": 75.0,
+            "GrossAmount": 75.0,
+            "TaxAmount": 0.0
+          }
+        ],
+        "SourceType": "MANJOURNAL",
+        "SourceID": "bb6cfcfc-4500-4475-bd3a-93ee512428e0"
+      }
+    },
+    {"op": "tb_shift", "code": "710", "delta_cents": -75000},
+    {"op": "tb_shift", "code": "711", "delta_cents": 82500},
+    {"op": "tb_shift", "code": "820", "delta_cents": -7500}
+  ]
+}
