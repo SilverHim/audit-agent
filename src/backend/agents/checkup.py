@@ -160,12 +160,22 @@ class DataCheckup:
         return program_requests(needs, have, now)
 
     async def run_if_stale(self, eid: str) -> CheckRun | None:
-        """最近一次体检已不对应当前数据时跑一次, 否则不跑, 返回 None: 没体检过, 之后又写过数据 (数据版本变了), 或还有
-        体检不再提出而仍待补交的请求 (RETIRED_REQUESTS, 已有项目里的报表草稿请求; 这次体检撤回它). 用于 P1 等数据节点
-        (恢复与重放不重复体检), 确认数据已齐, 启动补做与已提交导入的重试 (上次体检失败或被跳过时补做)."""
+        """最近一次体检已不对应当前数据时跑一次, 否则不跑, 返回 None: 没体检过, 之后又写过数据 (数据版本变了), 还有
+        体检不再提出而仍待补交的请求 (RETIRED_REQUESTS, 已有项目里的报表草稿请求; 这次体检撤回它), 或有待补交的文件
+        请求而它要的类型现在已有 (需求 R344, 口径同对照请求用的 resources 与 OnHand.has: 登记文件与改类型本身不改数据
+        版本 (抽取转人工时没有写入), 如对着合同请求上传的合同抽取转人工, 之后的那次体检失败或被跳过; 这次体检把请求
+        转 received). 用于 P1 等数据节点 (恢复与重放不重复体检), 确认数据已齐, 启动补做与已提交导入的重试 (上次体检
+        失败或被跳过时补做).
+
+        资料没变时不重复体检, 靠两个前提: 体检本身 (run_checks) 不提文件请求, 程序要的请求 (program_requests) 只要
+        现在还没有的资料, 所以体检之后待补交的文件请求要的类型都还没有. 前提被打破 (如体检提出文件请求, 或程序要的
+        请求把已有的资料也列上) 时, 这类请求体检后仍 open, 每次调用都会重跑体检."""
         run = await self.deps.data.check_run(eid)
         if run is not None and run.data_version == (await self.deps.data.readiness(eid)).data_version:
-            requests = await self.deps.data.requests(eid)
-            if not any(r.status == "open" and r.id in RETIRED_REQUESTS for r in requests):
+            have = await resources(self.deps, eid)
+            requests = [r for r in await self.deps.data.requests(eid) if r.status == "open"]
+            retired = any(r.id in RETIRED_REQUESTS for r in requests)
+            arrived = any(r.document_type is not None and have.has(r.document_type) for r in requests)
+            if not retired and not arrived:
                 return None
         return await self.run(eid)

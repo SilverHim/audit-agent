@@ -13,7 +13,6 @@ import json
 from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +47,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
+    RunPopulation,
     TaskStatus,
     TrailEntry,
     TrailKind,
@@ -61,8 +61,9 @@ from backend.orchestration.runner import GraphRunner
 from backend.orchestration.scheduler import build_schedule
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE
+from backend.services.populations import distinct_items, judged_subjects, total_cents
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, wait_idle
+from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, no_population, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
 from tests.test_e2e_mock import Demo, assert_pointers_resolve, real_storage, trail_of
@@ -74,12 +75,14 @@ from tests.xero_fakes import (
     XERO_DATASET,
     XERO_JOURNAL_VOUCHERS,
     XERO_JOURNALS_FEATURES,
+    XERO_PERIOD,
     XERO_RULES,
     finish_xero17,
     new_xero_deps,
     xero17_gates,
     xero17_reviews,
     xero_journal_reviews,
+    xero_rev08_populations,
     xero_uploads,
 )
 from tests.xero_flow import approve_acceptance, confirm_ready, demo_source, import_stage, offline_runner
@@ -566,6 +569,57 @@ async def assert_documents(x: Xero17) -> None:
     }
 
 
+# ── 需求 R324: 被测总体 (验收 1, 3, 4) ──
+
+ORC1026_FIELDS = {  # ORC1026 的识别字段: 发票号, 客户, 合同, 入账日, 分录 (金额在项目的 amount_cents)
+    "invoice_no": "ORC1026",
+    "customer": "DIISR - Small Business Services",
+    "contract_id": "CON-X01",
+    "posting_date": "2026-09-17",
+    "journal_entry_id": "XJ-580-2",
+}
+
+
+@shared_loop
+async def test_populations(xero17: Xero17) -> None:
+    """需求 R324 验收 1: POP-RUN-REV-08-1 只有第 1 版, R01, R02 为窗口内六张 (990000), R03 为找得到收款的五张
+    (935000, 没有 ORC1024), 去重后六张 990000; ORC1026 在 R01 带服务完成记录, 签收日与签收人, 在 R03 带收款流水,
+    收款日与收款额; 例外仍只有 X-REV-08-1-R03-1. 验收 3: 只有执行过的三条规则程序 (PLN-07, REV-08, CSH-05) 写了总体,
+    判断程序 (REV-02, CSH-02) 与闸门程序 PLN-01 没有; 流程结束时检查点状态里没有总体. 验收 4: REV-03 的对象清单为三份
+    合同."""
+    store = xero17.runner.deps.output_store
+    populations = {p.id: p for p in await store.latest(xero17.eid, RunPopulation)}
+    assert sorted(populations) == ["POP-RUN-CSH-05-1", "POP-RUN-PLN-07-1", "POP-RUN-REV-08-1"]
+    rev08 = populations["POP-RUN-REV-08-1"]
+    assert await store.history(xero17.eid, RunPopulation, rev08.id) == [rev08]
+    assert (rev08.run_id, rev08.procedure_id, rev08.rules) == ("RUN-REV-08-1", "REV-08", xero_rev08_populations())
+    assert [(r.rule_id, r.source_type, r.count, r.amount_cents) for r in rev08.rules] == [
+        ("R01", "sales_invoice", 6, 990000),
+        ("R02", "sales_invoice", 6, 990000),
+        ("R03", "sales_invoice", 5, 935000),
+    ]
+    window = ["ORC1020", "ORC1021", "ORC1022", "ORC1023", "ORC1024", "ORC1026"]
+    numbers = [sorted(i.fields["invoice_no"] for i in r.items) for r in rev08.rules]
+    assert numbers == [window, window, [n for n in window if n != "ORC1024"]]
+    items = distinct_items(rev08)
+    assert items is not None and (len(items), total_cents(i.amount_cents for i in items)) == (6, 990000)
+    r01, _, r03 = ({i.source_id: i for i in r.items}[ORC1026] for r in rev08.rules)
+    assert (r01.amount_cents, r01.fields) == (
+        715000,
+        ORC1026_FIELDS
+        | {"records": [{"delivery_no": "SR-ORC1026", "signed_date": "2026-09-17", "signed_by": "Priya Natarajan"}]},
+    )
+    receipt = {"bank_transaction_ids": "BT-090-0124", "received_dates": "2026-10-14", "received_cents": 385000}
+    assert (r03.amount_cents, r03.fields) == (715000, ORC1026_FIELDS | receipt)
+    exceptions = await store.latest(xero17.eid, AuditException, run_id="RUN-REV-08-1")
+    assert [(x.id, x.amount_cents) for x in exceptions] == [("X-REV-08-1-R03-1", 330000)]
+    values = (await xero17.runner.app.aget_state(GraphRunner.config(xero17.eid))).values
+    assert values["staged_results"] == [] and no_population(values)
+    judgments = await store.latest(xero17.eid, Judgment, procedure_id="REV-03")
+    tasks = await store.latest(xero17.eid, ReviewTask, procedure_id="REV-03")
+    assert judged_subjects("RUN-REV-03-1", judgments, tasks) == XERO17_CONTRACTS
+
+
 # ── 验收 8: 原目录不变 ──
 
 
@@ -656,8 +710,6 @@ async def test_journals_decisions_and_calls(journals: Xero17, xero17: Xero17) ->
 
 
 # ── R120: 连库变体 ──
-
-XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.json)
 
 
 @pytest.mark.slow

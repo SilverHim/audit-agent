@@ -11,12 +11,12 @@ from fastapi.responses import JSONResponse, Response
 
 from backend.contracts.errors import DataRejected, DecisionRejected, EngagementLocked
 
-# 写入时的 NOT_AT_GATE 是 409; GET 闸门由路由单独返回 404, 不走这张表
 _STATUS: dict[str, int] = {
     "BAD_CREDENTIALS": 401,
     "NOT_FOUND": 404,
     "TASK_NOT_FOUND": 404,
     "ENGAGEMENT_BUSY": 409,
+    "NOT_AT_GATE": 409,
     "RESUME_REQUIRED": 409,
     "FEATURES_MISMATCH": 409,
     "NOT_AWAITING_DATA": 409,
@@ -26,6 +26,7 @@ _STATUS: dict[str, int] = {
     "TASK_NOT_PENDING": 409,
     "REQUEST_NOT_OPEN": 409,
     "NOT_AWAITING_REVIEW": 409,
+    "NOT_AWAITING_CORRECTION": 409,  # 不在等待更正时提交更正通知 (需求 R162)
     "NOT_RERUNNABLE": 409,
     "XERO_NOT_CONNECTED": 409,
     "XERO_TENANT_REQUIRED": 409,
@@ -55,9 +56,10 @@ def api_error(code: str, message: str = "", *, status: int | None = None, **extr
 
 
 def http_for_decision(exc: DecisionRejected) -> HTTPException:
-    """DecisionRejected 按错误码表映射; 写入路径上的 NOT_AT_GATE 为 409. DataRejected 的 extra 并入 detail."""
-    status = 409 if exc.code == "NOT_AT_GATE" else None
-    return api_error(exc.code, exc.message, status=status, **(exc.extra if isinstance(exc, DataRejected) else {}))
+    """DecisionRejected 按错误码表映射. DataRejected 的 extra 并入 detail."""
+    extra = exc.extra if isinstance(exc, DataRejected) else {}
+    # status 照错误码表取; 显式写 None 是因为 extra 为 dict[str, object], 不写时 mypy 认为它可能带 status
+    return api_error(exc.code, exc.message, status=None, **extra)
 
 
 @asynccontextmanager

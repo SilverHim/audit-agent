@@ -6,22 +6,36 @@
 
 例外行可带 extra_pointers 列 (需求 R223): 在主指针 (source_type, source_id) 之后附加的证据指针, 如分录行的例外另指
 相关科目的试算表行. 不进 detail, 也不进主指针的 locator.
+
+执行了的规则各记一份被测总体 (RuleResult.populations, 需求 R324, 按 YAML 顺序): emit rows 的规则以返回行为总体;
+emit exception 的规则写了 population 时另执行其 SQL (参数同规则 SQL), 没写的记为未记录 (count 为空). 总体 SQL 出错
+与规则出错同样抛 RuleError.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, get_args
 
 from pydantic_core import to_jsonable_python
 
 from backend.contracts.errors import RuleError
 from backend.contracts.knowledge import ProcedureTemplate, RuleSpec
-from backend.contracts.models import AuditException, EvidencePointer, ProcedureRun, RuleOutcome
+from backend.contracts.models import (
+    AuditException,
+    EvidencePointer,
+    PopulationItem,
+    ProcedureRun,
+    RuleOutcome,
+    RulePopulation,
+    SourceType,
+)
 from backend.contracts.ports import FinancialDataStore
 from backend.contracts.services import RuleResult
 from backend.services.judgment_engine import ROW_EVIDENCE
+from backend.services.populations import total_cents
 
 DEFAULT_REASON = "前置检查未通过"  # 命中的检查没有给出理由 (reason 列为空或没有) 时的理由
+ROW_TYPES = frozenset(get_args(SourceType))  # 认识的行类型, 被测总体的对象类型只取这些 (rule_population)
 EXTRA_POINTERS = "extra_pointers"  # 附加指针列: JSON 数组 (或其文本), 每项 {source_type, source_id, locator 可选}
 
 
@@ -61,6 +75,30 @@ def extra_pointers(value: Any) -> list[EvidencePointer]:
     return pointers
 
 
+def rule_population(rule_id: str, rows: Sequence[Mapping[str, Any]]) -> RulePopulation:
+    """一条规则的被测总体 (需求 R324): 每行一个被测项目. 各行 source_type 列相同且是认识的行类型 (SourceType) 时为
+    对象类型; 不同 (如 GEN-03 C01 合并分录与流水), 不认识或没有该列时对象类型为空, 各行的 source_type 原样留在识别字段
+    里 (不报错: emit rows 的规则返回什么列由程序自定). source_id 列为行 ID (没有该列时取 id 列, emit rows 的规则多以 id
+    返回行 ID), amount_cents 列为金额, 其余列为识别字段 (JSON 形式, 日期成 ISO 文本). 金额合计见
+    populations.total_cents."""
+    types = {row.get("source_type") for row in rows}
+    only = next(iter(types)) if len(types) == 1 else None
+    source_type = only if only in ROW_TYPES else None
+    items = []
+    for row in rows:
+        key = "source_id" if "source_id" in row else "id"
+        lifted = {key, "amount_cents", *(("source_type",) if source_type is not None else ())}
+        fields = to_jsonable_python({k: v for k, v in row.items() if k not in lifted})
+        items.append(PopulationItem(source_id=row.get(key), amount_cents=row.get("amount_cents"), fields=fields))
+    return RulePopulation(
+        rule_id=rule_id,
+        source_type=source_type,
+        items=items,
+        count=len(items),
+        amount_cents=total_cents(item.amount_cents for item in items),
+    )
+
+
 class SqlRuleEngine:
     def __init__(self, financial_store: FinancialDataStore) -> None:
         self.financial_store = financial_store
@@ -78,7 +116,13 @@ class SqlRuleEngine:
                 rows = await self.financial_store.query(eid, rule.sql, params)
                 if rule.emit == "rows":
                     result.rows[rule.id] = rows
+                    result.populations.append(rule_population(rule.id, rows))
                     continue
+                if rule.population is None:
+                    result.populations.append(RulePopulation(rule_id=rule.id))  # 未记录
+                else:
+                    tested = await self.financial_store.query(eid, rule.population.sql, params)
+                    result.populations.append(rule_population(rule.id, tested))
                 for number, row in enumerate(rows, 1):
                     source_id = row["source_id"]
                     locator = ", ".join(k for k in row if k not in {"source_type", "source_id", EXTRA_POINTERS})

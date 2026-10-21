@@ -43,6 +43,7 @@ from tests.fakes import (
     FAKE_GUID,
     NUMBAT_AUDITOR,
     NUMBAT_PROFILE,
+    CreatingEngagementStore,
     FakeAbr,
     FakeDataStore,
     FakeRegistry,
@@ -52,7 +53,7 @@ from tests.fakes import (
     make_deps,
     wait_idle,
 )
-from tests.test_demo_default import SETTINGS, CreatingEngagementStore, demo_runner, needs_snapshot
+from tests.test_demo_default import SETTINGS, demo_runner, needs_snapshot
 
 CLIENTS = "/api/v1/clients"
 ENGAGEMENTS = "/api/v1/engagements"
@@ -238,16 +239,18 @@ QUERIED = (EvidenceType.external, Reliability.external_original)
 
 
 async def new_client_engagement(guid: str) -> tuple[GraphRunner, list[str], str, dict[str, Any], dict[str, Any]]:
-    """经接口新建客户 Wombat 与它的项目 (没有数据集), 等后台停下: 返回 runner, 数据集目录的查找, 项目 ID, 总览与
-    客户资料页. ABN 经假 ABR (Wombat 为有效的公司登记, 有 ACN)."""
+    """经接口新建客户 Wombat 与它的项目 (没有数据集, 工作语言 zh), 等后台停下: 返回 runner, 数据集目录的查找, 项目
+    ID, 总览与客户资料页. ABN 经假 ABR (Wombat 为有效的公司登记, 有 ACN)."""
     runner, looked = spy_runner(FakeAbr({"44900043101": "active"}), guid)
     async with api_client(runner) as client:
         client_id = (await post(client, wombat())).json()["client_id"]
-        created = await client.post(ENGAGEMENTS, json={**PERIOD, "client_id": client_id})
+        created = await client.post(ENGAGEMENTS, json={**PERIOD, "client_id": client_id, "working_language": "zh"})
         assert created.status_code == 201, created.text
         overview = created.json()
         eid = overview["engagement"]["id"]
-        assert (overview["engagement"]["dataset"], overview["client_name"]) == (None, "Wombat Analytics Pty Ltd")
+        engagement = overview["engagement"]
+        assert (engagement["dataset"], engagement["working_language"]) == (None, "zh")  # 需求 R339 验收 1
+        assert overview["client_name"] == "Wombat Analytics Pty Ltd"
         await wait_idle(runner, eid)
         state = (await client.get(f"{ENGAGEMENTS}/{eid}")).json()
         view = (await client.get(f"{ENGAGEMENTS}/{eid}/client-profile")).json()

@@ -2,6 +2,7 @@
 (接口文档第 7 节 recover 规则第 2 条). R30: 闸门决定从 Store 与该决定重建效果, 以该闸门节点身份写入检查点.
 R31: 客户画像版本写入检查点后回 p0_intel; 复核决定以 Command(resume=决定 ID) 交给等待中的节点."""
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,6 +21,7 @@ from backend.contracts.models import (
     OpinionType,
     Phase,
     PlanStatus,
+    Procedure,
     ProcedureRun,
     ProcedureStatus,
     ProfileSource,
@@ -38,14 +40,18 @@ from backend.orchestration.gates import acc01_effects
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner, waiting_payloads
 from backend.services.presentation import record_presentation
+from backend.services.review_queue import RERUNNABLE
 from tests.external import needs
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
     TYPO_PROFILE,
+    FakeJudgmentEngine,
+    FakeOutputStore,
     FakeTrail,
     ScriptA3,
     ScriptA4,
+    fails_first,
     finished,
     make_runner,
     preset_rerun,
@@ -73,6 +79,7 @@ from tests.test_fin_gate import at_fin_gate, fin_decision
 from tests.test_flow import REVIEWS, approve_materiality, start_numbat
 from tests.test_presentation import SHOWN_AT, presented_ba01
 from tests.test_rerun import CrashAfterCommit, FlakyRegistry, failed_at_p0
+from tests.test_rerun_decision import SI0612, SI0618, judged, rev02_judged_by, rev03_confirmed
 from tests.test_rpt_gate import at_rpt_gate, reject_and_redraft, rpt_decision
 
 EID = ENGAGEMENT.id
@@ -880,9 +887,11 @@ async def test_group_rerun_recovered_in_run_order(monkeypatch: pytest.MonkeyPatc
     assert entry.payload["closed_task_ids"] == ["T-RUN-DOC-04-1-CON-001-v1"]
 
 
-async def test_group_rerun_trail_backfilled_with_closed_tasks() -> None:
-    """Q17: DOC-04 第 1 次两份合同失败, rerun 决定只写入 Store (留痕没写成, 节点未恢复): recover 补写的留痕列出
-    一并关闭的另一份合同的任务, 节点整组重跑后走到重要性闸门."""
+Check = Callable[[], Awaitable[None]]  # 补做之后各场景自己的断言
+
+
+async def doc04_two_failed() -> tuple[GraphRunner, FakeOutputStore, Check]:
+    """DOC-04 (P1 节点内等待) 第 1 次两份合同失败 (两个 failed 任务); 整组重跑后走到重要性闸门."""
     seen: list[list[str]] = []
 
     def agents(deps: Any) -> dict[str, Any]:
@@ -905,15 +914,50 @@ async def test_group_rerun_trail_backfilled_with_closed_tasks() -> None:
         EID, acc01_decision(GateVerdict.approve, id="D-GATE")
     )
     await wait_idle(runner, EID)
+
+    async def check() -> None:
+        assert (await runner.app.aget_state(CONFIG)).next == ("gate_p1_risk",)
+        assert seen == [[], ["CON-001", "CON-002"]]
+
+    return runner, store, check
+
+
+async def rev02_failed_and_unattributed() -> tuple[GraphRunner, FakeOutputStore, Check]:
+    """REV-02 (P2, 真实 A6 与假判断引擎) 第 1 次两个对象判断失败: SI-2026-0612 带 REV-08 的跨期例外, 转 unattributed
+    任务; SI-2026-0618 没有规则例外, 为 failed 任务 (需求 R347: 两类同属一组). 整组重跑时两个对象都重判, 都成功."""
+    engine = FakeJudgmentEngine({SI0612: fails_first(1), SI0618: fails_first(1, "failed")})
+    s = await rev03_confirmed(rev02_judged_by(engine))
+
+    async def check() -> None:
+        procedure = await s.output_store.get(EID, Procedure, "REV-02", 3)  # 第 1 次执行后 v2, rerun 写出 v3
+        assert procedure is not None and procedure.rerun_subject_ids == [SI0612, SI0618]
+        assert sorted(judged(engine)) == [SI0612, SI0612, SI0618, SI0618]
+
+    return s.runner, s.output_store, check
+
+
+@pytest.mark.parametrize("scenario", [doc04_two_failed, rev02_failed_and_unattributed], ids=["doc04", "rev02"])
+async def test_group_rerun_trail_backfilled_with_closed_tasks(
+    scenario: Callable[[], Awaitable[tuple[GraphRunner, FakeOutputStore, Check]]],
+) -> None:
+    """Q17: 一轮失败留下两个可重跑任务, 对其中 (按 ID) 最后一个 failed 任务的 rerun 决定只写入 Store (留痕没写成,
+    节点未恢复): recover 补写的留痕列出一并关闭的另一个任务, 与提交时 DecisionSubmit 关闭的组相同, 之后整组重跑.
+    doc04: P1 节点内等待, 两份合同各一个 failed 任务; rev02 (需求 R347): P2, 另一个是带规则例外的对象判断失败留下的
+    unattributed 任务, 同属一组."""
+    runner, store, check = await scenario()
     pending = sorted(await store.latest(EID, ReviewTask, status=TaskStatus.pending), key=lambda t: t.id)
-    await preset_rerun(store, pending[1], "D-1")
+    group = [t for t in pending if t.kind in RERUNNABLE]
+    decided = [t for t in group if t.kind is TaskKind.failed][-1]
+    others = [t.id for t in group if t.id != decided.id]
+    assert len(group) == 2 and len(others) == 1
+    await preset_rerun(store, decided, "D-RERUN")  # rev02 的 D-1 至 D-3 是 REV-03 的确认
 
     await runner.recover()
     await wait_idle(runner, EID)
 
-    assert (await runner.app.aget_state(CONFIG)).next == ("gate_p1_risk",) and runner.run_error(EID) is None
-    assert seen == [[], ["CON-001", "CON-002"]]
+    assert runner.run_error(EID) is None
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    [entry] = [e for e in trail.entries if e.idempotency_key == "D-1"]
-    assert entry.payload["closed_task_ids"] == ["T-RUN-DOC-04-1-CON-001-v1"]
+    [entry] = [e for e in trail.entries if e.idempotency_key == "D-RERUN"]
+    assert entry.payload["closed_task_ids"] == others
+    await check()

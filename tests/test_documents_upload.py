@@ -43,6 +43,7 @@ from backend.services import data_import
 from backend.services.data_service import DataService, edit_entry
 from backend.services.import_batches import staged_of
 from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from tests.external import REPO
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CONTRACTS,
@@ -200,6 +201,52 @@ async def test_uploaded_confirmation_reply_is_extracted_without_linking() -> Non
     )
     extraction = data.extractions[("reply", doc.id, 1)]
     assert (extraction["data"]["account_no"], extraction["data"]["confirmed_balance_cents"]) == ("12345601", 120840000)
+
+
+class LanguageRecorder:
+    """判断引擎外包一层, 记下每次调用大模型时的 (程序, 交给它的执行的 language); 其余照转."""
+
+    def __init__(self, inner: JudgmentEngine) -> None:
+        self.inner = inner
+        self.calls: list[tuple[str, str]] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    async def call_llm(self, eid: str, template: Any, run: ProcedureRun, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((template.id, run.language))
+        return await self.inner.call_llm(eid, template, run, *args, **kwargs)
+
+
+async def test_upload_runs_take_the_project_language() -> None:
+    """需求 R339 验收 3 (审核 R339-07, R339-11): 上传即处理的执行也记处理时项目的工作语言. 项目改为 zh 后, 直接上传
+    (分类, 合同与回函的抽取), A3 按指定类型抽取 ASIC 摘录, 智能导入 (分类与合同抽取, 账表识别) 交给大模型的执行都是 zh;
+    在注入的判断引擎上记, 看的是交给大模型的那一次执行."""
+    runner, _, _, evidence, _ = setup()
+    deps = upload_deps(runner)
+    assert isinstance(deps.judgments, JudgmentEngine)
+    recorder = LanguageRecorder(deps.judgments)
+    deps = replace(deps, judgments=recorder)
+    service = DataService(deps, runner)
+    assert await runner.deps.engagement_store.set_working_language(EID, "zh") == "en"
+    engagement = await runner.deps.engagement_store.get(EID)
+    assert engagement is not None
+
+    await service.upload_documents(
+        EID, [("CON-001.pdf", b"%PDF CON-001"), ("12345601.pdf", b"%PDF reply")], actor="U-1"
+    )
+    await drain(service)
+    extract = await evidence.save(
+        EID, "900043030.pdf", b"%PDF registry", type=DocumentType.other, reliability=Reliability.internal_copy
+    )
+    await DocumentIntake(deps).classified(EID, extract, DocumentType.registry_extract, engagement)
+    accounts = (REPO / "data" / "demo" / "accounts.csv").read_bytes()
+    await service.start_batch(EID, [("CON-002.pdf", b"%PDF CON-002"), ("accounts.csv", accounts)], actor="U-1")
+    await drain(service)
+
+    assert sorted(set(recorder.calls)) == [
+        (p, "zh") for p in ("DOC-04", "DOC-06", "DOC-CLASSIFY", "DOC-REGISTRY", "DOC-SHEET")
+    ]
 
 
 async def test_unknown_type_needs_manual_then_type_set_by_auditor() -> None:

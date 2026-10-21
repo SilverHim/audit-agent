@@ -1259,14 +1259,14 @@ async def test_rpt03_validation_ignores_superseded_judgments() -> None:
 
 
 def test_reads_check_sees_comma_joined_tables(tmp_path: Path) -> None:
-    """R274-08: 加载校验按账表名整词扫描规则 SQL, 逗号连接的表也认得出: REV-08 的 R03 改成逗号连接银行流水 (只有
-    这条规则读它), reads 漏了 bank_transactions 时报错."""
+    """R274-08: 加载校验按账表名整词扫描规则 SQL, 逗号连接的表也认得出: REV-08 的 R03 与其被测总体的 SQL (R324) 都改成
+    逗号连接银行流水 (只有这两段读它), reads 漏了 bank_transactions 时报错."""
     root = tmp_path / "knowledge"
     shutil.copytree(get_settings().KNOWLEDGE_ROOT, root)
     path = root / "procedures" / "REV-08.yaml"
     text = path.read_text(encoding="utf-8")
     join = "FROM sales_invoices i JOIN bank_transactions t ON t.engagement_id=i.engagement_id"
-    assert text.count(join) == 1
+    assert text.count(join) == 2
     text = text.replace(join, "FROM sales_invoices i, bank_transactions t WHERE t.engagement_id=i.engagement_id")
     text = text.replace(
         "reads: [sales_invoices, delivery_notes, bank_transactions]", "reads: [sales_invoices, delivery_notes]"

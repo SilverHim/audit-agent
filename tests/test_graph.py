@@ -17,13 +17,17 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     GateVerdict,
+    Judgment,
     MaterialityCandidates,
+    Misstatement,
+    MisstatementStatus,
     OpinionType,
     Phase,
     PlanStatus,
     ProcedureStatus,
     ProfileSource,
     ReportStatus,
+    RerunRequest,
     ReviewTask,
     TargetType,
     TaskKind,
@@ -37,7 +41,11 @@ from backend.orchestration.graph import (
     GATE_NODES,
     GATES,
     ScheduleStuck,
+    after_communicate,
     after_fan_in,
+    after_final_review,
+    after_triage,
+    after_verify,
     compile_graph,
     gate_route,
     route_schedule,
@@ -310,6 +318,8 @@ async def test_acc01_decision_on_old_scorecard_is_represented() -> None:
 
 NOW_TASK = datetime(2026, 10, 1, tzinfo=UTC)
 DONE, PLANNED, AWAITING = ProcedureStatus.completed, ProcedureStatus.planned, ProcedureStatus.awaiting_human
+MISSTATEMENT_ON = NUMBAT_FEATURES | {"misstatement"}  # 功能 misstatement 打开 (需求 R160)
+TRIAGE = "misstatement_triage"
 
 
 def _p2_nodes() -> GraphNodes:
@@ -383,6 +393,8 @@ def test_after_fan_in_waits_for_pending_task() -> None:
 
 
 def test_after_fan_in_completes_when_all_done() -> None:
+    """P2 全部结清且没有待决任务: 走 completion 出口进完成阶段; 功能 misstatement 打开时主图把这个出口接到错报分诊
+    (需求 R160 验收 3, 见 test_misstatement_graph_structure 的 fan_in 边; 去处只由 build_graph 定)."""
     nodes = _p2_nodes()
     state = _p2_state(nodes, {"REV-08": DONE, "REV-03": DONE, "REV-02": DONE})
 
@@ -573,6 +585,29 @@ BASELINE_EDGES = [
 ]
 
 
+# 功能 misstatement 打开时 (需求 R160 验收 1, 2) 比基线多的边: 完成阶段的错报闭环; 基线的 fan_in → completion 改为
+# → misstatement_triage, gate_fin 驳回由 → completion 改为 → summarize
+P3_NODES = {TRIAGE, "communicate", "await_correction", "verify_correction", "p3_reassess", "summarize", "final_review"}
+MISSTATEMENT_REPLACED = [("fan_in", "completion", True, None), ("gate_fin", "completion", True, "reject")]
+MISSTATEMENT_EDGES = [
+    ("await_correction", "verify_correction", False, None),
+    ("communicate", "await_correction", True, None),
+    ("communicate", "verify_correction", True, None),
+    ("fan_in", TRIAGE, True, "completion"),  # after_fan_in 的 completion 出口接到分诊
+    ("final_review", "completion", True, None),
+    ("final_review", TRIAGE, True, None),
+    ("gate_fin", "summarize", True, "reject"),
+    (TRIAGE, "communicate", True, None),
+    (TRIAGE, TRIAGE, True, None),
+    ("p3_reassess", "summarize", False, None),
+    ("summarize", "final_review", False, None),
+    ("verify_correction", "await_correction", True, None),
+    ("verify_correction", "communicate", True, None),
+    ("verify_correction", TRIAGE, True, None),
+    ("verify_correction", "p3_reassess", True, None),
+]
+
+
 def test_baseline_graph_structure() -> None:
     """R75 验收 8: 基线功能集下 compile_graph 的节点集合, 边与条件边去向逐一同现状, 静态中断为 4 个闸门节点."""
     deps = make_deps(FakeRegistry(), FakeTrail(), features=NUMBAT_FEATURES)
@@ -582,6 +617,19 @@ def test_baseline_graph_structure() -> None:
     edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
     assert edges == BASELINE_EDGES
     assert list(app.interrupt_before_nodes) == GATES == ["gate_acc01", "gate_p1_risk", "gate_fin", "gate_rpt01"]
+
+
+def test_misstatement_graph_structure() -> None:
+    """需求 R160 验收 1, 2: 功能 misstatement 打开时多出完成阶段的 7 个节点与 MISSTATEMENT_EDGES, P2 结清改去
+    misstatement_triage, FIN-01 驳回改回 summarize; 静态中断仍是 4 个闸门. 其余同基线."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=MISSTATEMENT_ON)
+    app = compile_graph(make_graph_nodes(deps), InMemorySaver())
+    graph = app.get_graph()
+    assert set(graph.nodes) == BASELINE_NODES | P3_NODES
+    edges = sorted((e.source, e.target, e.conditional, e.data) for e in graph.edges)
+    baseline = [e for e in BASELINE_EDGES if e not in MISSTATEMENT_REPLACED]
+    assert edges == sorted([*baseline, *MISSTATEMENT_EDGES])
+    assert list(app.interrupt_before_nodes) == GATES
 
 
 def test_planning_graph_structure() -> None:
@@ -614,3 +662,113 @@ def test_make_runner_compiles_by_features() -> None:
     baseline, _ = make_runner(interrupt_before=["fieldwork"])
     assert list(baseline.app.interrupt_before_nodes) == [*GATES, "fieldwork"]
     assert "plan_draft" not in baseline.app.get_graph().nodes
+
+
+# ── 需求 R160 验收 3: 完成阶段的路由纯函数 ──
+
+
+def p3_misstatement(oid: str, status: MisstatementStatus, **fields: Any) -> Misstatement:
+    """一条错报: 不是 identified 的都已分类, 其余字段按状态补齐 (模型校验)."""
+    base: dict[str, Any] = {"classification_judgment_id": None if status is MisstatementStatus.identified else "J-1"}
+    if status in (MisstatementStatus.communicated, MisstatementStatus.uncorrected):
+        base |= {"communicated_at": NOW_TASK, "management_response": "OK"}
+    if status is MisstatementStatus.uncorrected:
+        base["uncorrected_basis"] = "refused"
+    if status is MisstatementStatus.verifying:
+        base |= {"communicated_at": NOW_TASK, "correction_notice_id": "D-CN"}
+    if status is MisstatementStatus.corrected:
+        base |= {"verified_by_judgment_id": "J-V", "corrected_cents": 100, "residual_cents": 0}
+    return Misstatement.model_validate(
+        {
+            "id": oid,
+            "judgment_id": "J-0",
+            "exception_id": None,
+            "review_record_id": "D-0",
+            "type": "factual",
+            "account": "Revenue",
+            "assertion": "Cutoff",
+            "amount_cents": 100,
+            "direction": "overstated",
+            "status": status,
+        }
+        | base
+        | fields
+    )
+
+
+NEW = p3_misstatement("M-NEW", MisstatementStatus.identified)  # 完成阶段新认定, 未分类
+CLASSIFIED = p3_misstatement("M-CLS", MisstatementStatus.identified, classification_judgment_id="J-FIN-03-1-M-CLS")
+COMMUNICATED = p3_misstatement("M-COM", MisstatementStatus.communicated)
+RECOMMUNICATE = p3_misstatement("M-RE", MisstatementStatus.communicated, needs_recommunication=True)
+VERIFYING = p3_misstatement("M-VER", MisstatementStatus.verifying)
+SETTLED_ONES = [
+    p3_misstatement("M-COR", MisstatementStatus.corrected),
+    p3_misstatement("M-UNC", MisstatementStatus.uncorrected),
+]
+
+
+def with_misstatements(*misstatements: Misstatement) -> EngagementState:
+    """完成阶段的状态: 程序包有 FIN-03 (分诊能分类), 错报为给定的."""
+    pack = [make_procedure("FIN-03", Phase.P3_Completion)]
+    return initial_state(ENGAGEMENT, pack, NUMBAT_PROFILE.version) | {"misstatements": list(misstatements)}  # type: ignore[return-value]
+
+
+@pytest.mark.parametrize(
+    ("route", "misstatements", "expected"),
+    [
+        (after_triage, [NEW, CLASSIFIED], TRIAGE),
+        (after_triage, [CLASSIFIED, *SETTLED_ONES], "communicate"),
+        (after_triage, [], "communicate"),
+        (after_communicate, [CLASSIFIED, COMMUNICATED], "await_correction"),
+        (after_communicate, [CLASSIFIED, *SETTLED_ONES], "verify_correction"),
+        (after_communicate, [VERIFYING, CLASSIFIED, *SETTLED_ONES], "verify_correction"),  # 已收到更正通知的去验证
+        (after_verify, [NEW, RECOMMUNICATE, COMMUNICATED], TRIAGE),  # 先分类
+        (after_verify, [RECOMMUNICATE, COMMUNICATED], "communicate"),  # 再重新沟通
+        (after_verify, [COMMUNICATED, *SETTLED_ONES], "await_correction"),  # 再等其余的更正
+        (after_verify, [CLASSIFIED, *SETTLED_ONES], "p3_reassess"),
+        (after_final_review, [NEW, *SETTLED_ONES], TRIAGE),
+        (after_final_review, SETTLED_ONES, "completion"),
+    ],
+)
+def test_p3_routes(route: Any, misstatements: list[Misstatement], expected: str) -> None:
+    """表驱动: 回 misstatement_triage 的条件都是有未分类的 identified 错报 (完成阶段新认定的); after_communicate 看有无
+    communicated; after_verify 依次看未分类, 须重新沟通, 仍在等更正."""
+    assert route(with_misstatements(*misstatements)) == expected
+
+
+def test_after_triage_raises_without_fin03() -> None:
+    """程序包里没有 FIN-03 (旧项目或手工装配) 而有未分类的错报: 分诊是空操作, 回去也分不了类, 抛 ScheduleStuck 列出
+    错报, 不在分诊上空转到递归上限 (第 1 轮审核 R160-01); 没有未分类的照常去沟通."""
+    state = with_misstatements(NEW, CLASSIFIED) | {"procedure_pack": []}
+    with pytest.raises(ScheduleStuck, match=f"{NEW.id}.*FIN-03"):
+        after_triage(state)  # type: ignore[arg-type]
+    assert after_triage(with_misstatements(CLASSIFIED) | {"procedure_pack": []}) == "communicate"  # type: ignore[arg-type]
+
+
+def test_after_verify_raises_while_verifying_left() -> None:
+    """验证之后仍有 verifying 的错报 (FIN-09 没有给出结果): 抛 ScheduleStuck, 列出错报, 不把未验证的错报带进累计."""
+    with pytest.raises(ScheduleStuck, match="M-VER"):
+        after_verify(with_misstatements(VERIFYING, *SETTLED_ONES))
+
+
+def test_routes_ignore_misstatements_of_superseded_runs() -> None:
+    """路由只看当前结果 (同 FIN-03, FIN-04): 来源判断的执行被过期重跑取代, 其错报 (未分类的, 已沟通的, 须重新沟通的,
+    验证中的) 都不算, 各路由走 "没有这类错报" 的出口."""
+    request = RerunRequest(
+        id="RR-1",
+        procedure_ids=["REV-02"],
+        superseded_run_ids=["RUN-REV-02-1"],
+        data_version=2,
+        requested_by="U-1",
+        requested_at=NOW_TASK,
+    )
+    source = Judgment.model_construct(id="J-0", run_id="RUN-REV-02-1", procedure_id="REV-02")
+    stale = with_misstatements(NEW, COMMUNICATED, RECOMMUNICATE, VERIFYING)
+    state = stale | {"rerun_requests": [request], "judgments": [source]}
+    routes = (after_triage, after_communicate, after_verify, after_final_review)
+    assert [route(state) for route in routes] == [  # type: ignore[arg-type]
+        "communicate",
+        "verify_correction",
+        "p3_reassess",
+        "completion",
+    ]

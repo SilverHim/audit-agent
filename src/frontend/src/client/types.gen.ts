@@ -116,6 +116,35 @@ export type AccountCategoryIn = {
 };
 
 /**
+ * AdjustmentEntryView
+ *
+ * 可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否
+ * 已载入.
+ */
+export type AdjustmentEntryView = {
+    /**
+     * Entry No
+     */
+    entry_no: string;
+    /**
+     * Posting Date
+     */
+    posting_date: string;
+    /**
+     * Description
+     */
+    description: string | null;
+    /**
+     * Line Count
+     */
+    line_count: number;
+    /**
+     * Loaded
+     */
+    loaded: boolean;
+};
+
+/**
  * AgentId
  *
  * 智能体编号.
@@ -420,6 +449,10 @@ export type AuditReportVersion = {
      * Approved At
      */
     approved_at?: string | null;
+    /**
+     * Run Id
+     */
+    run_id?: string | null;
 };
 
 /**
@@ -1518,9 +1551,9 @@ export type ConversationTurn = {
      */
     answer: string;
     /**
-     * Lang
+     * Answer Lang
      */
-    lang: 'zh' | 'en';
+    answer_lang: 'zh' | 'en';
     /**
      * Citations
      */
@@ -1537,6 +1570,73 @@ export type ConversationTurn = {
      * Aborted
      */
     aborted?: boolean;
+};
+
+/**
+ * CorrectionNotice
+ *
+ * 更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
+ * 第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入
+ * 更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写
+ * 理由, 不带凭证号.
+ */
+export type CorrectionNotice = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Kind
+     */
+    kind: 'adjustments_posted' | 'stop_waiting';
+    /**
+     * Misstatement Ids
+     */
+    misstatement_ids: Array<string>;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Decided By
+     */
+    decided_by: string;
+    /**
+     * Decided At
+     */
+    decided_at: string;
+};
+
+/**
+ * CorrectionNoticeIn
+ *
+ * 更正通知请求体 (需求 R163): CorrectionNotice 去掉 id, version, decided_by, decided_at, 由服务端填写.
+ */
+export type CorrectionNoticeIn = {
+    /**
+     * Kind
+     */
+    kind: 'adjustments_posted' | 'stop_waiting';
+    /**
+     * Misstatement Ids
+     */
+    misstatement_ids: Array<string>;
+    /**
+     * Adjustment Entry Nos
+     */
+    adjustment_entry_nos?: Array<string>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
 };
 
 /**
@@ -2121,6 +2221,10 @@ export type Engagement = {
         [key: string]: string;
     };
     /**
+     * Working Language
+     */
+    working_language?: 'zh' | 'en';
+    /**
      * Created At
      */
     created_at: string;
@@ -2153,6 +2257,10 @@ export type EngagementCreate = {
      * Client Id
      */
     client_id?: string | null;
+    /**
+     * Working Language
+     */
+    working_language?: string;
 };
 
 /**
@@ -2183,6 +2291,14 @@ export type EngagementOverview = {
      * Awaiting Data
      */
     awaiting_data: boolean;
+    /**
+     * Awaiting Correction
+     */
+    awaiting_correction?: boolean;
+    /**
+     * Awaiting Correction Ids
+     */
+    awaiting_correction_ids?: Array<string>;
     /**
      * Missing Tables
      */
@@ -2220,6 +2336,12 @@ export type EngagementOverview = {
      * Features
      */
     features?: Array<string>;
+    /**
+     * Run Languages
+     */
+    run_languages?: {
+        [key: string]: 'zh' | 'en';
+    };
 };
 
 /**
@@ -3327,6 +3449,10 @@ export type MaterialityCandidate = {
      * High Cents
      */
     high_cents: number;
+    /**
+     * Not Applicable
+     */
+    not_applicable?: 'loss' | 'not_positive' | null;
 };
 
 /**
@@ -3549,6 +3675,10 @@ export type MisstatementReport = {
      */
     materiality_cents: number | null;
     opinion_route: OpinionType | null;
+    /**
+     * Correction Notices
+     */
+    correction_notices?: Array<CorrectionNotice>;
 };
 
 /**
@@ -3954,7 +4084,9 @@ export type PresentedEvidence = {
 /**
  * PresentedFailure
  *
- * 失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空.
+ * 失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空: run 填 reason; llm_call 填 subject_id 与调用的
+ * 四项 (level_failed, errors, attempts, trail_id); exception 填规则三项 (rule_id, amount_cents, detail), 另填该对象
+ * 最后一次调用的四项 (需求 R355; 留痕里找不到该对象的调用时只有规则三项).
  */
 export type PresentedFailure = {
     /**
@@ -4240,6 +4372,10 @@ export type ProcedureRun = {
      * Rule Outcomes
      */
     rule_outcomes?: Array<RuleOutcome>;
+    /**
+     * Language
+     */
+    language?: 'zh' | 'en';
 };
 
 /**
@@ -4799,6 +4935,14 @@ export type ReviewTaskView = {
     draft_rules?: {
         [key in DisputeResolution]?: 'required' | 'hidden' | 'optional';
     };
+    /**
+     * Misstatement Update Kind
+     */
+    misstatement_update_kind?: 'classification' | 'verification' | null;
+    /**
+     * Update Decisions
+     */
+    update_decisions?: Array<Decision>;
 };
 
 /**
@@ -5579,6 +5723,19 @@ export type ValidationError = {
 };
 
 /**
+ * WorkingLanguageIn
+ *
+ * 改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查
+ * (engagements.parse_language).
+ */
+export type WorkingLanguageIn = {
+    /**
+     * Language
+     */
+    language: string;
+};
+
+/**
  * XeroAuthorize
  *
  * 连接 Xero (GET /data/xero/connect): 前端跳去的授权地址.
@@ -6091,6 +6248,36 @@ export type EngagementsGetPlanResponses = {
 
 export type EngagementsGetPlanResponse = EngagementsGetPlanResponses[keyof EngagementsGetPlanResponses];
 
+export type EngagementsSetWorkingLanguageData = {
+    body: WorkingLanguageIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/working-language';
+};
+
+export type EngagementsSetWorkingLanguageErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EngagementsSetWorkingLanguageError = EngagementsSetWorkingLanguageErrors[keyof EngagementsSetWorkingLanguageErrors];
+
+export type EngagementsSetWorkingLanguageResponses = {
+    /**
+     * Successful Response
+     */
+    200: Engagement;
+};
+
+export type EngagementsSetWorkingLanguageResponse = EngagementsSetWorkingLanguageResponses[keyof EngagementsSetWorkingLanguageResponses];
+
 export type EngagementsResumeEngagementData = {
     body?: never;
     path: {
@@ -6200,9 +6387,11 @@ export type GatesGetGateError = GatesGetGateErrors[keyof GatesGetGateErrors];
 
 export type GatesGetGateResponses = {
     /**
+     * Response Gates-Get Gate
+     *
      * Successful Response
      */
-    200: GateView;
+    200: GateView | null;
 };
 
 export type GatesGetGateResponse = GatesGetGateResponses[keyof GatesGetGateResponses];
@@ -8090,6 +8279,68 @@ export type ReportsGetTrailResponses = {
 };
 
 export type ReportsGetTrailResponse = ReportsGetTrailResponses[keyof ReportsGetTrailResponses];
+
+export type CorrectionsSubmitCorrectionNoticeData = {
+    body: CorrectionNoticeIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/correction-notices';
+};
+
+export type CorrectionsSubmitCorrectionNoticeErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CorrectionsSubmitCorrectionNoticeError = CorrectionsSubmitCorrectionNoticeErrors[keyof CorrectionsSubmitCorrectionNoticeErrors];
+
+export type CorrectionsSubmitCorrectionNoticeResponses = {
+    /**
+     * Successful Response
+     */
+    202: IdBody;
+};
+
+export type CorrectionsSubmitCorrectionNoticeResponse = CorrectionsSubmitCorrectionNoticeResponses[keyof CorrectionsSubmitCorrectionNoticeResponses];
+
+export type CorrectionsListAdjustmentEntriesData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/adjustment-entries';
+};
+
+export type CorrectionsListAdjustmentEntriesErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type CorrectionsListAdjustmentEntriesError = CorrectionsListAdjustmentEntriesErrors[keyof CorrectionsListAdjustmentEntriesErrors];
+
+export type CorrectionsListAdjustmentEntriesResponses = {
+    /**
+     * Response Corrections-List Adjustment Entries
+     *
+     * Successful Response
+     */
+    200: Array<AdjustmentEntryView>;
+};
+
+export type CorrectionsListAdjustmentEntriesResponse = CorrectionsListAdjustmentEntriesResponses[keyof CorrectionsListAdjustmentEntriesResponses];
 
 export type StandardsGetStandardData = {
     body?: never;

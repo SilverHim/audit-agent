@@ -17,7 +17,7 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, UndefinedError, meta
 from pydantic import ValidationError
 
-from backend.contracts.knowledge import LLMSpec
+from backend.contracts.knowledge import LLMSpec, LocalizedText, ManualSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import (
     AuditPlanDraft,
     ContractExtraction,
@@ -25,6 +25,7 @@ from backend.contracts.llm_outputs import (
     EngagementTermsExtraction,
     MisstatementClassificationDraft,
 )
+from backend.contracts.manual_results import ManagementResponses, result_model
 from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
@@ -36,10 +37,13 @@ from backend.contracts.models import (
     EvidencePointer,
     EvidenceType,
     GateId,
+    Misstatement,
+    MisstatementStatus,
     Model,
     Phase,
     Procedure,
     ReportingFramework,
+    RerunRequest,
     Retention,
     RiskLevel,
     TermType,
@@ -47,15 +51,33 @@ from backend.contracts.models import (
 from backend.contracts.records import DatasetTraits
 from backend.contracts.state import initial_state
 from backend.core.config import get_settings
+from backend.orchestration.graph import P3_NODES, compile_graph
+from backend.orchestration.nodes import MISSTATEMENT_NODES
 from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.scheduler import build_schedule
 from backend.services import procedure_library
-from backend.services.judgment_engine import output_model, prompt_env
-from backend.services.procedure_library import ProcedureLibrary, highest_risk, ref_problem
+from backend.services.features import FEATURES
+from backend.services.judgment_engine import output_model
+from backend.services.procedure_library import ProcedureLibrary, highest_risk, prompt_env, ref_problem, render_text
 from tests.external import optional, supplements_dir
-from tests.fakes import ENGAGEMENT, NUMBAT_CONTRACTS, NUMBAT_PROFILE, NUMBAT_REPLIES, audit_plan, engagement_terms
+from tests.fakes import (
+    ENGAGEMENT,
+    NUMBAT_CONTRACTS,
+    NUMBAT_PROFILE,
+    NUMBAT_REPLIES,
+    PLAN_REJECT_REASON,
+    FakeRegistry,
+    FakeTrail,
+    audit_plan,
+    engagement_terms,
+    fin08_registered,
+    knowledge_library,
+    make_deps,
+    make_graph_nodes,
+)
 from tests.fakes import NUMBAT_OBJECTIVES as OBJECTIVES
 from tests.fixture_sets import FIXTURE_PARAMS, FIXTURE_SETS, NUMBAT, FixtureSet
+from tests.test_contracts import lifecycle_misstatement
 
 ROOT = get_settings().KNOWLEDGE_ROOT
 P2 = {"REV-08", "REV-03", "REV-02", "CSH-04", "DOC-06", "CSH-05", "CSH-02"}
@@ -2085,6 +2107,154 @@ def test_fin03_template_loads_only_with_misstatement() -> None:
     assert on.enabled("FIN-03") and "FIN-03" in {p.id for p in fixed_procedures(on)}
 
 
+def test_fin08_template_loads_only_with_misstatement() -> None:
+    """R161 验收 1, 11: FIN-08 为完成阶段 A8 的人工程序 (L1), 挂功能 misstatement, 依赖 FIN-03, 写错报; 人工段为更正
+    请求的说明, 结果模型 ManagementResponses (已登记), 不要证据文件; 两个准则片段的 procedures 列了 FIN-08. 基线下不
+    启用, 不进项目启动实例化的程序; 打开 misstatement 时进."""
+    base = ProcedureLibrary(ROOT)
+    t = base.load("FIN-08")
+    assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
+        "错报沟通与回复记录",
+        Phase.P3_Completion,
+        "Completion",
+        AgentId.A8,
+        Engine.manual,
+        AutonomyLevel.L1,
+        "misstatement",
+        None,
+    )
+    assert (t.depends_on, t.outputs, t.standards) == (["FIN-03"], ["misstatements"], ["ASA450-P08", "ASA450-P09"])
+    assert t.manual == ManualSpec(
+        instructions="请求管理层更正已累计的错报并登记回复 (ASA 450 第 8 段)",
+        result_model="ManagementResponses",
+        min_evidence=0,
+    )
+    assert result_model("ManagementResponses") is ManagementResponses
+    for fragment_id in t.standards:
+        fragment = base.fragment(fragment_id)
+        assert fragment is not None and fragment.procedures == ["FIN-08"], fragment_id
+    assert "FIN-08" not in {x.id for x in base.all()} | {p.id for p in fixed_procedures(base)}
+    on = ProcedureLibrary(ROOT, frozenset({"misstatement"}))
+    assert on.enabled("FIN-08") and "FIN-08" in {p.id for p in fixed_procedures(on)}
+
+
+def response_row(mid: str, at: datetime) -> dict[str, Any]:
+    """FIN-08 登记的一行 (JSON 形式, 同前端提交): 沟通与回复都在 at."""
+    return {
+        "misstatement_id": mid,
+        "base_version": 2,
+        "communicated_at": at.isoformat(),
+        "communicated_to": "CFO",
+        "responded_at": at.isoformat(),
+        "response": "Agreed.",
+        "agrees_to_correct": True,
+    }
+
+
+def registered_at(*rounds: list[datetime]) -> dict[str, list[Any]]:
+    """FIN-08 依次各次执行的登记 (状态片段): 第 n 次登记 rounds[n-1] 中各时间各一行 (错报 M-1, M-2, ...)."""
+    history: dict[str, list[Any]] = {"review_tasks": [], "review_records": []}
+    for run_no, times in enumerate(rounds, start=1):
+        rows = [response_row(f"M-{i}", at) for i, at in enumerate(times, start=1)]
+        for key, items in fin08_registered(run_no, rows).items():
+            history[key] += items
+    return history
+
+
+ROUND_1, ROUND_2 = datetime.fromisoformat("2026-10-19T04:00:00Z"), datetime.fromisoformat("2026-10-21T04:00:00Z")
+# 第 2 次登记 (重新沟通) 改写了 M-1 的沟通时间: 错报上只剩第 2 次的
+RECOMMUNICATED = Misstatement(
+    id="M-1",
+    judgment_id="J-1",
+    exception_id=None,
+    review_record_id="D-1",
+    type="factual",
+    account="Revenue",
+    assertion="Cutoff",
+    amount_cents=100,
+    direction="overstated",
+    status=MisstatementStatus.communicated,
+    communicated_at=ROUND_2,
+)
+SUPERSEDED_FIN08 = RerunRequest(  # 过期重跑取代了 FIN-08 第 1 次执行: 它的登记仍算
+    id="RR-1",
+    procedure_ids=["FIN-08"],
+    superseded_run_ids=["RUN-FIN-08-1"],
+    data_version=2,
+    requested_by="U-1",
+    requested_at=ROUND_2,
+)
+
+
+def other_manual_result() -> dict[str, list[Any]]:
+    """别的人工程序 (以后的 FIN-07, RPT-07 一类, kind 同为 manual) 的 manual_result: details 不是 FIN-08 的登记 (按它
+    解析会报错), 不看 (第 2 轮审核 R161-09)."""
+    history = fin08_registered(9, [])
+    task = history["review_tasks"][0].model_copy(update={"procedure_id": "FIN-07"})
+    record = history["review_records"][0]
+    result = record.manual_result.model_copy(update={"details": {"x": 1}})
+    return {"review_tasks": [task], "review_records": [record.model_copy(update={"manual_result": result})]}
+
+
+FIRST_COMMUNICATED, VERIFIED_ENTRIES = "first_misstatement_communicated_at", "verified_adjustment_entry_nos"
+VERIFIED = lifecycle_misstatement(  # FIN-09 验证为 corrected 的错报, 两笔更正分录
+    id="M-1",
+    status="corrected",
+    correction_notice_id="CN-1",
+    adjustment_entry_nos=["AJE-X05", "AJE-X01"],
+    corrected_cents=10000,
+    residual_cents=0,
+    verified_by_judgment_id="J-FIN-09-1-M-1",
+)
+
+
+@pytest.mark.parametrize(
+    ("ref", "changes", "expected"),
+    [
+        (FIRST_COMMUNICATED, {}, None),
+        (FIRST_COMMUNICATED, {"misstatements": [RECOMMUNICATED]}, None),  # 没有登记: 不看错报上的沟通时间
+        (FIRST_COMMUNICATED, registered_at([ROUND_2, ROUND_1]), "2026-10-19T04:00:00Z"),  # 一次登记中最早的
+        (
+            FIRST_COMMUNICATED,
+            registered_at([ROUND_1], [ROUND_2]) | {"misstatements": [RECOMMUNICATED]},
+            "2026-10-19T04:00:00Z",
+        ),
+        (
+            FIRST_COMMUNICATED,
+            registered_at([ROUND_1], [ROUND_2]) | {"rerun_requests": [SUPERSEDED_FIN08]},
+            "2026-10-19T04:00:00Z",
+        ),
+        (FIRST_COMMUNICATED, other_manual_result(), None),
+        (VERIFIED_ENTRIES, {"misstatements": [VERIFIED]}, ["AJE-X01", "AJE-X05"]),
+        (VERIFIED_ENTRIES, {}, []),  # 没有错报: [], 不是 None
+    ],
+    ids=[
+        "none",
+        "misstatement_only",
+        "earliest",
+        "recommunicated",
+        "superseded",
+        "other_program",
+        "verified_entries",
+        "no_entries",
+    ],
+)
+def test_derived_refs(ref: str, changes: dict[str, Any], expected: Any) -> None:
+    """派生引用 (DERIVED_REFS) 按状态解析, 值转成 JSON 兼容的; ref 写法校验认得这两个名字.
+    - first_misstatement_communicated_at (R161 验收 9, 第 1 轮审核 R161-02, R161-08): FIN-08 各次登记的沟通时间的
+      最早值, 转成 ISO 文本; 重新沟通 (第 2 次登记) 改写错报上的沟通时间后仍为首次的, 被过期重跑取代的执行的登记也算,
+      别的程序的 manual_result 与错报上的字段不看; 还没有登记时为 None, 以 None 执行, 不抛错.
+    - verified_adjustment_entry_nos (R174 验收 2): 已验证更正分录的凭证号 (services/adjusted_tb.verified_entry_nos,
+      判断条件见 test_contracts); 状态没有错报时为 [], 不是 None, 不抛错."""
+    library = ProcedureLibrary(ROOT)
+    param = {"ref": ref}
+    assert ref_problem(ref) is None
+    template = library.load("FIN-04").model_copy(update={"params": {"value": param}})
+    state = initial_state(ENGAGEMENT, [], 1) | changes
+    resolved = library.resolve_params(template, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=None)
+    assert resolved == {"value": expected}
+
+
 def fin03_variables() -> dict[str, Any]:
     """FIN-03 提示词的变量, 按头注释逐项给齐 (data 的各列表都非空), 模拟 R158 交给 judge 的上下文."""
     library = ProcedureLibrary(ROOT)
@@ -2168,9 +2338,9 @@ def test_fin03_prompt_renders_with_its_header_variables() -> None:
 def test_fin09_template_loads_only_with_misstatement() -> None:
     """R164 验收 1, 8: FIN-09 为完成阶段 A8 的混合程序 (L2), 挂功能 misstatement, 读分录与科目表; 参数 adjustment_prefix
     取数据集声明 (没有数据集时为 "AJE-"), 规则只有 V01 (emit rows), 准则片段 ASA450-P07 (其 procedures 列了 FIN-09),
-    输出模型为更正验证草稿. 与验收字面的差异 (协调者裁定) 见 FIN-09.yaml 注释: depends_on 为空, manual_result_allowed
-    为假, outputs 不含 exceptions. 规则 SQL, 参数与提示词里没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开
-    misstatement 时进 P2 以外的固定集."""
+    输出模型为更正验证草稿. depends_on 只有 FIN-08 (R161 补上, GEN-05 增量就绪后再加, 协调者裁定见 FIN-09.yaml 注释);
+    R165 起 manual_result_allowed 为真, 载荷类别 verification, outputs 含 V02 的 exceptions. 规则 SQL, 参数与提示词里
+    没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开 misstatement 时进 P2 以外的固定集."""
     base = ProcedureLibrary(ROOT)
     t = base.load("FIN-09")
     assert (t.name, t.phase, t.cycle, t.owner, t.engine, t.autonomy_level, t.feature, t.gate) == (
@@ -2183,8 +2353,12 @@ def test_fin09_template_loads_only_with_misstatement() -> None:
         "misstatement",
         None,
     )
-    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == ([], [], False, False)
-    assert (t.outputs, t.reads) == (["judgments", "review_tasks", "misstatements"], ["journal_entries", "accounts"])
+    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08"], [], False, True)
+    assert t.misstatement_update_kind == "verification"
+    assert (t.outputs, t.reads) == (
+        ["judgments", "exceptions", "review_tasks", "misstatements"],
+        ["journal_entries", "accounts"],
+    )
     assert t.evidence_required == [EvidenceType.voucher]
     state = initial_state(ENGAGEMENT, [], 1)
     resolved = base.resolve_params(t, ENGAGEMENT, state, None, traits=DatasetTraits(), profile=NUMBAT_PROFILE)
@@ -2339,7 +2513,7 @@ def test_pln15_prompt_header_lists_its_variables() -> None:
     assert all(f"- {item.procedure_id}:" in first for item in audit_plan().items)
     terms = engagement_terms()  # R198 的 TERMS 样例, 按 JSON 渲染 (第 2 修订的上下文带它)
     second = template.render(pln15_context(2, terms.model_dump(mode="json")))
-    assert "## Revision 2" in second and "Add the planned timing of bank confirmations" in second
+    assert "## Revision 2" in second and PLAN_REJECT_REASON in second
     assert f'"framework": "{terms.framework}"' in second and "Engagement terms: not checked" not in second
 
 
@@ -3076,3 +3250,188 @@ def test_runtime_check_fails_without_runtime_copy(tmp_path: Path) -> None:
     (runtime / "REV-03" / "CON-999.json").write_text("{}", encoding="utf-8")
     with pytest.raises(AssertionError):
         check_runtime(replace(NUMBAT, runtime=runtime))
+
+
+# 功能 misstatement 打开时完成阶段执行程序的节点在图上的先后 (需求 R160): 分诊到最终复核 (await_correction 不执行
+# 程序), 最后 completion; 回流只回到分诊, 所以先后即节点在 P3_NODES 中的次序 (用例里按主图的边核对)
+P3_ORDER = [node for node in (*P3_NODES, "completion") if node in MISSTATEMENT_NODES]
+
+
+def p3_rank(pid: str) -> tuple[int, int]:
+    """程序在完成阶段的先后: (节点次序, 节点内次序)."""
+    return next(
+        (n, MISSTATEMENT_NODES[node].index(pid)) for n, node in enumerate(P3_ORDER) if pid in MISSTATEMENT_NODES[node]
+    )
+
+
+def test_p3_dependencies_follow_node_order() -> None:
+    """需求 R160 验收 9: 功能全开时, 完成阶段的非闸门程序都在某个节点里执行; 每条的 depends_on 中同在完成阶段节点里的
+    程序排在它之前 (节点在前, 或同节点内在前); 裁定第 1 批的依赖表与节点顺序一致 (FIN-04 在 FIN-03, FIN-09, PLN-19
+    之后; FIN-15 在 FIN-09, FIN-04 之后; FIN-02 所在的 completion 在 final_review 之后; Issue #46 起没有 FIN-12), 表里的
+    程序还没有模板的也核对."""
+    deps = make_deps(FakeRegistry(), FakeTrail(), features=frozenset({"critic", "misstatement"}))
+    edges = {(e.source, e.target) for e in compile_graph(make_graph_nodes(deps)).get_graph().edges}
+    assert all(step in edges for step in pairwise(P3_ORDER)), P3_ORDER  # 次序即主图上前进的边 (第 1 轮审核 R160-05)
+    placed = {pid for pids in MISSTATEMENT_NODES.values() for pid in pids}
+    library = ProcedureLibrary(ROOT, frozenset(FEATURES))
+    p3 = [t for t in library.all() if t.phase is Phase.P3_Completion and t.gate is None]
+    assert p3 and {t.id for t in p3} <= placed
+    for t in p3:
+        for dep in (d for d in t.depends_on if d in placed):
+            assert p3_rank(dep) < p3_rank(t.id), (dep, t.id)
+    ruling = {
+        "FIN-04": ["FIN-03", "FIN-09", "PLN-19"],
+        "FIN-15": ["FIN-09", "FIN-04"],
+        "FIN-02": ["FIN-15"],
+    }
+    for pid, deps in ruling.items():
+        assert all(p3_rank(dep) < p3_rank(pid) for dep in deps), pid
+
+
+# ── 需求 R324: 范围说明, 规则的被测总体与检查项 ──
+
+POP_TEMPLATE: dict[str, Any] = {
+    "id": "X-POP",
+    "name": "被测总体自测",
+    "phase": "P2_Executing",
+    "cycle": "Revenue",
+    "owner": "A6",
+    "engine": "rule",
+    "autonomy_level": "L3",
+    "reads": ["sales_invoices"],
+    "params": {"window_days": 20, "period_end": {"ref": "period_end"}},
+    "scope": {"zh": "期末前 {{ window_days }} 天入账的发票", "en": "Invoices posted {{ window_days }} days before"},
+    "rules": [
+        {
+            "id": "R01",
+            "name": "自测",
+            "severity": "high",
+            "sql": "SELECT 1 FROM sales_invoices",
+            "check": {"zh": "入账期间正确", "en": "Recorded in the correct period"},
+            "population": {
+                # :: 类型转换不是绑定参数
+                "sql": "SELECT i.id::text AS source_id FROM sales_invoices i WHERE i.engagement_id = :eid"
+                " AND i.posting_date <= CAST(:period_end AS date)",
+                "description": {
+                    "zh": "{{ period_end | days_before(window_days) }} 起入账",
+                    "en": "{% if window_days %}Posted from {{ period_end | days_before(window_days) }}{% endif %}",
+                },
+            },
+        }
+    ],
+}
+
+
+def pop_template(path: str = "", value: Any = None) -> dict[str, Any]:
+    """POP_TEMPLATE 的深拷贝, 点分路径 (列表下标写数字) 处的值换成 value; path 为空时原样."""
+    template = json.loads(json.dumps(POP_TEMPLATE))
+    if path:
+        *parents, last = path.split(".")
+        node = template
+        for key in parents:
+            node = node[int(key)] if isinstance(node, list) else node[key]
+        node[last] = value
+    return template
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "problems"),
+    [
+        ("", None, []),
+        (
+            "rules.0.population.sql",
+            "SELECT i.id AS source_id FROM sales_invoices i WHERE i.amount_cents > :limit_cents",
+            ["X-POP.R01 的总体 SQL 用了 params 以外的参数 limit_cents"],
+        ),
+        ("rules.0.emit", "rows", ["X-POP.R01: emit rows 的规则以返回行为总体, 不能写 population"]),
+        ("scope.zh", "期末前 {{ window }} 天", ["X-POP.scope.zh 的占位不在 params 内: window"]),
+        (  # 条件块里的过滤器 Jinja2 编译时不查, 这里也要查出
+            "rules.0.population.description.en",
+            "{% if window_days %}{{ period_end | days_after(1) }}{% endif %}",
+            ["X-POP.R01.population.en 用了不认识的过滤器 days_after"],
+        ),
+        (
+            "rules.0.population.description.zh",
+            "{{ period_end",
+            ["X-POP.R01.population.zh: unexpected end of template, expected 'end of print statement'."],
+        ),
+        (  # 检验名同过滤器, 只能用已有的 (审核 R324-11)
+            "rules.0.population.description.en",
+            "{% if window_days is odd_ish %}Odd{% endif %}",
+            ["X-POP.R01.population.en 用了不认识的检验 odd_ish"],
+        ),
+        ("rules.0.check.zh", "入账 {{ window_days }} 天内", ["X-POP.R01.check.zh 不渲染, 不能写占位"]),
+        ("rules.0.check.en", "Correct {% if x %}period{% endif %}", ["X-POP.R01.check.en 不渲染, 不能写占位"]),
+        (  # 总体 SQL 读的账表也须在 reads 中 (过期判断按 reads)
+            "rules.0.population.sql",
+            "SELECT d.id AS source_id FROM delivery_notes d WHERE d.engagement_id = :eid",
+            ["X-POP 读 delivery_notes"],
+        ),
+    ],
+)
+def test_population_and_placeholder_checks(path: str, value: Any, problems: list[str]) -> None:
+    """验收 5: 总体 SQL 的绑定参数只能用 params 中的与 eid; emit rows 的规则不写总体; scope 与 description 的占位只用
+    params 中的参数, 语法与过滤器 (只有 days_before) 写对; 总体 SQL 读的账表须在 reads 中."""
+    template = ProcedureTemplate.model_validate(pop_template(path, value))
+    found = [
+        *procedure_library.population_problems([template]),
+        *procedure_library.text_problems([template]),
+        *procedure_library.read_problems([template]),
+    ]
+    assert found == problems
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        ("scope", {"zh": "范围"}),  # 缺 en
+        ("rules.0.check", {"zh": "", "en": "Recorded in the correct period"}),  # zh 为空
+        ("rules.0.population.description", {"en": "Posted"}),
+        ("scope", {"zh": " \n ", "en": "Scope"}),  # 只有空白也算空 (审核 R324-11)
+        ("rules.0.check", {"zh": "入账期间正确", "en": "  "}),  # en 只有空白 (审核 R324-12)
+    ],
+)
+def test_localized_texts_need_both_languages(path: str, value: dict[str, str]) -> None:
+    """验收 5: description, check, scope 的 zh 与 en 须同时给出, 去掉首尾空白后不能为空."""
+    with pytest.raises(ValidationError):
+        ProcedureTemplate.model_validate(pop_template(path, value))
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "message"),
+    [
+        ("rules.0.population.sql", "SELECT 1 WHERE :x = 1", "规则被测总体的写法不对: X-POP.R01 的总体 SQL"),
+        ("scope.en", "{{ days }} days", "范围说明, 总体说明与检查项名称的写法不对: X-POP.scope.en"),
+    ],
+)
+def test_population_problems_fail_the_load(tmp_path: Path, path: str, value: str, message: str) -> None:
+    """验收 5: 写法不对时程序库构造即报错 (含未启用的模板, 同其他加载校验)."""
+    with pytest.raises(ValueError, match=re.escape(message)):
+        ref_library(tmp_path, yaml.safe_dump(pop_template(path, value) | {"feature": "journals"}, allow_unicode=True))
+
+
+@pytest.mark.parametrize("period_end", [date(2026, 9, 30), "2026-09-30"])  # 参数快照经 Store 读回后日期为文本
+def test_rev08_scope_checks_and_population_descriptions(period_end: date | str) -> None:
+    """验收 1: REV-08 (Xero, 特别风险, window_days 20) 的 scope 渲染为 "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的
+    销售发票" 与英文; 三条规则都写了总体, check 的中文依次为入账期间正确, 有服务完成记录, 收款金额相符; 快照缺参数时
+    渲染即报错 (StrictUndefined)."""
+    template = knowledge_library(ROOT).load("REV-08")
+    params = {"window_days": 20, "period_end": period_end}
+    assert template.scope is not None
+    assert render_text(template.scope, params) == LocalizedText(
+        zh="期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票",
+        en="Sales invoices posted in the 20 days before period end (2026-09-10 to 2026-09-30)",
+    )
+    assert [(r.id, r.check.zh if r.check else None) for r in template.rules] == [
+        ("R01", "入账期间正确"),
+        ("R02", "有服务完成记录"),
+        ("R03", "收款金额相符"),
+    ]
+    descriptions = [render_text(r.population.description, params).zh for r in template.rules if r.population]
+    assert descriptions == [
+        "2026-09-10 至 2026-09-30 入账, 有服务完成记录的销售发票",
+        "2026-09-10 至 2026-09-30 入账的全部销售发票",
+        "2026-09-10 至 2026-09-30 入账, 银行流水里找得到收款的销售发票",
+    ]
+    with pytest.raises(UndefinedError, match="window_days"):
+        render_text(template.scope, {"period_end": period_end})

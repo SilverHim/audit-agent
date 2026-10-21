@@ -11,12 +11,12 @@ from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import (
     AgentId,
     Engagement,
-    ManualResult,
     Procedure,
     ProcedureRun,
     ReviewRecord,
     ReviewTask,
     RuleOutcome,
+    RulePopulation,
     RunStatus,
 )
 from backend.contracts.ports import (
@@ -93,16 +93,27 @@ class RunContext:
     state: EngagementState  # 编排状态快照; 只读, 按需取切片, 不整体送 LLM
 
 
+@dataclass(frozen=True)
+class AgentOutput:
+    """Agent 一次执行的产出, 节点入口 ProcedureAgent.outcome 的返回: 要并入编排状态的片段, 与规则引擎记下的被测总体
+    (需求 R324). 总体不是状态字段, 不进片段; 节点只给规则程序的成功执行写 RunPopulation (nodes.run_population)."""
+
+    patch: StatePatch  # 片段, 同 run 的返回
+    populations: list[RulePopulation] | None  # 原始发现为规则引擎的结果 (RuleResult) 时为其 populations, 否则为空
+
+
 @runtime_checkable
 class ManualHandler(Protocol):
     """人工程序 (engine manual 且不是闸门, 需求 R93) 的模板 owner 为它实现的三步, 由 Agent 声明在 manual_procedures
     (agents/registry.manual_owners 按模板 owner 找). 派发与写入由编排完成, 三步都不写存储.
 
-    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material). ctx 同其他程序的执行
-      (run 为本次执行, state 为执行前的状态).
-    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后, 收到的结果
-      证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文). ctx.run 为派发的那次执行
-      (任务目标), ctx.state 为检查点里的状态: 节点停在等待, 派发的执行记录与任务只在 Store, 不在其中.
+    - prepare: A10 派发时调一次, 返回放进 manual 任务请求的材料 (ManualRequest.material); 返回 None 表示没有要人做的
+      (空执行: 执行记录 succeeded, 不建任务, 不等人; 需求 R161). ctx 同其他程序的执行 (run 为本次执行, state 为执行
+      前的状态).
+    - check: DecisionSubmit 收到 manual_result 时调, 在通用核对 (decisions.check_manual_result) 之后, 收到的决定中
+      结果的证据指针已按文件登记改写; 返回问题, 非空即拒绝 (INVALID_VALUE, 消息为问题原文); 结果依据的对象版本不对时
+      可抛 VersionConflict (VERSION_MISMATCH). ctx.run 为派发的那次执行 (任务目标), ctx.state 为检查点里的状态: 节点
+      停在等待, 派发的执行记录与任务只在 Store, 不在其中.
     - collect: 节点读回 manual_result 后调, 把结果整理成领域对象, 返回的片段只能含 owner 写入范围 (merge.AGENT_FIELDS)
       内, 模板 outputs 声明的字段, 不能含执行记录与任务 (procedure_runs, review_tasks, 派发片段的字段), 只能由本次
       执行写的对象 (如关系图) run_id 须为派发的那次执行 (nodes.check_collected), 以 owner 为写入者写入; Store 已有
@@ -111,9 +122,9 @@ class ManualHandler(Protocol):
       纯函数: 不取当前时间, 不调大模型, 只看 ctx 与决定, 重放时重算得同一结果.
     """
 
-    def prepare(self, ctx: RunContext) -> dict[str, Any]: ...
+    def prepare(self, ctx: RunContext) -> dict[str, Any] | None: ...
 
-    def check(self, ctx: RunContext, task: ReviewTask, result: ManualResult) -> list[str]: ...
+    def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]: ...
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch: ...
 
@@ -156,7 +167,7 @@ class ProcedureAgent[F](ABC):
     """执行审计程序的 Agent 的抽象基类, 对应设计规格 5.3 的三步: 选程序, 执行, 解读.
 
     子类声明编号与负责的程序, 实现 execute 与 interpret; F 是 execute 产出的原始发现类型.
-    run 是模板方法, 子类不覆写.
+    outcome 与 run 是模板方法, 子类不覆写: 节点调 outcome (片段与被测总体), 只要片段的地方调 run.
     """
 
     agent_id: ClassVar[AgentId]  # 智能体编号, 子类给值
@@ -179,7 +190,13 @@ class ProcedureAgent[F](ABC):
     async def interpret(self, ctx: RunContext, findings: F) -> StatePatch:
         """把原始发现解读为要并入编排状态的片段. procedure_runs 须含 ctx.run 的终态 (succeeded 或 failed)."""
 
-    async def run(self, ctx: RunContext) -> StatePatch:
-        """编排节点调用的唯一入口: 先 execute, 再 interpret."""
+    async def outcome(self, ctx: RunContext) -> AgentOutput:
+        """编排节点调用的入口: 先 execute, 再 interpret; 原始发现是规则引擎的结果 (RuleResult) 时另交回其被测总体
+        (需求 R324)."""
         findings = await self.execute(ctx)
-        return await self.interpret(ctx, findings)
+        patch = await self.interpret(ctx, findings)
+        return AgentOutput(patch, findings.populations if isinstance(findings, RuleResult) else None)
+
+    async def run(self, ctx: RunContext) -> StatePatch:
+        """只要片段时的入口 (测试与直接调用 Agent 的地方): outcome 的片段."""
+        return (await self.outcome(ctx)).patch

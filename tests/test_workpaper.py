@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 
-from backend.adapters.llm import MockLLMClient
 from backend.agents.base import AgentDeps, RunContext
 from backend.agents.workpaper import WorkpaperAgent, misstatement_objective
 from backend.contracts.models import (
@@ -30,66 +29,40 @@ from backend.contracts.models import (
     MisstatementStatus,
     MisstatementType,
     MisstatementUpdate,
-    Phase,
-    RerunRequest,
     ReviewStatus,
     ReviewTask,
     RiskLevel,
     RunStatus,
     TargetType,
     TaskKind,
-    TrailKind,
 )
 from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
-from backend.orchestration.nodes import build_run
 from backend.services.features import BASELINE
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from backend.services.presentation import failure_of
-from tests.fakes import NOW, FakeTrail, ScriptedLLM, finished, make_ctx, make_run, xero_document
+from tests.fakes import NOW, FakeTrail, ScriptedLLM, finished, make_run, xero_document
 from tests.fixture_sets import XERO
-from tests.test_xero_fixtures import RecordingJudgments, xero_state
-from tests.xero_fakes import make_xero_deps, xero_engagement, xero_identified_misstatements, xero_profile, xero_traits
+from tests.misstatement_fakes import (
+    FACTUAL,
+    FIN03,
+    REPLY,
+    SUPERSEDED,
+    classified,
+    fin03_context,
+    fin03_deps,
+    fin03_state,
+    llm_calls,
+)
+from tests.test_xero_fixtures import RecordingJudgments
 
-FIN03 = "FIN-03"
-REPLY = "confirmations/12345679.pdf"  # BA-091 的回函 (CSH-04 存档, 不在外勤阶段的上传里)
 SUBJECTS = ["M-D-XJ499", "M-D-CSH02-091"]  # 按认定的先后
 FIXTURE_KEYS = ["XJ-499", "BA-091"]  # 来源判断的对象
-
-
-def fin03_deps(trail: FakeTrail, llm: Any = None, **kwargs: Any) -> AgentDeps:
-    """Xero 假实现, 主模型缺省读 Xero fixture 正本 (复核模型同; FIN-03 为 L2, A7 按跳过规则不调); 财务存储另登记
-    BA-091 的回函. kwargs 原样转交 make_xero_deps (如 features, library)."""
-    client = llm if llm is not None else MockLLMClient(XERO.fixtures)
-    deps = make_xero_deps(trail=trail, llm=client, review_llm=client, **kwargs)
-    deps.financial_store.document_refs.append(xero_document(REPLY))  # type: ignore[attr-defined]
-    return deps
-
-
-def fin03_state(**changes: Any) -> EngagementState:
-    """FIN-03 前的状态: xero_state 加两条错报与来源判断 (另有 REV-03 对 CON-X01 的判断); changes 覆盖任意键."""
-    preset = xero_identified_misstatements()
-    state = xero_state() | {"judgments": preset["judgments"], "misstatements": preset["misstatements"]}
-    return state | changes  # type: ignore[return-value]
-
-
-def fin03_context(deps: AgentDeps, state: EngagementState) -> RunContext:
-    """FIN-03 第 1 次执行: 程序为完成阶段的第 1 版 (L2), 执行记录同 GraphNodes.perform 用 build_run 建."""
-    engagement = xero_engagement()
-    ctx = make_ctx(deps, FIN03, engagement=engagement)
-    procedure = ctx.procedure.model_copy(update={"phase": Phase.P3_Completion})
-    run = build_run(
-        deps.library, ctx.template, procedure, engagement, state, NOW, traits=xero_traits(), profile=xero_profile()
-    )
-    return RunContext(engagement, procedure, ctx.template, run, state | {"procedure_pack": [procedure]})  # type: ignore[arg-type]
 
 
 async def run_fin03(deps: AgentDeps, state: EngagementState) -> tuple[StatePatch, RunContext]:
     ctx = fin03_context(deps, state)
     return await WorkpaperAgent(deps).run(ctx), ctx
-
-
-def llm_calls(trail: FakeTrail) -> list[Any]:
-    return [e for e in trail.entries if e.kind is TrailKind.llm_call]
 
 
 @pytest.mark.external
@@ -312,22 +285,6 @@ async def test_payload_type_from_model_objective_from_rule() -> None:
     ]
 
 
-# Xero fixture 正本给两条错报的分类载荷 (验收 2): 类型与舞弊迹象取模型, 来源与审计目标取规则
-FACTUAL: dict[str, Any] = {
-    "type": MisstatementType.factual,
-    "fraud_indicative": False,
-    "fraud_reason": None,
-    "origin": "current_period",
-    "objective_id": None,
-}
-
-
-def classified(m: Misstatement, judgment_id: str | None = None, **changes: Any) -> Misstatement:
-    """已分类的下一版: 作分类的判断缺省为 FIN-03 第 1 次对它的判断, changes 为分类载荷写的字段 (R159 的预期值)."""
-    judgment_id = judgment_id or f"J-FIN-03-1-{m.id}"
-    return m.model_copy(update={"version": m.version + 1, "classification_judgment_id": judgment_id, **changes})
-
-
 @pytest.mark.external
 @pytest.mark.parametrize(
     "misstatements",
@@ -349,16 +306,6 @@ async def test_fin03_without_unclassified_misstatements_calls_no_model(misstatem
     assert llm_calls(trail) == []
     assert list(patch) == ["procedure_runs"]
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
-
-
-SUPERSEDED = RerunRequest(  # 过期重跑取代了 XJ-499 来源判断的那次执行
-    id="RR-1",
-    procedure_ids=["GEN-02"],
-    superseded_run_ids=["RUN-GEN-02-1"],
-    data_version=2,
-    requested_by="U-1",
-    requested_at=NOW,
-)
 
 
 def awaiting_review(state: EngagementState) -> dict[str, Any]:
@@ -479,33 +426,30 @@ async def test_fin03_judgments_downgraded_with_autonomy(llm: Any, expected: dict
 
 @pytest.mark.external
 @pytest.mark.parametrize(
-    ("replies", "attempts", "level"),
+    ("reply", "level"),
     [
-        (["not json", "not json", "not json"], 3, "syntax"),  # 不是 JSON (语法级, 同结构级重试 2 次)
+        ("not json", "syntax"),  # 不是 JSON
         (
-            [
-                json.dumps(
-                    json.loads(fixture_raw("XJ-499")) | {"nature": {"type": "projected", "fraud_indicative": False}}
-                )
-            ],
-            1,
+            json.dumps(
+                json.loads(fixture_raw("XJ-499")) | {"nature": {"type": "projected", "fraud_indicative": False}}
+            ),
             "semantic",
         ),
     ],
     ids=["syntax", "semantic"],
 )
-async def test_failed_classification_creates_failed_task_allowing_manual_result(
-    replies: list[str], attempts: int, level: str
-) -> None:
-    """验收 7: 大模型连续 3 次语法或结构失败 (重试耗尽), 或引用, 语义失败 (只调 1 次, 如类型为 projected) 时, 该错报
-    建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开 manual_result_allowed,
-    需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数与留痕."""
+async def test_failed_classification_creates_failed_task_allowing_manual_result(reply: str, level: str) -> None:
+    """验收 7: 大模型连续 3 次没通过 (重试耗尽; 语法级, 或语义级如类型为 projected, 后者自需求 R348 起也回传重试) 时,
+    该错报建带对象的 failed 任务 T-RUN-FIN-03-1-M-D-XJ499-v1, 允许 {rerun, manual_result} (FIN-03 开
+    manual_result_allowed, 需求 R158); 另一条照常判断. 呈递的失败原因 (failure_of) 取该错报最后一次调用的级别, 次数
+    与留痕."""
+    replies = [reply] * MAX_ATTEMPTS
     llm = ScriptedLLM({"XJ-499": replies, "BA-091": [fixture_raw("BA-091")]})
     trail = FakeTrail()
     deps = fin03_deps(trail, llm)
     patch, _ = await run_fin03(deps, fin03_state())
 
-    assert len(llm.requests) == attempts + 1
+    assert len(llm.requests) == MAX_ATTEMPTS + 1
     assert [j.id for j in patch["judgments"]] == ["J-FIN-03-1-M-D-CSH02-091"]
     failed = next(t for t in patch["review_tasks"] if t.kind is TaskKind.failed)
     assert (failed.id, failed.subject_id, failed.target_id) == (
@@ -520,7 +464,7 @@ async def test_failed_classification_creates_failed_task_allowing_manual_result(
     last = [e for e in llm_calls(trail) if e.payload["fixture_key"] == "XJ-499"][-1]
     failure = failure_of(failed, run, llm_calls(trail))
     assert failure is not None
-    assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, attempts, last.id)
+    assert (failure.level_failed, failure.attempts, failure.trail_id) == (level, MAX_ATTEMPTS, last.id)
 
 
 class Consistent:

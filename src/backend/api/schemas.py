@@ -15,6 +15,8 @@ from backend.contracts.models import (
     AuditReportVersion,
     ClientProfile,
     Confirmation,
+    CorrectionNotice,
+    CorrectionNoticeKind,
     Decision,
     DeclaredHolding,
     DeclaredParty,
@@ -38,6 +40,7 @@ from backend.contracts.models import (
     Misstatement,
     MisstatementDraft,
     MisstatementUpdate,
+    MisstatementUpdateKind,
     Model,
     NeitherAction,
     OpinionType,
@@ -82,6 +85,16 @@ class EngagementCreate(Model):
     period_end: date
     dataset: str | None = None
     client_id: str | None = None
+    # 工作语言 (需求 R339): 不带为 en, 与之前的输出一致; 前端表单缺省取界面语言. 取值在路由里查
+    # (engagements.parse_language), 不在 zh, en 之中报 422 INVALID_VALUE, 不走请求体校验的通用 422
+    working_language: str = "en"
+
+
+class WorkingLanguageIn(Model):
+    """改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查
+    (engagements.parse_language)."""
+
+    language: str
 
 
 class DatasetSummary(Model):
@@ -127,6 +140,26 @@ class GateDecisionIn(Model):
     annotations: list[Annotation] = []
     plan_confirmation: PlanConfirmation | None = None  # PLN-15 通过时必填 (需求 R203)
     reason: str | None = None
+
+
+class CorrectionNoticeIn(Model):
+    """更正通知请求体 (需求 R163): CorrectionNotice 去掉 id, version, decided_by, decided_at, 由服务端填写."""
+
+    kind: CorrectionNoticeKind  # 更正分录已入账, 或停止等待
+    misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
+    adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted; 为空时载入全部未载入的)
+    reason: str | None = None  # 理由, stop_waiting 必填
+
+
+class AdjustmentEntryView(Model):
+    """可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否
+    已载入."""
+
+    entry_no: str  # 凭证号, 如 AJE-X01
+    posting_date: date  # 入账日期
+    description: str | None  # 摘要
+    line_count: int  # 行数
+    loaded: bool  # 总账里已有这个凭证号的行 (已由更正通知载入)
 
 
 class ReviewRecordIn(Model):
@@ -295,6 +328,12 @@ class ReviewTaskView(Model):
     allowed_resolutions: list[DisputeResolution] = []
     # 各可选仲裁的错报草稿规则 (功能 collab 打开时的争议任务, ReviewQueue.draft_rules, 与校验同一规则); 其余为空
     draft_rules: dict[DisputeResolution, DraftRule] = {}
+    # 所属程序模板的错报更新类别 (FIN-03 classification, FIN-09 verification, 需求 R163), 前端按它给分类或验证表单;
+    # 其余程序为空
+    misstatement_update_kind: MisstatementUpdateKind | None = None
+    # allowed_decisions 中须填 misstatement_update 的决定 (orchestration.decisions.update_decisions: 推翻, 对例外认定
+    # 错报, 失败任务给手工结果, 需求 R159); 模板没有载荷类别时为空. 前端只看它, 不另抄规则
+    update_decisions: list[Decision] = []
 
 
 class ManualTaskView(Model):
@@ -342,6 +381,7 @@ class MisstatementReport(Model):
     schedule: UncorrectedSchedule | None
     materiality_cents: int | None
     opinion_route: OpinionType | None
+    correction_notices: list[CorrectionNotice] = []  # 全部更正通知, 按提交时间 (需求 R163)
 
 
 class ReportBundle(Model):

@@ -7,11 +7,11 @@ from backend.agents.base import ProcedureAgent, RunContext, finish_run
 from backend.contracts.models import (
     AgentId,
     MisstatementStatus,
-    OpinionType,
     UncorrectedItem,
     UncorrectedSchedule,
 )
 from backend.contracts.state import StatePatch
+from backend.services.opinion import allowed_opinions
 from backend.services.staleness import current_results
 
 # FIN-04 能编入汇总表的错报状态: 未更正, 部分更正 (累计剩余额), 已更正 (只列 ID); 其余的出现即执行失败 (需求 R166).
@@ -34,7 +34,8 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
         corrected 的只列 ID 于 corrected_ids. 还有其他状态的错报 (identified, communicated, verifying 未结清; 本版不写的
         evaluated, closed 同样不能累计) 时抛 ValueError, 不出汇总表: A1 记执行失败并建 failed 任务, 转人工 (兜底, 正常
         拓扑下错报都已结清). 功能 misstatement 关闭时错报一律为 uncorrected (旧口径), 结果同 R23.
-        total_cents 为 items 金额之和, 不按高估低估抵销; 不低于整体重要性 (materiality_cents) 时候选意见为保留.
+        total_cents 为 items 金额之和, 不按高估低估抵销; 候选意见取 services.opinion.allowed_opinions (与 FIN-01 的校验
+        同一函数, 需求 R184), 持续经营结论传 None, 即金额路径: 不低于整体重要性 materiality_cents 时为保留.
         两个门槛取本次执行的参数快照. 状态已有汇总表 (FIN-01 驳回后重做) 时出下一版.
         例: 一条 14200000 高估的未更正错报, 重要性 12000000, 明显微小 600000 → items 一行, total 14200000, qualified.
         """
@@ -70,6 +71,9 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
                 excluded.append(misstatement.id)
         total = sum(item.amount_cents for item in items)
         previous = ctx.state["uncorrected_schedule"]
+        # A9 只走金额路径 (FIN-04 早于 gate_fin 的 FIN-02 步, 拿不到已批准的结论), 综合候选由 FIN-01 闸门材料调本函数
+        # 给出 (GC-09, 需求 R187 验收 4), 签字前提的参数由 SG-16 加
+        options = allowed_opinions(total_cents=total, materiality_cents=materiality, going_concern=None)
         return UncorrectedSchedule(
             id="SCHEDULE",
             version=previous.version + 1 if previous else 1,
@@ -78,7 +82,7 @@ class QCAgent(ProcedureAgent[UncorrectedSchedule]):
             corrected_ids=corrected,
             total_cents=total,
             materiality_cents=materiality,
-            candidate_opinion=OpinionType.qualified if total >= materiality else OpinionType.unqualified,
+            candidate_opinion=options.candidate,
         )
 
     async def interpret(self, ctx: RunContext, findings: UncorrectedSchedule) -> StatePatch:

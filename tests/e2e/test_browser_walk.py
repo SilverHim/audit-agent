@@ -3,7 +3,8 @@
 只经页面操作推进, 读数经接口; 每步截图, 记控制台报错与失败请求, 超时记 "卡住"; 报告写 var/e2e/<UTC>/report.md.
 
 决定同 R311 (tests/test_demo_walkthrough_live.py 的 decision_table: BA-091 与 XJ-499 认定错报, XJ-575 推翻为接受,
-其余确认; 争议能维持原判断就维持, 否则 "两者都不采用"; failed 任务每个对象至多重跑一次), RPT-01 先退回一次再签字,
+其余确认; 争议能维持原判断就维持, 否则 "两者都不采用"; failed 与 unattributed 任务每个对象至多重跑一次, 后者重跑后
+仍失败才按决定表处理, 需求 R347, R355), RPT-01 先退回一次再签字,
 打开 planning 时 PLN-15 先退回一次再批准 (同 R317). 功能集取 .env.example 的 FEATURES. 后端连测试库
 (TEST_DATABASE_URL), 存储与检查点都是真实的; mock 模式读演示运行副本的固定输出, live 模式调真实模型 (配置同 R311,
 经 tests.external.live_llm_settings 取, 没配时跳过). 两个用例都标 slow, 默认测试不跑.
@@ -18,12 +19,17 @@ from uuid import uuid4
 
 import pytest
 
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.e2e.harness import backend, frontend, out_dir, require_tools, run_walk, write_report
 from tests.external import LLM_KEYS, live_llm_settings
+from tests.fakes import PLAN_REJECT_REASON
 from tests.fixture_sets import XERO
-from tests.test_demo_walkthrough_live import (
+from tests.live_walk import (
     CONFIRM_CONCLUSION,
+    MAX_CALLS,
     RERUN_REASON,
+    RERUNNABLE,
+    REVISED_BY,
     LiveWalk,
     assert_hard,
     decision_table,
@@ -31,11 +37,11 @@ from tests.test_demo_walkthrough_live import (
     warn_soft,
 )
 from tests.tools.live_budget import Budget, install_budget
-from tests.xero_fakes import DEMO_FEATURES, REPO, XERO17_ANNOTATION, XERO17_MATERIALITY
+from tests.xero_fakes import DEMO_FEATURES, ORC1026, REPO, XERO17_ANNOTATION, XERO17_MATERIALITY
 from tests.xero_flow import READY_REASON
+from tests.xero_harness import FlakyLLM
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
-MAX_CALLS = 160  # 用量上限: 同 R311 的驱动 (固定输出走一遍 45 次, 打开 planning 时 47 次), 留出重试与重跑的余量
 # 各段的超时 (毫秒): 页面上的一个操作, 打开页面 (开发服务首次打开要预构建依赖), 后台一段执行 (live 时模型调用多,
 # 放宽); 驱动整体 (秒)
 TIMEOUTS = {
@@ -43,7 +49,6 @@ TIMEOUTS = {
     "live": {"action_ms": 60_000, "nav_ms": 120_000, "idle_ms": 1_800_000},
 }
 WALK_TIMEOUT_S = {"mock": 1_800, "live": 7_200}
-PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # PLN-15 退回的理由 (同 R206, R317)
 # 驱动认的页面文字 (英文界面, src/frontend/src/locales/en.ts)
 LABELS = {
     "register": "Create account",
@@ -97,6 +102,8 @@ def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, A
         "plan_reject_reason": PLAN_REJECT_REASON,
         "ready_reason": READY_REASON,
         "rerun_reason": RERUN_REASON,
+        "rerunnable": sorted(RERUNNABLE),
+        "revised_by": REVISED_BY,
         "confirm_conclusion": CONFIRM_CONCLUSION,
         "timeouts": TIMEOUTS[mode],
         "max_steps": 200,
@@ -118,9 +125,16 @@ def walk_of(results: dict[str, Any]) -> LiveWalk:
 
 
 async def browser_walk(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: Budget, mode: str, fin_policy: str, **llm: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    budget: Budget,
+    mode: str,
+    fin_policy: str,
+    failing: dict[tuple[str, str], int] | None = None,
+    **llm: str,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
-    """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过."""
+    """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过.
+    failing: (程序, fixture_key) → 先失败几次 (主模型换成 FlakyLLM 包装, 见 tests.xero_harness), 自测驱动的重跑一路."""
     require_tools()
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
@@ -140,6 +154,9 @@ async def browser_walk(
         **llm,
     }
     async with backend(monkeypatch, env) as (api, app):
+        if failing:  # 组装根的主模型与判断引擎共用这一个客户端
+            client = app.state.deps.llm
+            client.reload(FlakyLLM(client.inner, failing), client.model_name)
         install_budget(app.state.deps, budget)
         async with frontend(out, api) as base:
             results = await run_walk(walk_config(out, base, mode, fin_policy), out, WALK_TIMEOUT_S[mode])
@@ -159,6 +176,21 @@ async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert_hard(data)
     assert (data["reruns"], data["troubled_tasks"]) == ({}, []), report
     assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}, report
+
+
+async def test_browser_walk_mock_reruns_unattributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R355: ORC1026 (REV-02 的判断对象, 带 REV-08 的 R03-1) 前 MAX_ATTEMPTS 次输出不是 JSON, 判断失败转
+    unattributed 任务; 驱动在页面上先重跑一次 (同 R347 的 HTTP 驱动), 第 2 次执行给出结果, 照常走到归档, 没有问题,
+    硬性检查都过; 汇总记重跑一次与这条任务, 其余决定同 mock 走查."""
+    failing = {("REV-02", ORC1026): MAX_ATTEMPTS}
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "unqualified", failing
+    )
+    assert results["issues"] == [], report
+    assert results["reached_archive"] and results["gates"] == gates_expected(), report
+    assert_hard(data)
+    assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1026}": 1}, [["REV-02", ORC1026, "unattributed"]])
+    assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1, "rerun": 1}, report
 
 
 @pytest.mark.live(max_calls=MAX_CALLS)

@@ -212,7 +212,8 @@ async def update_refused(http: httpx.AsyncClient, c: Case, key: str, status: int
 
 async def at_gate(http: httpx.AsyncClient, c: Case) -> dict[str, Any] | None:
     response = await http.get(f"/api/v1/engagements/{c.eid}/gate")
-    return response.json() if response.status_code == 200 else None
+    assert response.status_code == 200, response.text  # 不在闸门为 200 null (需求 R346); 别的状态是错
+    return response.json()
 
 
 @pytest.mark.external

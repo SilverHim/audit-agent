@@ -28,7 +28,6 @@ from backend.contracts.models import (
     GateVerdict,
     MaterialityCandidates,
     MaterialityChoice,
-    OpinionType,
     Phase,
     PlanStatus,
     Procedure,
@@ -53,14 +52,14 @@ from backend.contracts.views import (
     ReportMaterial,
 )
 from backend.orchestration.nodes import uncovered_objectives, update_procedure
-from backend.services.features import FEATURES, LEGACY_FEATURES, PLANNING, parse_features
+from backend.services.features import FEATURES, LEGACY_FEATURES, MISSTATEMENT, PLANNING, parse_features
+from backend.services.opinion import allowed_opinions
 from backend.services.staleness import current_results, stale_procedures, superseded_runs
 
 # 只在某道闸门的某种决定下可填的字段. plan_confirmation (需求 R203) 只有 PLN-15 的通过决定能填 (登记行, 需求 R205),
 # 其余闸门的决定带它报 FIELD_NOT_ALLOWED
 GATE_SPECIFIC = ("materiality", "edits", "disposition", "annotations", "plan_confirmation")
 REPORT_TZ = ZoneInfo("Australia/Sydney")  # 报告日等业务日期按悉尼取当天 (第 0 节)
-FIN01_DISPOSITIONS = (OpinionType.unqualified, OpinionType.qualified)  # 本版 FIN-01 只能选这两种意见类型
 RISK_ORDER = list(RiskLevel)  # 风险等级由低到高: low < medium < high < significant
 
 # 闸门路由的返回值, 即闸门的出口名: 通过, 驳回, 重跑 ACC-04, 重新呈报.
@@ -182,11 +181,18 @@ def acc01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     }
 
 
+def fin01_reject(features: frozenset[str]) -> str:
+    """FIN-01 驳回的去处: 功能 misstatement 打开时回 summarize 重做 FIN-04 (需求 R160, 不重跑分类, 沟通与验证),
+    关闭时回 completion."""
+    return "summarize" if MISSTATEMENT in features else "completion"
+
+
 def fin01_effects(pack: list[Procedure], decision: GateDecision) -> StatePatch:
     """FIN-01 闸门决定的效果 (第 7 节), 纯函数, 由 aupdate_state(as_node="gate_fin") 写入状态.
 
     approve: FIN-01 置 completed, opinion_route 取审计师选的意见类型 (可与候选意见不同), 阶段进 P4_Reporting;
-    reject 与 insufficient_info: 只记决定 (reject 由路由回 completion 重做汇总表, insufficient_info 留在闸门重新呈报).
+    reject 与 insufficient_info: 只记决定 (reject 由路由回 completion 重做汇总表, 功能 misstatement 打开时回 summarize,
+    见 fin01_reject; insufficient_info 留在闸门重新呈报).
     """
     if decision.decision is not GateVerdict.approve:
         return {"gate_decisions": [decision]}
@@ -314,7 +320,8 @@ def materiality_amounts(candidates: MaterialityCandidates, choice: MaterialityCh
 
 def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoice) -> None:
     """重要性选择的取值校验, 不过报 INVALID_VALUE: basis 在候选中, 且该候选的基准金额为正 (Q18: 如税前亏损时
-    不能以税前利润为基准, 候选照常列出供审计师参考); pct 在该候选 [pct_low, pct_high] 内;
+    不能以税前利润为基准; 候选照常列出并标本期不适用, 需求 R351. 按金额判断, 不看标记, 没有标记的旧候选同样拒绝);
+    pct 在该候选 [pct_low, pct_high] 内;
     performance_pct 在 performance_pct_range 内 (闭区间); clearly_trivial_pct 大于 0 且不超过候选给的比例 (Q8)."""
     candidate = next((c for c in candidates.candidates if c.basis == choice.basis), None)
     if candidate is None:
@@ -322,7 +329,8 @@ def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoi
     if candidate.base_amount_cents <= 0:
         raise DecisionRejected(
             "INVALID_VALUE",
-            f"materiality.basis {choice.basis} 的基准金额不为正 ({candidate.base_amount_cents} 分), 不能作为重要性基准",
+            f"materiality.basis {choice.basis} 本期不适用: 基准金额不为正 ({candidate.base_amount_cents} 分), "
+            "不能作为重要性基准",
         )
     if not candidate.pct_low <= choice.pct <= candidate.pct_high:
         raise DecisionRejected("INVALID_VALUE", f"materiality.pct 应在 [{candidate.pct_low}, {candidate.pct_high}] 内")
@@ -676,9 +684,20 @@ async def pln15_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
 
 
 async def fin01_check(deps: AgentDeps, eid: str, decision: GateDecision, target: Versioned) -> None:
-    if decision.disposition is not None and decision.disposition not in FIN01_DISPOSITIONS:
+    """disposition 须在 services.opinion.allowed_opinions 给出的可选范围内 (与 A9 的候选同一函数, 需求 R184;
+    target 为当前汇总表, 传其合计与重要性; 持续经营结论本条传 None, 接上已批准的 FIN-02 结论由 GC-10 (需求 R188)
+    做); 不在时报 INVALID_VALUE, 消息列出可选的意见类型与理由."""
+    if decision.disposition is None:
+        return
+    assert isinstance(target, UncorrectedSchedule)  # FIN-01 的材料对象 (GateSpec.material_model)
+    options = allowed_opinions(
+        total_cents=target.total_cents, materiality_cents=target.materiality_cents, going_concern=None
+    )
+    if decision.disposition not in options.allowed:
+        allowed = ", ".join(o.value for o in options.allowed) or "(无)"
         raise DecisionRejected(
-            "INVALID_VALUE", f"意见类型只能选 unqualified 或 qualified, 不能选 {decision.disposition}"
+            "INVALID_VALUE",
+            f"意见类型只能选 {allowed}, 不能选 {decision.disposition}; {'; '.join(options.reasons)}",
         )
 
 
@@ -837,7 +856,7 @@ GATES: list[GateSpec] = [
         material_field="uncorrected_schedule",
         material_model=UncorrectedSchedule,
         material_id="SCHEDULE",
-        exits={"approve": "report_draft", "reject": "completion"},
+        exits={"approve": "report_draft", "reject": fin01_reject},
         fields={
             GateVerdict.approve: FieldRule(("reason", "disposition")),  # FIN-01 通过也须填理由
             GateVerdict.reject: REASON,

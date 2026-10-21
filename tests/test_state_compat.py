@@ -13,12 +13,13 @@ import pytest
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditPlan,
+    AuditReportVersion,
     AutonomyLevel,
     CheckItemStatus,
     ClauseStatus,
@@ -92,6 +93,7 @@ from tests.fakes import (
     make_deps,
     make_graph_nodes,
     make_procedure,
+    make_run,
     make_runner,
     numbat_all_p2_agents,
     ownership_graph,
@@ -208,6 +210,7 @@ def test_initial_state_equals_previous_literal() -> None:
         gate_decisions=[],
         misstatements=[],
         rerun_requests=[],  # 需求 R274 加
+        correction_notices=[],  # 需求 R162 加
         uncorrected_schedule=None,
         representation_letter=None,  # 以下四项需求 R215 加
         compliance_checks=[],
@@ -279,14 +282,15 @@ def test_every_node_and_route_is_wrapped() -> None:
         unwrapped = [name for name, spec in graph.nodes.items() if spec.runnable.afunc.__code__ not in node_code]
         assert unwrapped == [], features
         routes = [b.path.func for branches in graph.branches.values() for b in branches.values()]
-        # 含 R290 的 p0_inputs; 功能 planning 另有 gate_p1_plan 的出口 (需求 R205)
-        count = 9 if "planning" in features else 8
+        # 含 R290 的 p0_inputs; 功能 planning 另有 gate_p1_plan 的出口 (需求 R205), misstatement 另有完成阶段的 4 个
+        # 路由 (需求 R160)
+        count = 8 + ("planning" in features) + 4 * ("misstatement" in features)
         assert len(routes) == count and all(r.__code__ is route_code for r in routes), features
 
 
 # ── 验收 2: 模拟旧检查点 ──
 
-# 加字段之前的检查点没有的通道: 原有三个, 加需求 R215 的四个 (签字前提的产出)
+# 加字段之前的检查点没有的通道: 原有三个, 加需求 R215 的四个 (签字前提的产出), 需求 R162 的更正通知
 DROPPED = (
     "misstatements",
     "uncorrected_schedule",
@@ -295,6 +299,7 @@ DROPPED = (
     "compliance_checks",
     "governance_communications",
     "independence_declaration",
+    "correction_notices",
 )
 
 
@@ -710,6 +715,44 @@ def test_old_checkpoint_schedule_reads_back_with_new_defaults() -> None:
     back = serde.loads_typed(serde.dumps_typed(old))
     assert isinstance(back, UncorrectedSchedule) and back.corrected_ids == []
     assert isinstance(back.items[0], UncorrectedItem) and back.items[0].origin == "current_period"
+
+
+def without_field(model: type[BaseModel], dropped: str) -> type[BaseModel]:
+    """去掉一个字段的同名同模块类: 加这个字段之前写进检查点的样子 (按原类名序列化, 读回时取现在的类)."""
+    fields: dict[str, Any] = {
+        name: (info.annotation, info) for name, info in model.model_fields.items() if name != dropped
+    }
+    return create_model(model.__name__, __module__=model.__module__, **fields)
+
+
+REPORT = AuditReportVersion(
+    id="REPORT-1",
+    version=1,
+    revision=1,
+    opinion_type=OpinionType.qualified,
+    sections={},
+    judgment_refs=[],
+    run_id="RUN-RPT-03-1",
+)
+
+
+@pytest.mark.parametrize(
+    ("sample", "field", "default"),
+    [(make_run("REV-02"), "language", "en"), (REPORT, "run_id", None), (ENGAGEMENT, "working_language", "en")],
+    ids=["run", "report", "engagement"],
+)
+def test_records_from_before_working_language_read_back_with_defaults(
+    sample: BaseModel, field: str, default: str | None
+) -> None:
+    """需求 R339 验收 3: 加字段之前写进检查点的执行记录 (没有 language) 经白名单 serde 读回为现在的类, 取 en (那时的
+    输出都是英文); 存储里的旧行 (JSON 没有这个键) 读回同样是 en. 项目的 working_language 同理; 报告稿没有 run_id 的
+    读回为空 (页面查不到执行, 不标生成语言)."""
+    model = type(sample)
+    serde = checkpoint_serde()
+    old = without_field(model, field)(**sample.model_dump(exclude={field}))
+    back = serde.loads_typed(serde.dumps_typed(old))
+    assert type(back) is model and getattr(back, field) == default
+    assert getattr(model.model_validate(sample.model_dump(mode="json", exclude={field})), field) == default
 
 
 def test_type_guard_names_classes_outside_state_modules() -> None:

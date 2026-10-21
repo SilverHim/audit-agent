@@ -80,6 +80,7 @@ from tests.fakes import (
     FakeRegistry,
     FakeTrail,
     ScriptAgent,
+    evidence_pointers,
     make_deps,
     make_runner,
     wait_idle,
@@ -361,32 +362,11 @@ async def test_every_evidence_pointer_resolves(demo: Started) -> None:
     await assert_pointers_resolve(demo)
 
 
-async def evidence_pointers(s: Started, eid: str = EID, *, everything: bool = False) -> list[EvidencePointer]:
-    """判断 (推理链与证据), 合同与函证的证据指针. everything 时另含例外, 承接评分卡的登记检查与复核决定的人工结果,
-    即存储中全部带指针的对象 (R56 验收 2; 假存储只预置了部分试算表行, 例外指针在假实现下解析不全)."""
-    store = s.output_store
-    pointers: list[EvidencePointer] = []
-    for j in await store.latest(eid, Judgment):
-        pointers += [*j.evidence, *(p for step in j.reasoning_chain for p in step.evidence)]
-    if everything:
-        for x in await store.latest(eid, AuditException):
-            pointers += x.evidence
-        for card in await store.latest(eid, AcceptanceScorecard):
-            pointers += [check.evidence for check in card.registry_checks]
-        for r in await store.latest(eid, ReviewRecord):
-            pointers += r.manual_result.evidence if r.manual_result is not None else []
-    for c in await s.runner.deps.financial_store.contracts(eid):
-        pointers += c.evidence
-    for c in await store.latest(eid, Confirmation):
-        pointers += c.evidence
-    return pointers
-
-
 async def assert_pointers_resolve(s: Started, eid: str = EID, *, everything: bool = False) -> list[EvidencePointer]:
     """验收 4: 判断 (推理链与证据), 合同与函证的证据指针都能解析 (行存在, 页码不超过页数, 准则已注册, 留痕存在);
     everything 同 evidence_pointers. 返回检查过的指针."""
     resolver = PointerResolver(s.runner.deps.judgments.validator, eid, None)
-    pointers = await evidence_pointers(s, eid, everything=everything)
+    pointers = await evidence_pointers(s.runner.deps, eid, everything=everything)
     assert len(pointers) > 30
     for p in pointers:
         resolved, reason = await resolver.resolve(p)
@@ -397,8 +377,8 @@ async def assert_pointers_resolve(s: Started, eid: str = EID, *, everything: boo
 @shared_loop
 async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -> None:
     """(Codex R56 探针) everything 时在判断, 合同, 函证之外另收例外与承接评分卡的全部指针, 一条不漏."""
-    base = await evidence_pointers(demo)
-    full = await evidence_pointers(demo, everything=True)
+    base = await evidence_pointers(demo.runner.deps)
+    full = await evidence_pointers(demo.runner.deps, everything=True)
     exceptions = await demo.output_store.latest(EID, AuditException)
     [card] = await demo.output_store.latest(EID, AcceptanceScorecard)
     assert len(exceptions) == 4 and all(x.evidence for x in exceptions) and len(card.registry_checks) == 3

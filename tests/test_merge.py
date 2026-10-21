@@ -229,7 +229,8 @@ def test_agent_fields_match_section_6_table() -> None:
         "representation_letter",  # 需求 R215
     }
     assert AGENT_FIELDS[AgentId.A6] == {"exceptions", "judgments", "review_tasks", "confirmations"}
-    assert AGENT_FIELDS[AgentId.A8] == {"judgments", "review_tasks", "misstatements"}  # 需求 R156
+    # 需求 R156; R165 加 FIN-09 的 V02 例外
+    assert AGENT_FIELDS[AgentId.A8] == {"judgments", "exceptions", "review_tasks", "misstatements"}
     # 需求 R215: A9 加合规检查与其例外, 任务; A10 加治理层沟通与独立性声明
     assert AGENT_FIELDS[AgentId.A9] == {"uncorrected_schedule", "compliance_checks", "exceptions", "review_tasks"}
     assert AGENT_FIELDS[AgentId.A10] == {
@@ -915,10 +916,10 @@ def test_report_revision_is_a_new_id_not_a_lower_version() -> None:
     old = AuditReportVersion(
         id="REPORT-1", version=3, revision=1, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
     )
-    revised = AuditReportVersion(
-        id="REPORT-2", revision=2, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[]
-    )
     run = finished(make_run("RPT-03", run_no=2))
+    revised = AuditReportVersion(
+        id="REPORT-2", revision=2, opinion_type=OpinionType.qualified, sections={}, judgment_refs=[], run_id=run.id
+    )
     state = initial_state(ENGAGEMENT, [make_procedure("RPT-03")], 1)
     state["report_versions"] = [old]
 
@@ -1049,7 +1050,7 @@ async def test_run_agent_checks_template_outputs() -> None:
     def with_confirmations(ctx: Any) -> StatePatch:
         return {"confirmations": [], "procedure_runs": [finished(ctx.run)]}
 
-    patch, writer = await nodes.run_agent(ScriptA6(deps, with_confirmations), make_ctx(deps, "REV-02"))
+    patch, writer, _ = await nodes.run_agent(ScriptA6(deps, with_confirmations), make_ctx(deps, "REV-02"))
     assert writer is AgentId.A1 and "confirmations" not in patch
     [run] = patch["procedure_runs"]
     assert (run.status, run.failure_reason) == (RunStatus.failed, "merge_rejected: REV-02 未声明产出 confirmations")
@@ -1066,7 +1067,7 @@ async def test_a1_failure_patch_not_limited_by_outputs() -> None:
 
     ctx = make_ctx(deps, "REV-08")
     assert "review_tasks" not in ctx.template.outputs
-    patch, writer = await nodes.run_agent(ScriptA6(deps, broken), ctx)
+    patch, writer, _ = await nodes.run_agent(ScriptA6(deps, broken), ctx)
     assert writer is AgentId.A1
     [failed] = patch["review_tasks"]
     assert (failed.kind, failed.procedure_id) == (TaskKind.failed, "REV-08")

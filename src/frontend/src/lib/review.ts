@@ -114,6 +114,7 @@ export type ReviewDraft = {
   reason: string
   conclusion: string
   account: string
+  accountCode: string // 科目代码 (从科目表选), 空串为不填 (需求 R163)
   assertion: Assertion
   amount: string
   direction: Direction
@@ -126,6 +127,7 @@ export function emptyDraft(): ReviewDraft {
     reason: '',
     conclusion: '',
     account: '',
+    accountCode: '',
     assertion: 'Cutoff',
     amount: '',
     direction: 'overstated',
@@ -134,12 +136,13 @@ export function emptyDraft(): ReviewDraft {
   }
 }
 
-// 错报草稿填进表单. 只有人点"复制建议数据"才填入, 不预填; 例外: 功能 collab 打开时仲裁采纳的一方建议错报,
-// 选中即按该方的草稿预填 (见 attachRule)
+// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 只有人点"复制建议数据"才填入, 不预填; 例外:
+// 功能 collab 打开时仲裁采纳的一方建议错报, 选中即按该方的草稿预填 (见 attachRule)
 export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
   return {
     ...draft,
     account: proposed.account,
+    accountCode: proposed.account_code ?? '',
     assertion: proposed.assertion,
     amount: (proposed.amount_cents / 100).toFixed(2),
     direction: proposed.direction,
@@ -259,7 +262,7 @@ export function buildRecord(
   return base
 }
 
-// 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案
+// 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案. 科目代码可空 (空为不填; 后端查它在本项目科目表中)
 export function misstatementDraft(input: ReviewDraft, t: Messages): MisstatementDraft | string {
   const cents = audToCents(input.amount)
   if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
@@ -269,6 +272,7 @@ export function misstatementDraft(input: ReviewDraft, t: Messages): Misstatement
     assertion: input.assertion,
     amount_cents: cents,
     direction: input.direction,
+    account_code: input.accountCode || null,
   }
 }
 

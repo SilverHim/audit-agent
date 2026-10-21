@@ -2,7 +2,7 @@
 
 import { type Client, type ClientMeta, formDataBodySerializer, type Options as Options2, type RequestResult, type ServerSentEventsResult, type TDataShape, urlSearchParamsBodySerializer } from './client';
 import { client } from './client.gen';
-import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
+import type { AuthLoginData, AuthLoginErrors, AuthLoginResponses, AuthRegisterData, AuthRegisterErrors, AuthRegisterResponses, ClientsAbnLookupData, ClientsAbnLookupErrors, ClientsAbnLookupResponses, ClientsCreateClientData, ClientsCreateClientErrors, ClientsCreateClientResponses, ClientsListClientsData, ClientsListClientsResponses, ConversationAskConciergeData, ConversationAskConciergeErrors, ConversationAskConciergeResponses, ConversationListConversationData, ConversationListConversationErrors, ConversationListConversationResponses, ConversationStreamConciergeData, ConversationStreamConciergeErrors, ConversationStreamConciergeResponses, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesErrors, CorrectionsListAdjustmentEntriesResponses, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeErrors, CorrectionsSubmitCorrectionNoticeResponses, DataAccountHistoryData, DataAccountHistoryErrors, DataAccountHistoryResponses, DataChangeImportSheetData, DataChangeImportSheetErrors, DataChangeImportSheetResponses, DataCommitImportData, DataCommitImportErrors, DataCommitImportResponses, DataConfirmBatchData, DataConfirmBatchErrors, DataConfirmBatchResponses, DataDataRequestsData, DataDataRequestsErrors, DataDataRequestsResponses, DataDemoImportData, DataDemoImportErrors, DataDemoImportResponses, DataEditBatchItemData, DataEditBatchItemErrors, DataEditBatchItemResponses, DataGetBatchData, DataGetBatchErrors, DataGetBatchResponses, DataListBatchesData, DataListBatchesErrors, DataListBatchesResponses, DataMarkRequestUnavailableData, DataMarkRequestUnavailableErrors, DataMarkRequestUnavailableResponses, DataReadyData, DataReadyErrors, DataReadyResponses, DataRetryBatchData, DataRetryBatchErrors, DataRetryBatchResponses, DataSetAccountCategoryData, DataSetAccountCategoryErrors, DataSetAccountCategoryResponses, DatasetsListDatasetsData, DatasetsListDatasetsResponses, DataStartBatchData, DataStartBatchErrors, DataStartBatchResponses, DataStartImportData, DataStartImportErrors, DataStartImportResponses, DataSummaryData, DataSummaryErrors, DataSummaryResponses, DataTablePageData, DataTablePageErrors, DataTablePageResponses, DataTableSchemasData, DataTableSchemasResponses, DataXeroConnectData, DataXeroConnectErrors, DataXeroConnectResponses, DataXeroDisconnectData, DataXeroDisconnectErrors, DataXeroDisconnectResponses, DataXeroProfileCheckData, DataXeroProfileCheckErrors, DataXeroProfileCheckResponses, DataXeroSyncData, DataXeroSyncErrors, DataXeroSyncResponses, DataXeroTenantData, DataXeroTenantErrors, DataXeroTenantResponses, DataXeroTenantsData, DataXeroTenantsErrors, DataXeroTenantsResponses, DeferralsListDeferralsData, DeferralsListDeferralsErrors, DeferralsListDeferralsResponses, DeferralsSetDeferralData, DeferralsSetDeferralErrors, DeferralsSetDeferralResponses, EngagementsCreateEngagementData, EngagementsCreateEngagementErrors, EngagementsCreateEngagementResponses, EngagementsGetClientProfileData, EngagementsGetClientProfileErrors, EngagementsGetClientProfileResponses, EngagementsGetEngagementData, EngagementsGetEngagementErrors, EngagementsGetEngagementResponses, EngagementsGetPlanData, EngagementsGetPlanErrors, EngagementsGetPlanResponses, EngagementsListEngagementsData, EngagementsListEngagementsResponses, EngagementsResumeEngagementData, EngagementsResumeEngagementErrors, EngagementsResumeEngagementResponses, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageErrors, EngagementsSetWorkingLanguageResponses, EvidenceContractHistoryData, EvidenceContractHistoryErrors, EvidenceContractHistoryResponses, EvidenceDocumentHistoryData, EvidenceDocumentHistoryErrors, EvidenceDocumentHistoryResponses, EvidenceEditConfirmationData, EvidenceEditConfirmationErrors, EvidenceEditConfirmationResponses, EvidenceEditContractData, EvidenceEditContractErrors, EvidenceEditContractResponses, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractErrors, EvidenceEditRegistryExtractResponses, EvidenceGetEvidenceData, EvidenceGetEvidenceErrors, EvidenceGetEvidenceResponses, EvidenceGetRecordData, EvidenceGetRecordErrors, EvidenceGetRecordResponses, EvidenceListConfirmationsData, EvidenceListConfirmationsErrors, EvidenceListConfirmationsResponses, EvidenceListContractsData, EvidenceListContractsErrors, EvidenceListContractsResponses, EvidenceListDocumentsData, EvidenceListDocumentsErrors, EvidenceListDocumentsResponses, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsErrors, EvidenceListRegistryExtractsResponses, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryErrors, EvidenceRegistryExtractHistoryResponses, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsErrors, EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeErrors, EvidenceSetDocumentTypeResponses, EvidenceUploadDocumentsData, EvidenceUploadDocumentsErrors, EvidenceUploadDocumentsResponses, GatesGetGateData, GatesGetGateErrors, GatesGetGateResponses, GatesSubmitGateDecisionData, GatesSubmitGateDecisionErrors, GatesSubmitGateDecisionResponses, GatesUpdateClientProfileData, GatesUpdateClientProfileErrors, GatesUpdateClientProfileResponses, HealthHealthData, HealthHealthResponses, IntegrationsXeroCallbackData, IntegrationsXeroCallbackErrors, ManualListManualTasksData, ManualListManualTasksErrors, ManualListManualTasksResponses, ReportsGetMisstatementsData, ReportsGetMisstatementsErrors, ReportsGetMisstatementsResponses, ReportsGetReportsData, ReportsGetReportsErrors, ReportsGetReportsResponses, ReportsGetTrailData, ReportsGetTrailErrors, ReportsGetTrailResponses, ReportsListTrailData, ReportsListTrailErrors, ReportsListTrailResponses, ReviewsGetJudgmentData, ReviewsGetJudgmentErrors, ReviewsGetJudgmentResponses, ReviewsGetProcedureData, ReviewsGetProcedureErrors, ReviewsGetProcedureResponses, ReviewsListExceptionsData, ReviewsListExceptionsErrors, ReviewsListExceptionsResponses, ReviewsListReviewTasksData, ReviewsListReviewTasksErrors, ReviewsListReviewTasksResponses, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskErrors, ReviewsPresentReviewTaskResponses, ReviewsRerunProceduresData, ReviewsRerunProceduresErrors, ReviewsRerunProceduresResponses, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordErrors, ReviewsSubmitReviewRecordResponses, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponses, SettingsTestLlmSlotData, SettingsTestLlmSlotErrors, SettingsTestLlmSlotResponses, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotErrors, SettingsUpdateLlmSlotResponses, StandardsGetStandardData, StandardsGetStandardErrors, StandardsGetStandardResponses, UsersMeData, UsersMeResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -140,6 +140,7 @@ export const engagementsListEngagements = <ThrowOnError extends boolean = false>
  * 数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间
  * 而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).
  * 新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).
+ * working_language 不在 zh, en 时 422 INVALID_VALUE (parse_language, 同 PUT working-language).
  */
 export const engagementsCreateEngagement = <ThrowOnError extends boolean = false>(options: Options<EngagementsCreateEngagementData, ThrowOnError>): RequestResult<EngagementsCreateEngagementResponses, EngagementsCreateEngagementErrors, ThrowOnError> => (options.client ?? client).post<EngagementsCreateEngagementResponses, EngagementsCreateEngagementErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -170,6 +171,24 @@ export const engagementsGetPlan = <ThrowOnError extends boolean = false>(options
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/engagements/{eid}/plan',
     ...options
+});
+
+/**
+ * Set Working Language
+ *
+ * 改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时
+ * 422 INVALID_VALUE (parse_language); 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值
+ * 相同不改, 不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户), 留痕写失败时把语言改回
+ * 原值再抛错, 不留下没有留痕的修改. 不取项目锁: 后台执行中照样可改, 改之后才建的执行记录取新值.
+ */
+export const engagementsSetWorkingLanguage = <ThrowOnError extends boolean = false>(options: Options<EngagementsSetWorkingLanguageData, ThrowOnError>): RequestResult<EngagementsSetWorkingLanguageResponses, EngagementsSetWorkingLanguageErrors, ThrowOnError> => (options.client ?? client).put<EngagementsSetWorkingLanguageResponses, EngagementsSetWorkingLanguageErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/working-language',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
 });
 
 /**
@@ -218,7 +237,8 @@ export const gatesUpdateClientProfile = <ThrowOnError extends boolean = false>(o
 /**
  * Get Gate
  *
- * 不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND.
+ * 当前闸门的材料; 不在闸门是常态, 回 200, 响应体 null (需求 R346, 待拍板 Q30). 停在闸门但材料缺失时
+ * 404 NOT_FOUND.
  */
 export const gatesGetGate = <ThrowOnError extends boolean = false>(options: Options<GatesGetGateData, ThrowOnError>): RequestResult<GatesGetGateResponses, GatesGetGateErrors, ThrowOnError> => (options.client ?? client).get<GatesGetGateResponses, GatesGetGateErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -258,7 +278,8 @@ export const reviewsListReviewTasks = <ThrowOnError extends boolean = false>(opt
  * 判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务
  * 绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在
  * 404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.
- * deferred 按稍后处理的留痕 (已决定的任务为假); 只有带 subject_id 的 failed 任务读 llm_call 留痕取失败原因.
+ * deferred 按稍后处理的留痕 (已决定的任务为假); 只有带对象的 failed 与 unattributed 任务读 llm_call 留痕取失败
+ * 原因 (presentation.reads_llm_calls).
  */
 export const reviewsPresentReviewTask = <ThrowOnError extends boolean = false>(options: Options<ReviewsPresentReviewTaskData, ThrowOnError>): RequestResult<ReviewsPresentReviewTaskResponses, ReviewsPresentReviewTaskErrors, ThrowOnError> => (options.client ?? client).post<ReviewsPresentReviewTaskResponses, ReviewsPresentReviewTaskErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -950,7 +971,7 @@ export const dataXeroDisconnect = <ThrowOnError extends boolean = false>(options
 /**
  * Get Misstatements
  *
- * 汇总表取 SCHEDULE; 重要性与意见类型取项目总览.
+ * 汇总表取 SCHEDULE; 重要性与意见类型取项目总览; 更正通知取 Store 中的全部, 按提交时间 (需求 R163).
  */
 export const reportsGetMisstatements = <ThrowOnError extends boolean = false>(options: Options<ReportsGetMisstatementsData, ThrowOnError>): RequestResult<ReportsGetMisstatementsResponses, ReportsGetMisstatementsErrors, ThrowOnError> => (options.client ?? client).get<ReportsGetMisstatementsResponses, ReportsGetMisstatementsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -987,6 +1008,34 @@ export const reportsListTrail = <ThrowOnError extends boolean = false>(options: 
 export const reportsGetTrail = <ThrowOnError extends boolean = false>(options: Options<ReportsGetTrailData, ThrowOnError>): RequestResult<ReportsGetTrailResponses, ReportsGetTrailErrors, ThrowOnError> => (options.client ?? client).get<ReportsGetTrailResponses, ReportsGetTrailErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
     url: '/api/v1/engagements/{eid}/trail/{trail_id}',
+    ...options
+});
+
+/**
+ * Submit Correction Notice
+ *
+ * 停在等待更正时提交更正通知 (第 7 节 "更正通知"): id 为 D-{uuid4}, 提交人与时刻由服务端填写; handler 直接
+ * await submit. 不在等更正 409 NOT_AWAITING_CORRECTION, 其余校验同其他决定.
+ */
+export const correctionsSubmitCorrectionNotice = <ThrowOnError extends boolean = false>(options: Options<CorrectionsSubmitCorrectionNoticeData, ThrowOnError>): RequestResult<CorrectionsSubmitCorrectionNoticeResponses, CorrectionsSubmitCorrectionNoticeErrors, ThrowOnError> => (options.client ?? client).post<CorrectionsSubmitCorrectionNoticeResponses, CorrectionsSubmitCorrectionNoticeErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/correction-notices',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * List Adjustment Entries
+ *
+ * 项目数据集可载入的更正分录 (DatasetLoader.adjustment_entries, 按凭证号), loaded 为总账里已有该凭证号的行;
+ * 没有数据集或数据集没有更正分录 (如 Numbat) 为空.
+ */
+export const correctionsListAdjustmentEntries = <ThrowOnError extends boolean = false>(options: Options<CorrectionsListAdjustmentEntriesData, ThrowOnError>): RequestResult<CorrectionsListAdjustmentEntriesResponses, CorrectionsListAdjustmentEntriesErrors, ThrowOnError> => (options.client ?? client).get<CorrectionsListAdjustmentEntriesResponses, CorrectionsListAdjustmentEntriesErrors, ThrowOnError>({
+    security: [{ scheme: 'bearer', type: 'http' }],
+    url: '/api/v1/engagements/{eid}/adjustment-entries',
     ...options
 });
 

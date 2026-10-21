@@ -14,7 +14,7 @@ from backend.contracts.conversation import ConciergeQuestion
 from backend.contracts.models import Phase, TrailKind
 from backend.core.security import create_access_token
 from backend.main import create_app
-from tests.chat_fakes import ScriptedChatModel, chat_client, chat_deps, make_chat, parse_sse
+from tests.chat_fakes import ScriptedChatModel, chat_client, chat_deps, make_chat, parse_sse, project_state
 from tests.fakes import ENGAGEMENT, NUMBAT_AUDITOR, NUMBAT_PROFILE, FakeEngagementStore, FakeTrail
 from tests.test_concierge_chat_service import StallingModel
 
@@ -23,7 +23,7 @@ BASE = f"/api/v1/engagements/{EID}/conversation"
 
 
 async def test_ask_then_list_history() -> None:
-    chat = make_chat(RuleChatModel())
+    chat = make_chat(RuleChatModel(), state=project_state("zh"))
     async with chat_client(chat) as client:
         assert (await client.get(BASE)).json() == []
         response = await client.post(BASE, json={"question": "现在到哪一步了？", "lang": "zh"})
@@ -32,7 +32,7 @@ async def test_ask_then_list_history() -> None:
         assert answer["answer"].startswith("项目目前处于执行阶段")
         [turn] = (await client.get(BASE)).json()
     assert turn["question"] == "现在到哪一步了？" and turn["answer"] == answer["answer"]
-    assert turn["trail_id"] == answer["trail_id"] and turn["lang"] == "zh" and turn["aborted"] is False
+    assert turn["trail_id"] == answer["trail_id"] and turn["answer_lang"] == "zh" and turn["aborted"] is False
     assert turn["created_at"] is not None
 
 

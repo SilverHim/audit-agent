@@ -6,10 +6,8 @@ import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any, ClassVar, Literal, NoReturn, cast
+from typing import Any, ClassVar, Literal, cast
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, Undefined
 from pydantic import BaseModel, ValidationError
 
 from backend.contracts import llm_outputs
@@ -75,7 +73,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
-from backend.services.procedure_library import ProcedureLibrary
+from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
 
@@ -107,7 +105,7 @@ DOCUMENT_EVIDENCE: dict[DocumentType, EvidenceType] = {
 }
 # 不算行金额的金额列: 银行流水的交易后余额是累计数, 不是这一行的金额
 NOT_ROW_AMOUNTS = {"balance_after_cents"}
-MAX_ATTEMPTS = 3  # 首次调用加语法, 结构失败后最多 2 次重试
+MAX_ATTEMPTS = 3  # 首次调用加没通过 (四级任一级) 后最多 2 次重试 (需求 R348)
 PERSONAL_FIELDS = frozenset({"birth_date"})  # 渲染提示词前从变量里去掉的字段: 个人的出生日期 (需求 R310)
 # 系统提示词: 要求只输出符合输出模型 JSON schema 的一个对象
 SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON schema below. \
@@ -121,7 +119,7 @@ JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
     "Rule findings are not evidence sources: never put a finding ID in an evidence pointer. "
     "Cite the rows, document pages or fields that the finding is about.\n\n{schema}",
 )
-# 语法或结构失败后追加的用户消息
+# 没通过校验后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:
 
 {errors}
@@ -624,21 +622,20 @@ class OutputValidator:
     async def validate(
         self, eid: str, template: ProcedureTemplate, response: LLMResponse[T_out], ctx: ValidationContext
     ) -> ValidationReport[T_out]:
-        """依次校验语法, 结构, 引用, 语义, 返回第一个未通过的级别; 语法与结构失败可重试, 其余不可.
+        """依次校验语法, 结构, 引用, 语义, 返回第一个未通过的级别; 没通过都可重试 (ValidationReport.retryable).
 
         output 取通过结构校验的输出并改写证据指针; 引用失败时 unsupported_steps 与 errors 仍列出已查到的问题.
         """
         model = output_model(template)
         output, level, errors = parse_output(model, response)
         if output is None:
-            return ValidationReport(level_failed=level, retryable=True, unsupported_steps=[], errors=errors)
+            return ValidationReport(level_failed=level, unsupported_steps=[], errors=errors)
         check = self.CHECKS.get(model)
         if check is None:
             raise NotImplementedError(f"{model.__name__} 的引用与语义校验")
         result = await check(self, eid, output, ctx)
         return ValidationReport(
             level_failed=result.level,
-            retryable=False,
             unsupported_steps=result.unsupported,
             errors=result.errors,
             notes=result.notes,
@@ -907,25 +904,6 @@ for _model, _check in (
     OutputValidator.register(_model, _check)
 
 
-def json_default(value: object) -> NoReturn:
-    """tojson 遇到不能序列化的对象时调用: 缺变量 (StrictUndefined) 抛 UndefinedError, 其余仍抛 TypeError.
-
-    StrictUndefined 只在取值, 转字符串等操作时报错, json.dumps 只会说它不能序列化, 看不出是缺了变量.
-    """
-    if isinstance(value, Undefined):
-        str(value)  # StrictUndefined 转字符串即抛 UndefinedError, 消息写明缺的是哪个变量
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
-
-
-def prompt_env(root: Path) -> Environment:
-    """提示词模板的 Jinja2 环境: 去掉块标签所在行的换行与行首空白, 缺变量即报错 (含经 tojson 输出的), 不做 HTML 转义."""
-    env = Environment(
-        loader=FileSystemLoader(root), trim_blocks=True, lstrip_blocks=True, undefined=StrictUndefined, autoescape=False
-    )
-    env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": json_default}  # sort_keys 同 Jinja2 缺省
-    return env
-
-
 def prompt_hash(system: str, messages: Sequence[LLMMessage]) -> str:
     """送给大模型的完整输入 (system 与 messages) 的 sha256: 规范 JSON, 键排序, 不留空白, 非 ASCII 字符原样."""
     canonical = json.dumps(
@@ -975,10 +953,10 @@ class JudgmentEngine:
         system: str = SYSTEM_PROMPT,
         subject_id: str | None = None,
     ) -> LLMCallResult[Any]:
-        """渲染提示词, 调大模型并校验输出; 语法或结构失败时把原文 (为空时不加) 与错误追加进对话重试, 最多共
-        MAX_ATTEMPTS 次.
+        """渲染提示词, 调大模型并校验输出; 没通过 (语法, 结构, 引用, 语义任一级, 需求 R348) 时把原文 (为空时不加) 与
+        错误追加进对话重试, 最多共 MAX_ATTEMPTS 次; 只标 unsupported 的步骤算通过, 不重试.
 
-        引用与语义失败不重试. 每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
+        每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
         渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
@@ -1076,7 +1054,7 @@ class JudgmentEngine:
     ) -> JudgmentOutcome:
         """对一个判断对象调大模型, 把通过校验的草稿补全为 Judgment (review_status pending, 由调用方分类).
 
-        失败 (重试耗尽, 引用或语义失败) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
+        失败 (重试耗尽仍没通过) 时 judgment 为空: hybrid 程序为 unattributed (保留规则结果), 其余为 failed.
         调用方 Agent 取模板 owner; performed_by 为项目负责人. 系统提示词为 JUDGMENT_SYSTEM.
         """
         variables = {

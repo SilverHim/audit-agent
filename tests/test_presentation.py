@@ -34,6 +34,7 @@ from backend.contracts.views import PresentedSide, TaskPresentation
 from backend.core.config import get_settings
 from backend.orchestration.nodes import fail_run
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from backend.services.presentation import (
     assemble,
     dwell_seconds,
@@ -48,10 +49,12 @@ from tests.fakes import (
     ENGAGEMENT,
     NOW,
     NUMBAT_AUDITOR,
+    FakeOutputStore,
     FakeTrail,
     LayeredMockLLM,
     api_client,
     make_run,
+    make_runner,
     numbat_rev08_exception,
     wait_idle,
 )
@@ -316,6 +319,15 @@ def whole_run_failure() -> tuple[ReviewTask, ProcedureRun]:
     return patch["review_tasks"][0], patch["procedure_runs"][0]
 
 
+# SI-2026-0612 的 REV-08 跨期例外 (X-REV-08-1-R01-1) 作为无归因任务的失败原因时的规则三项
+REV08_RULE = {
+    "source": "exception",
+    "rule_id": "R01",
+    "amount_cents": 14200000,
+    "detail": {"posting_date": "2026-06-28", "signed_date": "2026-07-03"},
+}
+
+
 def unattributed() -> tuple[ReviewTask, AuditException]:
     """无归因: SI-2026-0612 判断失败, REV-08 的跨期例外出 v2 unattributed 并建任务 (T-X-REV-08-1-R01-1-v2)."""
     first = numbat_rev08_exception(make_run("REV-08"))
@@ -328,15 +340,7 @@ def unattributed() -> tuple[ReviewTask, AuditException]:
     ("case", "expected"),
     [
         (whole_run_failure, {"source": "run", "reason": "RuntimeError: boom"}),
-        (
-            unattributed,
-            {
-                "source": "exception",
-                "rule_id": "R01",
-                "amount_cents": 14200000,
-                "detail": {"posting_date": "2026-06-28", "signed_date": "2026-07-03"},
-            },
-        ),
+        (unattributed, REV08_RULE),  # 没给 llm_call 留痕: 只有规则三项
     ],
 )
 def test_failure_of_run_and_exception(case: Any, expected: dict[str, Any]) -> None:
@@ -345,50 +349,102 @@ def test_failure_of_run_and_exception(case: Any, expected: dict[str, Any]) -> No
     assert failure is not None and failure.model_dump(exclude_defaults=True) == expected
 
 
+async def judged_rev02(tmp_path: Path, malformed: str) -> tuple[dict[str, Any], FakeTrail]:
+    """真实判断引擎跑 REV-02 (setup(real=True)): 固定输出复制到测试临时目录, malformed 那张发票的换成结构不合的
+    (连续 3 次都不过). 返回片段与留痕."""
+    fixtures = tmp_path / "REV-02"
+    shutil.copytree(Path(__file__).resolve().parent / "fixtures" / "llm" / "REV-02", fixtures)
+    (fixtures / f"{malformed}.json").write_text(json.dumps({"conclusion": "Synthetic malformed output"}))
+    agent, ctx, _ = setup(real=True)
+    agent.deps.judgments.llm = MockLLMClient(tmp_path)  # type: ignore[attr-defined]
+    patch = await agent.run(ctx)
+    trail = agent.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return dict(patch), trail
+
+
+def llm_calls(trail: FakeTrail, subject: str) -> tuple[list[TrailEntry], list[TrailEntry]]:
+    """留痕中的 llm_call 行 (按写入顺序), 与其中对象为 subject 的几行 (须为 3 次尝试)."""
+    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
+    mine = [e for e in calls if e.payload["fixture_key"] == subject]
+    assert [e.payload["attempt"] for e in mine] == [1, 2, 3]
+    return calls, mine
+
+
+def later_rows(last: TrailEntry) -> list[TrailEntry]:
+    """对象最后一行之后才写的, 不该被取到的行: 同一执行里 GEN-09 (独立复核) 的, 第 2 次执行里同一对象的."""
+    return [
+        last.model_copy(update={"id": "TR-critic", "procedure_id": "GEN-09"}),
+        last.model_copy(update={"id": "TR-rerun", "run_id": "RUN-REV-02-2"}),
+    ]
+
+
+def call_items(entry: TrailEntry) -> dict[str, Any]:
+    """失败原因中取自那行 llm_call 的四项 (结构不合, 3 次)."""
+    assert entry.payload["errors"]
+    return {"level_failed": "structure", "errors": entry.payload["errors"], "attempts": 3, "trail_id": entry.id}
+
+
 async def test_failed_subject_takes_last_llm_call_of_that_subject(tmp_path: Path) -> None:
     """验收 5: 真实判断引擎跑 REV-02, SI-2026-0618 的输出连续 3 次结构不合 (测试临时目录里的固定输出): 建
     T-RUN-REV-02-1-SI-2026-0618-v1, 失败原因取本次执行里对象为 SI-2026-0618 的最后一行 llm_call (structure,
     errors, 3 次); 在它之后写的别的行 (同一执行的独立复核, 别的执行里同一对象) 不被取到. 正常的判断任务没有失败原因."""
-    fixtures = tmp_path / "REV-02"
-    fixtures.mkdir()
-    source = Path(__file__).resolve().parent / "fixtures" / "llm" / "REV-02" / "SI-2026-0612.json"
-    shutil.copy(source, fixtures / "SI-2026-0612.json")
-    (fixtures / "SI-2026-0618.json").write_text(json.dumps({"conclusion": "Synthetic malformed output"}))
-    agent, ctx, _ = setup(real=True)
-    agent.deps.judgments.llm = MockLLMClient(tmp_path)  # type: ignore[attr-defined]
-    patch = await agent.run(ctx)
+    patch, trail = await judged_rev02(tmp_path, "SI-2026-0618")
     tasks = {t.id: t for t in patch["review_tasks"]}
     task, run = tasks["T-RUN-REV-02-1-SI-2026-0618-v1"], patch["procedure_runs"][0]
-    trail = agent.deps.trail
-    assert isinstance(trail, FakeTrail)
-    calls = [e for e in trail.entries if e.kind is TrailKind.llm_call]
-    mine = [e for e in calls if e.payload["fixture_key"] == "SI-2026-0618"]
-    assert [e.payload["attempt"] for e in mine] == [1, 2, 3]
-    later = [  # 之后才写的: 同一执行里 GEN-09 的行, 第 2 次执行里同一对象的行
-        mine[-1].model_copy(update={"id": "TR-critic", "procedure_id": "GEN-09"}),
-        mine[-1].model_copy(update={"id": "TR-rerun", "run_id": "RUN-REV-02-2"}),
-    ]
-    failure = failure_of(task, run, [*calls, *later])
+    calls, mine = llm_calls(trail, "SI-2026-0618")
+    failure = failure_of(task, run, [*calls, *later_rows(mine[-1])])
     assert failure is not None
-    assert (failure.source, failure.subject_id, failure.level_failed, failure.attempts, failure.trail_id) == (
-        "llm_call",
-        "SI-2026-0618",
-        "structure",
-        3,
-        mine[-1].id,
-    )
-    assert failure.errors == mine[-1].payload["errors"] and failure.errors
+    assert failure.model_dump(exclude_defaults=True) == {
+        "source": "llm_call",
+        "subject_id": "SI-2026-0618",
+        **call_items(mine[-1]),
+    }
     assert failure_of(tasks["T-J-REV-02-1-SI-2026-0612-v1"], run, calls) is None
     # 需求 R158 之前的旧行没有 subject_id, 按 fixture_key 找, 结果相同
     legacy = [e.model_copy(update={"payload": {k: v for k, v in e.payload.items() if k != "subject_id"}}) for e in mine]
     assert failure_of(task, run, legacy) == failure
 
 
+async def test_unattributed_adds_last_llm_call_of_its_subject(tmp_path: Path) -> None:
+    """需求 R355 验收 1: 真实判断引擎跑 REV-02, SI-2026-0612 的输出连续 3 次结构不合; 它有 REV-08 的跨期例外, 例外出
+    v2 unattributed 并建 T-X-REV-08-1-R01-1-v2. 失败原因为规则三项, 加本次执行里对象为 SI-2026-0612 的最后一行
+    llm_call 的四项 (取法同带对象的 failed, 之后写的别的程序与别的执行的行不取); source 仍为 exception, 不填
+    subject_id. 留痕里只有别的对象与独立复核的调用时, 与任务不带对象时只有规则三项. 经接口呈递 (读项目的 llm_call
+    留痕) 结果相同."""
+    patch, trail = await judged_rev02(tmp_path, "SI-2026-0612")
+    [task] = [t for t in patch["review_tasks"] if t.kind is TaskKind.unattributed]
+    [marked] = [x for x in patch["exceptions"] if x.id == task.target_id]
+    assert (task.id, task.subject_id) == ("T-X-REV-08-1-R01-1-v2", "SI-2026-0612")
+    calls, mine = llm_calls(trail, "SI-2026-0612")
+    failure = failure_of(task, marked, [*calls, *later_rows(mine[-1])])
+    assert failure is not None and failure.model_dump(exclude_defaults=True) == REV08_RULE | call_items(mine[-1])
+    others = [e for e in calls if e not in mine]
+    assert {e.payload["fixture_key"] for e in others} >= {"SI-2026-0618"}
+    only_rule = failure_of(task, marked, others)
+    assert only_rule is not None and only_rule.model_dump(exclude_defaults=True) == REV08_RULE
+    # 不带对象的任务不按空对象去配没记对象的行
+    bare = task.model_copy(update={"subject_id": None})
+    unkeyed = mine[-1].model_copy(
+        update={"payload": {k: v for k, v in mine[-1].payload.items() if k not in ("subject_id", "fixture_key")}}
+    )
+    unmatched = failure_of(bare, marked, [unkeyed])
+    assert unmatched is not None and unmatched.model_dump(exclude_defaults=True) == REV08_RULE
+
+    store = FakeOutputStore([*patch["exceptions"], *patch["review_tasks"], *patch["procedure_runs"]])
+    runner, _ = make_runner(output_store=store, trail=trail)
+    async with api_client(runner) as http:
+        response = await present(http, task.id)
+    assert response.status_code == 200, response.text
+    assert response.json()["failure"] == failure_of(task, marked, calls).model_dump(mode="json")  # type: ignore[union-attr]
+
+
 @pytest.mark.parametrize("recorded", [False, True], ids=["no_key", "none"])
 async def test_non_judge_failed_subject_found_by_fixture_key(recorded: bool) -> None:
-    """判断引擎以外的调用方 (A3 的 DOC-06 回函抽取, fixture_key 即账户) 不记对象: BA-01 账号不符 (语义失败, 只调 1
-    次) 时失败卡片按 fixture_key 找到这次调用; 留痕记了 subject_id 而为空时同样回落 (第 2 轮审核 R158-11)."""
-    agent, ctx, trail = doc06_setup(doc06_scripted(BA_01=[doc06_raw("BA-01", account_no="99999999")]))
+    """判断引擎以外的调用方 (A3 的 DOC-06 回函抽取, fixture_key 即账户) 不记对象: BA-01 账号不符 (语义失败, 回传
+    重试 MAX_ATTEMPTS 次仍不过, 需求 R348) 时失败卡片按 fixture_key 找到这几次调用; 留痕记了 subject_id 而为空时
+    同样回落 (第 2 轮审核 R158-11)."""
+    agent, ctx, trail = doc06_setup(doc06_scripted(BA_01=[doc06_raw("BA-01", account_no="99999999")] * MAX_ATTEMPTS))
     patch = await agent.run(ctx)
     [task] = patch["review_tasks"]
     [run] = patch["procedure_runs"]
@@ -397,7 +453,7 @@ async def test_non_judge_failed_subject_found_by_fixture_key(recorded: bool) -> 
         calls = [e.model_copy(update={"payload": {**e.payload, "subject_id": None}}) for e in calls]
     failure = failure_of(task, run, calls)
     assert failure is not None
-    assert (failure.subject_id, failure.level_failed, failure.attempts) == ("BA-01", "semantic", 1)
+    assert (failure.subject_id, failure.level_failed, failure.attempts) == ("BA-01", "semantic", MAX_ATTEMPTS)
 
 
 def test_presentation_entry_time_is_injected() -> None:

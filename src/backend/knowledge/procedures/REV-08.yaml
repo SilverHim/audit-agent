@@ -1,5 +1,11 @@
 id: REV-08
 name: 凭证三单匹配
+# 范围与各规则总体的说明 (需求 R324): 占位按参数快照渲染, 窗口两端都含 (同规则 SQL 的 BETWEEN)
+scope:
+  zh: 期末前 {{ window_days }} 天 ({{ period_end | days_before(window_days) }} 至 {{ period_end }}) 入账的销售发票
+  en: >-
+    Sales invoices posted in the {{ window_days }} days before period end
+    ({{ period_end | days_before(window_days) }} to {{ period_end }})
 phase: P2_Executing
 cycle: Revenue
 owner: A6
@@ -27,6 +33,28 @@ rules:
                                AND CAST(:period_end AS date)
         AND d.signed_date > CAST(:period_end AS date)
       ORDER BY i.id
+    check: {zh: 入账期间正确, en: Recorded in the correct period}
+    # 被测总体 (需求 R324): 窗口内有服务完成记录 (发运单) 的发票, 每张一行; records 为该发票的记录数组 (按记录 ID),
+    # 每条 {delivery_no, signed_date, signed_by}, 没签收的签收日与签收人为 null (签收人是自由文本, 不用逗号连接)
+    population:
+      description:
+        zh: >-
+          {{ period_end | days_before(window_days) }} 至 {{ period_end }} 入账, 有服务完成记录的销售发票
+        en: >-
+          Sales invoices posted from {{ period_end | days_before(window_days) }} to {{ period_end }}
+          that have a service completion record
+      sql: |
+        SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
+               i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id,
+               jsonb_agg(jsonb_build_object('delivery_no', d.delivery_no, 'signed_date', d.signed_date,
+                                            'signed_by', d.signed_by) ORDER BY d.id)
+                 FILTER (WHERE d.id IS NOT NULL) AS records
+        FROM sales_invoices i JOIN delivery_notes d ON d.engagement_id = i.engagement_id AND d.invoice_id = i.id
+        WHERE i.engagement_id = :eid
+          AND i.posting_date BETWEEN CAST(:period_end AS date) - CAST(:window_days AS int)
+                                 AND CAST(:period_end AS date)
+        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id
+        ORDER BY i.id
   - id: R02
     name: 缺发运单或无签收日
     severity: high
@@ -38,6 +66,22 @@ rules:
         AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
         AND (d.id IS NULL OR d.signed_date IS NULL)
       ORDER BY i.id, d.id
+    check: {zh: 有服务完成记录, en: Service completion record exists}
+    population:  # 窗口内的全部发票, 每张一行 (列同 R01); 没有服务完成记录的 records 为 null
+      description:
+        zh: "{{ period_end | days_before(window_days) }} 至 {{ period_end }} 入账的全部销售发票"
+        en: "All sales invoices posted from {{ period_end | days_before(window_days) }} to {{ period_end }}"
+      sql: |
+        SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
+               i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id,
+               jsonb_agg(jsonb_build_object('delivery_no', d.delivery_no, 'signed_date', d.signed_date,
+                                            'signed_by', d.signed_by) ORDER BY d.id)
+                 FILTER (WHERE d.id IS NOT NULL) AS records
+        FROM sales_invoices i LEFT JOIN delivery_notes d ON d.engagement_id=i.engagement_id AND d.invoice_id=i.id
+        WHERE i.engagement_id=:eid
+          AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
+        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id
+        ORDER BY i.id
   # R03 的收款与发票对应: 流水参考号包含发票号; 发票号为 "字母前缀加纯数字" (如 Xero 的 ORC1026) 时另认参考号里
   # 出现该数字串且前后都不是数字的 (客户付款时常只写数字: "1026", "Invoice 1026"; "10261", "21026" 不算).
   # 带连字符等其他写法的发票号 (Numbat 的 SI-2026-0612) 只按包含发票号对应 (设计稿 v2.1 第 5.1 节, 决定 9)
@@ -58,3 +102,28 @@ rules:
       GROUP BY i.id, i.amount_cents
       HAVING SUM(t.amount_cents)<>i.amount_cents
       ORDER BY i.id
+    check: {zh: 收款金额相符, en: Receipts agree to the invoice}
+    # 窗口内截至数据日已有收款的发票 (收款对应同本规则), 尚未收款的不在其中, 本项不作判断. 收款流水 ID 与收款日按流水
+    # ID 逗号连接 (同规则 SQL 的 bank_transaction_ids; 两者都不含逗号), 日期用 to_char, 不随服务器的 DateStyle 变
+    population:
+      description:
+        zh: >-
+          {{ period_end | days_before(window_days) }} 至 {{ period_end }} 入账, 银行流水里找得到收款的销售发票
+        en: >-
+          Sales invoices posted from {{ period_end | days_before(window_days) }} to {{ period_end }}
+          with receipts found in the bank transactions
+      sql: |
+        SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
+               i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id,
+               string_agg(t.id, ',' ORDER BY t.id) AS bank_transaction_ids,
+               string_agg(to_char(t.txn_date, 'YYYY-MM-DD'), ',' ORDER BY t.id) AS received_dates,
+               CAST(SUM(t.amount_cents) AS bigint) AS received_cents
+        FROM sales_invoices i JOIN bank_transactions t ON t.engagement_id=i.engagement_id
+          AND t.amount_cents>0
+          AND (position(i.invoice_no IN t.reference)>0
+               OR (i.invoice_no ~ '^[A-Za-z]+[0-9]+$'
+                   AND t.reference ~ ('(^|[^0-9])' || substring(i.invoice_no from '[0-9]+$') || '([^0-9]|$)')))
+        WHERE i.engagement_id=:eid
+          AND i.posting_date BETWEEN CAST(:period_end AS date)-CAST(:window_days AS int) AND CAST(:period_end AS date)
+        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.contract_id, i.posting_date, i.journal_entry_id
+        ORDER BY i.id

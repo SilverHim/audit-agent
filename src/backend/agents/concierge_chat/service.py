@@ -68,8 +68,8 @@ from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
 from backend.contracts.views import EngagementOverview
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError
-from backend.services.judgment_engine import prompt_env
 from backend.services.llm_settings import LlmSettingsService
+from backend.services.procedure_library import prompt_env
 
 log = logging.getLogger(__name__)
 PING_SECONDS = 15.0  # 这么久没有事件就发一行 SSE 注释保活, 免得代理断开空闲连接
@@ -166,6 +166,8 @@ class ChatTurn:
     cites: dict[str, ConciergeCitation] = field(default_factory=dict)  # 已执行的工具结果里的编号池, 随图状态更新
     history_pool: dict[str, ConciergeCitation] = field(default_factory=dict)  # 历史中可引用的编号
     model: str = ""  # 最近一次调用的模型名
+    # 本轮的回答语言 (项目的工作语言, 需求 R342): 读总览时定下, 之后改了工作语言也不影响这一轮; 还没读到时为空
+    answer_lang: Lang | None = None
     input_tokens: int = 0  # 本轮各次调用的输入 token 合计
     output_tokens: int = 0  # 本轮各次调用的输出 token 合计
     record: "asyncio.Task[Any] | None" = None  # 写这一轮 conversation 留痕 (正常或 aborted) 的独立任务, 只建一次
@@ -383,18 +385,22 @@ class ConciergeChat:
             await asyncio.wait([previous])
         model = await self.source.current()
         overview = await self.state.overview(eid)
+        # 回答语言取项目的工作语言 (需求 R342); 提问带的 lang 是界面语言, 只管工具提示 (见 _converse)
+        answer_lang: Lang = overview.engagement.working_language
+        turn.answer_lang = answer_lang
 
         def system(summary: Summary | None) -> str:
-            return self.system_prompt(overview, question.lang, summary.text if summary else "")
+            return self.system_prompt(overview, answer_lang, summary.text if summary else "")
 
-        history = await self._fit(eid, model, await load_history(self.deps.trail, eid), system, question, force=False)
+        history = await load_history(self.deps.trail, eid)
+        history = await self._fit(eid, model, history, system, question, answer_lang, force=False)
         turn.history_pool = history.pool()
         try:
             state = await self._converse(turn, eid, model, history, system, question)
         except ContextOverflow:
             if turn.parts:  # 已经输出了一部分, 不能重来
                 raise
-            history = await self._fit(eid, model, history, system, question, force=True)
+            history = await self._fit(eid, model, history, system, question, answer_lang, force=True)
             turn.history_pool = history.pool()
             state = await self._converse(turn, eid, model, history, system, question)
         answer = answer_of(state)
@@ -407,13 +413,14 @@ class ConciergeChat:
         turn.emit("done", {"trail_id": trail_id})
         return ConciergeAnswer(answer=answer, citations=citations, trail_id=trail_id)
 
-    def system_prompt(self, overview: EngagementOverview, lang: Lang, summary: str) -> str:
+    def system_prompt(self, overview: EngagementOverview, answer_lang: Lang, summary: str) -> str:
+        """系统提示词; answer_lang 为回答语言 (项目的工作语言), 写在 "Language:" 一行与末尾的语言要求里."""
         engagement = overview.engagement
         return self.prompts.get_template("system.md.j2").render(
             client_name=overview.client_name,
             period_start=engagement.period_start.isoformat(),
             period_end=engagement.period_end.isoformat(),
-            lang=lang,
+            answer_lang=answer_lang,
             summary=summary,
         )
 
@@ -447,7 +454,7 @@ class ConciergeChat:
             model=model,
             tools=self.tools,
             env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero),
-            lang=question.lang,
+            ui_lang=question.lang,  # 界面语言: 工具提示文字按它, 回答语言另在系统提示里
             max_steps=limits.max_steps,
             max_tokens=limits.max_tokens,
             tool_budget=limits.turn_reserve * 3,
@@ -477,11 +484,12 @@ class ConciergeChat:
         history: History,
         system: Callable[[Summary | None], str],
         question: ConciergeQuestion,
+        answer_lang: Lang,
         *,
         force: bool,
     ) -> History:
-        """历史超预算 (或 force: 上游已报超限) 时压缩: 较早的轮连同上一份摘要写成新摘要, 保留最近几轮原文.
-        force 时保留的轮数减半. 摘要失败只截掉较早的轮 (不写摘要)."""
+        """历史超预算 (或 force: 上游已报超限) 时压缩: 较早的轮连同上一份摘要写成新摘要 (用这一轮的回答语言写),
+        保留最近几轮原文. force 时保留的轮数减半. 摘要失败只截掉较早的轮 (不写摘要)."""
         size = context_tokens(system(history.summary), history.turns, question.question, self.tools.specs)
         if not force and size <= self.limits.context_budget:
             return history
@@ -491,7 +499,7 @@ class ConciergeChat:
             return history
         old, kept = history.turns[:cut], history.turns[cut:]
         try:
-            text = await self._summarize(eid, model, history.summary, old)
+            text = await self._summarize(eid, model, history.summary, old, answer_lang)
         except (asyncio.CancelledError, SecretEcho):  # 密钥回显不是普通的压缩失败: 整轮按安全失败处理
             raise
         except Exception as e:
@@ -518,9 +526,12 @@ class ConciergeChat:
         )
         return History(Summary(trail_id, text, old[-1].trail_id, pool), kept)
 
-    async def _summarize(self, eid: str, model: ChatModel, previous: Summary | None, old: Sequence[Turn]) -> str:
+    async def _summarize(
+        self, eid: str, model: ChatModel, previous: Summary | None, old: Sequence[Turn], answer_lang: Lang
+    ) -> str:
+        """把 old 连同上一份摘要写成新摘要; answer_lang 为摘要的语言 (这一轮的回答语言, 需求 R342)."""
         prompt = self.prompts.get_template("summary.md.j2").render(
-            previous=previous.text if previous else "", turns=summary_material(old)
+            previous=previous.text if previous else "", turns=summary_material(old), answer_lang=answer_lang
         )
         messages = [ChatMessage(role="system", content=SUMMARY_SYSTEM), ChatMessage(role="user", content=prompt)]
         result = await collect(model, messages, self.limits.summary_max_tokens)
@@ -566,6 +577,16 @@ class ConciergeChat:
             )
         )
 
+    async def _working_language(self, eid: str) -> Lang:
+        """项目当前的工作语言; 查不到项目为 en (缺省值, 同 Engagement.working_language). 查项目出错时记日志并取 en:
+        只在还没读到总览就中断的一轮里用到, 不能因为它写不成这一轮的留痕 (问题本身总要留痕)."""
+        try:
+            engagement = await self.deps.engagement_store.get(eid)
+        except Exception as e:
+            log.warning("审计助理留痕时查项目 %s 的工作语言出错, 回答语言记 en: %s", eid, type(e).__name__)
+            return "en"
+        return engagement.working_language if engagement is not None else "en"
+
     async def _record_turn(
         self,
         turn: ChatTurn,
@@ -577,11 +598,14 @@ class ConciergeChat:
         *,
         aborted: bool,
     ) -> str:
-        """这轮问答的 conversation 留痕: 执行者为审计师; payload 含问, 答, 引用, 工具轨迹 (不含结果原文)."""
+        """这轮问答的 conversation 留痕: 执行者为审计师; payload 含问, 答, 界面语言 (ui_lang), 回答语言 (answer_lang,
+        需求 R342), 引用, 工具轨迹 (不含结果原文). 还没读到总览就中断的, 回答语言取项目当时的工作语言."""
+        answer_lang = turn.answer_lang or await self._working_language(eid)
         payload: dict[str, Any] = {
             "question": question.question,
             "answer": answer,
-            "lang": question.lang,
+            "ui_lang": question.lang,
+            "answer_lang": answer_lang,
             "citations": [c.model_dump(mode="json") for c in citations],
             "model": turn.model,
             "tools": [asdict(t) for t in turn.traces],

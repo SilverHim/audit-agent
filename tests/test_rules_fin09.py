@@ -10,7 +10,7 @@ import pytest
 from backend.orchestration.nodes import build_run
 from tests.external import snapshot_dir, supplements_dir
 from tests.test_xero_rules_db import XeroProject, build_xero_project, database_url, procedure_of
-from tests.xero_fakes import SNAPSHOT_NAME
+from tests.xero_fakes import SNAPSHOT_NAME, xero_v01_rows
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
 
@@ -60,8 +60,8 @@ def accounts(rows: list[dict[str, Any]]) -> list[tuple[Any, ...]]:
 async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pytest.TempPathFactory) -> None:
     """验收 3: 未载入更正分录时 V01 没有行 (XJ-397, XJ-499 等 is_adjustment 为真的手工分录不取); 载入第 1 轮 (AJE-X01,
     AJE-X05) 后为这两笔的 5 行, 列同提示词头注释 (审核 R164-04), 科目类型与分类取科目表 (DA 的映射), source_doc 为来源
-    对象; 再载第 2 轮后共 11 行. 前缀按原文比较: 改为 "AJE_" 或 "%" 时没有行 (用 LIKE 会把 _ 与 % 当通配符而取到全部
-    更正行)."""
+    对象; 再载第 2 轮后共 11 行. 两次都与假规则引擎用的行 (xero_fakes.xero_v01_rows) 逐行相等. 前缀按原文比较: 改为
+    "AJE_" 或 "%" 时没有行 (用 LIKE 会把 _ 与 % 当通配符而取到全部更正行)."""
     url = database_url()
     project = await build_xero_project(
         url, snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME), tmp_path_factory.mktemp("xero")
@@ -72,6 +72,7 @@ async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pyte
 
     await project.datasets.load_adjustments(eid, dataset, ["AJE-X01", "AJE-X05"])
     first = await v01(project)
+    assert first == xero_v01_rows(["AJE-X01", "AJE-X05"])
     assert list(first[0]) == V01_COLUMNS
     assert [r["source_doc"] for r in first] == ["XJ-499"] * 3 + ["BA-091"] * 2
     assert accounts(first) == [
@@ -83,7 +84,9 @@ async def test_v01_takes_audit_adjustment_lines_by_prefix(tmp_path_factory: pyte
     ]
 
     await project.datasets.load_adjustments(eid, dataset, ["AJE-X02", "AJE-X03", "AJE-X04"])
-    rows = accounts(await v01(project))
+    second = await v01(project)
+    assert second == xero_v01_rows()
+    rows = accounts(second)
     assert len(rows) == 11 and [r[0] for r in rows] == sorted(r[0] for r in rows)
     assert {r[0].rsplit("-", 1)[0] for r in rows} == {f"AJE-X0{n}" for n in range(1, 6)}
     assert await v01(project, adjustment_prefix="AJE_") == await v01(project, adjustment_prefix="%") == []

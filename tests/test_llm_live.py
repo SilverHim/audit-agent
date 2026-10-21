@@ -466,7 +466,7 @@ async def test_key_echo_not_in_trail_through_engine() -> None:
     """(R58-03) 经真实 A3 与判断引擎: 回显密钥的响应使整次执行失败, 留痕与 Run 的失败原因都不含密钥."""
     server = Server((200, completion(raw("BA-01") + KEY)), (200, completion(raw("BA-02"))))
     agent, ctx, trail = setup(llm=client(server))
-    patch, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, _, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert all(KEY not in json.dumps(e.model_dump(mode="json"), ensure_ascii=False) for e in trail.entries)
     assert KEY not in json.dumps([r.model_dump(mode="json") for r in patch["procedure_runs"]])
 
@@ -580,7 +580,7 @@ async def test_escaped_model_echo_not_in_trail_through_engine() -> None:
     body = json.dumps(completion(raw("BA-01"), model="MODEL")).replace('"MODEL"', f'"{escaped(KEY)}"')
     server = Server((200, body), (200, completion(raw("BA-02"))))
     agent, ctx, trail = setup(llm=client(server))
-    patch, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, _, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert all(KEY not in json.dumps(e.model_dump(mode="json"), ensure_ascii=False) for e in trail.entries)
     assert KEY not in json.dumps([r.model_dump(mode="json") for r in patch["procedure_runs"]])
 

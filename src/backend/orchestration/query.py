@@ -33,7 +33,14 @@ from backend.contracts.views import (
     ProcedureSummary,
 )
 from backend.orchestration.gates import current_gate, current_plan, current_spec
-from backend.orchestration.runner import GraphRunner, at_rerun_point, awaiting_data, resume_required, review_waits
+from backend.orchestration.runner import (
+    GraphRunner,
+    at_rerun_point,
+    awaiting_data,
+    correction_wait,
+    resume_required,
+    review_waits,
+)
 from backend.services.data_quality import missing_tables
 from backend.services.features import frozen_features
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
@@ -139,6 +146,7 @@ class GraphStateQuery:
             )
 
         waiting_data = awaiting_data(snapshot)
+        correction = correction_wait(snapshot)
         return EngagementOverview(
             engagement=engagement,
             client_name=profile.legal_name,
@@ -148,6 +156,8 @@ class GraphStateQuery:
             # 节点内 interrupt() 暂停时, 对应的待执行任务带 interrupts; 闸门是静态中断, 不带. 等数据就绪另计
             awaiting_review=bool(review_waits(snapshot)),
             awaiting_data=waiting_data,
+            awaiting_correction=correction is not None,
+            awaiting_correction_ids=correction["misstatement_ids"] if correction is not None else [],
             missing_tables=missing_tables(await self.deps.data.stats(eid)) if waiting_data else [],
             procedures=summaries,
             stale_procedure_ids=[p.id for p in ordered if p.id in stale],
@@ -159,6 +169,7 @@ class GraphStateQuery:
             clearly_trivial_cents=values["clearly_trivial_cents"],
             opinion_route=values["opinion_route"],
             features=sorted(frozen_features(engagement.version_snapshot, self.deps.features)),
+            run_languages={run.id: run.language for run in runs if run.language != engagement.working_language},
         )
 
     async def _resume_hint(self, eid: str) -> str | None:

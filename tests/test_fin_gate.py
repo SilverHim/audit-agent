@@ -130,8 +130,19 @@ ANNOTATION = Annotation(section=ReportSection.basis_for_opinion, comment="x")
     [
         (fin_decision(GateVerdict.approve, disposition=None), "MISSING_FIELD", "disposition"),
         (fin_decision(GateVerdict.approve, reason=None), "MISSING_FIELD", "reason"),
-        (fin_decision(GateVerdict.approve, disposition=OpinionType.adverse), "INVALID_VALUE", "adverse"),
-        (fin_decision(GateVerdict.approve, disposition=OpinionType.disclaimer), "INVALID_VALUE", "disclaimer"),
+        # 消息列出可选范围与理由 (services.opinion.allowed_opinions, 需求 R184): SCHEDULE v1 合计 14200000,
+        # 重要性 12000000
+        (
+            fin_decision(GateVerdict.approve, disposition=OpinionType.adverse),
+            "INVALID_VALUE",
+            "只能选 unqualified, qualified, 不能选 adverse; 金额路径: 未更正错报合计 14200000 分不低于整体重要性 "
+            "12000000 分, 金额路径候选 qualified (可由审计师推翻, ASA 450 para 11)",
+        ),
+        (
+            fin_decision(GateVerdict.approve, disposition=OpinionType.disclaimer),
+            "INVALID_VALUE",
+            "只能选 unqualified, qualified, 不能选 disclaimer",
+        ),
         (fin_decision(GateVerdict.reject, disposition=OpinionType.qualified), "FIELD_NOT_ALLOWED", "disposition"),
         (fin_decision(GateVerdict.approve, materiality=CHOICE), "FIELD_NOT_ALLOWED", "materiality"),
         (fin_decision(GateVerdict.reject, edits=[edit()]), "FIELD_NOT_ALLOWED", "edits"),

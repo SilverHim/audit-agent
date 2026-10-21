@@ -42,6 +42,7 @@ from backend.contracts.state import StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import GraphNodes, apply_patch, build_run
 from backend.orchestration.runner import GraphRunner
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import needs
 from tests.fakes import (
     DOC_EL,
@@ -55,6 +56,7 @@ from tests.fakes import (
     NUMBAT_OBJECTIVES,
     NUMBAT_RISKS,
     PLAN_REJECT_ID,
+    PLAN_REJECT_REASON,
     PLANNING_FEATURES,
     FakeRegistry,
     FakeRuleEngine,
@@ -72,13 +74,13 @@ from tests.fixture_sets import XERO
 from tests.test_decisions import Started, acc01_decision, pln_decision
 from tests.test_output_validator import PLAN_PROCEDURES
 from tests.test_p1 import p1_setup
-from tests.test_xero_fixtures import xero_state
 from tests.xero_fakes import (
     DEMO_FEATURES,
     XERO17_MATERIALITY,
     make_xero_deps,
     xero_engagement,
     xero_profile,
+    xero_state,
     xero_traits,
 )
 
@@ -254,6 +256,29 @@ async def test_pln01_candidates_follow_params_order() -> None:
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
 
 
+@pytest.mark.parametrize(
+    ("basis", "base", "expected"),
+    [
+        ("profit_before_tax", -150000000, "loss"),  # 税前亏损
+        ("profit_before_tax", 0, "not_positive"),
+        ("revenue", 0, "not_positive"),
+        ("total_assets", -1, "not_positive"),
+    ],
+)
+async def test_pln01_marks_non_positive_basis_not_applicable(basis: str, base: int, expected: str) -> None:
+    """需求 R351: 基准金额不为正的候选照常列出, 金额照算, 标本期不适用 (税前利润为负记 loss, 其余 not_positive);
+    其余两项不标. 防把它从材料里删掉, 或只认税前利润."""
+    rows = [r | {"base_amount_cents": base} if r["basis"] == basis else r for r in NUMBAT_M01_ROWS]
+    agent, ctx, _ = setup("PLN-01", only("PLN-01", RuleResult(exceptions=[], rows={"M01": rows})))
+    patch = await agent.run(ctx)
+    found = {c.basis: c for c in patch["materiality_candidates"].candidates}
+    assert [c.basis for c in found.values()] == ["revenue", "total_assets", "profit_before_tax"]
+    assert {b: c.not_applicable for b, c in found.items()} == {
+        b: expected if b == basis else None for b in ("revenue", "total_assets", "profit_before_tax")
+    }
+    assert (found[basis].base_amount_cents, found[basis].low_cents) == (base, scaled(base, found[basis].pct_low))
+
+
 async def test_pln01_uses_params_snapshot_not_template() -> None:
     agent, ctx, _ = setup("PLN-01")
     params = ctx.run.params_snapshot | {
@@ -367,10 +392,9 @@ PLAN_PARAMS = {  # 验收 1 列出的参数 (其余参数取建 Run 时的解析
     "REV-03": {"period_end": "2026-09-30"},
     "REV-08": {"window_days": 20, "period_end": "2026-09-30"},
 }
-REJECT_REASON = "Add the planned timing of bank confirmations"
 
 
-def plan_reject(target_id: str, reason: str = REJECT_REASON, decision_id: str = PLAN_REJECT_ID) -> GateDecision:
+def plan_reject(target_id: str, reason: str = PLAN_REJECT_REASON, decision_id: str = PLAN_REJECT_ID) -> GateDecision:
     """PLN-15 对 target_id 第 1 版的驳回."""
     return GateDecision(
         id=decision_id,
@@ -602,20 +626,21 @@ async def test_plan_fixtures_cover_the_demo_procedures(fixture: Path) -> None:
 
 @needs("q1_snapshot", "q1_supplements")
 @pytest.mark.parametrize(
-    ("replies", "level", "attempts"),
+    ("reply", "level"),
     [
-        (["not json"] * 3, "syntax", 3),
-        (['{"overall_strategy": "only"}'] * 3, "structure", 3),
-        ([plan_raw(standards_cited=["ASA315-P12"])], "reference", 1),
-        ([plan_raw(timetable=[{"milestone": "Planning", "due": "2026-09-01"}])], "semantic", 1),
+        ("not json", "syntax"),
+        ('{"overall_strategy": "only"}', "structure"),
+        (plan_raw(standards_cited=["ASA315-P12"]), "reference"),
+        (plan_raw(timetable=[{"milestone": "Planning", "due": "2026-09-01"}]), "semantic"),
     ],
+    ids=["syntax", "structure", "reference", "semantic"],
 )
-async def test_pln15_failed_check_fails_the_run(replies: list[str], level: str, attempts: int) -> None:
-    """验收 4, 5: 语法与结构失败重试至 3 次仍失败, 或引用, 语义失败 (不重试): A4 抛 ValueError (含失败的级别), 经
-    A1 的 run_agent 转为 RUN-PLN-15-1 failed 与 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun), 不写计划."""
-    ctx, deps, trail = await plan_context(ScriptedLLM({"r1": replies}))
+async def test_pln15_failed_check_fails_the_run(reply: str, level: str) -> None:
+    """验收 4, 5: 任一级不过都回传重试 (引用与语义级自需求 R348 起), 至 3 次仍失败: A4 抛 ValueError (含失败的级别),
+    经 A1 的 run_agent 转为 RUN-PLN-15-1 failed 与 T-RUN-PLN-15-1-v1 (failed, 只允许 rerun), 不写计划."""
+    ctx, deps, trail = await plan_context(ScriptedLLM({"r1": [reply] * MAX_ATTEMPTS}))
     agent = RiskAssessorAgent(deps)
-    patch, writer = await GraphNodes(deps, 2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(deps, 2).run_agent(agent, ctx)
     assert writer is AgentId.A1 and "audit_plans" not in patch
     [run] = patch["procedure_runs"]
     assert (run.id, run.status) == ("RUN-PLN-15-1", RunStatus.failed)
@@ -625,7 +650,7 @@ async def test_pln15_failed_check_fails_the_run(replies: list[str], level: str, 
     [task] = patch["review_tasks"]
     assert (task.id, task.kind, task.subject_id) == ("T-RUN-PLN-15-1-v1", TaskKind.failed, None)
     assert deps.queue.allowed(task) == frozenset({Decision.rerun})
-    assert [e.payload["attempt"] for e in llm_calls(trail)] == list(range(1, attempts + 1))
+    assert [e.payload["attempt"] for e in llm_calls(trail)] == list(range(1, MAX_ATTEMPTS + 1))
 
 
 @needs("q1_snapshot", "q1_supplements")
@@ -666,7 +691,7 @@ async def test_pln15_revision_answers_the_rejection() -> None:
         2,
         "RUN-PLN-15-2",
     )
-    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, REJECT_REASON)
+    assert (plan2.addresses_decision_id, plan2.revision_reason) == (PLAN_REJECT_ID, PLAN_REJECT_REASON)
     assert (retired.id, retired.version, retired.status, retired.run_id) == (
         "PLAN-1",
         2,
@@ -677,7 +702,7 @@ async def test_pln15_revision_answers_the_rejection() -> None:
     assert retired.model_dump(exclude=unchanged) == plan1.model_dump(exclude=unchanged)
     [request] = llm.requests
     prompt = "\n".join(m.content for m in request.messages)
-    assert request.fixture_key == "r2" and "## Revision 2" in prompt and REJECT_REASON in prompt
+    assert request.fixture_key == "r2" and "## Revision 2" in prompt and PLAN_REJECT_REASON in prompt
 
     ctx, deps, _ = await plan_context(llm, audit_plans=[retired], procedure_runs=[run1], gate_decisions=gates)
     assert [p.id for p in (await drafted(ctx, deps))["audit_plans"]] == ["PLAN-2"]

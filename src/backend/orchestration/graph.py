@@ -9,6 +9,14 @@ assemble_pack → schedule ⇉ fieldwork × N ⇉ fan_in → { p1_ingest | sched
 await_events, await_data → fan_in
 completion → gate_fin → { report_draft | completion }
 report_draft → gate_rpt01 → { archive | report_draft }
+  功能 misstatement 打开时 (需求 R160, 完成阶段按设计稿 v2.1 第 7.2 节): fan_in 结清后去 misstatement_triage 而不是
+  completion, gate_fin 驳回回 summarize:
+  misstatement_triage → { misstatement_triage | communicate }
+  communicate → { await_correction | verify_correction };  await_correction → verify_correction
+  verify_correction → { misstatement_triage | communicate | await_correction | p3_reassess }
+  p3_reassess → summarize → final_review → { misstatement_triage | completion }
+  completion → gate_fin → { report_draft | summarize }
+  回 misstatement_triage 的条件都是 "有未分类的 identified 错报" (完成阶段新认定的, 先分类再沟通).
 
 读法: → 固定边; { a | b } 条件边, 由路由函数按状态选一个; ⇉ 用 Send 并行派发多个实例.
 闸门 (gate_*; 基线四道, 功能 planning 另加 gate_p1_plan) 前静态中断, 等审计师决定; 每道闸门另有 represent 出口,
@@ -18,7 +26,7 @@ interrupt() (种类见 waits.py).
 """
 
 import functools
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Hashable
 from typing import Any, Literal, Protocol, TypeVar
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -26,8 +34,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Send
 
+from backend.agents.workpaper import FIN03, unclassified
 from backend.contracts.models import (
     GateId,
+    MisstatementStatus,
     Phase,
     Procedure,
     ProcedureStatus,
@@ -37,13 +47,24 @@ from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration import gates
 from backend.orchestration.nodes import NODE_PROCEDURES, WAITING, FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
-from backend.services.features import BASELINE, PLANNING
+from backend.services.features import BASELINE, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary
+from backend.services.staleness import current_results
 
 # 闸门的节点, 出口, 材料与路由都在登记表 (gates.GATES); 这里给基线功能集下的两个常用视图
 GATE_NODES: dict[GateId, str] = {spec.gate: spec.node for spec in gates.registered(BASELINE)}  # 闸门 → 节点名
 GATES = gates.gate_nodes(BASELINE)  # 基线功能集下的闸门节点名 (测试与工具用); 编译按功能集取 gates.gate_nodes
 
+# 功能 misstatement 打开时完成阶段加的节点 (需求 R160), 节点函数与节点同名 (GraphNodes)
+P3_NODES = (
+    "misstatement_triage",
+    "communicate",
+    "await_correction",
+    "verify_correction",
+    "p3_reassess",
+    "summarize",
+    "final_review",
+)
 UNFINISHED = (ProcedureStatus.planned, ProcedureStatus.executing)  # 还要派发执行的程序状态
 SETTLED = (ProcedureStatus.completed, ProcedureStatus.no_data)  # P2 结清: 已完成, 或未执行 (无数据, 需求 R280)
 LATE = NODE_PROCEDURES["p1_ingest"]  # 执行阶段等到数据后经 p1_ingest 补跑的 P2 以外程序 (需求 R272)
@@ -160,7 +181,8 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     P2 以外等到了数据的程序 (LATE 中回到 planned 的, 即 DOC-04) → p1_ingest 补跑 (需求 R272);
     有可派发的 P2 程序 (待执行且前置都已完成) → schedule, 不因别的程序等复核或等数据而停下;
     有待决的复核任务 → await_events 等审计师;
-    P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion;
+    P2 程序全部结清 (completed, 或 no_data 未执行) 且没有程序在等数据 → completion, 即进完成阶段 (功能 misstatement
+    打开时主图把这个出口接到 misstatement_triage, 由 build_graph 按功能集定, 需求 R160);
     有程序在等数据 (awaiting_data, 任何阶段) → await_data 等数据到达 (需求 R272).
     都不是时抛 ScheduleStuck: 有待执行的程序却派不出 (前置卡在 awaiting_human 或 in_dispute 而没有待决任务),
     或等人处理 (awaiting_human, in_dispute) 却没有待决任务, 进 await_events 会永远等不到决定; 消息逐个列出程序与状态.
@@ -190,6 +212,53 @@ def after_fan_in(nodes: GraphNodes) -> Callable[[EngagementState], AfterFanIn]:
     return route
 
 
+# ── 功能 misstatement 打开时完成阶段的路由 (需求 R160), 都只看状态中当前结果的错报 (同 FIN-03, FIN-04) ──
+
+
+def after_triage(state: EngagementState) -> Literal["misstatement_triage", "communicate"]:
+    """misstatement_triage 之后: 还有未分类的 identified 错报 (复核人在 FIN-03 任务上认定了新错报) 回去再分类
+    (FIN-03 下一次执行只判它们), 否则去沟通. 程序包里没有 FIN-03 (旧项目或手工装配) 时分诊是空操作, 回去也分不了类:
+    抛 ScheduleStuck 列出错报, 不在分诊上空转到递归上限 (同 P2 的守卫, 第 1 轮审核 R160-01)."""
+    pending = unclassified(state)
+    if not pending:
+        return "communicate"
+    if not any(p.id == FIN03 for p in state["procedure_pack"]):
+        ids = ", ".join(m.id for m in pending)
+        raise ScheduleStuck(f"有未分类的错报 {ids}, 程序包里却没有 {FIN03}, 分诊分不了类")
+    return "misstatement_triage"
+
+
+def after_communicate(state: EngagementState) -> Literal["await_correction", "verify_correction"]:
+    """communicate 之后: 有已沟通 (communicated, 等管理层更正) 的错报去等待更正, 否则 (都拒绝, 或没有错报) 去验证."""
+    misstatements = current_results(state).misstatements
+    communicated = any(m.status is MisstatementStatus.communicated for m in misstatements)
+    return "await_correction" if communicated else "verify_correction"
+
+
+def after_verify(
+    state: EngagementState,
+) -> Literal["misstatement_triage", "communicate", "await_correction", "p3_reassess"]:
+    """verify_correction 之后, 按顺序: 有未分类的 identified 错报 (复核人在 FIN-09 任务上认定的) → misstatement_triage;
+    有须重新沟通的 (分录对不上) → communicate; 有仍在等更正的 communicated → await_correction (部分更正通知后);
+    否则 → p3_reassess. 仍有 verifying 的错报 (验证没有给出结果) 抛 ScheduleStuck: 往下走会把未验证的错报带进累计."""
+    if unclassified(state):
+        return "misstatement_triage"
+    misstatements = current_results(state).misstatements
+    if any(m.needs_recommunication for m in misstatements):
+        return "communicate"
+    if any(m.status is MisstatementStatus.communicated for m in misstatements):
+        return "await_correction"
+    verifying = [m.id for m in misstatements if m.status is MisstatementStatus.verifying]
+    if verifying:
+        raise ScheduleStuck(f"更正验证之后仍有 verifying 的错报: {', '.join(verifying)} (FIN-09 没有给出验证结果)")
+    return "p3_reassess"
+
+
+def after_final_review(state: EngagementState) -> Literal["misstatement_triage", "completion"]:
+    """final_review 之后: FIN-15 的复核认定了新错报 → misstatement_triage (回流), 否则 → completion."""
+    return "misstatement_triage" if unclassified(state) else "completion"
+
+
 def after_p0_inputs(state: EngagementState) -> Literal["p0_inputs", "p0_intel"]:
     """p0_inputs 之后: ACC-04 在等 ASIC 摘录 (awaiting_data, 需求 R290) 回 p0_inputs (下一次进来没有变化时停下等待),
     否则往下到 p0_intel."""
@@ -207,9 +276,10 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
 
     features: 启用的功能 (services/features.py). 基线功能集下的主图即下面的结构 (tests/test_graph.py 守卫);
     各功能的新节点与闸门只在该功能启用时加入: planning 加 plan_draft 与 gate_p1_plan, 装配之后先起草计划, 批准才进
-    P2 (需求 R205).
+    P2 (需求 R205); misstatement 加完成阶段的错报闭环节点 (需求 R160, 见模块 docstring).
     """
     planning = PLANNING in features
+    misstatement = MISSTATEMENT in features
     g = StateGraph(EngagementState)
 
     # ── 节点: 名字 → 节点函数. 节点与路由函数都包一层 fill_defaults, 旧检查点缺的键读到缺省值 ──
@@ -228,6 +298,9 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     g.add_node("await_events", node_with_defaults(nodes.await_events))
     g.add_node("await_data", node_with_defaults(nodes.await_data))
     g.add_node("completion", node_with_defaults(nodes.completion))
+    if misstatement:
+        for name in P3_NODES:
+            g.add_node(name, node_with_defaults(getattr(nodes, name)))
     g.add_node("report_draft", node_with_defaults(nodes.report_draft))
     g.add_node("archive", node_with_defaults(nodes.archive))
     g.add_node("declined", node_with_defaults(nodes.declined))
@@ -253,13 +326,27 @@ def build_graph(nodes: GraphNodes, features: frozenset[str] = BASELINE) -> State
     # 条件边: 执行完由路由函数选下一个节点; 第三个参数列出所有可能的去向
     g.add_conditional_edges("schedule", route_with_defaults(route_schedule(nodes)), ["fieldwork", "fan_in"])
     g.add_edge("fieldwork", "fan_in")  # 所有并行实例都结束后才进 fan_in
-    g.add_conditional_edges(
-        "fan_in",
-        route_with_defaults(after_fan_in(nodes)),
-        ["p1_ingest", "schedule", "await_events", "await_data", "completion"],
-    )
+    # P2 结清 (路由的 completion 出口) 后的去处只在这里按功能集定: 功能 misstatement 打开时先进错报分诊
+    after_p2: dict[Hashable, str] = {name: name for name in ("p1_ingest", "schedule", "await_events", "await_data")}
+    after_p2["completion"] = "misstatement_triage" if misstatement else "completion"
+    g.add_conditional_edges("fan_in", route_with_defaults(after_fan_in(nodes)), after_p2)
     g.add_edge("await_events", "fan_in")  # 审计师处理完复核, 回 fan_in 重新判断
     g.add_edge("await_data", "fan_in")  # 程序要的数据到了 (或重查), 回 fan_in 重新判断
+    if misstatement:  # 完成阶段的错报闭环 (需求 R160)
+        triage = "misstatement_triage"
+        g.add_conditional_edges(triage, route_with_defaults(after_triage), [triage, "communicate"])
+        g.add_conditional_edges(
+            "communicate", route_with_defaults(after_communicate), ["await_correction", "verify_correction"]
+        )
+        g.add_edge("await_correction", "verify_correction")
+        g.add_conditional_edges(
+            "verify_correction",
+            route_with_defaults(after_verify),
+            [triage, "communicate", "await_correction", "p3_reassess"],
+        )
+        g.add_edge("p3_reassess", "summarize")
+        g.add_edge("summarize", "final_review")
+        g.add_conditional_edges("final_review", route_with_defaults(after_final_review), [triage, "completion"])
     g.add_edge("completion", "gate_fin")
     g.add_edge("report_draft", "gate_rpt01")
     g.add_edge("archive", END)

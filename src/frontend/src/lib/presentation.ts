@@ -1,7 +1,8 @@
-import type { EvidencePointer, ReviewTaskView, TaskPresentation } from '@/client/types.gen'
+import type { EvidencePointer, PresentedFailure, ReviewTaskView, TaskPresentation } from '@/client/types.gen'
 import { isJudgment } from '@/lib/review'
 
-// 判断呈递 (后端 R152, GEN-11) 在前端的几条判断: 何时呈递, 视图属于哪条任务, 判断卡用哪种版式, 何时省掉两方的建议
+// 判断呈递 (后端 R152, GEN-11) 在前端的几条判断: 何时呈递, 视图属于哪条任务, 判断卡用哪种版式, 何时省掉两方的建议,
+// 失败原因一栏显示哪几段
 
 // 同一次挂载里同一条任务只呈递一次 (StrictMode 的第二次 effect, 重新渲染与轮询刷新都不再调), 换一条任务再呈递.
 // last 为这次挂载里上次呈递的键 (没有为 null). 纯函数
@@ -31,6 +32,25 @@ export function cardLayout(view: ReviewTaskView, presentation: TaskPresentation 
 // 显示, 这里不重复; 已决定的任务不出决定卡, collab 关闭时决定卡没有这一栏, 都在两栏里显示. 纯函数
 export function showSideProposals(collab: boolean, view: ReviewTaskView): boolean {
   return !(collab && view.task.status === 'pending')
+}
+
+// 失败原因一栏 (呈递的 failure) 依次显示的几段: 无归因的例外先给规则与明细 (rule); 大模型调用没通过的几项 (call:
+// 调用次数与没通过的校验; errors: 错误原文) 带对象的失败与无归因的例外 (需求 R355) 都给, 同一种显示. 整次执行失败
+// (run) 的原因已在目标上, 不重复, 为 null. 纯函数
+export type FailureParts = {
+  rule: { id: string | null; detail: Record<string, unknown> } | null
+  call: { attempts: number; level: NonNullable<PresentedFailure['level_failed']> } | null
+  errors: string[]
+}
+
+export function failureParts(failure: PresentedFailure | null | undefined): FailureParts | null {
+  if (!failure || failure.source === 'run') return null
+  const rule = failure.source === 'exception' ? { id: failure.rule_id ?? null, detail: failure.detail ?? {} } : null
+  const call =
+    failure.attempts != null && failure.level_failed
+      ? { attempts: failure.attempts, level: failure.level_failed }
+      : null
+  return { rule, call, errors: failure.errors ?? [] }
 }
 
 // 证据指针列表的 React key: 来源, ID, locator 与页. 后端去重键 (judgment_engine.evidence_key) 不同的指针 key 都不同:

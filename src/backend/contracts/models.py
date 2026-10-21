@@ -7,13 +7,29 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal, Self, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic_core import PydanticCustomError
 
 
 class Model(BaseModel):
     """所有领域对象的基类: 建好后不可修改, 不许出现未定义的字段."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")  # frozen 不可修改, extra=forbid 不许多字段
+
+
+BLANK = (
+    "blank"  # 必填文字为空白时的校验错误类型; 人工结果按它报 MISSING_FIELD (decisions.check_manual_result, 需求 R161)
+)
+
+
+def not_blank(text: str) -> str:
+    """必填文字去首尾空白后不能为空, 不过抛错误类型 BLANK; 通过时原样返回 (不改人填的文字)."""
+    if not text.strip():
+        raise PydanticCustomError(BLANK, "不能为空")
+    return text
+
+
+NonBlank = Annotated[str, AfterValidator(not_blank)]  # 必填文字: 去首尾空白后非空
 
 
 # ── 2.1 枚举 ──────────────────────────────────────────────
@@ -352,6 +368,8 @@ class MisstatementStatus(StrEnum):
 # 错报来源: 本期发现, 或上期未更正的结转 (ASA 450 第 13 段)
 MisstatementOrigin = Literal["current_period", "prior_period_uncorrected"]
 UncorrectedBasis = Literal["refused", "stopped_waiting"]  # 未更正的依据: 管理层拒绝更正, 或审计师决定停止等待
+# 更正通知的两种 (需求 R162): 管理层的更正分录已入账 (载入分录, 所列错报转 verifying), 或不再等 (所列错报记未更正)
+CorrectionNoticeKind = Literal["adjustments_posted", "stop_waiting"]
 
 
 class Direction(StrEnum):
@@ -522,6 +540,8 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
+# 重要性候选本期不适用的原因 (需求 R351): 税前亏损 (以税前利润为基准时), 其余基准金额不为正
+MaterialityInapplicable = Literal["loss", "not_positive"]
 # 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理; staged 为智能导入的批次里上传而
 # 尚未确认 (需求 R277): 类型为 other, 不被程序使用, 启动时也不补做, 确认时按确认单改为对应的类型与状态;
 # not_imported 为确认时没勾选的文件 (未导入, 终态): 类型仍为 other, 不被程序与体检使用, 要导入就重新上传
@@ -882,6 +902,10 @@ class ClientEntry(Model):
     first_source: ProfileSource | None  # 第 1 版的来源; 老版本为空
 
 
+# 项目的工作语言 (需求 R339, Issue #51): 底稿与回答用的语言. en 为英文 (缺省, 与之前的输出一致), zh 为中文
+WorkingLanguage = Literal["zh", "en"]
+
+
 class Engagement(Model):
     """审计项目: 一个客户一个财年的一次审计, 记录所处阶段与是否已锁定. 客户名称, ABN 从客户画像取."""
 
@@ -895,6 +919,9 @@ class Engagement(Model):
     phase: Phase  # 当前阶段
     locked: bool = False  # 签字或拒绝承接后锁定, 拒绝一切写入
     version_snapshot: dict[str, str] = {}  # 启动时冻结: 程序库 commit, LLM 模式与模型, prompt 摘要, 功能集, 冻结时刻
+    # 工作语言 (需求 R339): 建项目时选, 之后可改 (PUT working-language, 留痕); 每次执行记下当时的值
+    # (ProcedureRun.language), 已生成的内容不随之改写. 之前建的项目为 en
+    working_language: WorkingLanguage = "en"
     created_at: datetime  # 创建时间
     updated_at: datetime  # 最后更新时间
 
@@ -950,6 +977,29 @@ class RuleOutcome(Model):
     reason: str  # 理由: 命中的检查 SQL 返回的第一行的 reason 列, 为空时为 "前置检查未通过"
 
 
+class PopulationItem(Model):
+    """被测总体中的一个被测项目 (需求 R324, ASA 230 第 9(a) 段的识别特征): SQL 返回的一行."""
+
+    source_id: str | None  # 行 ID; 返回行没有行 ID (如汇总行) 时为空
+    amount_cents: int | None  # 金额, 单位分; 返回行没有金额列时为空
+    fields: dict[str, Any]  # 其余列 (识别字段, 如发票号, 客户, 入账日), JSON 形式
+
+
+class RulePopulation(Model):
+    """一条执行了的规则的被测总体 (需求 R324): 对象类型, 各被测项目, 项目数与金额合计. 执行前检查命中而没有执行的
+    规则不记.
+
+    emit exception 而没写总体 SQL 的规则记为未记录: count 与 amount_cents 为空, 没有项目; 记录了而一个项目都没有时
+    count 与 amount_cents 为 0."""
+
+    rule_id: str  # 规则编号, 如 R01
+    # 对象类型; 未记录, 没有项目, 返回行没有 source_type 列, 各行不同或不是认识的行类型时为空 (原值留在识别字段里)
+    source_type: SourceType | None = None
+    items: list[PopulationItem] = []  # 各被测项目, 按 SQL 返回的顺序
+    count: int | None = None  # 项目数, 未记录为空
+    amount_cents: int | None = None  # 金额合计: 各项目都有金额时为其和, 否则 (含未记录) 为空
+
+
 class ProcedureRun(Versioned):
     """程序的一次执行记录: 第几次, 起因, 起止时间, 成败. 重跑会产生新记录."""
 
@@ -966,6 +1016,19 @@ class ProcedureRun(Versioned):
     data_version: int | None = None
     # 规则引擎没有执行的规则 (需求 R130), 按 YAML 顺序; 全部执行或不经规则引擎为空. 旧记录读回时为空
     rule_outcomes: list[RuleOutcome] = []
+    # 建执行记录时项目的工作语言 (需求 R339, nodes.build_run; 上传即处理的执行为 ingest.upload_run): 要求的生成语言,
+    # 提示词从 R340 起按它输出, mock 由 R343 照实记 en; 页面据此标注. 之前的执行记录 (Store 与检查点里没有这个键)
+    # 读回为 en: 那时的输出都是英文
+    language: WorkingLanguage = "en"
+
+
+class RunPopulation(Versioned):
+    """规则程序一次成功执行的被测总体 (需求 R324), ID 为 POP-{run_id}. 只在 Store (不是编排状态的字段), 与执行记录
+    终态同一事务写入; 失败的执行不写, 重放不重写. 判断与抽取程序的对象清单由 Store 推出 (services.populations), 不写."""
+
+    run_id: str  # 所属执行
+    procedure_id: str  # 所属程序
+    rules: list[RulePopulation]  # 各执行了的规则的总体, 按 YAML 顺序
 
 
 class ScheduleRow(Model):
@@ -1262,6 +1325,9 @@ class MaterialityCandidate(Model):
     pct_high: float  # 比例上限
     low_cents: int  # 候选下限 = 基准金额 × pct_low
     high_cents: int  # 候选上限 = 基准金额 × pct_high
+    # 本期不适用的原因: 基准金额不为正时有值 (loss 依据 ASA 320 第 A5 段; not_positive 为不为正的基准乘比例得不出
+    # 重要性), 候选照常呈报, 不能选为重要性基准 (需求 R351)
+    not_applicable: MaterialityInapplicable | None = None
 
 
 class MaterialityCandidates(Versioned):
@@ -1477,6 +1543,20 @@ class RerunRequest(Versioned):
     requested_at: datetime  # 请求时间
 
 
+class CorrectionNotice(Versioned):
+    """更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
+    第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入
+    更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写
+    理由, 不带凭证号."""
+
+    kind: CorrectionNoticeKind  # 通知的种类
+    misstatement_ids: list[str]  # 所列的错报, 须在等待更正的错报中
+    adjustment_entry_nos: list[str] = []  # 更正分录的凭证号 (只用于 adjustments_posted)
+    reason: str | None = None  # 理由, stop_waiting 必填
+    decided_by: str  # 提交通知的审计师 (用户 ID); 更正分录的写入人
+    decided_at: datetime  # 提交时间
+
+
 class Misstatement(Versioned):
     """已认定的错报, 来自某条判断或例外; 规格书 12.2 Misstatement 与 12.3 的生命周期 (需求 R156, 迁移表见接口文档
     第 2.5 节). 人认定时建第 1 版, 功能 misstatement 打开为 identified, 关闭为 uncorrected (旧口径, 不经沟通, basis
@@ -1575,10 +1655,10 @@ class ManagementResponse(Model):
 
     misstatement_id: str  # 回复的错报
     base_version: int  # 沟通时的错报版本
-    communicated_at: datetime  # 沟通时间
-    communicated_to: str  # 沟通对象 (管理层或治理层中的人与职务)
-    responded_at: datetime  # 回复时间
-    response: str  # 回复原文
+    communicated_at: AwareDatetime  # 沟通时间 (须带时区: 与决定时刻比较, 第 1 轮审核 R161-01)
+    communicated_to: NonBlank  # 沟通对象 (管理层或治理层中的人与职务)
+    responded_at: AwareDatetime  # 回复时间 (须带时区)
+    response: NonBlank  # 回复原文
     agrees_to_correct: bool  # 是否同意更正
 
     @model_validator(mode="after")
@@ -1824,6 +1904,9 @@ class AuditReportVersion(Versioned):
     report_date: date | None = None  # 报告日, 签字当天
     approved_by: str | None = None  # 签字人的用户 ID
     approved_at: datetime | None = None  # 签字时间
+    # 起草它的那次 RPT-03 执行 (需求 R339, 写法同 AuditPlan.run_id): RPT-03 起草的版本记本次执行 (合并时须为本次执行,
+    # merge.check_own_run), 签字等后续版本沿用; 页面按它取执行记录的 language 标生成语言. 之前的版本读回为空, 不标
+    run_id: str | None = None
 
 
 class RepresentationClause(Model):

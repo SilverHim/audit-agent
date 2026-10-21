@@ -113,8 +113,8 @@ async def test_rule_error_propagates() -> None:
 
 async def test_rule_error_becomes_failed_run_by_a1() -> None:
     agent, ctx = setup("CSH-05", raising(RuleError("B01 timed out")))
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
-    assert writer is AgentId.A1
+    patch, writer, populations = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    assert writer is AgentId.A1 and populations is None  # A1 的失败片段不交回被测总体 (需求 R324)
     [run] = patch["procedure_runs"]
     assert run.status is RunStatus.failed and run.failure_reason == "RuleError: B01 timed out"
     assert patch["review_tasks"][0].kind is TaskKind.failed

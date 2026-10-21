@@ -2,7 +2,7 @@
 
 from typing import Any, Literal, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.contracts.data import DataInput, TableKind
 from backend.contracts.models import (
@@ -41,6 +41,30 @@ class ProcedureInputs(Model):
     documents: list[DocumentType] = []  # 文件类型: 有一份该类型的文件即算有
 
 
+class LocalizedText(Model):
+    """中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改)."""
+
+    zh: str  # 中文
+    en: str  # 英文
+
+    @field_validator("zh", "en")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("不能为空或只有空白")
+        return value
+
+
+class RulePopulationSpec(Model):
+    """emit exception 的规则的被测总体 (需求 R324): 另一段 SQL 取该规则核对的全部对象 (例外只是其中没通过的).
+
+    SQL 每个对象一行, 列的取法同 emit rows 的返回行 (rule_engine.rule_population): source_type 为对象类型, source_id
+    为行 ID, amount_cents 为金额, 其余列为识别字段; 绑定参数同规则 SQL, 只能用 params 中的与 eid (加载时校验)."""
+
+    sql: str  # SQL, 由 B 编写
+    description: LocalizedText  # 筛选说明, 可用 Jinja2 写参数占位, 按参数快照渲染 (procedure_library.render_text)
+
+
 class RuleCheck(Model):
     """规则的一项执行前检查 (需求 R130): SQL 返回行即不执行该规则, 记 status 与第一行的 reason 列."""
 
@@ -59,6 +83,10 @@ class RuleSpec(Model):
     checks: list[RuleCheck] = []  # 执行前检查, 按顺序执行, 第一个返回行的决定不执行 (需求 R130); 为空即总是执行
     # 舞弊红旗 (需求 R168, 功能 autonomy): 判断解释的例外出自标了它的规则时, 判断级降级直接降到 L1 (fraud_flag 条件)
     fraud_flag: bool = False
+    # 被测总体 (需求 R324): 只给 emit exception 的规则写, emit rows 的规则以返回行为总体; 没写的 exception 规则总体记为
+    # 未记录 (RulePopulation.count 为空)
+    population: RulePopulationSpec | None = None
+    check: LocalizedText | None = None  # 检查项名称, 如 "入账期间正确" (底稿的检查列), 不带占位
 
 
 DowngradeAt = Literal["assembly", "judgment"]  # 降级的时点: 装配 (写进 Procedure) 或判断 (写进 Judgment)
@@ -120,6 +148,9 @@ class ProcedureTemplate(Model):
 
     id: str  # 程序编号
     name: str  # 程序名称
+    # 范围说明 (需求 R324), 如 "期末前 20 天 (2026-09-10 至 2026-09-30) 入账的销售发票": 可用 Jinja2 写参数占位, 按
+    # 参数快照渲染 (procedure_library.render_text); 为空即不写
+    scope: LocalizedText | None = None
     phase: Phase  # 所属阶段
     cycle: str  # 所属循环, 如 Revenue, Cash
     owner: AgentId  # 执行它的智能体

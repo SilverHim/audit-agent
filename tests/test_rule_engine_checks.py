@@ -167,14 +167,16 @@ async def test_check_error_is_a_rule_error(template: ProcedureTemplate) -> None:
 
 @pytest.mark.parametrize("procedure_id", ["PLN-07", "PLN-01", "REV-08", "CSH-05", "REV-02", "CSH-02"])
 async def test_rules_without_checks_run_exactly_as_before(procedure_id: str) -> None:
-    """零影响 (裁定 Q4 (b)): 现有带规则的 6 条程序都没有执行前检查, 引擎对每条规则只执行它的 SQL 一次, 按 YAML 顺序,
-    参数原样, 不多一次查询; outcomes 为空. 防给现有程序多跑查询或记出未执行的规则."""
+    """零影响 (裁定 Q4 (b)): 现有带规则的 6 条程序都没有执行前检查, 引擎对每条规则只执行它的 SQL 一次 (写了被测总体
+    的随后执行总体 SQL 一次, 需求 R324), 按 YAML 顺序, 参数原样, 不多一次查询; outcomes 为空. 防给现有程序多跑查询或
+    记出未执行的规则."""
     template = knowledge_library(get_settings().KNOWLEDGE_ROOT).load(procedure_id)
     assert template.rules and all(not r.checks for r in template.rules)
     store = AsyncMock()
     store.query.return_value = []
     result = await SqlRuleEngine(store).run(EID, template, make_run(procedure_id), PARAMS)
-    assert [c.args for c in store.query.await_args_list] == [(EID, r.sql, PARAMS) for r in template.rules]
+    sqls = [sql for r in template.rules for sql in (r.sql, *((r.population.sql,) if r.population else ()))]
+    assert [c.args for c in store.query.await_args_list] == [(EID, sql, PARAMS) for sql in sqls]
     assert result.outcomes == []
 
 

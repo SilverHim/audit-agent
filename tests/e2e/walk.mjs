@@ -30,7 +30,6 @@ const result = {
   decisions: [], // [任务 ID, 决定]
   steps: [], // {no, name, url, shot, console, failed, ms}
   issues: [], // {step, page, symptom, shot, expected}
-  known: {}, // 不算问题的已知情况 → 次数 (见下面的 response 监听)
 }
 const failures = new Map()
 let token = null
@@ -70,7 +69,7 @@ page.setDefaultTimeout(timeouts.action_ms)
 page.setDefaultNavigationTimeout(timeouts.nav_ms)
 const goto = (url) => page.goto(url, { waitUntil: 'domcontentloaded' })
 page.on('console', (message) => {
-  // 请求失败另由下面两个监听按地址与错误码记 (含预期的 404 NOT_AT_GATE 的筛除), 控制台的同一条不重复记
+  // 请求失败另由下面两个监听按地址与错误码记, 控制台的同一条不重复记
   if (message.type() !== 'error' || !current || message.text().startsWith('Failed to load resource')) return
   current.console.push(message.text().slice(0, 500))
 })
@@ -84,13 +83,6 @@ page.on('response', async (response) => {
   if (response.status() < 400 || !target) return
   const body = await response.text().catch(() => '')
   const code = body.match(/"code"\s*:\s*"([A-Z_]+)"/)?.[1] ?? ''
-  // 停在闸门以外时页面也会问 GET /gate (useGate), 提交闸门决定后的刷新也会问一次 (R346); 404 NOT_AT_GATE 不算失败,
-  // 只计次数
-  if (response.status() === 404 && code === 'NOT_AT_GATE') {
-    const key = 'GET /gate 404 NOT_AT_GATE'
-    result.known[key] = (result.known[key] ?? 0) + 1
-    return
-  }
   target.failed.push(`${response.request().method()} ${new URL(response.url()).pathname} ${response.status()} ${code}`)
 })
 
@@ -286,26 +278,48 @@ async function decideGate(gate) {
 function subjectOf(view) {
   const { task, target } = view
   if (task.kind === 'failed') {
-    if (task.procedure_id === 'PLN-15') return `r${result.gates.filter((g) => g === 'PLN-15').length + 1}`
+    // 整条失败的计划与报告按修订计 (修订号为其闸门已决定的次数加一, 同 R311 驱动的 REVISED_BY)
+    const gate = config.revised_by[task.procedure_id]
+    if (!task.subject_id && gate) return `r${result.gates.filter((g) => g === gate).length + 1}`
     return task.subject_id ?? ''
   }
   if (target.subject_id) return target.subject_id
   return target.detail?.entry_no ?? target.source_ids?.[0] ?? ''
 }
 
+// 重跑计数的键 (程序 对象), 同 tests/live_walk.py 的 rerun_key: 对象见 subjectOf (整条失败的计划与报告按修订)
+function rerunKey(view) {
+  return `${view.task.procedure_id} ${subjectOf(view)}`
+}
+
+// 可重跑的任务类型: 配置给的 (tests/live_walk.RERUNNABLE, 由后端 review_queue.RERUNNABLE 推出), 不在这里另写一份
+const RERUNNABLE = config.rerunnable
+
 function expectedFor(subject) {
   return config.table[subject] ?? { decision: 'confirm', reason: null, draft: null, conclusion: null }
 }
 
-function reviewPlan(view) {
+// pending 为当时全部待决任务 (复核队列各项). 规则同 tests/live_walk.py 的 review_body
+function reviewPlan(view, pending) {
   const { task } = view
   const subject = subjectOf(view)
   if (task.kind !== 'normal') result.troubled[task.id] = [task.procedure_id, subject, task.kind]
   const expected = expectedFor(subject)
-  if (task.kind === 'failed') {
-    const key = `${task.procedure_id} ${subject}`
+  const key = rerunKey(view)
+  // 判断或执行失败先重跑一次 (每个对象至多一次): failed 重跑后又失败即判失败; unattributed (带规则例外的对象, 需求
+  // R347, R355) 重跑后仍失败时按下面的决定表处理. 一轮失败算一组 (同 decisions.rerun_group): 同程序同一次执行其余待决
+  // 的可重跑任务随之重跑 (DecisionSubmit 一并关闭), 也算重跑过一次
+  if (task.kind === 'failed' || (task.kind === 'unattributed' && !failures.get(key))) {
     failures.set(key, (failures.get(key) ?? 0) + 1)
     if (failures.get(key) > 1) return { error: `${task.procedure_id} ${subject || '(整条)'} 重跑后又失败` }
+    const group = pending.filter(
+      (other) =>
+        other.task.procedure_id === task.procedure_id &&
+        other.task.run_id === task.run_id &&
+        RERUNNABLE.includes(other.task.kind) &&
+        other.task.id !== task.id,
+    )
+    for (const other of group) failures.set(rerunKey(other), (failures.get(rerunKey(other)) ?? 0) + 1)
     return { decision: 'rerun', reason: config.rerun_reason }
   }
   if (task.kind === 'normal' || task.kind === 'unattributed') {
@@ -344,9 +358,9 @@ async function fillDraft(id, draft) {
   await selectById(`ms-direction-${id}`, draft.direction)
 }
 
-async function decideTask(view) {
+async function decideTask(view, pending) {
   const id = view.task.id
-  const plan = reviewPlan(view)
+  const plan = reviewPlan(view, pending)
   if (plan.error) {
     issue(plan.error, '每个对象至多重跑一次, 任务类型在决定表的范围内')
     throw new Stuck(plan.error)
@@ -410,7 +424,7 @@ async function main() {
     if (pending.length) {
       const task = pending[0]
       name = `复核 ${task.task.procedure_id} ${subjectOf(task)}`
-      action = () => decideTask(task)
+      action = () => decideTask(task, pending)
     } else if (suggested) {
       name = `导入演示资料 ${suggested}`
       action = () => importDemo(suggested)

@@ -557,7 +557,7 @@ async def test_run_agent_returns_valid_patch_as_is() -> None:
     )
     patch = {"acceptance_scorecard": scorecard([]), "exceptions": [], "procedure_runs": [finished(make_run())]}
 
-    result, writer = await nodes.run_agent(ScriptAgent(nodes.deps, lambda ctx: patch), ctx)
+    result, writer, _ = await nodes.run_agent(ScriptAgent(nodes.deps, lambda ctx: patch), ctx)
 
     assert result is patch
     assert writer is AgentId.A2

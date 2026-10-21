@@ -19,6 +19,7 @@ from backend.contracts.models import (
     Engagement,
     Judgment,
     Misstatement,
+    MisstatementUpdateKind,
     Procedure,
     ProcedureRun,
     RerunRequest,
@@ -32,11 +33,11 @@ from backend.contracts.models import (
     User,
 )
 from backend.contracts.views import EngagementOverview, TaskPresentation
-from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit
+from backend.orchestration.decisions import TARGET_MODELS, GraphDecisionSubmit, update_decisions
 from backend.orchestration.query import GraphStateQuery
 from backend.services.deferrals import is_active, latest_entries
 from backend.services.features import COLLAB
-from backend.services.presentation import assemble, record_presentation
+from backend.services.presentation import assemble, reads_llm_calls, record_presentation
 from backend.services.review_queue import review_tier, subject_amount, task_amount
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
 from backend.services.trail_pages import all_of_kind
@@ -60,6 +61,8 @@ class TaskParts:
     tier: ReviewTier
     allowed_resolutions: list[DisputeResolution]
     draft_rules: dict[DisputeResolution, DraftRule]
+    misstatement_update_kind: MisstatementUpdateKind | None  # 所属程序模板的错报更新类别 (需求 R163)
+    update_decisions: list[Decision]  # 允许的决定中须带 misstatement_update 的 (decisions.update_decisions)
 
 
 async def updated_misstatement(
@@ -96,14 +99,17 @@ async def task_parts(
     misstatements = await updated_misstatement(deps, eid, target)
     subject = await subject_amount(deps.financial_store, eid, target) if isinstance(target, Judgment) else None
     amount = task_amount(target, exceptions, subject, misstatements)
+    allowed = _allowed(task, deps)
     return TaskParts(
         procedure_name=template.name,
         target=target,
-        allowed_decisions=_allowed(task, deps),
+        allowed_decisions=allowed,
         amount_cents=amount,
         tier=review_tier(task, target, amount, overview.performance_materiality_cents, overview.clearly_trivial_cents),
         allowed_resolutions=deps.queue.resolutions(task, target),
         draft_rules=deps.queue.draft_rules(task, target, COLLAB in overview.features),
+        misstatement_update_kind=template.misstatement_update_kind,
+        update_decisions=update_decisions(task.kind, allowed, template.misstatement_update_kind),
     )
 
 
@@ -140,6 +146,8 @@ async def list_review_tasks(
                     tier=parts.tier,
                     allowed_resolutions=parts.allowed_resolutions,
                     draft_rules=parts.draft_rules,
+                    misstatement_update_kind=parts.misstatement_update_kind,
+                    update_decisions=parts.update_decisions,
                 )
             )
     return views
@@ -156,7 +164,8 @@ async def present_review_task(
     """判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务
     绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在
     404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.
-    deferred 按稍后处理的留痕 (已决定的任务为假); 只有带 subject_id 的 failed 任务读 llm_call 留痕取失败原因."""
+    deferred 按稍后处理的留痕 (已决定的任务为假); 只有带对象的 failed 与 unattributed 任务读 llm_call 留痕取失败
+    原因 (presentation.reads_llm_calls)."""
     eid = engagement.id
     async with catch_api():
         task = await deps.output_store.get(eid, ReviewTask, task_id)
@@ -167,8 +176,7 @@ async def present_review_task(
         parts = await task_parts(deps, eid, task, exceptions, overview, task.target_version)
         marked = latest_entries(await all_of_kind(deps.trail, eid, TrailKind.deferral)).get(("review_task", task.id))
         deferred = marked is not None and is_active(marked, {task.id: task}, None, [])
-        failed_subject = task.kind is TaskKind.failed and task.subject_id is not None
-        calls = await all_of_kind(deps.trail, eid, TrailKind.llm_call) if failed_subject else []
+        calls = await all_of_kind(deps.trail, eid, TrailKind.llm_call) if reads_llm_calls(task) else []
         presentation_id = await record_presentation(deps.trail, eid, task, user.id, datetime.now(UTC))
     return assemble(
         task,

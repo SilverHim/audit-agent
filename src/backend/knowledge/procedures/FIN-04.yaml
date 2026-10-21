@@ -19,4 +19,5 @@ standards: [ASA450-P05]
 #   完成阶段认定的错报都经回流结清); 功能 misstatement 关闭时错报一律为 uncorrected, 结果同原口径
 # - total_cents = items 的 amount_cents 之和, 不按 direction 抵销
 # - materiality_cents 取 params; total_cents >= materiality_cents 时 candidate_opinion = qualified, 否则 unqualified
+#   (services.opinion.allowed_opinions, 需求 R184)
 rules: []

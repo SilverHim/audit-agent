@@ -38,7 +38,6 @@ from backend.contracts.models import (
     MaterialityChoice,
     Procedure,
     ReviewStatus,
-    TaskKind,
     TaskStatus,
 )
 from backend.contracts.ports import LLMClient, LLMRequest, LLMResponse, T_out
@@ -57,6 +56,7 @@ from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
+from backend.services.review_queue import RERUNNABLE
 from tests.fakes import FakeRuleEngine, FakeTrail, LayeredMockLLM
 from tests.tools.live_budget import Budget, BudgetedLLMClient
 from tests.xero_fakes import (
@@ -226,13 +226,14 @@ async def confirm_upstream(h: XeroHarness, state: EngagementState, layer: Sequen
 
 
 async def rerun_failed(h: XeroHarness, nodes: GraphNodes, state: EngagementState, pid: str) -> EngagementState:
-    """pid 有待决的 failed 任务时照审计师的 rerun 决定重跑一次: 整组任务置 decided, 程序出新版本, 只重判这组任务的对象
-    (rerun_subjects; 有整次失败的任务时整条重跑), 再执行一次并写入 (同 decisions 的 rerun_group 与 rerun_procedure,
-    以项目负责人写入). 没有时原样返回. 带规则例外的对象失败时建的是 unattributed 任务, 不在其中 (不能重跑)."""
+    """pid 有待决的可重跑任务 (review_queue.RERUNNABLE: failed 与带规则例外的对象判断失败留下的 unattributed, 需求
+    R347) 时照审计师的 rerun 决定重跑一次: 整组任务置 decided, 程序出新版本, 只重判这组任务的对象 (rerun_subjects;
+    有整次失败的任务时整条重跑), 再执行一次并写入 (同 decisions 的 rerun_group 与 rerun_procedure, 以项目负责人
+    写入). 没有时原样返回."""
     failed = [
         t
         for t in state["review_tasks"]
-        if t.procedure_id == pid and t.kind is TaskKind.failed and t.status is TaskStatus.pending
+        if t.procedure_id == pid and t.kind in RERUNNABLE and t.status is TaskStatus.pending
     ]
     if not failed:
         return state

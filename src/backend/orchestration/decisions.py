@@ -18,12 +18,14 @@ from backend.agents.workpaper import rule_fields
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
+    BLANK,
     AgentId,
     AuditException,
     AuditObjective,
     AuditReportVersion,
     AutonomyLevel,
     ClientProfile,
+    CorrectionNotice,
     CriticVerdict,
     Decision,
     DisputeResolution,
@@ -57,6 +59,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.ports import FinancialDataStore
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
@@ -76,7 +79,14 @@ from backend.orchestration.nodes import (
     save_outputs,
     waiting_status,
 )
-from backend.orchestration.runner import GraphRunner, at_rerun_point, features_mismatch, resume_required, review_waits
+from backend.orchestration.runner import (
+    GraphRunner,
+    at_rerun_point,
+    correction_wait,
+    features_mismatch,
+    resume_required,
+    review_waits,
+)
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
@@ -85,7 +95,7 @@ from backend.services.features import COLLAB, MISSTATEMENT
 from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import attribute_exceptions, draft_rule, misstatement_updates
+from backend.services.review_queue import RERUNNABLE, attribute_exceptions, draft_rule, misstatement_updates
 from backend.services.staleness import released, rerunnable, stale_procedures, superseded_judgments, superseded_runs
 from backend.services.trail_pages import all_of_kind
 
@@ -160,6 +170,16 @@ UPDATE_BY_HUMAN = frozenset(
         (TaskKind.failed, Decision.manual_result),
     }
 )
+
+
+def update_decisions(
+    kind: TaskKind, allowed: Sequence[Decision], update_kind: MisstatementUpdateKind | None
+) -> list[Decision]:
+    """允许的决定中须带 misstatement_update 的 (按 UPDATE_BY_HUMAN, 同 review_fields), 保持 allowed 的顺序; 模板
+    没有载荷类别 (update_kind 为空) 时为空. 复核队列据此告诉前端哪些决定要给载荷 (需求 R163), 前端不另抄这张表."""
+    if update_kind is None:
+        return []
+    return [decision for decision in allowed if (kind, decision) in UPDATE_BY_HUMAN]
 
 
 def review_fields(
@@ -316,8 +336,9 @@ def with_rule_fields(
 def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Sequence[DocumentRef]) -> ManualResult:
     """manual 任务的 manual_result 按任务的请求核对 (第 7 节校验表, 需求 R92), 不过抛 INVALID_VALUE: 证据不少于
     min_evidence 条, 都是本项目已登记的文件 (documents) 且页码在 1 到页数之间 (同判断的文件指针, document_pointer);
-    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝),
-    没有结果模型时为空. 必填 (reason, manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
+    执行日期不晚于决定时刻的悉尼日期; details 合请求的结果模型 (contracts/manual_results; 模型名已不在登记里也拒绝;
+    不合的只是必填文字为空白 (NonBlank) 时报 MISSING_FIELD, 需求 R161), 没有结果模型时为空. 必填 (reason,
+    manual_result 与其 performed_on) 已由 check_review_fields 查过. 纯函数.
     返回要存下的结果: 证据指针按文件当前登记改写 type 与 reliability (同判断的文件指针), 其余原样.
     例: 页数 2 的文件引第 3 页 → INVALID_VALUE "DOC-0a1b2c3d4e5f: 页码 3 不在 1-2 之间".
     """
@@ -353,7 +374,10 @@ def check_manual_result(record: ReviewRecord, task: ReviewTask, documents: Seque
     try:
         model.model_validate(result.details)
     except ValidationError as e:
-        fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in e.errors())
+        errors = e.errors()
+        fields = ", ".join(".".join(str(part) for part in error["loc"]) for error in errors)
+        if all(error["type"] == BLANK for error in errors):  # 必填文字为空白 (NonBlank, 需求 R161), 同理由为空
+            raise DecisionRejected("MISSING_FIELD", f"manual_result.details 的必填文字为空: {fields}") from e
         detail = f"manual_result.details 不合 {request.result_model}: {fields}"
         raise DecisionRejected("INVALID_VALUE", detail) from e
     return result.model_copy(update={"evidence": evidence})
@@ -744,11 +768,14 @@ def recompute_procedure(
 
 
 def rerun_group(task: ReviewTask, pending: list[ReviewTask]) -> list[ReviewTask]:
-    """rerun 决定关闭的一组 failed 任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序其余待决的
-    failed 任务 (都来自该程序最近一次执行), 按 ID 排序. pending 为该程序当前全部待决任务; normal, unattributed
-    任务不在组内."""
+    """rerun 决定关闭的一组可重跑任务 (Q17 一轮失败算一组, 整组重跑): 被决定的任务在前, 其后为同程序同一次执行
+    (run_id 相同, 同 recovery.closed_by) 其余待决的可重跑任务 (review_queue.RERUNNABLE: failed 与带规则例外的对象
+    判断失败留下的 unattributed, 需求 R347), 按 ID 排序. pending 为该程序当前全部待决任务; normal, dispute 等任务
+    不在组内. 整组一并关闭, 程序置 executing 后就没有待决的可重跑任务, 不会再来第二个 rerun 盖掉这一版的重判对象."""
     siblings = [
-        t for t in pending if t.kind is TaskKind.failed and t.procedure_id == task.procedure_id and t.id != task.id
+        t
+        for t in pending
+        if t.kind in RERUNNABLE and t.procedure_id == task.procedure_id and t.run_id == task.run_id and t.id != task.id
     ]
     return [task, *sorted(siblings, key=lambda t: t.id)]
 
@@ -756,7 +783,7 @@ def rerun_group(task: ReviewTask, pending: list[ReviewTask]) -> list[ReviewTask]
 def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[ReviewTask]) -> Procedure:
     """rerun 决定写出的程序新版本 (第 7 节): 置 executing (不论还有无别的待决任务), params 合并 rerun_params,
     rerun_subject_ids 取整组任务的对象 (见 nodes.rerun_subjects; 组内有整次失败的任务时为空, 整条重跑).
-    整组在同一事务里关闭, 程序处于 executing 时已没有待决的 failed 任务, 不会再来第二个 rerun.
+    整组在同一事务里关闭, 程序处于 executing 时已没有待决的可重跑任务 (failed, unattributed), 不会再来第二个 rerun.
     P2 程序由下一轮派发重跑, P2 以外的程序由所在节点读回这一版后重跑 (nodes.read_rerun 取等待版本 + 1).
     例: REV-03 第 1 次 CON-002, CON-003 失败, 对其中任一个 rerun → REV-03 新版本 executing,
     rerun_subject_ids [CON-002, CON-003].
@@ -768,6 +795,36 @@ def rerun_procedure(procedure: Procedure, record: ReviewRecord, group: list[Revi
             "params": {**procedure.params, **(record.rerun_params or {})},
             "rerun_subject_ids": rerun_subjects(group),
         }
+    )
+
+
+def check_notice_fields(notice: CorrectionNotice) -> None:
+    """更正通知的字段 (需求 R162), 不过抛 DecisionRejected: stop_waiting 须有理由 (去首尾空白后非空, 否则
+    MISSING_FIELD), 不能带凭证号 (FIELD_NOT_ALLOWED); adjustments_posted 的理由可写可不写, 凭证号为空表示载入全部未
+    载入的更正分录. 纯函数."""
+    if notice.kind == "stop_waiting":
+        if not (notice.reason or "").strip():
+            raise DecisionRejected("MISSING_FIELD", "reason")
+        if notice.adjustment_entry_nos:
+            raise DecisionRejected("FIELD_NOT_ALLOWED", "adjustment_entry_nos")
+
+
+def notice_trail(eid: str, notice: CorrectionNotice) -> TrailEntry:
+    """更正通知的 decision 留痕, 提交与恢复补写共用: 记在 FIN-08 下 (沟通之后的更正), 防重复键为通知 ID."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=notice.decided_by,
+        procedure_id="FIN-08",
+        summary=f"更正通知 {notice.kind}: {', '.join(notice.misstatement_ids)}",
+        idempotency_key=notice.id,
+        payload={
+            "decision_id": notice.id,
+            "kind": notice.kind,
+            "misstatement_ids": notice.misstatement_ids,
+            "adjustment_entry_nos": notice.adjustment_entry_nos,
+            "reason": notice.reason,
+        },
     )
 
 
@@ -829,6 +886,18 @@ def rerun_trail(eid: str, request: RerunRequest) -> TrailEntry:
             "closed_task_ids": request.closed_task_ids,
             "data_version": request.data_version,
         },
+    )
+
+
+def language_trail(eid: str, actor: str, before: WorkingLanguage, after: WorkingLanguage) -> TrailEntry:
+    """改工作语言 (需求 R339, PUT working-language) 的 decision 留痕: payload 的 action 为 working_language, from 与
+    to 为改前与改后的值. 没有决定对象 (不进 decisions 表), 不带防重复键; 与当前值相同不改时不写."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.decision,
+        actor=actor,
+        summary=f"工作语言 {before} → {after}",
+        payload={"action": "working_language", "from": before, "to": after},
     )
 
 
@@ -901,12 +970,13 @@ class GraphDecisionSubmit:
         self.runner.launch(eid, None if resume is None else Command(resume=resume))
 
     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
-        """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定与复核决定共用一张 decisions 表 (第 9 节), 两类都查.
+        """决定 ID 未被用过, 否则 INVALID_VALUE. 闸门决定, 复核决定, 过期重跑请求与更正通知共用一张 decisions 表
+        (第 9 节), 各类都查.
 
         同一 ID 再提交 (内容可能不同) 时, put 会按 (id, version) 返回旧决定, 效果却按新内容算.
         """
         store = self.deps.output_store
-        for kind in (GateDecision, ReviewRecord, RerunRequest):  # 三类同在 decisions 表, ID 不能重
+        for kind in (GateDecision, ReviewRecord, RerunRequest, CorrectionNotice):  # 同在 decisions 表, ID 不能重
             if await store.get(eid, kind, decision_id) is not None:
                 raise DecisionRejected("INVALID_VALUE", f"决定 ID {decision_id} 已用过")
 
@@ -976,20 +1046,27 @@ class GraphDecisionSubmit:
         self, eid: str, record: ReviewRecord, task: ReviewTask, target: Versioned | None, snapshot: StateSnapshot
     ) -> None:
         """人工程序的按程序核对 (需求 R93): 调模板 owner 的 ManualHandler.check, 返回问题时拒绝 (INVALID_VALUE,
-        消息为问题原文, 多条以分号连接). 在通用核对之后调, record 为其返回的 (证据指针已按登记改写). 上下文为该程序
-        在检查点中的版本与检查点状态 (节点停在等待, 派发的执行记录与任务只在 Store), run 为派发的那次执行 (任务目标).
-        owner 取 deps.manual_owners."""
+        消息为问题原文, 多条以分号连接; owner 抛的 VersionConflict 由 _deciding 转为 VERSION_MISMATCH, 需求 R161). 在
+        通用核对之后调, record 为其返回的 (证据指针已按登记改写). 上下文为该程序在检查点中的版本与检查点状态 (节点停在
+        等待, 派发的执行记录与任务只在 Store), run 为派发的那次执行 (任务目标). owner 取 deps.manual_owners."""
         assert isinstance(target, ProcedureRun) and record.manual_result is not None  # 通用核对已过
         values = fill_defaults(snapshot.values)
         procedure = next(p for p in values["procedure_pack"] if p.id == task.procedure_id)
         template = self.deps.library.load(task.procedure_id)
         ctx = RunContext(await self._engagement(eid), procedure, template, target, values)
-        problems = self.deps.manual_owners[task.procedure_id].check(ctx, task, record.manual_result)
+        problems = self.deps.manual_owners[task.procedure_id].check(ctx, task, record)
         if problems:
             raise DecisionRejected("INVALID_VALUE", "; ".join(problems))
 
-    async def submit(self, eid: str, decision: ReviewRecord | GateDecision) -> None:
-        """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写."""
+    async def submit(self, eid: str, decision: ReviewRecord | GateDecision | CorrectionNotice) -> None:
+        """提交一个决定: 校验通过则写入并在后台继续执行, 立即返回; 校验不过抛 DecisionRejected, 什么都不写.
+        三种决定: 闸门决定, 复核决定与更正通知 (需求 R162: 外部数据到达同样须由人确认, 经唯一写入口才能统一校验,
+        留痕与恢复)."""
+        if isinstance(decision, CorrectionNotice):
+            async with self._deciding(eid, resume=decision.id) as (engagement, snapshot):
+                await self.check_correction_notice(engagement, decision, snapshot)
+                await self._write_notice(eid, decision)
+            return
         if isinstance(decision, ReviewRecord):
             async with self._deciding(eid, resume=decision.id) as (_, snapshot):
                 task, checked = await self.check_review_record(eid, decision, snapshot)
@@ -1015,6 +1092,45 @@ class GraphDecisionSubmit:
             # 以闸门节点身份写入: 检查点越过闸门, 下一步由节点的路由按刚写入的决定选出口
             await self.app.aupdate_state(GraphRunner.config(eid), written, as_node=spec.node)
 
+    async def check_correction_notice(
+        self, engagement: Engagement, notice: CorrectionNotice, snapshot: StateSnapshot
+    ) -> None:
+        """更正通知的校验 (第 7 节校验顺序中 RESUME_REQUIRED 之后, 需求 R162), 不过抛 DecisionRejected: 图停在
+        await_correction 等更正通知, 否则 NOT_AWAITING_CORRECTION; 字段 (check_notice_fields); 所列错报非空, 不重复,
+        都在等待载荷中 (载荷只列不须重新沟通的 communicated 错报), 否则 INVALID_VALUE; adjustments_posted 的凭证号都在
+        数据集可载入的更正分录中 (DatasetLoader.adjustment_entry_nos), 项目没有数据集或数据集没有更正分录也是
+        INVALID_VALUE; 决定 ID 未用过. 读回通知后出错的节点不必另查: 通知已在 Store 而不在检查点, 先报
+        RESUME_REQUIRED."""
+        waiting = correction_wait(snapshot)
+        if waiting is None:
+            raise DecisionRejected("NOT_AWAITING_CORRECTION", "当前不在等待更正")
+        check_notice_fields(notice)
+        ids = notice.misstatement_ids
+        if not ids or len(set(ids)) < len(ids):
+            raise DecisionRejected("INVALID_VALUE", f"更正通知须列出不重复的错报, 现为 {ids}")
+        others = [mid for mid in ids if mid not in waiting["misstatement_ids"]]
+        if others:
+            raise DecisionRejected("INVALID_VALUE", f"{', '.join(others)} 不在等更正的错报中")
+        if notice.kind == "adjustments_posted":
+            dataset = engagement.dataset
+            if dataset is None:
+                raise DecisionRejected("INVALID_VALUE", "项目没有数据集, 没有可载入的更正分录")
+            available = self.deps.datasets.adjustment_entry_nos(dataset)
+            if not available:
+                raise DecisionRejected("INVALID_VALUE", f"项目的数据集 {dataset} 没有可载入的更正分录")
+            unknown = [no for no in notice.adjustment_entry_nos if no not in available]
+            if unknown:
+                raise DecisionRejected("INVALID_VALUE", f"更正分录中没有 {', '.join(unknown)}")
+        await self._check_decision_id(engagement.id, notice.id)
+
+    async def _write_notice(self, eid: str, notice: CorrectionNotice) -> None:
+        """写入已通过校验的更正通知 (写入者为提交的审计师), 提交后写 decision 留痕; 效果由等待更正的节点读回后完成
+        (nodes.apply_notice). 不写检查点."""
+        store = self.deps.output_store
+        async with store.transaction(eid):
+            await store.put(eid, [notice], actor=notice.decided_by)
+        await self.deps.trail.record(notice_trail(eid, notice))
+
     async def timed(self, eid: str, record: ReviewRecord) -> ReviewRecord:
         """填上复核停留时长 (需求 R153): 功能 collab 打开时按项目的全部 presentation 留痕 (逐页读完) 算 dwell_seconds
         与 presentation_id (presentation.dwell_seconds), 关闭时两项为空; 调用方给的值一律不用. 校验之后, 写入之前用."""
@@ -1026,7 +1142,7 @@ class GraphDecisionSubmit:
 
     async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
-        rerun 时连同同程序其余待决的 failed 任务一并置 decided (一轮失败算一组, 见 rerun_group).
+        rerun 时连同同程序其余待决的可重跑任务 (failed, unattributed) 一并置 decided (一轮失败算一组, 见 rerun_group).
 
         效果按 Store 当前版本计算 (与校验读的一致), 错报更新载荷所指的错报也取 Store 当前版本: 载荷依据的不是它
         (判断之后错报已出新版本) 抛 VersionConflict, 写出的新版本不合格报 INVALID_VALUE, 都不写 (需求 R159). 人给的

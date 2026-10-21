@@ -2,7 +2,7 @@
 
 完整的 Agent 循环 (调模型 → 调工具 → 再调模型) 在 mock 模式下照样走一遍, 离线演示与测试都能跑.
 覆盖的问题: 进度, 待处理事项 (含稍后处理), 重要性; 要求代为确认, 批准的给出引导; 其余回固定话术.
-不带工具调用时 (压缩摘要) 列出被压缩各轮的问题, 作为确定的摘要.
+不带工具调用时 (压缩摘要) 列出被压缩各轮的问题, 作为确定的摘要, 语言按压缩提示词的要求.
 """
 
 import json
@@ -15,8 +15,9 @@ from backend.contracts.ports import ChatModel
 
 MODEL_NAME = "mock"
 CHUNK = 12  # 流式输出每段的字数
-LANGUAGE = re.compile(r"^Language: (zh|en)$", re.MULTILINE)  # 系统提示词里的语言行
+LANGUAGE = re.compile(r"^Language: (zh|en)$", re.MULTILINE)  # 系统提示词里的回答语言行 (项目的工作语言, 需求 R342)
 AUDITOR = "[Auditor] "  # 压缩提示词里审计师问题行的前缀
+SUMMARY_LANGUAGE = re.compile(r"^Write the new summary in Simplified Chinese\b", re.MULTILINE)  # 压缩提示词要中文摘要
 
 Intent = Literal["todo", "approve", "materiality", "progress", "other"]
 # 按顺序匹配, 先中先得: "有什么需要我确认" 是问待办, 不是要求代为确认, 所以 todo 在 approve 之前
@@ -50,7 +51,8 @@ def classify(question: str) -> Intent:
     return next((intent for intent, pattern in INTENTS if pattern.search(question)), "other")
 
 
-def language(messages: Sequence[ChatMessage]) -> Lang:
+def answer_language(messages: Sequence[ChatMessage]) -> Lang:
+    """回答语言: 系统提示词里的 "Language:" 一行 (取项目的工作语言, 不看提问带的界面语言)."""
     system = next((m.content for m in messages if m.role == "system"), "")
     match = LANGUAGE.search(system)
     return "en" if match and match.group(1) == "en" else "zh"
@@ -166,10 +168,10 @@ def compose(intent: Intent, results: list[dict[str, Any]], lang: Lang) -> str:
 
 
 def summarize(messages: Sequence[ChatMessage]) -> str:
-    """压缩摘要: 列出材料里审计师的各个问题."""
+    """压缩摘要: 列出材料里审计师的各个问题, 用压缩提示词要求的语言 (回答语言, 需求 R342)."""
     material = next((m.content for m in reversed(messages) if m.role == "user"), "")
     questions = [line[len(AUDITOR) :].strip() for line in material.splitlines() if line.startswith(AUDITOR)]
-    if any(re.search(r"[一-鿿]", q) for q in questions):
+    if SUMMARY_LANGUAGE.search(material):
         return "审计师先后问过：" + "；".join(questions) + "。"
     return "The auditor asked: " + "; ".join(questions) + "."
 
@@ -188,7 +190,7 @@ class RuleChatModel:
         if not tools:
             text = summarize(messages)
         else:
-            lang = language(messages)
+            answer_lang = answer_language(messages)
             question = next((m.content for m in reversed(messages) if m.role == "user"), "")
             intent = classify(question)
             results = tool_results(messages)
@@ -197,7 +199,7 @@ class RuleChatModel:
                 call = ToolCall(id="call_0", name=tool, arguments="{}")
                 yield AssistantTurn(text="", tool_calls=[call], finish_reason="tool_calls", model=MODEL_NAME)
                 return
-            text = compose(intent, results, lang)
+            text = compose(intent, results, answer_lang)
         for start in range(0, len(text), CHUNK):
             yield TextDelta(text=text[start : start + CHUNK])
         yield AssistantTurn(text=text, finish_reason="stop", model=MODEL_NAME)

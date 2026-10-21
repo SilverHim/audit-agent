@@ -340,7 +340,7 @@
           "engagements"
         ],
         "summary": "Create Engagement",
-        "description": "建项目后启动流程, 返回时后台已在跑, running 为真. dataset 与 client_id 须给且只给一个, 否则 422.\n\n数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间\n而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).\n新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).",
+        "description": "建项目后启动流程, 返回时后台已在跑, running 为真. dataset 与 client_id 须给且只给一个, 否则 422.\n\n数据集客户 (给 dataset): 客户取数据集画像. 数据集不存在 404; 画像不合格, 补造文件与快照不匹配, 或数据集自带期间\n而请求的期间与之不同时 422, 不建项目 (载入器按数据集的期间取数, 不读项目期间).\n新建的客户 (给 client_id): 取该客户最新一版画像, 项目没有数据集. 客户不存在 404; 是数据集客户时 422 (按数据集建).\nworking_language 不在 zh, en 时 422 INVALID_VALUE (parse_language, 同 PUT working-language).",
         "operationId": "engagements-create_engagement",
         "requestBody": {
           "content": {
@@ -459,6 +459,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PlanView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/working-language": {
+      "put": {
+        "tags": [
+          "engagements"
+        ],
+        "summary": "Set Working Language",
+        "description": "改项目的工作语言 (需求 R339), 返回改后的项目: 之后建的执行用新语言, 已有的执行与产出不改. 取值不在 zh, en 时\n422 INVALID_VALUE (parse_language); 项目已锁定 423 ENGAGEMENT_LOCKED (存储的 writable 一路, 同其他写入); 与当前值\n相同不改, 不留痕; 改了时写一行 decision 留痕 (decisions.language_trail, 写入人为当前用户), 留痕写失败时把语言改回\n原值再抛错, 不留下没有留痕的修改. 不取项目锁: 后台执行中照样可改, 改之后才建的执行记录取新值.",
+        "operationId": "engagements-set_working_language",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkingLanguageIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Engagement"
                 }
               }
             }
@@ -630,7 +688,7 @@
           "gates"
         ],
         "summary": "Get Gate",
-        "description": "不在闸门时 404 NOT_AT_GATE. 停在闸门但材料缺失时 404 NOT_FOUND.",
+        "description": "当前闸门的材料; 不在闸门是常态, 回 200, 响应体 null (需求 R346, 待拍板 Q30). 停在闸门但材料缺失时\n404 NOT_FOUND.",
         "operationId": "gates-get_gate",
         "security": [
           {
@@ -654,7 +712,15 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GateView"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/GateView"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Gates-Get Gate"
                 }
               }
             }
@@ -819,7 +885,7 @@
           "reviews"
         ],
         "summary": "Present Review Task",
-        "description": "判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务\n绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在\n404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.\ndeferred 按稍后处理的留痕 (已决定的任务为假); 只有带 subject_id 的 failed 任务读 llm_call 留痕取失败原因.",
+        "description": "判断呈递 (GEN-11): 审计师打开一条复核任务. 返回按任务类型组装的视图 (services.presentation.assemble; 目标取任务\n绑定的版本, 金额与档位同复核队列), 并写一行 presentation 留痕 (每次打开都记, presentation_id 为其 ID). 任务不存在\n404 NOT_FOUND, 不写留痕. 不改任务, 不写 Store, 不取项目锁: 主图运行中, 项目已锁定, 任务已决定都照常可调.\ndeferred 按稍后处理的留痕 (已决定的任务为假); 只有带对象的 failed 与 unattributed 任务读 llm_call 留痕取失败\n原因 (presentation.reads_llm_calls).",
         "operationId": "reviews-present_review_task",
         "security": [
           {
@@ -3826,7 +3892,7 @@
           "reports"
         ],
         "summary": "Get Misstatements",
-        "description": "汇总表取 SCHEDULE; 重要性与意见类型取项目总览.",
+        "description": "汇总表取 SCHEDULE; 重要性与意见类型取项目总览; 更正通知取 Store 中的全部, 按提交时间 (需求 R163).",
         "operationId": "reports-get_misstatements",
         "security": [
           {
@@ -4076,6 +4142,116 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TrailEntry"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/correction-notices": {
+      "post": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "Submit Correction Notice",
+        "description": "停在等待更正时提交更正通知 (第 7 节 \"更正通知\"): id 为 D-{uuid4}, 提交人与时刻由服务端填写; handler 直接\nawait submit. 不在等更正 409 NOT_AWAITING_CORRECTION, 其余校验同其他决定.",
+        "operationId": "corrections-submit_correction_notice",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionNoticeIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/adjustment-entries": {
+      "get": {
+        "tags": [
+          "corrections"
+        ],
+        "summary": "List Adjustment Entries",
+        "description": "项目数据集可载入的更正分录 (DatasetLoader.adjustment_entries, 按凭证号), loaded 为总账里已有该凭证号的行;\n没有数据集或数据集没有更正分录 (如 Numbat) 为空.",
+        "operationId": "corrections-list_adjustment_entries",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdjustmentEntryView"
+                  },
+                  "title": "Response Corrections-List Adjustment Entries"
                 }
               }
             }
@@ -4625,6 +4801,49 @@
         "title": "AccountCategoryIn",
         "description": "审计师修改科目的标准分类."
       },
+      "AdjustmentEntryView": {
+        "properties": {
+          "entry_no": {
+            "type": "string",
+            "title": "Entry No"
+          },
+          "posting_date": {
+            "type": "string",
+            "format": "date",
+            "title": "Posting Date"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "line_count": {
+            "type": "integer",
+            "title": "Line Count"
+          },
+          "loaded": {
+            "type": "boolean",
+            "title": "Loaded"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entry_no",
+          "posting_date",
+          "description",
+          "line_count",
+          "loaded"
+        ],
+        "title": "AdjustmentEntryView",
+        "description": "可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否\n已载入."
+      },
       "AgentId": {
         "type": "string",
         "enum": [
@@ -5173,6 +5392,17 @@
               }
             ],
             "title": "Approved At"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
           }
         },
         "additionalProperties": false,
@@ -7383,13 +7613,13 @@
             "type": "string",
             "title": "Answer"
           },
-          "lang": {
+          "answer_lang": {
             "type": "string",
             "enum": [
               "zh",
               "en"
             ],
-            "title": "Lang"
+            "title": "Answer Lang"
           },
           "citations": {
             "items": {
@@ -7425,13 +7655,126 @@
         "required": [
           "question",
           "answer",
-          "lang",
+          "answer_lang",
           "citations",
           "trail_id",
           "created_at"
         ],
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
+      },
+      "CorrectionNotice": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adjustments_posted",
+              "stop_waiting"
+            ],
+            "title": "Kind"
+          },
+          "misstatement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Misstatement Ids"
+          },
+          "adjustment_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adjustment Entry Nos",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "decided_by": {
+            "type": "string",
+            "title": "Decided By"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "misstatement_ids",
+          "decided_by",
+          "decided_at"
+        ],
+        "title": "CorrectionNotice",
+        "description": "更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的\n第三种决定 (与闸门决定, 复核决定同一张 decisions 表, 共用 ID 空间, 第 0 节). adjustments_posted: 按凭证号载入\n更正分录 (为空时载入全部未载入的), 所列错报转 verifying; stop_waiting: 所列错报记未更正 (stopped_waiting), 须写\n理由, 不带凭证号."
+      },
+      "CorrectionNoticeIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "adjustments_posted",
+              "stop_waiting"
+            ],
+            "title": "Kind"
+          },
+          "misstatement_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Misstatement Ids"
+          },
+          "adjustment_entry_nos": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Adjustment Entry Nos",
+            "default": []
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "misstatement_ids"
+        ],
+        "title": "CorrectionNoticeIn",
+        "description": "更正通知请求体 (需求 R163): CorrectionNotice 去掉 id, version, decided_by, decided_at, 由服务端填写."
       },
       "CriticReasonCode": {
         "type": "string",
@@ -8502,6 +8845,15 @@
             "title": "Version Snapshot",
             "default": {}
           },
+          "working_language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Working Language",
+            "default": "en"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -8563,6 +8915,11 @@
               }
             ],
             "title": "Client Id"
+          },
+          "working_language": {
+            "type": "string",
+            "title": "Working Language",
+            "default": "en"
           }
         },
         "additionalProperties": false,
@@ -8615,6 +8972,19 @@
           "awaiting_data": {
             "type": "boolean",
             "title": "Awaiting Data"
+          },
+          "awaiting_correction": {
+            "type": "boolean",
+            "title": "Awaiting Correction",
+            "default": false
+          },
+          "awaiting_correction_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Awaiting Correction Ids",
+            "default": []
           },
           "missing_tables": {
             "items": {
@@ -8697,6 +9067,18 @@
             "type": "array",
             "title": "Features",
             "default": []
+          },
+          "run_languages": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "zh",
+                "en"
+              ]
+            },
+            "type": "object",
+            "title": "Run Languages",
+            "default": {}
           }
         },
         "additionalProperties": false,
@@ -10798,6 +11180,21 @@
           "high_cents": {
             "type": "integer",
             "title": "High Cents"
+          },
+          "not_applicable": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "loss",
+                  "not_positive"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Not Applicable"
           }
         },
         "additionalProperties": false,
@@ -11259,6 +11656,14 @@
                 "type": "null"
               }
             ]
+          },
+          "correction_notices": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionNotice"
+            },
+            "type": "array",
+            "title": "Correction Notices",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -12079,7 +12484,7 @@
           "source"
         ],
         "title": "PresentedFailure",
-        "description": "失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空."
+        "description": "失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空: run 填 reason; llm_call 填 subject_id 与调用的\n四项 (level_failed, errors, attempts, trail_id); exception 填规则三项 (rule_id, amount_cents, detail), 另填该对象\n最后一次调用的四项 (需求 R355; 留痕里找不到该对象的调用时只有规则三项)."
       },
       "PresentedSide": {
         "properties": {
@@ -12494,6 +12899,15 @@
             "type": "array",
             "title": "Rule Outcomes",
             "default": []
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "zh",
+              "en"
+            ],
+            "title": "Language",
+            "default": "en"
           }
         },
         "additionalProperties": false,
@@ -13561,6 +13975,29 @@
             "type": "object",
             "title": "Draft Rules",
             "default": {}
+          },
+          "misstatement_update_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "classification",
+                  "verification"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Misstatement Update Kind"
+          },
+          "update_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            },
+            "type": "array",
+            "title": "Update Decisions",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -14985,6 +15422,21 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WorkingLanguageIn": {
+        "properties": {
+          "language": {
+            "type": "string",
+            "title": "Language"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "language"
+        ],
+        "title": "WorkingLanguageIn",
+        "description": "改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查\n(engagements.parse_language)."
       },
       "XeroAuthorize": {
         "properties": {

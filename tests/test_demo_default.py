@@ -3,7 +3,6 @@
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.contracts.models import AcceptanceScorecard, ClientProfile, Engagement, Phase, ProfileSource, TrailKind
+from backend.contracts.models import AcceptanceScorecard, ProcedureRun, TrailKind
 from backend.core.config import Settings, get_settings
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.graph import compile_graph
@@ -20,9 +19,8 @@ from backend.persistence import seed as seed_module
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
 from tests.external import needs, snapshot_location, supplements_path
 from tests.fakes import (
-    NOW,
     NUMBAT_AUDITOR,
-    FakeEngagementStore,
+    CreatingEngagementStore,
     FakeOutputStore,
     FakeRegistry,
     FakeTrail,
@@ -37,39 +35,6 @@ DEFAULT = "xero/20261017-q1"
 SNAPSHOTS = snapshot_location("20261017-q1").parent  # 快照目录的上级 (只给路径; 要快照的用例经 needs_snapshot 核对)
 needs_snapshot = needs("q1_snapshot", "q1_supplements")  # 标 external, 没有快照或补造时跳过, 跟踪了却找不到时失败
 NO_DB: Any = object()  # 建项目与 ACC-04 不读写财务表
-
-
-class CreatingEngagementStore(FakeEngagementStore):
-    """能建项目的假项目存储: 编号 ENG-2026-001 起顺排; 画像与该客户的各版比较内容, 有一版相同就沿用最新一版, 都不同
-    才出新版本 (同 PostgresEngagementStore.create 的效果)."""
-
-    async def create(
-        self, *, owner_id: str, period_start: date, period_end: date, dataset: str | None, profile: ClientProfile
-    ) -> Engagement:
-        if period_end < period_start:
-            raise ValueError("period_end precedes period_start")
-        versions = sorted((p for p in self.profiles if p.id == profile.id), key=lambda p: p.version)
-        if not versions:
-            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
-        elif any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
-            profile = versions[-1]
-        else:
-            profile = profile.model_copy(update={"version": versions[-1].version + 1})
-            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
-        engagement = Engagement(
-            id=f"ENG-2026-{len(self.engagements) + 1:03d}",
-            client_id=profile.id,
-            period_start=period_start,
-            period_end=period_end,
-            dataset=dataset,
-            owner_id=owner_id,
-            client_profile_version=profile.version,
-            phase=Phase.P0_Acceptance,
-            created_at=NOW,
-            updated_at=NOW,
-        )
-        self.engagements.append(engagement)
-        return engagement
 
 
 def demo_runner(registry: Callable[[Any, Callable[[str], Path | None], Any], Any] | None = None) -> GraphRunner:
@@ -105,13 +70,15 @@ def test_demo_dataset_defaults_to_xero() -> None:
     assert Settings.model_fields["DEMO_DATASET"].default == DEFAULT
 
 
+DEMO_BODY = {"period_start": "2024-01-01", "period_end": "2024-12-31", "dataset": "demo"}  # 与任何数据集都无关的期间
+
+
 async def test_demo_created_with_any_period() -> None:
     """验收 4, 8: demo (Numbat) 不自带期间, 不比较: 用与任何数据集都无关的期间建项目 201, 项目期间为请求值,
-    跑到 ACC-01."""
+    跑到 ACC-01. 不带 working_language 时项目与各次执行都是 en (需求 R339 验收 1, 3), 总览没有要标注的执行."""
     runner = demo_runner()
     async with api_client(runner) as client:
-        body = {"period_start": "2024-01-01", "period_end": "2024-12-31", "dataset": "demo"}
-        created = await client.post("/api/v1/engagements", json=body)
+        created = await client.post("/api/v1/engagements", json=DEMO_BODY)
         assert created.status_code == 201, created.text
         eid = created.json()["engagement"]["id"]
         await wait_idle(runner, eid)
@@ -120,6 +87,27 @@ async def test_demo_created_with_any_period() -> None:
     engagement = overview["engagement"]
     assert (engagement["period_start"], engagement["period_end"]) == ("2024-01-01", "2024-12-31")
     assert (engagement["dataset"], overview["current_gate"]) == ("demo", "ACC-01")
+    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
+    assert engagement["working_language"] == "en" and runs and {run.language for run in runs} == {"en"}
+    assert overview["run_languages"] == {}
+
+
+async def test_demo_created_in_chinese() -> None:
+    """需求 R339 验收 1, 3: 带 working_language zh 建项目, 项目与跑到 ACC-01 的各次执行都是 zh. 总览的
+    run_languages 只给生成语言与当前工作语言不同的执行 (审核 R339-09): 都是 zh 时为空, 改为 en 后列出这些执行."""
+    runner = demo_runner()
+    async with api_client(runner) as client:
+        created = await client.post("/api/v1/engagements", json={**DEMO_BODY, "working_language": "zh"})
+        assert created.status_code == 201, created.text
+        eid = created.json()["engagement"]["id"]
+        await wait_idle(runner, eid)
+        before = (await client.get(f"/api/v1/engagements/{eid}")).json()
+        changed = await client.put(f"/api/v1/engagements/{eid}/working-language", json={"language": "en"})
+        after = (await client.get(f"/api/v1/engagements/{eid}")).json()
+    runs = await runner.deps.output_store.latest(eid, ProcedureRun)
+    assert before["engagement"]["working_language"] == "zh" and runs and {run.language for run in runs} == {"zh"}
+    assert before["run_languages"] == {} and changed.status_code == 200
+    assert after["run_languages"] == {run.id: "zh" for run in runs}
 
 
 @needs_snapshot

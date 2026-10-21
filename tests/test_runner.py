@@ -99,6 +99,26 @@ async def test_start_returns_while_running_then_stops_at_acc01() -> None:
     assert snapshot.next == ("gate_acc01",)
 
 
+async def test_runs_take_the_working_language_when_built() -> None:
+    """需求 R339 验收 3: 执行记录的 language 为建它时项目的工作语言. 跑到 ACC-01 的执行都是 en; 停在闸门时改为 zh,
+    批准之后新建的执行 (到 PLN-01/03) 都是 zh, 之前的执行不变."""
+    runner, store = make_runner()
+    await runner.start(EID)
+    await wait_idle(runner, EID)
+    before = {run.id: run.language for run in await store.latest(EID, ProcedureRun)}
+    assert before and set(before.values()) == {"en"}
+
+    assert await runner.deps.engagement_store.set_working_language(EID, "zh") == "en"
+    await GraphDecisionSubmit(runner.app, runner.deps, runner).submit(EID, acc01_decision(GateVerdict.approve))
+    await wait_idle(runner, EID)
+
+    runs = {run.id: run.language for run in await store.latest(EID, ProcedureRun)}
+    assert {rid: runs[rid] for rid in before} == before
+    after = {rid: language for rid, language in runs.items() if rid not in before}
+    assert after and set(after.values()) == {"zh"}
+    assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
+
+
 async def test_start_saves_fixed_procedures_v1() -> None:
     runner, store = make_runner()
 

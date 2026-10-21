@@ -4,7 +4,7 @@
 """
 
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -24,17 +24,22 @@ from backend.contracts.models import (
     AuditObjective,
     ClientProfile,
     Confirmation,
+    CorrectionNotice,
     Decision,
     DocumentType,
     Engagement,
+    Engine,
     Judgment,
     Misstatement,
+    MisstatementStatus,
     Phase,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
     ReviewRecord,
     ReviewTask,
+    RulePopulation,
+    RunPopulation,
     RunStatus,
     RunTrigger,
     TargetType,
@@ -64,12 +69,13 @@ from backend.orchestration.merge import (
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
-from backend.orchestration.waits import data_payload, human_payload, inputs_payload, review_payload
+from backend.orchestration.waits import correction_payload, data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
-from backend.services.features import AUTONOMY, COLLAB, PLANNING
+from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
-from backend.services.review_queue import ReviewQueue
+from backend.services.review_queue import RERUNNABLE, ReviewQueue
+from backend.services.staleness import current_results
 
 logger = logging.getLogger(__name__)
 DATA_READY = "data_ready"  # 确认数据已齐后交给 p1_await_data 的恢复值; 节点不读它, 以 Store 中的确认为准
@@ -97,6 +103,23 @@ def next_run_no(procedure_id: str, runs: list[ProcedureRun]) -> int:
 def run_id_of(procedure_id: str, run_no: int) -> str:
     """执行记录的 ID (接口文档第 0 节)."""
     return f"RUN-{procedure_id}-{run_no}"
+
+
+def population_id(run_id: str) -> str:
+    """一次执行的被测总体的 ID (接口文档第 0 节, 需求 R324)."""
+    return f"POP-{run_id}"
+
+
+def run_population(
+    template: ProcedureTemplate, run: ProcedureRun, populations: list[RulePopulation] | None
+) -> RunPopulation | None:
+    """一次执行要写入 Store 的被测总体 (需求 R324): 规则程序 (engine rule) 经规则引擎执行 (populations 不为空, 见
+    agents.base.AgentOutput) 且 run (片段中本次执行的终态) 成功时, 为规则引擎记下的各规则总体; 其余为空: 执行失败 (含
+    A1 代写的失败片段), 不经规则引擎 (如测试的脚本 Agent), 判断, 抽取与闸门程序 (对象清单由 Store 推出,
+    services.populations)."""
+    if template.engine is not Engine.rule or populations is None or run.status is not RunStatus.succeeded:
+        return None
+    return RunPopulation(id=population_id(run.id), run_id=run.id, procedure_id=run.procedure_id, rules=populations)
 
 
 def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
@@ -129,10 +152,11 @@ def build_run(
     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
     为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
     本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
-    记录.
+    记录. language 取项目当时的工作语言 (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
     """
     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
-    return next_run(procedure.id, state["procedure_runs"], params, started_at)
+    run = next_run(procedure.id, state["procedure_runs"], params, started_at)
+    return run.model_copy(update={"language": engagement.working_language})
 
 
 def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datetime) -> StatePatch:
@@ -201,20 +225,21 @@ def check_collected(
 
 
 def failed_tasks(patch: StatePatch) -> list[ReviewTask]:
-    """片段里的 failed 任务 (整次失败时 A1 建的, 或 Agent 建的单对象失败任务), 不论是否已决定."""
-    return [task for task in patch.get("review_tasks", []) if task.kind is TaskKind.failed]
+    """片段里可重跑的失败任务 (review_queue.RERUNNABLE: 整次失败时 A1 建的, Agent 建的单对象 failed 任务, 带规则例外
+    的对象判断失败留下的 unattributed 任务, 需求 R347), 不论是否已决定. 节点内等待时它们同属一组 (Q17)."""
+    return [task for task in patch.get("review_tasks", []) if task.kind in RERUNNABLE]
 
 
 def rerun_subjects(group: list[ReviewTask]) -> list[str]:
-    """rerun 决定关闭的一组 failed 任务要重判的对象 (Q17 一轮失败算一组, 整组重跑): 各任务的 subject_id 去重排序;
-    其中有整次失败的任务 (subject_id 为空) 时为空, 整条重跑."""
+    """rerun 决定关闭的一组可重跑任务 (failed, unattributed) 要重判的对象 (Q17 一轮失败算一组, 整组重跑): 各任务的
+    subject_id 去重排序; 其中有整次失败的任务 (subject_id 为空) 时为空, 整条重跑."""
     if any(t.subject_id is None for t in group):
         return []
     return sorted({t.subject_id for t in group if t.subject_id is not None})
 
 
 # 各图节点依次执行的 P2 以外程序 (接口文档第 3 节). 节点按它执行 (只取程序包中有的, 见 node_procedures),
-# 恢复补做按它确定同一节点内复核决定的先后
+# 恢复补做按它确定同一节点内复核决定的先后. 按功能取用 node_table
 NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "p0_intel": ("ACC-04",),
     "p1_ingest": ("DOC-04",),
@@ -223,17 +248,39 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
     "completion": ("FIN-04",),
     "report_draft": ("RPT-03",),
 }
+# 功能 misstatement 打开时的完成阶段 (需求 R160, 设计稿 v2.1 第 7.2 节; 规格书第 10 节 P3 的顺序: 分类, 沟通, 等待更正,
+# 更正验证, PLN-19 重评, FIN-04 累计, FIN-15 复核, FIN-02 持续经营; Issue #46 起没有 FIN-12 报表检查), 覆盖
+# NODE_PROCEDURES 的同名节点: FIN-04 改在 summarize, completion 只执行 FIN-02. 程序库还没有的程序 (由错报闭环, 计划,
+# 签字前各需求加) 照列, 节点只执行程序包中有的; 分录段的 GEN-05 增量扫描由 R194 加在 verify_correction 的 FIN-09 之前
+MISSTATEMENT_NODES: dict[str, tuple[str, ...]] = {
+    "misstatement_triage": ("FIN-03",),
+    "communicate": ("FIN-08",),
+    "verify_correction": ("FIN-09",),
+    "p3_reassess": ("PLN-19",),
+    "summarize": ("FIN-04",),
+    "final_review": ("FIN-15",),
+    "completion": ("FIN-02",),
+}
+
+
+def node_table(features: Collection[str]) -> Mapping[str, tuple[str, ...]]:
+    """功能集下各图节点依次执行的程序: NODE_PROCEDURES, 功能 misstatement 打开时以 MISSTATEMENT_NODES 覆盖同名节点.
+    节点 (node_procedures) 与恢复补做 (recovery.catch_up_review) 共用."""
+    return {**NODE_PROCEDURES, **(MISSTATEMENT_NODES if MISSTATEMENT in features else {})}
 
 
 def node_procedures(node: str, pack: Iterable[Procedure], library: ProcedureLibrary) -> list[str]:
-    """该图节点要执行的程序: 按 NODE_PROCEDURES 的顺序, 只取程序包中有的. 挂了功能名的程序 (模板 feature 不为空)
-    不在程序包中时跳过: 功能未启用时不在固定集里 (services/features.py), 旧项目的程序包也可能缺后来新增的程序.
-    基线程序 (feature 为空) 不在程序包中是程序包出错, 抛 LookupError, 不静默跳过."""
+    """该图节点要执行的程序: 按 node_table (程序库的功能集) 的顺序, 只取程序包中有的. 挂了功能名的程序 (模板 feature
+    不为空) 与程序库还没有的程序不在程序包中时跳过: 功能未启用时不在固定集里 (services/features.py), 旧项目的程序包也
+    可能缺后来新增的程序. 基线程序 (feature 为空) 不在程序包中是程序包出错, 抛 LookupError, 不静默跳过."""
     present = {p.id for p in pack}
-    missing = [pid for pid in NODE_PROCEDURES[node] if pid not in present and library.load(pid).feature is None]
+    order = node_table(library.features)[node]
+    missing = [
+        pid for pid in order if pid not in present and library.enabled(pid) and library.load(pid).feature is None
+    ]
     if missing:
         raise LookupError(f"{node}: 程序包中没有基线程序 {', '.join(missing)}")
-    return [pid for pid in NODE_PROCEDURES[node] if pid in present]
+    return [pid for pid in order if pid in present]
 
 
 async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate, run: ProcedureRun) -> StatePatch:
@@ -302,9 +349,9 @@ async def stored_outputs(deps: AgentDeps, eid: str, template: ProcedureTemplate,
     # 项目里只有一份 (singleton) 或按程序取 (by_procedure) 的产出取的是最新版本, 回退到较早的检查点重放时可能来自
     # 本程序之后的执行 (如 FIN-01 驳回后 FIN-04 的第 2 次); 把之后的执行一并取回, 下一次执行才会接着取号,
     # 不再撞上已有的执行而重放出同一版. 前提: 模板 outputs 含这类字段 (取回方式在 LATER_RUNS 中) 的程序, 成功的执行
-    # 不建单对象 failed 任务; 节点内 rerun 只由这种任务触发, 所以之后的执行只可能来自之后的节点执行, 正常重放时没有
-    # (成功后建别的任务并在节点内等人不影响). 否则 "第 1 次成功并留 failed 任务 → 节点内 rerun 出第 2 次 → 第 2 次
-    # 等人" 后恢复, 从头重放第 1 次会取回仍在等人的第 2 次, 报下面的错.
+    # 不建单对象的可重跑任务 (failed, unattributed); 节点内 rerun 只由这种任务触发, 所以之后的执行只可能来自之后的节点
+    # 执行, 正常重放时没有 (成功后建别的任务并在节点内等人不影响). 否则 "第 1 次成功并留可重跑任务 → 节点内 rerun 出
+    # 第 2 次 → 第 2 次等人" 后恢复, 从头重放第 1 次会取回仍在等人的第 2 次, 报下面的错.
     # 之后的执行还有待决任务 (那次节点正在等人) 时, 重放恢复不了那次等待, 报错要求从最新的检查点恢复
     if any(field in patch and FIELD_REPLAY[field] in LATER_RUNS for field in fields):
         later = await store.latest(eid, ProcedureRun, procedure_id=run.procedure_id)
@@ -486,6 +533,64 @@ def merge_patch(result: StatePatch, patch: StatePatch) -> None:
         result[key] = [*result.get(key, []), *value] if key in REDUCERS else value
 
 
+def awaiting_correction(state: EngagementState) -> list[str]:
+    """等管理层更正的错报 (需求 R162): 当前结果中 communicated 且不须重新沟通的, 按 ID 排序 (等待载荷的
+    misstatement_ids). 纯函数."""
+    return sorted(
+        m.id
+        for m in current_results(state).misstatements
+        if m.status is MisstatementStatus.communicated and not m.needs_recommunication
+    )
+
+
+def after_notice(misstatement: Misstatement, notice: CorrectionNotice) -> Misstatement:
+    """按更正通知写出的错报新版本 (接口文档第 2.5 节迁移表): adjustments_posted 转 verifying, stop_waiting 记
+    uncorrected (stopped_waiting); 都记 correction_notice_id, needs_recommunication 置假. 经 model_validate 重建.
+    纯函数."""
+    posted = notice.kind == "adjustments_posted"
+    changes = {
+        "status": MisstatementStatus.verifying if posted else MisstatementStatus.uncorrected,
+        "uncorrected_basis": None if posted else "stopped_waiting",
+        "correction_notice_id": notice.id,
+        "needs_recommunication": False,
+        "version": misstatement.version + 1,
+    }
+    return Misstatement.model_validate({**misstatement.model_dump(), **changes})
+
+
+async def apply_notice(
+    deps: AgentDeps, engagement: Engagement, misstatements: Sequence[Misstatement], notice: CorrectionNotice
+) -> list[Misstatement]:
+    """读回的更正通知生效 (需求 R162, 一次审计师动作一个事务): adjustments_posted 时载入更正分录
+    (DatasetLoader.load_adjustments, 凭证号为空时传 None 即载入全部未载入的, 写入人为提交通知的审计师) 与所列错报的
+    新版本 (after_notice, 写入者 A1) 在同一事务内写入 (Postgres 下载入的事务并入外层); stop_waiting 只写错报. 提交后
+    补写本项目数据版本的 data 留痕 (data_service.version_entries, 同 DataService.backfill_trails; 同键已有的跳过):
+    这次载入写出的总账新版本随即有 sync 留痕, 写入人同上; 写 Store 后写留痕前被杀的, 节点重放时补上 (第 1 轮审核
+    R162-01). misstatements: 状态中的错报, 所列的取这里的版本. 返回写入后的
+    错报 (重放时为 Store 已存的那一版); Store 已有内容不同的同版本抛 VersionConflict 整体回滚."""
+    # data_service 引用 orchestration (nodes, runner), 用时再导入
+    from backend.services.data_service import version_entries
+
+    eid, store = engagement.id, deps.output_store
+    by_id = {m.id: m for m in misstatements}
+    updated = [after_notice(by_id[mid], notice) for mid in notice.misstatement_ids]
+    posted = notice.kind == "adjustments_posted"
+    async with store.transaction(eid):
+        if posted:
+            assert engagement.dataset is not None  # DecisionSubmit 已查数据集有可载入的更正分录
+            entry_nos = notice.adjustment_entry_nos or None
+            await deps.datasets.load_adjustments(eid, engagement.dataset, entry_nos, actor=notice.decided_by)
+        written = cast(list[Misstatement], await store.put(eid, updated, actor=AgentId.A1))
+        clashes = [f"{m.id} v{m.version}" for m, w in zip(updated, written, strict=True) if m != w]
+        if clashes:
+            raise VersionConflict(
+                f"更正通知 {notice.id} 写出的错报与 Store 中已有的同版本内容不同: {', '.join(clashes)}"
+            )
+    if posted:
+        await record_transitions(deps.trail, await version_entries(deps.data, eid))
+    return written
+
+
 class GraphNodes:
     """主图的全部节点函数, 持有依赖与各 Agent 实例."""
 
@@ -496,18 +601,21 @@ class GraphNodes:
         check_outputs(deps.library)  # 模板声明的产出字段须在写入范围内且登记了重放取回方式
         check_inputs(deps.library, NODE_PROCEDURES["p1_ingest"])  # 模板 inputs 的写法 (需求 R272)
 
-    async def run_agent(self, agent: ProcedureAgent[Any], ctx: RunContext) -> tuple[StatePatch, AgentId]:
-        """调 Agent 并校验它的片段, 返回 (要写入的片段, 写入者).
+    async def run_agent(
+        self, agent: ProcedureAgent[Any], ctx: RunContext
+    ) -> tuple[StatePatch, AgentId, list[RulePopulation] | None]:
+        """调 Agent (ProcedureAgent.outcome) 并校验它的片段, 返回 (要写入的片段, 写入者, 被测总体).
 
-        正常时为 Agent 的片段与写入者 (writer_of). Agent 抛异常 (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃,
-        返回 A1 代写的失败片段 (fail_run) 与 A1. failure_reason 为 "异常类名: 异常文本",
-        校验不过为 "merge_rejected: 原因".
+        正常时为 Agent 的片段, 写入者 (writer_of) 与规则引擎记下的被测总体 (不经规则引擎为空, 需求 R324). Agent 抛异常
+        (含 RuleError) 或片段校验不过时, Agent 的片段整体丢弃, 返回 A1 代写的失败片段 (fail_run), A1 与空的总体.
+        failure_reason 为 "异常类名: 异常文本", 校验不过为 "merge_rejected: 原因".
         LangGraph 的中断等控制流信号 (GraphBubbleUp) 不算失败, 照常抛出.
         """
         writer = writer_of(ctx.template, agent)
         procedure_id, run_id = ctx.run.procedure_id, ctx.run.id
         try:
-            patch = await agent.run(ctx)
+            output = await agent.outcome(ctx)
+            patch = output.patch
             if manual_program(ctx.template):  # 人工程序的执行片段是派发片段 (需求 R92)
                 check_dispatch(patch, writer=writer, procedure_id=procedure_id, run_id=run_id, state=ctx.state)
             else:
@@ -522,8 +630,8 @@ class GraphNodes:
         except Exception as e:
             reason = f"{type(e).__name__}: {e}"
         else:
-            return patch, writer
-        return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1
+            return patch, writer, output.populations
+        return fail_run(self.deps.queue, ctx.run, reason, datetime.now(UTC)), AgentId.A1, None
 
     async def perform(
         self, state: EngagementState, engagement: Engagement, procedure_id: str, instance: str | None = None
@@ -532,9 +640,9 @@ class GraphNodes:
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
-        返回程序编号, 执行记录 ID, 写入者与要写入的片段.
+        返回程序编号, 执行记录 ID, 写入者与要写入的片段; 规则程序成功执行时另有被测总体 (见 run_population).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
-        取回的执行是失败的, 写入者为 A1.
+        取回的执行是失败的, 写入者为 A1. 重放不带被测总体: 已与执行记录终态一起写过.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
@@ -560,11 +668,14 @@ class GraphNodes:
         procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+        population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
                 engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
             )
-            patch, writer = await self.run_agent(agent, ctx)
+            patch, writer, populations = await self.run_agent(agent, ctx)
+            ended = next(r for r in patch["procedure_runs"] if r.id == procedure_run.id)
+            population = run_population(template, ended, populations)
         else:
             patch = await stored_outputs(self.deps, engagement.id, template, stored_run)
             # 取回的对象各自当初校验过, 拼成片段后再查一遍外键; 不成立说明 Store 与检查点对不上, 作节点错误
@@ -572,7 +683,10 @@ class GraphNodes:
             if problems:
                 raise RuntimeError(f"重放 {stored_run.id} 取回的产出引用不完整: {'; '.join(problems)}")
             writer = AgentId.A1 if stored_run.status is RunStatus.failed else writer_of(template, agent)
-        return StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
+        staged = StagedResult(procedure_id=procedure_id, run_id=procedure_run.id, writer=writer, patch=patch)
+        if population is not None:
+            staged["population"] = population
+        return staged
 
     async def attempt(
         self,
@@ -589,8 +703,9 @@ class GraphNodes:
         dispute, failed 等, 或之前各次执行留下而尚未决定的, 见 pending_tasks) 为 awaiting_human (功能 collab 打开且
         有待决的 dispute 任务时为 in_dispute, 见 waiting_status), 否则为 completed (闸门程序为 planned);
         rerun_subject_ids 都清空 (只重判的对象只对紧接着的这一次执行有效).
-        之前各次执行留下的 failed 任务都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
+        之前各次执行留下的可重跑任务 (failed, unattributed) 都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
+        规则程序成功执行的被测总体 (需求 R324) 在同一事务内写入, 不并入状态.
         提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
         """
         result = await self.perform(state, engagement, procedure_id)
@@ -612,6 +727,8 @@ class GraphNodes:
             stored = await save_outputs(
                 self.deps.output_store, engagement.id, patch, actor=writer, evidence_store=self.deps.evidence_store
             )
+            if "population" in result:
+                await self.deps.output_store.put(engagement.id, [result["population"]], actor=writer)
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
             if phase is not None:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
@@ -673,11 +790,11 @@ class GraphNodes:
     async def read_rerun(
         self, eid: str, record_id: str, failed: dict[str, ReviewTask], waiting: Procedure
     ) -> tuple[ReviewRecord, Procedure]:
-        """读回审计师对某个 failed 任务的决定, 以及决定写出的程序版本. 返回 (决定, 程序版本).
+        """读回审计师对某个可重跑任务 (failed, unattributed) 的 rerun 决定与它写出的程序版本. 返回 (决定, 程序版本).
 
-        failed: 正在等待的这一轮执行建的 failed 任务, 同属一组 (Q17; 已由 manual_result 关闭的已移出, 需求 R158), 决定
-        须针对其中之一: 第 k 次等待只接受针对第 k 轮的决定. 已读回过的决定 ID 被再次送来 (LangGraph 沿用上次的恢复值)
-        时, execute 在调用前就跳过, 不到这里.
+        failed: 正在等待的这一轮执行建的可重跑任务 (failed_tasks: failed, unattributed), 同属一组 (Q17; 已由 rerun
+        以外的决定关闭的已移出, 需求 R158, R347), 决定须针对其中之一: 第 k 次等待只接受针对第 k 轮的决定. 已读回过的
+        决定 ID 被再次送来 (LangGraph 沿用上次的恢复值) 时, execute 在调用前就跳过, 不到这里.
         waiting: 等待时写出的 awaiting_human 程序版本. 程序版本取 waiting.version + 1, 即 rerun 决定在同一事务里写出的
         那一版 (executing, 含合并后的 params 与 rerun_subject_ids), 不取最新版本: 节点重放时会依次经过多次等待,
         最新版本可能是之后的决定写出的. 这一版的 rerun_subject_ids 须覆盖整组 (见 rerun_subjects), 否则决定没有
@@ -717,11 +834,12 @@ class GraphNodes:
         读回的决定); 要等时 interrupt() 暂停, 审计师对本程序的任务提交决定后以 Command(resume=决定 ID) 恢复, 节点从头
         执行: 已结束的执行按重放规则取 Store, 各次 interrupt() 依次取回已提交的决定 ID. 取回的决定:
         - rerun (或针对 failed 任务而不是 manual_result 的决定): 读回它写出的程序版本 (见 read_rerun), 以 run_no + 1
-          再执行一次. 一次失败留下多个任务时算一组 (Q17): 对其中任一个 rerun 即整组关闭, 下一轮一起重跑这组里仍待决
-          的对象; 第 k 轮的等待只接受针对第 k 轮任务的 rerun.
+          再执行一次. 一次执行留下的可重跑任务 (failed, unattributed, 需求 R347) 算一组 (Q17): 对其中任一个 rerun 即
+          整组关闭, 下一轮一起重跑这组里仍待决的对象; 第 k 轮的等待只接受针对第 k 轮任务的 rerun.
         - 其余: 从 Store 整体读回本程序的对象 (见 read_review), 与提交顺序无关. 其中针对 failed 任务的 manual_result
-          (模板 manual_result_allowed, 需求 R158) 已由 DecisionSubmit 建成人工判断并关闭该任务, 同样整体读回; 该任务
-          移出本轮的组, 之后同轮其余失败任务的 rerun 只重跑组内其余对象 (同 DecisionSubmit 关闭整组时只取待决的).
+          (模板 manual_result_allowed, 需求 R158) 已由 DecisionSubmit 建成人工判断并关闭该任务, 同样整体读回. 读回的
+          一切 rerun 以外的决定 (failed 任务的 manual_result, unattributed 任务的推翻与认定错报等) 都把该任务移出本轮
+          的组, 之后同轮其余可重跑任务的 rerun 只重跑组内其余对象 (同 DecisionSubmit 关闭整组时只取待决的).
         不再等时节点结束: 这一轮的程序版本当时就不等人时用它, 当时在等时取 Store 最新版本 (DecisionSubmit 重算出的).
         返回历次执行写入的片段 (含失败的执行与已决定的任务), 读回的决定与对象, 以及最终的完整程序包.
         phase: 节点同时推进的阶段 (见 attempt), 不为空时返回的片段带上它.
@@ -760,7 +878,8 @@ class GraphNodes:
             merge_patch(result, patch)
             waiting = next(p for p in pack if p.id == procedure_id)
             run_id = patch["procedure_runs"][0].id
-            # 这一轮执行建的 failed 任务, 同属一组 (Q17); 重放时取回的是最新版本 (可能已 decided), 也算在内.
+            # 这一轮执行建的可重跑任务 (failed, unattributed), 同属一组 (Q17); 重放时取回的是最新版本 (可能已
+            # decided), 也算在内.
             # 按 run_id 过滤作防御: 单份产出程序的成功执行重放时, stored_outputs 会把之后各轮的执行与任务一并取回
             failed = {task.id: task for task in failed_tasks(patch) if task.run_id == run_id}
             while await self.still_waiting(eid, procedure_id, [*in_checkpoint, *earlier, *delivered]):
@@ -782,9 +901,10 @@ class GraphNodes:
                     raise LookupError(f"ReviewRecord {record_id} not found")
                 delivered.append(record_id)
                 task = await store.get(eid, ReviewTask, record.task_id)
-                # 针对 failed 任务的决定 (或找不到任务的) 走 rerun 的读回, 由 read_rerun 查它须为 rerun 且针对本轮;
-                # 复核队列允许的 failed 任务的 manual_result (带对象且模板 manual_result_allowed, 需求 R158) 除外, 同
-                # 其余决定整体读回. 整次失败的任务 (没有对象) 收到 manual_result 仍按 read_rerun 报错
+                # rerun (针对可重跑任务: failed, unattributed, 需求 R347), 针对 failed 任务的其余决定 (或找不到任务的)
+                # 走 rerun 的读回, 由 read_rerun 查它须为 rerun 且针对本轮; 复核队列允许的 failed 任务的 manual_result
+                # (带对象且模板 manual_result_allowed, 需求 R158) 除外, 同其余决定 (含 unattributed 的推翻与认定错报)
+                # 整体读回. 整次失败的任务 (没有对象) 收到 manual_result 仍按 read_rerun 报错
                 failed_result = (
                     task is not None
                     and task.kind is TaskKind.failed
@@ -810,8 +930,10 @@ class GraphNodes:
                     break  # 以 run_no + 1 再执行一轮
                 if task.procedure_id != procedure_id:
                     raise ValueError(f"{record_id} 处理的任务 {task.id} 不属于正在等待的 {procedure_id}")
-                if failed_result:  # 该任务出组: 本轮其余失败任务的 rerun 只重跑组内其余对象 (见 read_rerun)
-                    failed.pop(task.id, None)
+                # rerun 以外的决定都把该任务移出本轮的组 (failed 任务的 manual_result, unattributed 任务的推翻与认定
+                # 错报, 需求 R347): 本轮其余可重跑任务的 rerun 只重跑组内其余对象 (见 read_rerun), 同 DecisionSubmit
+                # 关闭整组时只取待决的
+                failed.pop(task.id, None)
                 merge_patch(result, await self.read_review(eid, procedure_id))
                 if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
                     # 只并入派发的执行记录与任务 (整理出的对象可引用它们), 不并入重放按 outputs 取回的对象: 写 Store
@@ -989,7 +1111,8 @@ class GraphNodes:
         被当成复核决定 ID. 这里节点内只有这一个等待, 恢复值不会被别处取走.
         恢复时仍未确认 (绕过 /data/ready 恢复) 抛 LookupError.
 
-        进节点先由 A3 体检 (需求 R15; 体检结果已对应当前数据版本时跳过, 恢复与重放不重复): 缺的必需表各提一份补交
+        进节点先由 A3 体检 (需求 R15; 最近一次体检已不对应当前数据时才补做, 条件见接口文档第 6 节数据体检的时机,
+        恢复与重放不重复): 缺的必需表各提一份补交
         请求, 已确认就绪的 (如数据集载入) 也在这里第一次体检. 体检出错只记日志, 不影响等待与推进.
         """
         eid = state["engagement_id"]
@@ -1138,7 +1261,8 @@ class GraphNodes:
         各项在 fieldwork 中都按派发时的状态校验过, 但同轮几项合起来可能冲突, 如前一项把某例外改出 v2, 后一项仍交回
         v1, 或建了指向 v1 的待决任务. 不过的项丢弃片段, 改为 A1 写的失败执行与 failed 任务 (结束时间沿用原执行的),
         其余项照常写入. 字段归属与本次执行的终态只在 fieldwork 查: A1 的失败片段与重放取回的片段按 Agent 的规则会被误拒.
-        片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs).
+        片段按写入者 put, 含 documents 时在同一事务内写文件状态 (见 save_outputs); 暂存项带被测总体 (规则程序成功
+        执行, 需求 R324) 时同一事务内按写入者写入, 不并入状态, 改为失败项的不写.
         本轮执行过的程序在同一事务内各出一个新版本 (Demo需求文档第 4.1 节): 该程序还有待决的复核任务
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human (功能 collab 打开且有待决的 dispute 任务时为
         in_dispute, 见 waiting_status), 否则为 completed; rerun_subject_ids 清空.
@@ -1156,13 +1280,16 @@ class GraphNodes:
         current = state  # 已并入本轮前面各项的状态, 用来校验后面的项
         async with store.transaction(eid):
             for item in staged:
-                patch, writer = item["patch"], item["writer"]
+                patch, writer, population = item["patch"], item["writer"], item.get("population")
                 problems = [*check_ids(patch, current), *check_refs(patch, current)]
                 if problems:
                     run = next(r for r in patch["procedure_runs"] if r.id == item["run_id"])
                     ended_at = run.ended_at or datetime.now(UTC)
                     patch, writer = fail_run(self.deps.queue, run, str(MergeRejected(problems)), ended_at), AgentId.A1
+                    population = None
                 saved = await save_outputs(store, eid, patch, actor=writer, evidence_store=self.deps.evidence_store)
+                if population is not None:
+                    await store.put(eid, [population], actor=writer)
                 merge_patch(result, saved)
                 current = apply_patch(current, saved)
             tasks = current["review_tasks"]
@@ -1227,12 +1354,57 @@ class GraphNodes:
 
     # ── P3, P4 ──
     async def completion(self, state: EngagementState) -> StatePatch:
-        """P2 结清后进入完成阶段: A9 执行 FIN-04, 产出未更正错报汇总表 SCHEDULE (下一版) 与候选意见.
-
-        阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行一次,
-        出 SCHEDULE 下一版.
+        """功能 misstatement 关闭时: P2 结清后进入完成阶段, A9 执行 FIN-04, 产出未更正错报汇总表 SCHEDULE (下一版) 与
+        候选意见. 阶段置 P3_Completion, 与 FIN-04 的执行写入同一事务 (第 3 节). FIN-01 驳回后回到这里时以 rerun 再执行
+        一次, 出 SCHEDULE 下一版.
+        功能 misstatement 打开时 (需求 R160): 完成阶段的最后一步, 只执行 FIN-02 (node_table), 不写阶段 (已在
+        misstatement_triage 写过); FIN-04 在 summarize.
         """
-        return await self.run_node(state, "completion", phase=Phase.P3_Completion)
+        phase = None if MISSTATEMENT in self.deps.features else Phase.P3_Completion
+        return await self.run_node(state, "completion", phase=phase)
+
+    # 功能 misstatement 打开时的完成阶段各节点 (需求 R160), 执行的程序见 MISSTATEMENT_NODES, 去向见 graph 的路由
+    async def misstatement_triage(self, state: EngagementState) -> StatePatch:
+        """错报分诊: A8 执行 FIN-03, 给未分类的 identified 错报分类. P2 结清后第一次进来时阶段置 P3_Completion, 与
+        FIN-03 的执行写入同一事务; 回流再进来 (完成阶段新认定了错报) 时阶段已是 P3_Completion, 不再写."""
+        phase = None if state["phase"] is Phase.P3_Completion else Phase.P3_Completion
+        return await self.run_node(state, "misstatement_triage", phase=phase)
+
+    async def communicate(self, state: EngagementState) -> StatePatch:
+        """与管理层沟通错报 (FIN-08, 人工程序, 由 R161 加入)."""
+        return await self.run_node(state, "communicate")
+
+    async def await_correction(self, state: EngagementState) -> StatePatch:
+        """等待管理层更正 (需求 R162, 规格书 12.3 AwaitingCorrection): 在节点内 interrupt() 等审计师提交更正通知, 载荷
+        为等更正的错报 (awaiting_correction, 路由只在有 communicated 错报时进入). DecisionSubmit 校验并写入通知后以
+        Command(resume=通知 ID) 恢复, 节点从头执行, 读回通知 (Store) 并生效 (apply_notice). 一次执行只收一份通知:
+        只列了部分错报时, 经 verify_correction 后 after_verify 再回到这里, 载荷只列其余的. 返回错报新版本与该通知."""
+        eid = state["engagement_id"]
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None:
+            raise LookupError(f"Engagement {eid} not found")
+        notice_id = interrupt(correction_payload(awaiting_correction(state), []))
+        notice = await self.deps.output_store.get(eid, CorrectionNotice, notice_id)
+        if notice is None:
+            raise LookupError(f"CorrectionNotice {notice_id} not found")
+        written = await apply_notice(self.deps, engagement, state["misstatements"], notice)
+        return {"misstatements": written, "correction_notices": [notice]}
+
+    async def verify_correction(self, state: EngagementState) -> StatePatch:
+        """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""
+        return await self.run_node(state, "verify_correction")
+
+    async def p3_reassess(self, state: EngagementState) -> StatePatch:
+        """完成阶段重评重要性与风险 (PLN-19, 由计划段加入)."""
+        return await self.run_node(state, "p3_reassess")
+
+    async def summarize(self, state: EngagementState) -> StatePatch:
+        """错报累计: A9 执行 FIN-04, 出 SCHEDULE 下一版; 每轮回流一次, FIN-01 驳回后回到这里重做. 不写阶段."""
+        return await self.run_node(state, "summarize")
+
+    async def final_review(self, state: EngagementState) -> StatePatch:
+        """签字前的最终复核 (FIN-15, 由签字前段加入); 新认定的错报由路由送回分诊."""
+        return await self.run_node(state, "final_review")
 
     async def report_draft(self, state: EngagementState) -> StatePatch:
         """A10 执行 RPT-03, 出审计报告的下一修订 (REPORT-{revision}, 第 1 版); RPT-01 退回后回到这里, 按批注修订,

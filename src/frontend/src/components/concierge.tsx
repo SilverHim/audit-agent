@@ -1,9 +1,14 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from 'cn'
 import { MessageCircle } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { reviewsPresentReviewTaskMutation, reviewsSubmitReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
+import {
+  dataTablePageOptions,
+  reportsGetMisstatementsOptions,
+  reviewsPresentReviewTaskMutation,
+  reviewsSubmitReviewRecordMutation,
+} from '@/client/@tanstack/react-query.gen'
 import type {
   Assertion,
   Decision,
@@ -20,15 +25,28 @@ import type {
 } from '@/client/types.gen'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { ExceptionDetail } from '@/components/exception-detail'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { UpdateFields, UpdatePayload } from '@/components/update-fields'
+import { GeneratedLanguage } from '@/components/working-language'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import {
+  accountOptions,
+  emptyUpdate,
+  misstatementUpdate,
+  type UpdateDraft,
+  updateBase,
+  updateFromPayload,
+  updateKindFor,
+} from '@/lib/misstatements'
 import { formatAud } from '@/lib/money'
 import {
   cardLayout,
+  failureParts,
   needsPresentation,
   pointerKey,
   presentationFor,
@@ -226,41 +244,27 @@ function usePresentation(eid: string, taskId: string): TaskPresentation | undefi
   return presentationFor(data, taskId)
 }
 
-// 失败原因 (呈递的 failure): 带对象的失败给调用次数, 没通过的校验与错误; 无归因的例外给规则与明细.
-// 整次执行失败的原因 (failure_reason) 已在目标上, 不重复
+// 失败原因 (呈递的 failure, 显示哪几段见 lib/presentation.failureParts): 无归因的例外先给规则与明细, 再与带对象的
+// 失败一样给调用次数, 没通过的校验与错误
 function FailureDetail({ failure }: { failure: PresentedFailure | null | undefined }) {
   const { t } = useI18n()
   const p = t.judgment.presentation
-  if (failure?.source === 'llm_call') {
-    return (
-      <div className="flex flex-col gap-1.5" data-testid="presented-failure">
-        {failure.attempts != null && failure.level_failed ? (
-          <span>{p.attempts(failure.attempts, p.levels[failure.level_failed])}</span>
-        ) : null}
-        {failure.errors?.length ? (
-          <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] text-secondary-foreground" lang="en">
-            {failure.errors.map((error) => (
-              <li key={error}>{error}</li>
-            ))}
-          </ul>
-        ) : null}
-      </div>
-    )
-  }
-  if (failure?.source === 'exception') {
-    const detail = Object.entries(failure.detail ?? {})
-    return (
-      <div className="flex flex-col gap-1" data-testid="presented-failure">
-        {failure.rule_id ? <span>{p.rule(failure.rule_id)}</span> : null}
-        {detail.length ? (
-          <Code className="text-[12.5px] text-secondary-foreground">
-            {detail.map(([key, value]) => `${key}: ${String(value)}`).join(' · ')}
-          </Code>
-        ) : null}
-      </div>
-    )
-  }
-  return null
+  const parts = failureParts(failure)
+  if (!parts) return null
+  return (
+    <div className="flex flex-col gap-1.5" data-testid="presented-failure">
+      {parts.rule?.id ? <span>{p.rule(parts.rule.id)}</span> : null}
+      {parts.rule ? <ExceptionDetail detail={parts.rule.detail} /> : null}
+      {parts.call ? <span>{p.attempts(parts.call.attempts, p.levels[parts.call.level])}</span> : null}
+      {parts.errors.length ? (
+        <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-[13px] text-secondary-foreground" lang="en">
+          {parts.errors.map((error) => (
+            <li key={error}>{error}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
 }
 
 // 争议两方的一栏: 两栏同一样式, 不标哪方更有理. proposals 为真时另显示本方的建议动作与错报草稿 (见
@@ -386,6 +390,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
         {view.task.procedure_id}
       </Code>
       <span className="font-semibold">{proc}</span>
+      {isJudgment(target) ? <GeneratedLanguage eid={eid} runId={target.run_id} /> : null}
       <span className="flex-1" />
       <StatusPill tone={tier === 'full_review' ? 'risk' : tier === 'check_evidence' ? 'warn' : 'accent'}>
         {t.tiers[tier]}
@@ -482,6 +487,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
           {target.conclusion}
         </p>
       </div>
+      {target.misstatement_update ? <UpdatePayload update={target.misstatement_update} /> : null}
       <div className="flex flex-col gap-2.5 border-line-soft border-b px-4 py-4">
         <SectionLabel>{t.judgment.reasoning(target.reasoning_chain.length)}</SectionLabel>
         <ReasoningChain eid={eid} steps={target.reasoning_chain} />
@@ -672,6 +678,11 @@ export function ReviewDecisionCard({
     view.allowed_decisions.length === 1 ? view.allowed_decisions[0] : null,
   )
   const [draft, setDraft] = useState<ReviewDraft>(emptyDraft)
+  // 人给的错报更新载荷 (需求 R159, R163): 以判断带的 AI 载荷为起点, 可改
+  const carried = judgment?.misstatement_update ?? null
+  const [updateDraft, setUpdateDraft] = useState<UpdateDraft>(() =>
+    carried ? updateFromPayload(carried) : emptyUpdate(),
+  )
   const [dispute, setDispute] = useState<DisputeChoice | null>(null)
   const [withMisstatement, setWithMisstatement] = useState(false)
   const [consulted, setConsulted] = useState(false)
@@ -682,6 +693,12 @@ export function ReviewDecisionCard({
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
+  const updateKind = updateKindFor(view, decision)
+  // 失败与无归因任务的载荷依据错报的当前版本, 从错报列表取; 判断带载荷时不用
+  const misstatements = useQuery({
+    ...reportsGetMisstatementsOptions({ path: { eid } }),
+    enabled: Boolean(updateKind) && !carried,
+  })
   const isDispute = (decision as string | null) === 'dispute_resolution'
   const collabDispute = isDispute && collab
   const rule = isDispute ? attachRule(view, dispute) : 'optional'
@@ -716,11 +733,21 @@ export function ReviewDecisionCard({
     }
     const body = buildRecord(view, decision, draft, t)
     if (typeof body === 'string') return toast.error(body)
-    submit.mutate({ path: { eid }, body })
+    if (!updateKind) return submit.mutate({ path: { eid }, body })
+    const base = updateBase(view, misstatements.data?.items ?? [])
+    const update = misstatementUpdate(updateKind, base, updateDraft, t)
+    if (typeof update === 'string') return toast.error(update)
+    submit.mutate({ path: { eid }, body: { ...body, misstatement_update: update } })
   }
 
   const busy = disabled || submit.isPending
   const showsMisstatement = decision === 'misstatement' || (isDispute && attaching)
+  // 科目代码从本项目科目表选 (复用账表接口; 认定错报时才取)
+  const accounts = useQuery({
+    ...dataTablePageOptions({ path: { eid, kind: 'accounts' }, query: { limit: 200 } }),
+    enabled: showsMisstatement,
+  })
+  const codes = accountOptions(accounts.data?.rows ?? [], draft.accountCode)
   const copies = showsMisstatement ? copySources(judgment, dispute, collabDispute) : []
   const needsConclusion =
     decision === 'override' || decision === 'manual_result' || (isDispute && dispute === 'neither')
@@ -875,6 +902,21 @@ export function ReviewDecisionCard({
                 onChange={(event) => set({ account: event.target.value })}
               />
             </Field>
+            <Field id={`ms-code-${view.task.id}`} label={t.card.msFields.accountCode}>
+              <select
+                id={`ms-code-${view.task.id}`}
+                className={SELECT}
+                value={draft.accountCode}
+                onChange={(event) => set({ accountCode: event.target.value })}
+              >
+                <option value="">{t.card.msFields.noAccountCode}</option>
+                {codes.map((item) => (
+                  <option key={item.code} value={item.code}>
+                    {item.name ? `${item.code} · ${item.name}` : item.code}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field id={`ms-assertion-${view.task.id}`} label={t.card.msFields.assertion}>
               <select
                 id={`ms-assertion-${view.task.id}`}
@@ -914,6 +956,16 @@ export function ReviewDecisionCard({
             </Field>
           </div>
         </div>
+      ) : null}
+
+      {updateKind ? (
+        <UpdateFields
+          id={`update-${view.task.id}`}
+          kind={updateKind}
+          value={updateDraft}
+          onChange={(patch) => setUpdateDraft((current) => ({ ...current, ...patch }))}
+          disabled={busy}
+        />
       ) : null}
 
       {decision === 'rerun' ? (

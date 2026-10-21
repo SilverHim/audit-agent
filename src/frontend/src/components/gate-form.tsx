@@ -29,6 +29,8 @@ import { AbnLookupNote } from '@/components/abn-lookup-note'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { ExceptionDetail } from '@/components/exception-detail'
+import { MisstatementList } from '@/components/misstatement-lifecycle'
 import {
   CheckIcon,
   checkTone,
@@ -49,8 +51,10 @@ import { requestTitle } from '@/lib/data-api'
 import { decisionCardKey, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { inapplicable, initialChoice, selectableCandidates } from '@/lib/materiality'
 import { formatAud, formatPct } from '@/lib/money'
 import { initialConfirmation, planApprovalBody, planDecisionErrorText } from '@/lib/plan'
+import { reportPart } from '@/lib/report-sections'
 import { procedureName } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
 import type { Messages } from '@/locales/en'
@@ -73,11 +77,12 @@ export const REPORT_SECTIONS: ReportSection[] = [
 const FIN_OPINIONS: OpinionType[] = ['unqualified', 'qualified', 'adverse', 'disclaimer']
 const RISK_LEVELS: RiskLevel[] = ['low', 'medium', 'high', 'significant']
 const VERDICTS: GateVerdict[] = ['approve', 'reject', 'insufficient_info']
+// 当前闸门的材料; 不在闸门时 GET /gate 回 null (需求 R346)
 export function useGate(eid: string, enabled = true) {
   return useQuery({
     ...gatesGetGateOptions({ path: { eid } }),
     enabled,
-    retry: (count, error) => !isApiCode(error, 'NOT_AT_GATE') && !isApiCode(error, 'NOT_FOUND') && count < 1,
+    retry: (count, error) => !isApiCode(error, 'NOT_FOUND') && count < 1,
   })
 }
 
@@ -154,59 +159,6 @@ function PercentInput({
         %
       </span>
     </div>
-  )
-}
-
-type FluctuationBasis = 'balance_sheet' | 'profit_or_loss'
-
-// PLN-07 A01 的波动 (输出列见 PLN-07.yaml): 比较基数 opening 为资产负债类的期初 (含留存收益的结转) 或损益类的上期,
-// 变动率 change 相对它, 基数为 0 时为空; 只在一期出现的科目, 另一期的余额为空 (显示 "—")
-function FluctuationDetail({
-  account,
-  basis,
-  opening,
-  current,
-  change,
-}: {
-  account: string
-  basis: FluctuationBasis
-  opening: number
-  current: number | null
-  change: number | null
-}) {
-  const { t } = useI18n()
-  const labels = t.planning.fluctuation
-  return (
-    <span className="text-secondary-foreground">
-      <span lang="en">{account}</span> · {labels.basis[basis]}: <Code>{formatAud(opening)}</Code> → {labels.current}:{' '}
-      <Code>{formatAud(current)}</Code> (
-      {change === null ? labels.zeroBase[basis] : `${change > 0 ? '+' : ''}${(change * 100).toFixed(1)}%`})
-    </span>
-  )
-}
-
-function ExceptionDetail({ detail }: { detail: Record<string, unknown> }) {
-  const { account_name: account, basis, opening_cents: opening, current_cents: current, change_pct: change } = detail
-  if (
-    typeof account === 'string' &&
-    typeof opening === 'number' &&
-    (basis === 'balance_sheet' || basis === 'profit_or_loss')
-  ) {
-    const ratio = change == null ? Number.NaN : Number(change) // numeric 列可能序列化为字符串
-    return (
-      <FluctuationDetail
-        account={account}
-        basis={basis}
-        opening={opening}
-        current={typeof current === 'number' ? current : null}
-        change={Number.isFinite(ratio) ? ratio : null}
-      />
-    )
-  }
-  // 有的规则 (如 ACC-04) 例外没有明细, 空的不显示
-  if (Object.keys(detail).length === 0) return null
-  return (
-    <pre className="overflow-x-auto rounded-md bg-muted p-2.5 font-mono text-xs">{JSON.stringify(detail, null, 2)}</pre>
   )
 }
 
@@ -331,18 +283,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
         </dl>
         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
-        <ul className="m-0 flex list-none flex-col gap-1.5 p-0 text-[14px]">
-          {material.misstatements.map((item) => (
-            <li key={item.id} className="flex flex-wrap gap-2 rounded-lg border px-3 py-2">
-              <Code className="font-semibold">{item.id}</Code>
-              <span>
-                {item.account} · {t.assertions[item.assertion]} · {t.directions[item.direction]}
-              </span>
-              <span className="flex-1" />
-              <Code>{formatAud(item.amount_cents)}</Code>
-            </li>
-          ))}
-        </ul>
+        <MisstatementList items={material.misstatements} />
         {material.not_executed?.length ? (
           <>
             <span className="text-[13px] text-muted-foreground">
@@ -428,14 +369,15 @@ export function ReportPreview({
           className="flex flex-col gap-4 rounded-md border bg-white px-6 py-5 font-serif text-[14px] leading-relaxed"
           lang="en"
         >
-          {REPORT_SECTIONS.map((section) => (
-            <section key={section} className="flex flex-col gap-1">
-              <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">
-                {t.reportSections[section]}
-              </h3>
-              <p className="m-0 whitespace-pre-wrap">{report.sections[section] || '—'}</p>
-            </section>
-          ))}
+          {REPORT_SECTIONS.map((section) => {
+            const part = reportPart(section, report.sections[section] ?? '', t.reportSections[section])
+            return (
+              <section key={section} className="flex flex-col gap-1">
+                <h3 className="m-0 font-sans font-semibold text-[13px] text-muted-foreground">{part.heading}</h3>
+                <p className="m-0 whitespace-pre-wrap">{part.body}</p>
+              </section>
+            )
+          })}
         </div>
       </Panel>
       {decisions.length > 0 ? (
@@ -658,16 +600,23 @@ function PlanningFields({
       <div className="flex flex-col gap-1.5">
         <SectionLabel>{t.planning.candidates}</SectionLabel>
         <ul className="m-0 flex list-none flex-col gap-1 p-0 text-[13.5px]">
-          {candidates.candidates.map((item) => (
-            <li key={item.basis} className="flex flex-wrap gap-x-2">
-              <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
-              <Code>{formatAud(item.base_amount_cents)}</Code>
-              <span className="text-muted-foreground">
-                · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
-                <Code>{formatAud(item.high_cents)}</Code>
-              </span>
-            </li>
-          ))}
+          {candidates.candidates.map((item) => {
+            const reason = inapplicable(item)
+            return (
+              <li key={item.basis} className="flex flex-wrap gap-x-2">
+                <span className="min-w-28 font-medium">{t.bases[item.basis] ?? item.basis}</span>
+                <Code>{formatAud(item.base_amount_cents)}</Code>
+                {reason ? (
+                  <span className="text-muted-foreground">· {t.planning.notApplicable[reason]}</span>
+                ) : (
+                  <span className="text-muted-foreground">
+                    · {formatPct(item.pct_low)}–{formatPct(item.pct_high)} · <Code>{formatAud(item.low_cents)}</Code>–
+                    <Code>{formatAud(item.high_cents)}</Code>
+                  </span>
+                )}
+              </li>
+            )
+          })}
         </ul>
       </div>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3">
@@ -682,7 +631,7 @@ function PlanningFields({
               onChoice({ ...choice, basis, pct: next?.pct_high ?? choice.pct })
             }}
           >
-            {candidates.candidates.map((item) => (
+            {selectableCandidates(candidates).map((item) => (
               <option key={item.basis} value={item.basis}>
                 {t.bases[item.basis] ?? item.basis}
               </option>
@@ -929,22 +878,11 @@ function buildDecision(
   return base
 }
 
-function initialChoice(candidates: MaterialityCandidates): MaterialityChoice {
-  const usable = candidates.candidates.find((item) => item.base_amount_cents > 0) ?? candidates.candidates[0]
-  const range = candidates.performance_pct_range ?? [0.5, 0.75]
-  return {
-    basis: usable?.basis ?? 'revenue',
-    pct: usable?.pct_high ?? 0.01,
-    performance_pct: range[1],
-    clearly_trivial_pct: candidates.clearly_trivial_pct ?? 0.05,
-  }
-}
-
 // 表单视图: 材料加决定卡片
 export function GatePanel({ eid, disabled }: { eid: string; disabled: boolean }) {
   const { t } = useI18n()
   const gate = useGate(eid)
-  if (gate.error && isApiCode(gate.error, 'NOT_AT_GATE')) {
+  if (gate.data === null) {
     return <p className="text-muted-foreground text-sm">{t.formView.notAtGate}</p>
   }
   return (

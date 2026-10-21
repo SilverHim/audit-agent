@@ -5,7 +5,19 @@ manual_result.details 的模型. 程序库加载时核对 YAML 写的名字都�
 
 from pydantic import BaseModel
 
-RESULT_MODELS: dict[str, type[BaseModel]] = {}  # 结果模型名 → 模型 (宜继承 contracts.models.Model, 多出的字段报错)
+from backend.contracts.models import ManagementResponse, Model
+
+
+class ManagementResponses(Model):
+    """FIN-08 的登记表 (需求 R161): 与管理层沟通的错报每条一行 (沟通的时间与对象, 回复的时间与原文, 是否同意更正),
+    须恰好覆盖派发材料中的错报 (A8 的 check 核对)."""
+
+    responses: list[ManagementResponse]
+
+
+RESULT_MODELS: dict[str, type[BaseModel]] = {  # 结果模型名 → 模型 (宜继承 contracts.models.Model, 多出的字段报错)
+    "ManagementResponses": ManagementResponses,
+}
 
 
 def result_model(name: str) -> type[BaseModel] | None:

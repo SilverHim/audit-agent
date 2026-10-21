@@ -8,12 +8,15 @@
 P0 承接   录入客户 ABN → ACC-04 查询 ASIC / ABN（mock）→【闸门】ACC-01 是否承接
 P1 计划   载入合成数据集 → DOC-04 合同抽取 → PLN-07 初步分析 → PLN-01 重要性候选
           →【闸门】PLN-01/03 确认重要性与风险清单 → 装配程序包
+          → PLN-15 起草总体审计计划 →【闸门】PLN-15 计划审批（批准后进入执行，退回则按理由重拟；功能 planning）
 P2 执行   收入：REV-08 三单匹配、REV-03 合同条款评价 → REV-02 截止性判断
           函证：CSH-04 发函 → DOC-06 回函抽取；CSH-05 流水账面核对 → CSH-02 差异评价
           需要人的结果进复核队列，审计师逐条决定
 P3 完成   FIN-04 错报累计与候选意见 →【闸门】FIN-01 确认意见类型
 P4 报告   RPT-03 生成报告初稿 →【闸门】RPT-01 附批注退回修订，或签字归档
 ```
+
+演示配置（`.env.example` 的 FEATURES=critic,collab,journals,planning，见开发接口文档第 11 节）在上面的流程上另开三项：智能体协作（collab，需求 R155）、分录测试 GEN-05 与 GEN-02（journals，需求 R146）与计划审批（planning，需求 R317：PLN-01/03 通过后先停在 PLN-15，批准才进入执行）。
 
 Xero 演示数据集（xero/20261017-q1）的种子载入（`python -m backend.persistence.seed load`）只载快照；演示时还要做演示数据导入（需求 R269，数据管理页的按钮见 R270）：停在 ACC-01 闸门时导入承接资料，停在等数据时导入外勤的账表与文件，再由审计师确认数据已齐。财务报表以账套为准（Issue #46），演示资料里没有报表这一批。分阶段导入的演示用不经种子载入的新项目（数据版本 0）；种子载入过的项目视同已确认就绪，图不停在等数据，做外勤导入时快照七张表（含应付账单，需求 R178）会再写一版。
 
@@ -47,6 +50,7 @@ Xero 演示数据集（xero/20261017-q1）的种子载入（`python -m backend.p
 | 贯穿 | GEN-10 进度与来源解释 | LLM · L4 | A10 | 对话入口（开发接口文档第 6.1 节）：审计师提问时，模型按需调只读工具查进度、判断与证据来源后作答；只读，不提交决定。不单独派发，不建程序文件，只作对话留痕的程序编号 |
 | 贯穿 | GEN-11 判断呈递与决定收集 | 呈递（规格书为 LLM · L4） | A10 | 复核任务与闸门以结构化卡片呈递（推理链、证据指针、反方论证、独立复核结论），审计师在卡片的表单上提交决定，经 DecisionSubmit 写入；本版不调模型。不单独派发，不建程序文件 |
 | P3 | FIN-03 错报性质分类 | 混合 · L2 | A8 | 功能 misstatement。对每条未分类的已认定错报：审计目标与期间来源在代码中定，LLM 判类型（factual 或 judgmental，不做审计抽样故无 projected）与是否有舞弊迹象，每条错报一个 Judgment，带分类载荷，确认后写进错报的分类（需求 R157 定模板，A8 的执行由 R158 加，确认时写错报新版本与推翻、手工结果须由人给分类由 R159 加，所在节点由 R160 接入）；舞弊迹象只呈报，不阻断 |
+| P3 | FIN-08 错报沟通与回复记录 | 人工 · L1 | A8 | 功能 misstatement（需求 R161）。在 communicate 节点由 A10 派一条人工任务：材料逐条列待沟通的错报（已分类的，或分录对不上须重新沟通的）与更正请求；审计师在人工队列页登记与管理层的沟通（时间、对象、回复时间与原文、是否同意更正），A8 整理：同意的记已沟通，等更正；拒绝的记未更正并保留回复原文。没有待沟通的错报时空执行 |
 | P3 | FIN-09 更正验证 | 混合 · L2 | A8 | 功能 misstatement。对每条待验证（verifying）的错报：规则取凭证号以审计更正前缀开头的更正分录行，按来源对象与科目匹配，算已更正额与剩余额；LLM 判断是否完整更正及是否影响其他科目，每条错报一个 Judgment（需求 R164 定模板，执行由 R165 加） |
 | P3 | FIN-04 错报累计 | 规则 · L3 | A9 | 累计高于明显微小门槛的未更正错报，出汇总表；与整体重要性比较得候选意见 |
 | P3 | FIN-01 未更正错报评价 | 闸门 · L1 | A9 | 呈递汇总表与候选意见；审计师确认意见类型并写理由 |
@@ -97,16 +101,28 @@ p0_inputs → p0_intel → gate_acc01 → p1_await_data → p1_ingest → p1_ana
 completion → gate_fin → report_draft → gate_rpt01 → { report_draft | archive }
 ```
 
-功能 planning 打开时（需求 R205），装配之后先起草总体审计计划，批准才进入执行阶段。planning 只含 PLN-15 与其闸门，不依赖其他功能；重要性重估（PLN-19 与其闸门）另为功能 reassessment，依赖 misstatement 与 planning（需求 R313）：
+功能 planning 打开时（需求 R205；演示配置自需求 R317 起打开），装配之后先起草总体审计计划，批准才进入执行阶段。planning 只含 PLN-15 与其闸门，不依赖其他功能；重要性重估（PLN-19 与其闸门）另为功能 reassessment，依赖 misstatement 与 planning（需求 R313）：
 
 ```
 gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | plan_draft }
 ```
 
+功能 misstatement 打开时（需求 R160），P2 结清后先走完成阶段的错报闭环，FIN-01 驳回回 summarize：
+
+```
+fan_in → misstatement_triage → { misstatement_triage | communicate }
+communicate → { await_correction | verify_correction }，await_correction → verify_correction
+verify_correction → { misstatement_triage | communicate | await_correction | p3_reassess }
+p3_reassess → summarize → final_review → { misstatement_triage | completion }
+completion → gate_fin → { report_draft | summarize }
+```
+
+- 各节点依次执行 FIN-03（分类）、FIN-08（沟通）、FIN-09（更正验证）、PLN-19（重评）、FIN-04（累计，每轮一次）、FIN-15（最终复核）、FIN-02（持续经营）；程序库还没有的程序（由错报闭环、计划、签字前、持续经营各需求加入）节点为空操作；await_correction 在节点内等审计师提交更正通知（需求 R162）。阶段 P3_Completion 在 misstatement_triage 写入。完成阶段新认定的错报都回 misstatement_triage 先分类再沟通。
+
 - p0_inputs：新客户（项目没有数据集）先经 ABN Lookup 查是不是公司，是公司而没有上传 ASIC 摘录时把 ACC-04 置等资料（awaiting_data，A3 提出补交请求 REQ-registry_extract），在节点内 `interrupt()` 等审计师上传；上传后 A3 抽取，数据变动带动图回到 p0_inputs 再判一次，有摘录或请求标为客户无此类资料后进 p0_intel（需求 R290）。有数据集的项目、不是公司或查不到 ABN 的不等，直接进 p0_intel。
 - p1_await_data：建项目不载入财务数据，ACC-01 通过后在节点内 `interrupt()` 等审计师在数据管理页接入数据并确认已齐（数据集载入视同确认，不等）。
 - 静态中断 4 个：gate_acc01、gate_p1_risk、gate_fin、gate_rpt01（功能 planning 另加 gate_p1_plan）。闸门决定写入时按 GateDecision 路由（approve / reject / insufficient_info）。
-- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_inputs 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
+- 闸门的非通过出口：ACC-01 拒绝进 Declined 结束，客户画像更新后回 p0_inputs 重跑 ACC-04；PLN-01/03 驳回回 p1_analytics；FIN-01 驳回回 completion（功能 misstatement 打开时回 summarize）；RPT-01 驳回回 report_draft。四道闸门的信息不足都留在原闸门重新呈报。
 - assemble_pack 按审计目标的风险等级匹配程序 trigger，补齐依赖；每条审计目标至少被一条程序覆盖，否则阻断。功能 planning 打开时 assemble_pack 只写 P2 程序，不改阶段；plan_draft 由 A4 执行 PLN-15 起草计划，停在 gate_p1_plan；批准时计划置 approved、PLN-15 完成、阶段进 P2_Executing（同一事务），之后才派发（未批准的计划不派发）；驳回回 plan_draft 起草下一修订。
 - schedule 按依赖图拓扑分层，同层按循环分组，用 `Send` 派发 fieldwork 实例，上限 4；fieldwork 按程序的 owner 调用对应 Agent。
 - fan_in 用按 ID 合并的 reducer 收各实例返回的 ProcedureRun、Exception、Judgment、ReviewTask，由 A1 重算程序状态：有待决任务为 awaiting_human，否则为 completed；rerun 决定时由 DecisionSubmit 先置 executing，不受待决任务影响。
@@ -121,7 +137,7 @@ gate_p1_risk → assemble_pack → plan_draft → gate_p1_plan → { schedule | 
 - 规则可声明执行前检查（开发接口文档第 8.1 节 `checks`）：检查命中的规则不执行，执行记录里记 skipped 或 not_executable 与理由，不出 Exception，也不建复核任务，在程序详情页列出（规格书第 2.3 节写的"进复核队列"本版不做）。如 GEN-05 在数据集声明录入时间不可靠时跳过看录入时间的规则，没有审批人字段时 JE-R04 记 not_executable；GEN-05 因此不建复核任务。
 - 分录例外归因（GEN-02）的建议动作不受限制：同一笔可能被分录归因与科目程序各建议一次认定错报，由审计师避免重复（第 6 节 T12 一条）。
 - LLM 与混合程序出 Judgment：结论、推理链、证据指针、反方论证、建议动作、置信度。推理链中 fact 步骤须带证据指针，standard 步骤指向准则片段，inference 步骤引用前序步骤。
-- OutputValidator 做四级校验：语法、结构、引用、语义。语法与结构不通过时把错误回传 LLM，最多重试 2 次；重试耗尽后，混合程序的对象有规则例外时建 unattributed 任务，否则建 failed 任务；LLM 程序按对象建 failed 任务，不影响同一 Run 的其他对象。
+- OutputValidator 做四级校验：语法、结构、引用、语义。任一级不通过时把错误回传 LLM，最多重试 2 次（需求 R348；只把步骤标为 unsupported 的不算不通过）；重试耗尽后，混合程序的对象有规则例外时建 unattributed 任务，否则建 failed 任务；LLM 程序按对象建 failed 任务，不影响同一 Run 的其他对象。
 - 置信度由证据覆盖率、规则一致性、LLM 自报三项加权，权重放在 rules.json。
 - 以下情况需要人：自主度为 L1 或 L2；建议动作为 misstatement 或 more_evidence；CSH-02 有差异或回函应计利息未入账；校验失败或程序执行失败。其余自动关闭。
 - 复核决定只做五种：
@@ -216,6 +232,7 @@ compose.yml                        B
 - 复核任务批量确认与复核范围 batch（规格书第 9.1、12.2 节）
 - 在对话里提交决定；闸门到达时的呈递与 A10 主动通报；转达一致率统计（规格书第 18.2、5.4、15 节）。对话只读，决定只走卡片上的表单
 - 复核过快预警（规格书第 9.3 节，阈值规格书未给）：本版只记录停留时长
+- 等待更正的期限与到期提醒（规格书第 10 节 “由 A10 提醒”）：本版停在 await_correction 一直等审计师提交更正通知（已入账或停止等待，需求 R162）
 - 呈递时由大模型生成的白话讲解：GEN-11 只给结构化卡片，需要解释时在对话里问
 - GEN-09 的 "提示词或配置刚改过且复核数不足 30" 与 "人机一致率低于 80%" 两条触发；A7 复核率、一致率、错误发现率与误阻断率的统计（规格书第 6.3、15 节；没有 agreement_stats）
 - 会话结束清除对话记忆（规格书第 8.5 节）：本版一个项目一条连续对话，超出预算时自动压缩
@@ -263,6 +280,8 @@ compose.yml                        B
 | ASA240-A44 | 选取分录与其他调整时考虑的事项 | GEN-02 |
 | ASA240-P36 | 识别出错报时评价其是否有舞弊迹象 | FIN-03 |
 | ASA450-A6 | 事实错报、判断错报与推断错报的区分 | FIN-03 |
+| ASA450-P08 | 及时与管理层沟通累计的错报并请其更正 | FIN-08 |
+| ASA450-P09 | 管理层拒绝更正时了解其理由并在评价时考虑 | FIN-08 |
 | ASA550-P10 | 关联方的定义（只摘第 10(b) 项） | GEN-03 |
 | ASA550-P13 | 向管理层询问关联方及其交易 | GEN-01 |
 | ASA550-P15 | 检查记录与文件时留意未识别的关联方 | GEN-08 |

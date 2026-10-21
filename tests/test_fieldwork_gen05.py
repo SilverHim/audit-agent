@@ -14,8 +14,8 @@ from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
 from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps
 from tests.test_knowledge import design_traits
-from tests.test_xero_fixtures import xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, make_xero_deps
+from tests.test_xero_fixtures import xero_context
+from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_state
 
 
 @pytest.mark.external
@@ -67,7 +67,7 @@ async def test_rule_error_becomes_failed_run_and_rerun_task_by_a1() -> None:
     with pytest.raises(RuleError) as caught:
         await agent.run(ctx)
     assert caught.value is error
-    patch, writer = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A1
     [run] = patch["procedure_runs"]
     [task] = patch["review_tasks"]

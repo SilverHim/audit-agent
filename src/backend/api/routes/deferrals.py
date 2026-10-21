@@ -98,7 +98,7 @@ async def set_deferral(
             if body.target_id != xero_check:
                 raise api_error("PROFILE_CHECK_STALE", f"{body.target_id} 不是待处理的 Xero 组织信息核对")
         elif gate is None or gate.value != body.target_id:
-            raise api_error("NOT_AT_GATE", f"当前不在 {body.target_id} 闸门", status=409)
+            raise api_error("NOT_AT_GATE", f"当前不在 {body.target_id} 闸门")
         latest = latest_entries(await all_of_kind(deps.trail, eid, TrailKind.deferral)).get(
             (body.target_type, body.target_id)
         )

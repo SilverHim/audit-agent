@@ -28,6 +28,15 @@ import {
   useManualTasks,
   useUploadDocuments,
 } from '@/lib/manual-api'
+import {
+  emptyResponseRow,
+  type ListedMisstatement,
+  listedMisstatements,
+  type ResponseRow,
+  responsesDetails,
+  separateCode,
+} from '@/lib/misstatements'
+import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
@@ -94,7 +103,12 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
   const set = (patch: Partial<ManualDraft>) => setDraft((current) => ({ ...current, ...patch }))
   const fields = resultFields(view.result_schema)
   const pending = view.task.status === 'pending'
-  const material = Object.entries(view.request.material)
+  // FIN-08 (结果模型 ManagementResponses, 需求 R163): 材料中的错报每条一行登记, 不按结果模型的字段出 JSON 输入框;
+  // 材料里的错报在登记表里逐条列出, 材料一栏只列其余各项
+  const listed = listedMisstatements(view)
+  const [rows, setRows] = useState<Record<string, ResponseRow>>({})
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
+  const material = Object.entries(view.request.material).filter(([key]) => !listed || key !== 'misstatements')
 
   const submit = useMutation({
     ...reviewsSubmitReviewRecordMutation(),
@@ -106,7 +120,14 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
     onError: (error) => toast.error(apiMessage(error)),
   })
   const record = () => {
-    const body = manualRecordBody(view, draft, t)
+    let given: Record<string, unknown> | undefined
+    if (listed) {
+      const result = responsesDetails(listed, rows, t)
+      setRowErrors('errors' in result ? result.errors : {})
+      if ('errors' in result) return toast.error(t.fin08.errors.rows)
+      given = result.details
+    }
+    const body = manualRecordBody(view, draft, t, given)
     if (typeof body === 'string') return toast.error(body)
     submit.mutate({ path: { eid }, body })
   }
@@ -145,15 +166,25 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
             disabled={busy}
           />
           <Card title={t.manualPage.result}>
-            {fields.map((field) => (
-              <ResultInput
-                key={field.name}
-                id={`detail-${field.name}`}
-                field={field}
-                value={draft.values[field.name]}
-                onChange={(value) => set({ values: { ...draft.values, [field.name]: value } })}
+            {listed ? (
+              <ResponsesForm
+                listed={listed}
+                rows={rows}
+                errors={rowErrors}
+                onChange={(id, row) => setRows((current) => ({ ...current, [id]: row }))}
+                disabled={busy}
               />
-            ))}
+            ) : (
+              fields.map((field) => (
+                <ResultInput
+                  key={field.name}
+                  id={`detail-${field.name}`}
+                  field={field}
+                  value={draft.values[field.name]}
+                  onChange={(value) => set({ values: { ...draft.values, [field.name]: value } })}
+                />
+              ))
+            )}
             <div className="flex flex-col gap-1.5">
               <label htmlFor="performed-on" className="font-semibold text-[13px]">
                 {t.manualPage.performedOn}
@@ -201,6 +232,125 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
         </StatusPill>
       )}
     </>
+  )
+}
+
+// FIN-08 的登记表: 材料中的每条错报一行 (沟通时间与对象, 回复时间与原文, 是否同意更正); 时刻按本机时区填, 提交时带
+// 时区. 有问题的行在行下提示 (lib/misstatements.responsesDetails)
+// 是否同意更正的两个选项; 两个都没选为未选 (null)
+const AGREE_CHOICES: ReadonlyArray<['yes' | 'no', boolean]> = [
+  ['yes', true],
+  ['no', false],
+]
+
+function ResponsesForm({
+  listed,
+  rows,
+  errors,
+  onChange,
+  disabled,
+}: {
+  listed: ListedMisstatement[]
+  rows: Record<string, ResponseRow>
+  errors: Record<string, string>
+  onChange: (id: string, row: ResponseRow) => void
+  disabled: boolean
+}) {
+  const { t } = useI18n()
+  const f = t.fin08.fields
+  return (
+    <div className="flex flex-col gap-3" data-testid="fin08-responses">
+      <span className="text-[13px] text-muted-foreground">{t.fin08.hint}</span>
+      {listed.map((item) => {
+        const row = rows[item.id] ?? emptyResponseRow()
+        const set = (patch: Partial<ResponseRow>) => onChange(item.id, { ...row, ...patch })
+        const id = `fin08-${item.id}`
+        const code = separateCode(item)
+        return (
+          <fieldset key={item.id} className="m-0 flex flex-col gap-2.5 rounded-[10px] border p-3.5">
+            <legend className="flex flex-wrap gap-2 px-1 text-[14px]">
+              <Code className="font-semibold">{item.id}</Code>
+              <span>
+                {item.account}
+                {code ? ` (${code})` : ''} · {t.directions[item.direction]} ·{' '}
+                <Code>{formatAud(item.amount_cents)}</Code>
+              </span>
+            </legend>
+            {item.source_conclusion ? (
+              <p className="m-0 text-[13px] text-secondary-foreground" lang="en">
+                {item.source_conclusion}
+              </p>
+            ) : null}
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5">
+              <label htmlFor={`${id}-communicated-at`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
+                {f.communicatedAt}
+                <Input
+                  id={`${id}-communicated-at`}
+                  type="datetime-local"
+                  className="h-10"
+                  value={row.communicatedAt}
+                  disabled={disabled}
+                  onChange={(event) => set({ communicatedAt: event.target.value })}
+                />
+              </label>
+              <label htmlFor={`${id}-communicated-to`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
+                {f.communicatedTo}
+                <Input
+                  id={`${id}-communicated-to`}
+                  className="h-10"
+                  value={row.communicatedTo}
+                  disabled={disabled}
+                  onChange={(event) => set({ communicatedTo: event.target.value })}
+                />
+              </label>
+              <label htmlFor={`${id}-responded-at`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
+                {f.respondedAt}
+                <Input
+                  id={`${id}-responded-at`}
+                  type="datetime-local"
+                  className="h-10"
+                  value={row.respondedAt}
+                  disabled={disabled}
+                  onChange={(event) => set({ respondedAt: event.target.value })}
+                />
+              </label>
+            </div>
+            <label htmlFor={`${id}-response`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
+              {f.response}
+              <Textarea
+                id={`${id}-response`}
+                rows={2}
+                value={row.response}
+                disabled={disabled}
+                onChange={(event) => set({ response: event.target.value })}
+              />
+            </label>
+            <fieldset className="m-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-0 p-0 text-[13.5px]">
+              <legend className="float-left mr-2 text-[12.5px] text-[#4a5262]">{f.agrees}</legend>
+              {AGREE_CHOICES.map(([choice, value]) => (
+                <span key={choice} className="flex items-center gap-1.5">
+                  <input
+                    id={`${id}-agrees-${choice}`}
+                    type="radio"
+                    name={`${id}-agrees`}
+                    className="size-4 accent-primary"
+                    checked={row.agrees === value}
+                    disabled={disabled}
+                    onChange={() => set({ agrees: value })}
+                  />
+                  <label htmlFor={`${id}-agrees-${choice}`}>{t.fin08.agreeChoices[choice]}</label>
+                </span>
+              ))}
+            </fieldset>
+            {errors[item.id] ? (
+              <span role="alert" className="text-[13px] text-risk">
+                {errors[item.id]}
+              </span>
+            ) : null}
+          </fieldset>
+        )
+      })}
+    </div>
   )
 }
 

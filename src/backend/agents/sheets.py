@@ -20,7 +20,7 @@ from backend.agents.ingest import upload_run
 from backend.contracts.data import SheetReading, TableKind, TablePlan
 from backend.contracts.knowledge import LLMSpec, ProcedureTemplate
 from backend.contracts.llm_outputs import SheetRecognition
-from backend.contracts.models import AgentId, AutonomyLevel, DocumentRef, Engine, Phase
+from backend.contracts.models import AgentId, AutonomyLevel, DocumentRef, Engine, Phase, WorkingLanguage
 from backend.contracts.services import ValidationContext
 from backend.services.data_import import (
     KEYS,
@@ -117,22 +117,26 @@ class SheetIntake:
     def __init__(self, deps: AgentDeps) -> None:
         self.deps = deps  # 外部依赖
 
-    async def recognize(self, eid: str, document: DocumentRef, data: bytes) -> list[SheetReading]:
+    async def recognize(
+        self, eid: str, document: DocumentRef, data: bytes, language: WorkingLanguage
+    ) -> list[SheetReading]:
         """识别工作簿的每个工作表 (CSV 一个, 名为文件名主干), 按工作表顺序. 文件读不了抛 UnreadableFile.
 
-        document 为该文件的登记 (留痕的 run_id 为 UPLOAD-{文件 ID}); data 为文件内容."""
+        document 为该文件的登记 (留痕的 run_id 为 UPLOAD-{文件 ID}); data 为文件内容; language 为项目的工作语言
+        (见 ingest.upload_run)."""
         names = await asyncio.to_thread(sheet_names, document.file_name, data)
         readings = []
         for name in names:
             _, rows = await asyncio.to_thread(raw_rows, document.file_name, data, name)
             key = fixture_key(document.file_name, name, len(names))
-            readings.append(await self.recognize_sheet(eid, document, name, rows, key))
+            readings.append(await self.recognize_sheet(eid, document, name, rows, key, language))
         return readings
 
     async def recognize_sheet(
-        self, eid: str, document: DocumentRef, sheet: str, rows: RawRows, key: str
+        self, eid: str, document: DocumentRef, sheet: str, rows: RawRows, key: str, language: WorkingLanguage
     ) -> SheetReading:
-        """识别一个工作表: rows 为原样读出的全部行 (只取开头的样本行发给大模型), key 为 fixture_key."""
+        """识别一个工作表: rows 为原样读出的全部行 (只取开头的样本行发给大模型), key 为 fixture_key, language 为项目的
+        工作语言."""
         variables: dict[str, Any] = {
             "file_name": document.file_name,
             "sheet": sheet,
@@ -140,7 +144,7 @@ class SheetIntake:
             "rows": sample_text(sample_rows(rows)),
             "tables": TABLES,
         }
-        run = upload_run(SHEET.id, document)
+        run = upload_run(SHEET.id, document, language)
         try:
             result = await self.deps.judgments.call_llm(
                 eid, SHEET, run, variables, ValidationContext(standards_of=None), self.agent, key

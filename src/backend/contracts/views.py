@@ -39,6 +39,7 @@ from backend.contracts.models import (
     ReviewTier,
     RiskItem,
     UncorrectedSchedule,
+    WorkingLanguage,
 )
 
 
@@ -72,6 +73,9 @@ class EngagementOverview(Model):
     current_gate: GateId | None  # 正停在哪道闸门, 不在闸门为空
     awaiting_review: bool  # 是否停在节点内等复核决定 (不含等数据就绪)
     awaiting_data: bool  # 是否停在 P1 开始前等财务数据就绪 (p1_await_data), 审计师确认数据已齐后继续
+    # 是否停在 await_correction 等更正通知 (需求 R162), 与等更正的错报 (等待载荷的 misstatement_ids, 按 ID 排序)
+    awaiting_correction: bool = False
+    awaiting_correction_ids: list[str] = []
     missing_tables: list[TableKind]  # 等数据就绪时还缺的必需表 (科目表, 本期与上期试算表, 总账分录), 现查; 不在等时为空
     procedures: list[ProcedureSummary]  # 各程序状态
     stale_procedure_ids: list[str] = []  # 过期的程序, 按 procedures 的顺序 (含不能重跑的)
@@ -84,6 +88,9 @@ class EngagementOverview(Model):
     # 项目的功能集 (services/features.frozen_features: 已启动取冻结的, 未启动取当前进程的), 按名称排序; 前端据此
     # 决定按哪个功能的规则显示 (如 collab 打开时复核队列争议在前)
     features: list[str] = []
+    # 生成语言与当前工作语言 (engagement.working_language) 不同的执行 (执行 ID → ProcedureRun.language, 需求 R339):
+    # 判断, 计划与报告按其 run_id 取, 取到即标注 "以英文生成" 或 "以中文生成"; 查不到 (语言相同, 没有 run_id) 不标
+    run_languages: dict[str, WorkingLanguage] = {}
 
 
 class AcceptanceMaterial(Model):
@@ -221,15 +228,17 @@ class PresentedEvidence(Model):
 
 
 class PresentedFailure(Model):
-    """失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空."""
+    """失败类与无归因类任务的失败原因. 按出处填对应的几项, 其余为空: run 填 reason; llm_call 填 subject_id 与调用的
+    四项 (level_failed, errors, attempts, trail_id); exception 填规则三项 (rule_id, amount_cents, detail), 另填该对象
+    最后一次调用的四项 (需求 R355; 留痕里找不到该对象的调用时只有规则三项)."""
 
     source: FailureSource  # 出处
     reason: str | None = None  # run: 执行记录的 failure_reason
     subject_id: str | None = None  # llm_call: 失败的判断对象 (任务的 subject_id)
-    level_failed: ValidationLevel | None = None  # llm_call: 最后一次没通过的校验级别
-    errors: list[str] = []  # llm_call: 最后一次的校验错误
-    attempts: int | None = None  # llm_call: 调用次数 (最后一次的 attempt)
-    trail_id: str | None = None  # llm_call: 取的那行 llm_call 留痕
+    level_failed: ValidationLevel | None = None  # llm_call, exception: 最后一次没通过的校验级别
+    errors: list[str] = []  # llm_call, exception: 最后一次的校验错误
+    attempts: int | None = None  # llm_call, exception: 调用次数 (最后一次的 attempt)
+    trail_id: str | None = None  # llm_call, exception: 取的那行 llm_call 留痕
     rule_id: str | None = None  # exception: 命中的规则
     amount_cents: int | None = None  # exception: 例外金额, 单位分
     detail: dict[str, Any] = {}  # exception: 规则输出的明细

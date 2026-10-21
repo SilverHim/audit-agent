@@ -68,6 +68,7 @@ from backend.contracts.models import (
     TrailKind,
     User,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.records import (
     Account,
@@ -260,7 +261,9 @@ class DatasetLoader(Protocol):
         按 id 排序 (按最新一版审批日志补过录入人与审批人, 即库里的行); entry_nos 为 None 时载入文件中全部, 为空列表时
         不载入, 返回 [] (要全部须传 None). 幂等: 已有的同 id 同内容行跳过 (比的是按同一版审批日志补过之后的样子);
         有新行时总账整表换一版 (现有行加新行, 同 DataStore.write_tables: 来源 xero, 原文件名
-        adjustments/journal_entries.csv, 写入人 actor), data_version 加一, 记版本行; 试算表不动. 调用方须在提交后随即
+        adjustments/journal_entries.csv, 写入人 actor), data_version 加一, 记版本行; 试算表不动. 在
+        AuditOutputStore.transaction 块内调用时加入该事务 (写总账与版本行与块内其他写入一起提交或回滚, 需求 R162 的更正
+        通知生效即如此). 调用方须在提交后随即
         用 data_service.version_entry 为这一版写 data 留痕 (DataService.backfill_trails 只兜底). 凭证号不在文件中抛
         LookupError; 项目尚未载入, 数据集不同, 同 id 内容不同或某笔借贷不平抛 ValueError; 项目锁定抛
         EngagementLocked; 数据集没有更正分录文件抛 FileNotFoundError. 都不写入."""
@@ -546,8 +549,10 @@ class EngagementStore(Protocol):
         period_end: date,
         dataset: str | None,
         profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
     ) -> Engagement:
-        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance. profile (数据集带的画像; 新建的客户
+        """取号 ENG-{yyyy}-{nnn}; client_id = profile.id; phase = P0_Acceptance; working_language 为建项目时选的工作
+        语言 (需求 R339). profile (数据集带的画像; 新建的客户
         为其最新一版, dataset 为 None) 与 client_profiles 中该客户的各版比较内容 (不看版本号): 没有该客户时按 profile
         写入; 有一版相同 (数据集没变) 沿用最新一版, 含审计师在 ACC-01 改过的; 都不同 (数据集本身改了) 才写新一版
         (最新版本 +1). 旧版本不改. 写入的版本 source 为 dataset, updated_by 为 owner_id. client_profile_version 为
@@ -567,6 +572,11 @@ class EngagementStore(Protocol):
     ) -> None:
         """传 None 的不改, 同时刷新 updated_at; locked 置真后不可回退;
         在 AuditOutputStore.transaction 块内调用时加入该事务."""
+        ...
+
+    async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage:
+        """改项目的工作语言 (需求 R339), 返回改之前的值; 与之相同时不改 (不刷新 updated_at). 项目不存在抛
+        LookupError, 已锁定抛 EngagementLocked; 读旧值与改在同一事务, 并发的两次修改各自看到前一次的结果."""
         ...
 
     async def client_profile(self, client_id: str, version: int | None = None) -> ClientProfile | None: ...

@@ -15,6 +15,7 @@ from langgraph.types import Command, StateSnapshot
 from backend.agents.base import AgentDeps
 from backend.contracts.models import (
     AgentId,
+    CorrectionNotice,
     Decision,
     Engagement,
     GateDecision,
@@ -31,11 +32,12 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
-from backend.orchestration.decisions import rerun_trail, review_trail
+from backend.orchestration.decisions import notice_trail, rerun_trail, review_trail
 from backend.orchestration.gates import current_gate, current_spec, latest_in_order, spec_of
-from backend.orchestration.nodes import NODE_PROCEDURES, confirmations_from_store
-from backend.orchestration.runner import GraphRunner, at_rerun_point, waiting_payloads
+from backend.orchestration.nodes import confirmations_from_store, node_table
+from backend.orchestration.runner import GraphRunner, at_rerun_point, correction_wait, waiting_payloads
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.services.review_queue import RERUNNABLE
 
 
 async def gate_values(
@@ -193,14 +195,15 @@ def closed_by(
     record: ReviewRecord, task: ReviewTask, tasks: list[ReviewTask], records: list[ReviewRecord]
 ) -> list[str]:
     """rerun 决定随同关闭的同组任务 ID (决定提交时写进留痕, 补写时从 Store 推回): 与被决定任务同程序, 同一次执行
-    的 failed 任务中, 已 decided 而没有自己的复核决定的. tasks 与 records 为 Store 中各自的最新版本."""
+    的可重跑任务 (review_queue.RERUNNABLE: failed, unattributed) 中, 已 decided 而没有自己的复核决定的. tasks 与
+    records 为 Store 中各自的最新版本."""
     if record.decision is not Decision.rerun:
         return []
     targeted = {r.task_id for r in records}
     return sorted(
         t.id
         for t in tasks
-        if t.kind is TaskKind.failed
+        if t.kind in RERUNNABLE
         and t.procedure_id == task.procedure_id
         and t.run_id == task.run_id
         and t.id != task.id
@@ -216,8 +219,8 @@ async def catch_up_review(
     ainvoke(Command(resume=决定 ID)) 交出 (每交一个停在下一次等待), 返回交最后一个的 Command; 没有返回 None.
 
     节点内等待载荷 records 列出的本节点已读回的决定不算缺. 读回顺序不靠时间推断, 按 (程序在该节点内的执行次序
-    (nodes.NODE_PROCEDURES), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等, 读回后从 Store
-    整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
+    (nodes.node_table, 按项目的功能集), 0, 任务 ID) 排 rerun 以外的决定 (节点每次等待前按 Store 判断还要不要等,
+    读回后从 Store 整体并入, 交回顺序不影响等待次数与结果, 见 nodes.still_waiting), 按
     (次序, 1, 所针对任务所属执行的 run_no) 排 rerun 决定 (Q17 一轮失败算一组, 整组重跑: 同一程序每轮只对应一个 rerun
     决定, 下一轮由它触发). 同一程序同一轮有两个 rerun 决定说明不变式被破坏, 抛 RuntimeError. manual 任务 (人工程序,
     需求 R93) 的决定按 (次序, 1, 任务所属执行的 run_no, 任务 ID) 排: 节点读回它时即调 owner 整理结果, 要看到它所属
@@ -229,7 +232,7 @@ async def catch_up_review(
     重算, 复制后或只交回一部分时中断, 下次补做看到的是节点待执行或停在中间某次等待, 照样接着交.
 
     P2 的等复核 (await_events) 每次读回一个决定后即从 Store 整体读回, 与交哪个, 按什么顺序无关: 只交一个, 不复制.
-    图停在闸门, 不在等待也没有待执行的节点, 或节点不在 NODE_PROCEDURES 中时抛 RuntimeError.
+    图停在闸门, 不在等待也没有待执行的节点, 或节点不在节点表中时抛 RuntimeError.
     """
     eid = engagement.id
     store = deps.output_store
@@ -254,9 +257,10 @@ async def catch_up_review(
     await backfill_transitions(deps, engagement, snapshot, None)  # 复核决定不改阶段
     if node == "await_events":
         return Command(resume=min(r.id for r in missing))
-    if node not in NODE_PROCEDURES:
+    table = node_table(deps.features)
+    if node not in table:
         raise RuntimeError(f"复核决定未进检查点, 节点 {node} 不是等复核的节点, 无法补做")
-    order = NODE_PROCEDURES[node]
+    order = table[node]
 
     async def key(record: ReviewRecord) -> tuple[int, int, int, str]:
         task = tasks[record.task_id]
@@ -283,14 +287,35 @@ async def catch_up_review(
     return Command(resume=sequence[-1].id)
 
 
+async def catch_up_correction(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> Command[Any] | None:
+    """Store 中有检查点里没有的更正通知 (需求 R162) 时, 补写它的 decision 留痕, 返回 Command(resume=通知 ID) 交给
+    等待更正的节点 (节点读回后载入更正分录并写错报, 见 nodes.apply_notice); 没有返回 None. 等待载荷的 records 恒为空
+    (通知读回即生效), 不必看. 一次只会缺一份 (缺着时 DecisionSubmit 报 RESUME_REQUIRED, 不收新的通知); 缺的多于
+    一份, 或图不在等待更正时抛 RuntimeError."""
+    eid = engagement.id
+    waiting = correction_wait(snapshot)
+    known = {n.id for n in fill_defaults(snapshot.values)["correction_notices"]}
+    known |= set(waiting.get("records", [])) if waiting is not None else set()
+    missing = [n for n in await deps.output_store.latest(eid, CorrectionNotice) if n.id not in known]
+    if not missing:
+        return None
+    ids = ", ".join(sorted(n.id for n in missing))
+    if waiting is None or len(missing) > 1:
+        raise RuntimeError(f"更正通知 {ids} 未进检查点, 图却不在等待更正或缺的不止一份 ({snapshot.next}), 无法补做")
+    [notice] = missing
+    await record_once(deps, notice_trail(eid, notice))
+    return Command(resume=notice.id)
+
+
 async def catch_up(
     app: CompiledStateGraph[EngagementState], deps: AgentDeps, engagement: Engagement
 ) -> Command[Any] | None:
-    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定. 前三者直接写进
-    检查点; 复核决定由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回 None (从检查点继续).
-    补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
+    """补做 Store 已提交而检查点没跟上的内容, 依次: 闸门决定, 客户画像版本, 过期重跑请求, 复核决定, 更正通知. 前三者
+    直接写进检查点; 复核决定与更正通知由停着等待的节点读回, 返回 Command(resume=决定 ID) 作继续执行的输入, 其余返回
+    None (从检查点继续). 补做不写 Store, 只补写缺失的留痕; 再补做一次不改检查点与 Store."""
     snapshot = await app.aget_state(GraphRunner.config(engagement.id))
     snapshot = await catch_up_gates(app, deps, engagement, snapshot)
     snapshot = await catch_up_profile(app, deps, engagement, snapshot)
     snapshot = await catch_up_rerun(app, deps, engagement, snapshot)
-    return await catch_up_review(app, deps, engagement, snapshot)
+    command = await catch_up_review(app, deps, engagement, snapshot)
+    return command if command is not None else await catch_up_correction(deps, engagement, snapshot)

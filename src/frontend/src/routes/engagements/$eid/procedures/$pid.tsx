@@ -8,6 +8,7 @@ import { PointerList, standardLabel } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
+import { GeneratedLanguage } from '@/components/working-language'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
@@ -129,6 +130,7 @@ function ProcedurePage() {
                           {superseded.has(judgment.run_id) ? (
                             <StatusPill tone="neutral">{t.rerun.history}</StatusPill>
                           ) : null}
+                          <GeneratedLanguage eid={eid} runId={judgment.run_id} />
                           <span className="flex-1" />
                           {task ? (
                             <Link

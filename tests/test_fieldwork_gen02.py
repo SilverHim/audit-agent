@@ -36,15 +36,17 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    failed,
     make_ctx,
     make_deps,
     make_run,
     numbat_gen05_result,
+    passed,
 )
 from tests.fixture_sets import XERO
-from tests.test_fieldwork_judging import failed, passed, pending_task
-from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context, xero_state
-from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement
+from tests.test_fieldwork_judging import pending_task
+from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context
+from tests.xero_fakes import XERO_RULES, XERO_SAME_AMOUNT_INVOICES, make_xero_deps, supplement, xero_state
 
 VOUCHERS = ["XJ-397", "XJ-405", "XJ-430", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # 凭证号自然序
 FINDINGS = ["R09-1", "R12-1", "R10-1", "R10-2", "R09-2", "R11-1", "R11-2"]  # 各凭证的 GEN-05 例外, 依次
@@ -195,8 +197,8 @@ def test_each_voucher_gets_a_judgment_and_a_review_task(flow: Flow) -> None:
 
 @pytest.mark.external
 async def test_failed_voucher_leaves_its_finding_unattributed() -> None:
-    """验收 7: XJ-499 判断失败 (unattributed): R09-2 出 v2 unattributed, 以它为目标建带对象的任务, 可 override 或认定
-    错报; 其余 6 笔照常, 执行成功."""
+    """验收 7: XJ-499 判断失败 (unattributed): R09-2 出 v2 unattributed, 以它为目标建带对象的任务, 可 override, 认定
+    错报或重跑 (需求 R347); 其余 6 笔照常, 执行成功."""
     outcomes = {no: passed() for no in VOUCHERS} | {"XJ-499": failed("unattributed")}
     patch, _, _ = await run_gen02(outcomes)
     [marked] = patch["exceptions"]
@@ -207,7 +209,7 @@ async def test_failed_voucher_leaves_its_finding_unattributed() -> None:
         "XJ-499",
         TargetType.AuditException,
     )
-    assert make_xero_deps().queue.allowed(task) == {Decision.override, Decision.misstatement}
+    assert make_xero_deps().queue.allowed(task) == {Decision.override, Decision.misstatement, Decision.rerun}
     assert [j.subject_id for j in patch["judgments"]] == [no for no in VOUCHERS if no != "XJ-499"]
     assert patch["procedure_runs"][0].status is RunStatus.succeeded
 

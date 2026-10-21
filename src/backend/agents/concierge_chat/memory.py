@@ -41,7 +41,7 @@ class Turn:
     trail_id: str  # conversation 留痕 ID
     question: str
     answer: str
-    lang: Lang
+    answer_lang: Lang  # 回答语言 (需求 R342)
     citations: list[ConciergeCitation]
     created_at: datetime | None
     aborted: bool
@@ -50,7 +50,7 @@ class Turn:
         return ConversationTurn(
             question=self.question,
             answer=self.answer,
-            lang=self.lang,
+            answer_lang=self.answer_lang,
             citations=self.citations,
             trail_id=self.trail_id,
             created_at=self.created_at,
@@ -92,14 +92,21 @@ def citations_of(raw: Any) -> list[ConciergeCitation]:
     return found
 
 
+def recorded_language(payload: dict[str, Any]) -> Lang:
+    """一轮问答的回答语言 (需求 R342): 取 answer_lang; 需求 R342 之前的留痕没有, 取当时提问带的 lang (那时回答跟它走);
+    值不是 zh, en 的同没有, 往下一项取. 两项都没有为 en (同 Engagement.working_language 的缺省): 写入时总有其一,
+    只有手写或损坏的留痕会走到这一步."""
+    return next((value for value in (payload.get("answer_lang"), payload.get("lang")) if value in ("zh", "en")), "en")
+
+
 def turn_of(entry: TrailEntry) -> Turn:
+    """一条 conversation 留痕 → 一轮问答. 回答语言依次取 answer_lang, lang, en (recorded_language)."""
     payload = entry.payload
-    lang = payload.get("lang")
     return Turn(
         trail_id=entry.id or "",
         question=str(payload.get("question", entry.summary)),
         answer=str(payload.get("answer", "")),
-        lang=lang if lang in ("zh", "en") else "zh",
+        answer_lang=recorded_language(payload),
         citations=citations_of(payload.get("citations")),
         created_at=entry.created_at,
         aborted=payload.get("aborted") is True,
@@ -139,7 +146,7 @@ def history_messages(turns: Sequence[Turn]) -> list[ChatMessage]:
     messages = []
     for turn in turns:
         messages.append(ChatMessage(role="user", content=turn.question))
-        messages.append(ChatMessage(role="assistant", content=turn.answer or INTERRUPTED[turn.lang]))
+        messages.append(ChatMessage(role="assistant", content=turn.answer or INTERRUPTED[turn.answer_lang]))
     return messages
 
 
@@ -152,7 +159,11 @@ def context_tokens(system: str, turns: Sequence[Turn], question: str, tools: Seq
 def summary_material(turns: Sequence[Turn]) -> list[dict[str, Any]]:
     """压缩提示词的 turns 变量."""
     return [
-        {"question": t.question, "answer": t.answer or INTERRUPTED[t.lang], "citations": [c.id for c in t.citations]}
+        {
+            "question": t.question,
+            "answer": t.answer or INTERRUPTED[t.answer_lang],
+            "citations": [c.id for c in t.citations],
+        }
         for t in turns
     ]
 

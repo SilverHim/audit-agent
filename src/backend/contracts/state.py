@@ -2,7 +2,7 @@
 
 import copy
 from collections.abc import Mapping
-from typing import Annotated, Any, TypedDict, TypeVar, cast
+from typing import Annotated, Any, NotRequired, TypedDict, TypeVar, cast
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.models import (
@@ -15,6 +15,7 @@ from backend.contracts.models import (
     AuditReportVersion,
     ComplianceCheck,
     Confirmation,
+    CorrectionNotice,
     DocumentRef,
     Engagement,
     EngagementTerms,
@@ -33,6 +34,7 @@ from backend.contracts.models import (
     ReviewRecord,
     ReviewTask,
     RiskItem,
+    RunPopulation,
     ScheduleRow,
     UncorrectedSchedule,
     Versioned,
@@ -49,6 +51,9 @@ class StagedResult(TypedDict):
     run_id: str  # 本次执行记录的 ID
     writer: AgentId  # 片段的写入者: 执行程序的 Agent; 执行失败时为 A1
     patch: StatePatch  # 要写入的片段, 含本次执行记录的终态
+    # 本次执行的被测总体 (需求 R324): 规则程序经规则引擎成功执行时才有, 随暂存项过检查点, fan_in 与执行记录终态同一
+    # 事务写入 Store 后随 staged_results 清空; 不并入状态
+    population: NotRequired[RunPopulation]
 
 
 V = TypeVar("V", bound=Versioned)
@@ -135,6 +140,8 @@ class EngagementState(TypedDict):
     # 错报, 按 id 与版本合并 (需求 R156: 分类, 沟通, 更正与验证各出新版本; 原为只追加, 旧检查点照常读回)
     misstatements: Annotated[list[Misstatement], upsert_by_id]
     rerun_requests: Annotated[list[RerunRequest], append_unique]  # 过期程序的重跑请求, 只追加 (DecisionSubmit 写)
+    # 更正通知 (需求 R162), 只追加: DecisionSubmit 写 Store, 等待更正的节点读回后并入
+    correction_notices: Annotated[list[CorrectionNotice], append_unique]
     uncorrected_schedule: UncorrectedSchedule | None  # 未更正错报汇总表, A9 写
     # 签字前提的四类审计产出 (需求 R215): 声明书 REPLETTER (A5 FIN-07), 合规检查 CHECK-{程序} (A9 FIN-10, FIN-18),
     # 治理层沟通 GC-{程序}-{run_no} (A10 RPT-07), 独立性声明 S307C (A10 RPT-08 起草, RPT-01 签字时由 A1 置 signed)
@@ -175,6 +182,7 @@ STATE_DEFAULTS: dict[str, list[Any] | None] = {
     "gate_decisions": [],
     "misstatements": [],
     "rerun_requests": [],
+    "correction_notices": [],
     "uncorrected_schedule": None,
     "representation_letter": None,
     "compliance_checks": [],

@@ -1,7 +1,7 @@
 """登录、项目归属与决定错误码. 不启动数据库或编排图."""
 
 import functools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
@@ -13,11 +13,22 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.contracts.errors import DecisionRejected
-from backend.contracts.models import Engagement, MisstatementUpdate, Phase, ReviewRecord, TrailEntry, TrailKind, User
+from backend.contracts.models import (
+    CorrectionNotice,
+    Engagement,
+    Misstatement,
+    MisstatementUpdate,
+    Phase,
+    ReviewRecord,
+    TrailEntry,
+    TrailKind,
+    User,
+)
 from backend.core.security import create_access_token, decode_access_token, hash_password
 from backend.main import create_app
-from backend.persistence.stores import PostgresUserStore
-from tests.fakes import FakeTrail
+from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
+from tests.external import REPO
+from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail
 
 
 @functools.cache
@@ -319,13 +330,25 @@ def test_missing_token(api: SimpleNamespace) -> None:
     [
         ("ENG-2026-002", "NOT_FOUND"),  # 别人的项目
         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
-        ("ENG-2026-001/gate", "NOT_AT_GATE"),  # 自己的项目, 不在闸门
     ],
 )
 def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str) -> None:
     response = api.client.get(f"/api/v1/engagements/{path}", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == code
+
+
+def test_gate_not_at_gate_returns_null(api: SimpleNamespace) -> None:
+    """需求 R346: 自己的项目不在闸门是常态, GET /gate 回 200, 响应体 null (不再是 404 NOT_AT_GATE)."""
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/gate", headers=_auth(api))
+    assert (response.status_code, response.json()) == (200, None)
+
+
+def test_gate_material_missing_is_404_not_found(api: SimpleNamespace) -> None:
+    """停在闸门而材料缺失 (query.gate 抛 LookupError) 时 GET /gate 仍为 404 NOT_FOUND."""
+    api.client.app.state.query.gate.side_effect = LookupError("停在 PLN-15 闸门, 缺材料")
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/gate", headers=_auth(api))
+    assert (response.status_code, response.json()["detail"]["code"]) == (404, "NOT_FOUND")
 
 
 TRAIL_ROWS = [  # 依次为 TR-1 到 TR-5
@@ -408,17 +431,38 @@ def test_trail_cursor_must_be_a_trail_of_this_engagement(api: SimpleNamespace, b
         ("INVALID_VALUE", 422),
         ("ENGAGEMENT_LOCKED", 423),
         ("TASK_NOT_FOUND", 404),
+        ("NOT_AWAITING_CORRECTION", 409),
     ],
 )
-def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: int) -> None:
-    api.decisions.submit.side_effect = DecisionRejected(code, "目标对象已更新到 version 3")
-    response = api.client.post(
-        "/api/v1/engagements/ENG-2026-001/gate-decisions",
-        headers=_auth(api),
-        json={"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"},
-    )
+@pytest.mark.parametrize("route", ["gate-decisions", "client-profile", "correction-notices"])
+def test_gate_decision_error_mapping(api: SimpleNamespace, code: str, status: int, route: str) -> None:
+    """DecisionRejected 按错误码表映射, 原样带消息; 闸门的两条写入路由 (提交决定, 更新客户资料) 与提交更正通知 (需求
+    R163) 同一张表: NOT_AT_GATE 为 409 (需求 R346: 不再按方法区分), NOT_AWAITING_CORRECTION 为 409."""
+    rejected = DecisionRejected(code, "目标对象已更新到 version 3")
+    url = f"/api/v1/engagements/ENG-2026-001/{route}"
+    if route == "gate-decisions":
+        api.decisions.submit.side_effect = rejected
+        body = {"gate": "ACC-01", "target_id": "SCORECARD", "target_version": 1, "decision": "approve"}
+        response = api.client.post(url, headers=_auth(api), json=body)
+    elif route == "correction-notices":
+        api.decisions.submit.side_effect = rejected
+        response = api.client.post(url, headers=_auth(api), json=POSTED)
+    else:
+        api.decisions.update_client_profile.side_effect = rejected
+        response = api.client.put(url, headers=_auth(api), json=CLIENT_PROFILE_BODY)
     assert response.status_code == status
     assert response.json()["detail"] == {"code": code, "message": "目标对象已更新到 version 3"}
+
+
+CLIENT_PROFILE_BODY = {  # PUT /client-profile 的一份合规请求体
+    "version": 2,
+    "legal_name": "X Pty Ltd",
+    "abn": "51824753556",
+    "entity_type": "company",
+    "industry_anzsic": "4512",
+    "listed": False,
+    "directors": ["A"],
+}
 
 
 def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None:
@@ -431,3 +475,217 @@ def test_review_record_carries_misstatement_update(api: SimpleNamespace) -> None
     [call] = api.decisions.submit.await_args_list
     record = call.args[1]
     assert isinstance(record, ReviewRecord) and record.misstatement_update == MisstatementUpdate.model_validate(update)
+
+
+# ── 更正通知与可载入的更正分录 (需求 R163) ──
+
+NOTICE_URL = "/api/v1/engagements/ENG-2026-001/correction-notices"
+POSTED = {"kind": "adjustments_posted", "misstatement_ids": ["M-D-XJ499"], "adjustment_entry_nos": ["AJE-X01"]}
+
+
+def test_correction_notice_filled_by_server(api: SimpleNamespace) -> None:
+    """验收 1: 202 {id: D-{uuid4}}; 交给 DecisionSubmit 的通知 id 同响应, decided_by 为当前用户, decided_at 为服务端
+    时刻 (带时区, 不早于请求前), 其余字段原样; 请求体带 decided_by 422 (服务端填, 不收)."""
+    before = datetime.now(UTC)
+    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED)
+    assert response.status_code == 202
+    [call] = api.decisions.submit.await_args_list
+    eid, notice = call.args
+    assert isinstance(notice, CorrectionNotice) and eid == "ENG-2026-001"
+    assert response.json() == {"id": notice.id} and notice.id.startswith("D-") and len(notice.id) == 38
+    assert (notice.decided_by, notice.kind, notice.misstatement_ids, notice.adjustment_entry_nos) == (
+        "USR-1",
+        "adjustments_posted",
+        ["M-D-XJ499"],
+        ["AJE-X01"],
+    )
+    assert notice.reason is None and notice.decided_at.tzinfo is not None and notice.decided_at >= before
+    forged = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED | {"decided_by": "USR-9"})
+    assert forged.status_code == 422
+
+
+def test_correction_notice_body_checked(api: SimpleNamespace) -> None:
+    """请求体的种类不认识 422, 不交 DecisionSubmit; 不是本人的项目 404."""
+    response = api.client.post(NOTICE_URL, headers=_auth(api), json=POSTED | {"kind": "posted"})
+    assert response.status_code == 422 and not api.decisions.submit.await_args_list
+    other = api.client.post(NOTICE_URL.replace("001", "002"), headers=_auth(api), json=POSTED)
+    assert other.status_code == 404
+
+
+def use_engagement(api: SimpleNamespace, **fields: Any) -> SimpleNamespace:
+    """本人的项目改几个字段 (如数据集), 返回应用的依赖 (SimpleNamespace, 测试按需加存储)."""
+    deps = api.client.app.state.deps
+    deps.engagement_store.mine = deps.engagement_store.mine.model_copy(update=fields)
+    return deps  # type: ignore[no-any-return]
+
+
+# Xero演示数据集设计 "补造的更正分录" 一表: 凭证号, 行数, 摘要 (同一笔各行摘要相同; 都记 2026-09-30)
+XERO_ADJUSTMENTS = [
+    ("AJE-X01", 3, "Audit adjustment AJE-X01: journal #499 removed; no office equipment held at 30 September 2026"),
+    (
+        "AJE-X02",
+        2,
+        "Audit adjustment AJE-X02: superannuation guarantee at 12% on wages of 33,500.00 and accrued wages of 2,010.00",
+    ),
+    ("AJE-X03", 2, "Audit adjustment AJE-X03: wages accrued for 28 to 30 September 2026"),
+    ("AJE-X04", 2, "Audit adjustment AJE-X04: annual leave accrued to 30 September 2026"),
+    (
+        "AJE-X05",
+        2,
+        "Audit adjustment AJE-X05: interest accrued on the Business Savings Account to 30 September 2026, "
+        "as confirmed by the bank",
+    ),
+]
+
+
+@pytest.mark.external  # Xero 补造的更正分录
+@pytest.mark.parametrize(("loaded", "expected"), [([], []), (["AJE-X01", "AJE-X05"], ["AJE-X01", "AJE-X05"])])
+def test_adjustment_entries_of_xero(api: SimpleNamespace, loaded: list[str], expected: list[str]) -> None:
+    """验收 2: Xero 的 AJE-X01 至 AJE-X05 共 5 笔, 凭证号, 入账日, 摘要与行数同设计文档 (XERO_ADJUSTMENTS); 总账里还
+    没有时都未载入, D-CN1 载入 AJE-X01, AJE-X05 之后这两笔为已载入 (按总账里有没有该凭证号的行判断)."""
+    from tests.xero_fakes import XERO_DATASET, XeroFakeDatasetLoader, xero_adjustments
+
+    lines = {("journal_entry", r.id): r.model_dump() for r in xero_adjustments(loaded)} if loaded else {}
+    deps = use_engagement(api, dataset=XERO_DATASET)
+    deps.financial_store = FakeFinancialStore(records=lines)
+    deps.datasets = XeroFakeDatasetLoader(FakeFinancialStore())
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
+    assert response.status_code == 200
+    rows = response.json()
+    assert [(r["entry_no"], r["posting_date"], r["line_count"], r["description"]) for r in rows] == [
+        (entry_no, "2026-09-30", line_count, description) for entry_no, line_count, description in XERO_ADJUSTMENTS
+    ]
+    assert [r["entry_no"] for r in rows if r["loaded"]] == expected
+
+
+class UnreadDatasets:
+    """调一下就失败的载入器: 没有数据集的项目不该读它."""
+
+    def adjustment_entries(self, dataset: str) -> list[Any]:
+        raise AssertionError(f"不该读数据集 {dataset}")
+
+
+@pytest.mark.parametrize(
+    ("dataset", "datasets"),
+    [("demo", lambda: CsvDatasetLoader(REPO / "data")), (None, UnreadDatasets)],
+    ids=["numbat", "no_dataset"],
+)
+def test_adjustment_entries_empty_without_adjustments(
+    api: SimpleNamespace, dataset: str | None, datasets: Callable[[], Any]
+) -> None:
+    """验收 2: Numbat (仓库里的 data/demo, 真实 CSV 载入器: 没有更正分录文件) 为 []; 没有数据集的新客户为 [] 且不读
+    数据集 (载入器一调就失败)."""
+    deps = use_engagement(api, dataset=dataset)
+    deps.datasets = datasets()
+    deps.financial_store = FakeFinancialStore()
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/adjustment-entries", headers=_auth(api))
+    assert (response.status_code, response.json()) == (200, [])
+
+
+def test_misstatements_carry_lifecycle_and_notices(api: SimpleNamespace) -> None:
+    """验收 3: items 为各错报的最新版本, 带生命周期字段与科目代码; correction_notices 为 Store 中的全部更正通知, 按
+    提交时间; 重要性与意见取总览."""
+    early, late = datetime(2026, 10, 20, 3, 30, tzinfo=UTC), datetime(2026, 10, 22, 4, tzinfo=UTC)
+    first = CorrectionNotice(id="D-CN1", decided_by="USR-1", decided_at=early, **POSTED)
+    second = CorrectionNotice(
+        id="D-STOP", kind="stop_waiting", misstatement_ids=["M-1"], reason="r", decided_by="USR-1", decided_at=late
+    )
+    verifying = Misstatement.model_validate(
+        MISSTATEMENT.model_dump() | {"version": 4, "status": "verifying", "correction_notice_id": "D-CN1"}
+    )
+    deps = use_engagement(api)
+    deps.output_store = FakeOutputStore([MISSTATEMENT, verifying, second, first])
+    api.client.app.state.query.overview = AsyncMock(
+        return_value=SimpleNamespace(materiality_cents=32431, opinion_route=None)
+    )
+    response = api.client.get("/api/v1/engagements/ENG-2026-001/misstatements", headers=_auth(api))
+    assert response.status_code == 200
+    body = response.json()
+    [item] = body["items"]
+    assert (item["version"], item["status"], item["account_code"], item["correction_notice_id"]) == (
+        4,
+        "verifying",
+        "710",
+        "D-CN1",
+    )
+    assert [n["id"] for n in body["correction_notices"]] == ["D-CN1", "D-STOP"]
+    assert (body["materiality_cents"], body["schedule"]) == (32431, None)
+
+
+MISSTATEMENT = Misstatement(  # 第 1 版 (identified), 由人对判断认定; 科目代码由草稿带入
+    id="M-D-XJ499",
+    judgment_id="J-GEN-02-1-XJ-499",
+    exception_id=None,
+    review_record_id="D-1",
+    type="factual",
+    account="Office Equipment",
+    assertion="Accuracy",
+    amount_cents=75000,
+    direction="overstated",
+    account_code="710",
+)
+
+
+# ── 工作语言 (需求 R339) ──
+
+
+def language_store(api: SimpleNamespace, **fields: Any) -> FakeEngagementStore:
+    """本人的项目 (改几个字段, 如锁定) 换成能改工作语言的假项目存储, 返回它."""
+    deps = api.client.app.state.deps
+    store = FakeEngagementStore(engagements=[deps.engagement_store.mine.model_copy(update=fields)])
+    deps.engagement_store = store
+    return store
+
+
+LANGUAGE_URL = "/api/v1/engagements/ENG-2026-001/working-language"
+
+
+def test_working_language_change_is_trailed_once(api: SimpleNamespace) -> None:
+    """验收 2: en 改为 zh 返回改后的项目, decision 留痕一行 (action working_language, from en, to zh, 写入人为当前
+    用户); 再提交 zh (与当前相同) 不改也不留痕; 改回 en 再留一行."""
+    store = language_store(api)
+    changed = api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
+    assert (changed.status_code, changed.json()["working_language"]) == (200, "zh")
+    assert store.engagements[0].working_language == "zh"
+    same = api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
+    assert (same.status_code, same.json()["working_language"]) == (200, "zh")
+    api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "en"})
+    rows = [(e.kind, e.actor, e.payload) for e in api.trail.entries]
+    assert rows == [
+        (TrailKind.decision, "USR-1", {"action": "working_language", "from": "en", "to": "zh"}),
+        (TrailKind.decision, "USR-1", {"action": "working_language", "from": "zh", "to": "en"}),
+    ]
+
+
+CREATE = {"period_start": "2025-07-01", "period_end": "2026-06-30", "dataset": "demo"}  # POST /engagements 的请求体
+
+
+@pytest.mark.parametrize(
+    ("fields", "method", "url", "body", "status", "code"),
+    [
+        ({}, "PUT", LANGUAGE_URL, {"language": "fr"}, 422, "INVALID_VALUE"),
+        ({}, "PUT", LANGUAGE_URL, {"language": "ZH"}, 422, "INVALID_VALUE"),
+        ({"locked": True}, "PUT", LANGUAGE_URL, {"language": "zh"}, 423, "ENGAGEMENT_LOCKED"),
+        ({}, "PUT", LANGUAGE_URL.replace("001", "002"), {"language": "zh"}, 404, "NOT_FOUND"),  # 不是本人的项目
+        ({}, "POST", "/api/v1/engagements", {**CREATE, "working_language": "fr"}, 422, "INVALID_VALUE"),
+    ],
+    ids=["unknown", "case", "locked", "not_mine", "create_unknown"],
+)
+def test_working_language_rejected(
+    api: SimpleNamespace, fields: dict[str, Any], method: str, url: str, body: dict[str, str], status: int, code: str
+) -> None:
+    """验收 1, 2: 取值不在 zh, en 422 INVALID_VALUE (区分大小写; 建项目与修改同一个校验 parse_language, 建项目时
+    不建); 项目锁定 423 ENGAGEMENT_LOCKED; 别人的项目 404. 都不改项目, 不留痕 (POST 一例只看错误码)."""
+    store = language_store(api, **fields)
+    response = api.client.request(method, url, headers=_auth(api), json=body)
+    assert (response.status_code, response.json()["detail"]["code"]) == (status, code)
+    assert store.engagements[0].working_language == "en" and api.trail.entries == []
+
+
+def test_working_language_change_undone_when_trail_fails(api: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    """审核 R339-01: 留痕写失败时把语言改回原值再抛错: 项目仍是 en, 也没有留痕, 不留下没有留痕的修改."""
+    store = language_store(api)
+    monkeypatch.setattr(api.trail, "record", AsyncMock(side_effect=RuntimeError("trail down")))
+    with pytest.raises(RuntimeError, match="trail down"):
+        api.client.put(LANGUAGE_URL, headers=_auth(api), json={"language": "zh"})
+    assert store.engagements[0].working_language == "en" and api.trail.entries == []

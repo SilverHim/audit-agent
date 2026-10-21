@@ -1,8 +1,9 @@
 // 判断呈递在前端的判断 (lib/presentation) 的测试, bun test 运行. 数据是合成的: 只填用到的字段.
 import { describe, expect, test } from 'bun:test'
-import type { ReviewTaskView, TaskPresentation } from '../src/client/types.gen'
+import type { PresentedFailure, ReviewTaskView, TaskPresentation } from '../src/client/types.gen'
 import {
   cardLayout,
+  failureParts,
   needsPresentation,
   presentationFor,
   presentationKey,
@@ -74,5 +75,42 @@ describe('showSideProposals', () => {
 
   test('collab 关闭时决定卡没有两方的建议, 两栏照常显示', () => {
     expect(showSideProposals(false, view('T-1', 'pending', 'judgment'))).toBe(true)
+  })
+})
+
+describe('failureParts', () => {
+  // 后端 test_presentation 的 REV-02: SI-2026-0612 有 REV-08 跨期例外 (无归因), SI-2026-0618 没有 (带对象的失败);
+  // 两者的输出都连续 3 次结构不合
+  const rule = {
+    rule_id: 'R01',
+    amount_cents: 14200000,
+    detail: { posting_date: '2026-06-28', signed_date: '2026-07-03' },
+  }
+  const call = { level_failed: 'structure', errors: ['conclusion: field required'], attempts: 3, trail_id: 'TR-9' }
+  const failure = (fields: object) => fields as PresentedFailure
+
+  test('无归因的例外: 先规则与明细, 再调用次数, 没通过的校验与错误 (需求 R355); 没找到调用时只有规则与明细', () => {
+    expect(failureParts(failure({ source: 'exception', ...rule, ...call }))).toEqual({
+      rule: { id: 'R01', detail: rule.detail },
+      call: { attempts: 3, level: 'structure' },
+      errors: call.errors,
+    })
+    expect(failureParts(failure({ source: 'exception', ...rule }))).toEqual({
+      rule: { id: 'R01', detail: rule.detail },
+      call: null,
+      errors: [],
+    })
+  })
+
+  test('带对象的失败: 只有调用的几项, 与无归因的那段相同; 整次执行失败与没有失败原因为 null', () => {
+    const subject = failureParts(failure({ source: 'llm_call', subject_id: 'SI-2026-0618', ...call }))
+    expect(subject).toEqual({ rule: null, call: { attempts: 3, level: 'structure' }, errors: call.errors })
+    expect(failureParts(failure({ source: 'llm_call', subject_id: 'SI-2026-0618' }))).toEqual({
+      rule: null,
+      call: null,
+      errors: [],
+    })
+    expect(failureParts(failure({ source: 'run', reason: 'RuntimeError: boom' }))).toBeNull()
+    expect(failureParts(null)).toBeNull()
   })
 })

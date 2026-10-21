@@ -24,7 +24,7 @@ from backend.contracts.models import (
 from backend.contracts.services import JudgmentOutcome
 from backend.core.config import get_settings
 from backend.services.procedure_library import ProcedureLibrary
-from backend.services.review_queue import ReviewQueue
+from backend.services.review_queue import RERUNNABLE, ReviewQueue
 from tests.fakes import NOW, make_run
 
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
@@ -88,11 +88,13 @@ def test_failed_task_without_flag_or_subject_allows_rerun_only() -> None:
     assert QUEUE.allowed(make_task("REV-03", TaskKind.failed, subject_id=None)) == frozenset({Decision.rerun})
 
 
-def test_normal_and_unattributed_decisions_unchanged() -> None:
+def test_normal_and_unattributed_decisions() -> None:
+    """normal 不变; unattributed (带规则例外的对象判断失败) 另可 rerun, 同 failed 任务 (需求 R347 验收 1)."""
     normal = make_task("REV-02", TaskKind.normal, subject_id=None)
     unattributed = make_task("REV-02", TaskKind.unattributed, subject_id="INV-1")
     assert QUEUE.allowed(normal) == frozenset({Decision.confirm, Decision.override, Decision.misstatement})
-    assert QUEUE.allowed(unattributed) == frozenset({Decision.override, Decision.misstatement})
+    assert QUEUE.allowed(unattributed) == frozenset({Decision.override, Decision.misstatement, Decision.rerun})
+    assert frozenset({TaskKind.failed, TaskKind.unattributed}) == RERUNNABLE
 
 
 # ── classify 与 make_task: 第 5 节"需要人"表, 第 0 节任务 ID 规则 ──

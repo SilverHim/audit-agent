@@ -62,9 +62,11 @@ from backend.contracts.models import (
     ReviewStatus,
     RiskItem,
     RuleOutcome,
+    RulePopulation,
 )
 from backend.contracts.records import DatasetTraits, Employee, JournalEntry
 from backend.contracts.services import RuleResult
+from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import ADJUSTMENTS, XeroDatasetLoader, read_adjustments
@@ -74,6 +76,8 @@ from tests.external import external_dir, require_xero_snapshot, snapshot_dir, su
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    PLAN_CONFIRMATION,
+    PLAN_REJECT_REASON,
     FakeConfirmationChannel,
     FakeDatasetLoader,
     FakeDataStore,
@@ -86,14 +90,17 @@ from tests.fakes import (
     FakeTrail,
     csh02_subsequent_rows,
     csh02_window_rows,
+    engine_result,
     gen05_exception,
     make_deps,
+    rev08_populations,
     wait_idle,
 )
 from tests.fixture_sets import XERO
 
 REPO = Path(__file__).resolve().parents[1]
 XERO_DATASET = "xero/20261017-q1"
+XERO_PERIOD = (date(2026, 7, 1), date(2026, 9, 30))  # 快照的本期 (dataset.json)
 SNAPSHOT_NAME = "20261017-q1"  # 快照目录名, data/external/xero/api/20261017-q1
 # 演示配置的功能集: 取 .env.example 的 FEATURES (演示走通, 真实模型变体与 PLN-15 固定输出的守卫共用这一处)
 DEMO_FEATURES = parse_features(
@@ -102,6 +109,26 @@ DEMO_FEATURES = parse_features(
         for line in (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
         if line.startswith("FEATURES=")
     ).split("=", 1)[1]
+)
+# 演示配置走一遍各程序读固定输出 (演示运行副本) 的次数: 上传文件分类 21 份 (承接 2, 外勤 19), 合同 3, 回函 2, REV-03
+# 三份合同, REV-02 六张发票, CSH-02 一户, GEN-02 七笔凭证 (需求 R146), RPT-03 两稿, PLN-15 两个修订 (需求 R317); 每次都
+# 一次通过
+FIXTURE_READS = {
+    "DOC-CLASSIFY": 21,
+    "DOC-04": 3,
+    "DOC-06": 2,
+    "REV-03": 3,
+    "REV-02": 6,
+    "CSH-02": 1,
+    "GEN-02": 7,
+    "RPT-03": 2,
+    "PLN-15": 2,
+}
+FIXED_CALLS = sum(FIXTURE_READS.values())  # 固定输出走一遍的大模型调用数
+# 演示的两次 PLN-15 决定的请求体: 先退回 (要求写明银行函证的时间), 再批准 (确认同 R205; 需求 R317)
+PLAN_DECISIONS = (
+    {"decision": "reject", "reason": PLAN_REJECT_REASON},
+    {"decision": "approve", "plan_confirmation": PLAN_CONFIRMATION.model_dump(mode="json")},
 )
 PLANNING = REPO / "src" / "backend" / "knowledge" / "planning"  # 通用计划模板 (载入器的构造参数)
 DOC04_FIXTURES = REPO / "tests" / "fixtures" / "llm_xero" / "DOC-04"  # xero_contracts 的来源
@@ -228,6 +255,42 @@ def xero_adjustments(
     """补造的更正分录 (11 行), 按行 ID; entry_nos 给了时只取这些凭证."""
     rows = read_adjustments(supplement(loader).root / ADJUSTMENTS)
     return sorted((r for r in rows if entry_nos is None or r.entry_no in entry_nos), key=lambda r: r.id)
+
+
+def xero_v01_rows(
+    entry_nos: Sequence[str] | None = None, loader: XeroDatasetLoader | None = None
+) -> list[dict[str, Any]]:
+    """FIN-09 V01 的行 (需求 R165): 补造的更正分录 (xero_adjustments, entry_nos 给了时只取这些凭证) 接科目表的名称,
+    类型与标准分类, 列同 FIN-09.yaml 的 SQL, 按凭证号与行 ID. 载入这些分录 (entry_nos 为空时为全部) 之后连库跑 V01
+    得到的行与它逐行相等 (test_rules_fin09 两轮各断言一次)."""
+    accounts = {a.code: a for a in xero_tables(loader)["accounts"]}
+    rows = []
+    for line in sorted(xero_adjustments(entry_nos, loader), key=lambda r: (r.entry_no, r.id)):
+        account = accounts.get(line.account_code)
+        rows.append(
+            {
+                "source_type": "journal_entry",
+                "id": line.id,
+                "entry_no": line.entry_no,
+                "posting_date": line.posting_date,
+                "account_code": line.account_code,
+                "account_name": account.name if account else None,
+                "account_type": account.type if account else None,
+                "account_category": account.category if account else None,
+                "debit_cents": line.debit_cents,
+                "credit_cents": line.credit_cents,
+                "description": line.description,
+                "source_doc": line.source_doc,
+            }
+        )
+    return rows
+
+
+def with_adjustments(
+    store: FakeFinancialStore, entry_nos: Sequence[str], loader: XeroDatasetLoader | None = None
+) -> None:
+    """假财务存储另记补造的更正分录 entry_nos 的各行 (经 record 与 journal_entries 取得到, 同载入之后)."""
+    store.records |= {("journal_entry", r.id): r.model_dump() for r in xero_adjustments(entry_nos, loader)}
 
 
 def xero_employees(loader: XeroDatasetLoader | None = None) -> list[Employee]:
@@ -361,6 +424,21 @@ def xero_engagement(loader: XeroDatasetLoader | None = None) -> Engagement:
             "period_end": period[1],
         }
     )
+
+
+def xero_state() -> EngagementState:
+    """Xero 项目进入 P2 时的状态: 计划预置的目标与风险, 外勤阶段上传的文件, 闸门定的重要性 (收入 1%, 执行重要性 50%,
+    明显微小 5%, 即 32431 / 16216 / 1622). procedure_pack 为空, 每次执行由 xero_context (test_xero_fixtures) 换成
+    该程序."""
+    objectives, risks = xero_presets()
+    return initial_state(xero_engagement(), [], xero_profile().version) | {  # type: ignore[return-value]
+        "audit_objectives": objectives,
+        "risk_register": risks,
+        "documents": xero_documents("fieldwork"),
+        "materiality_cents": 32431,
+        "performance_materiality_cents": 16216,
+        "clearly_trivial_cents": 1622,
+    }
 
 
 class XeroFakeDatasetLoader(FakeDatasetLoader):
@@ -620,6 +698,24 @@ def xero_rev08_exception(run: ProcedureRun) -> AuditException:
                 reliability="internal_original",
             )
         ],
+    )
+
+
+XERO_REV08_WINDOW = 20  # REV-08 的窗口天数: 关联的收入目标为特别风险 (见上)
+
+
+@functools.cache
+def xero_rev08_populations() -> list[RulePopulation]:
+    """REV-08 对 Xero 演示的被测总体 (需求 R324): 由演示数据导入之后的表 (xero_tables) 按总体 SQL 的口径算出, 期末取
+    快照. R01, R02 为窗口内六张发票, R03 为其中找得到收款的五张 (ORC1024 截至数据日尚未收款). 连库结果与它一致由 R112
+    的连库用例断言 (同上)."""
+    tables = xero_tables()
+    return rev08_populations(
+        tables["sales_invoices"],
+        tables["delivery_notes"],
+        tables["bank_transactions"],
+        XERO_PERIOD[1],
+        XERO_REV08_WINDOW,
     )
 
 
@@ -899,21 +995,26 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
 
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
-] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES)
-    "PLN-07": lambda run: RuleResult(
-        exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}
+] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
+    "PLN-07": lambda run: engine_result(
+        "PLN-07",
+        RuleResult(exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}),
     ),
-    "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS}),
-    "REV-08": lambda run: RuleResult(exceptions=[xero_rev08_exception(run)], rows={}),
-    "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS}),
-    "CSH-05": lambda run: RuleResult(exceptions=[], rows={}),  # 两个账户对账单的期末余额都等于试算表
-    "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows()),
-    "GEN-05": xero_gen05_result,  # 功能 journals 打开时才执行
+    "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS})),
+    "REV-08": lambda run: engine_result(
+        "REV-08", RuleResult(exceptions=[xero_rev08_exception(run)], rows={}), xero_rev08_populations()
+    ),
+    "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS})),
+    # 两个账户对账单的期末余额都等于试算表
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={})),
+    "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
+    "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
-    "GEN-03": lambda run: RuleResult(
-        exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []}
+    "GEN-03": lambda run: engine_result(
+        "GEN-03", RuleResult(exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []})
     ),
-    "GEN-07": lambda run: RuleResult(exceptions=xero_gen07_exceptions(run), rows={}),  # 功能 going_concern 打开时才执行
+    # 功能 going_concern 打开时才执行
+    "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
 }
 
 
@@ -940,6 +1041,18 @@ XERO17_ANNOTATION = Annotation(
     ),
 )
 XERO17_CONTRACTS = ["CON-X01", "CON-X02", "CON-X03"]  # REV-03 的判断对象, 按编号
+# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
+XERO_PLAN_ROWS = [
+    ("OBJ-REV-OCC", "REV-03"),
+    ("OBJ-REV-OCC", "REV-08"),
+    ("OBJ-REV-CUT", "REV-02"),
+    ("OBJ-REV-CUT", "REV-03"),
+    ("OBJ-REV-CUT", "REV-08"),
+    ("OBJ-CASH-EXI", "CSH-02"),
+    ("OBJ-CASH-EXI", "CSH-04"),
+    ("OBJ-CASH-EXI", "CSH-05"),
+    (None, "DOC-06"),
+]
 XERO17_INVOICES = [str(row["id"]) for row in XERO_S01_ROWS]  # REV-02 的判断对象 (S01 六张), 按发票 ID
 
 # ── 打开功能 journals 的增量 (需求 R146; 设计稿第 7.2 节第 12, 13 步): GEN-05 七条例外, GEN-02 七条判断与其决定 ──
@@ -1169,3 +1282,39 @@ def xero_identified_misstatements() -> dict[str, list[Any]]:
         "judgments": [*sources, fixture_judgment("REV-03", "CON-X01", AutonomyLevel.L2)],
         "misstatements": misstatements,
     }
+
+
+# 第 2 轮的三条薪酬错报 (FIN-15 第 1 次对科目的判断认定, Xero演示数据集设计第 2.8 节): (科目代码, 决定 ID 后缀, 科目,
+# 金额), 都是 Completeness 低估
+XERO_ROUND2 = [
+    ("826", "F03", "Superannuation payable (826)", 426120),
+    ("804", "F04", "Wages payable (804)", 201000),
+    ("805", "F05", "Annual leave provision (805)", 268736),
+]
+
+
+def round_file(n: int) -> dict[str, Any]:
+    """补造的 FIN-08 第 n 轮沟通记录 (中性格式, manual/fin08_round{n}.json)."""
+    path = supplements_dir(SNAPSHOT_NAME) / "manual" / f"fin08_round{n}.json"
+    return json.loads(path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+
+
+def registration(
+    n: int, misstatements: Sequence[Misstatement], agrees: Mapping[str, bool] | None = None
+) -> list[dict[str, Any]]:
+    """第 n 轮记录映射成 FIN-08 结果模型 ManagementResponses 的行 (JSON 形式, 同前端提交): misstatement_sources 为
+    错报的来源判断, 每条一行, 依据的版本为给定错报的版本; 沟通对象取 recipient; agrees 缺省都同意 (补造的两轮都同意)."""
+    data = round_file(n)
+    by_source = {m.judgment_id: m for m in misstatements}
+    return [
+        {
+            "misstatement_id": by_source[source].id,
+            "base_version": by_source[source].version,
+            "communicated_at": data["communicated_at"],
+            "communicated_to": data["recipient"],
+            "responded_at": data["responded_at"],
+            "response": data["response"],
+            "agrees_to_correct": (agrees or {}).get(by_source[source].id, True),
+        }
+        for source in data["misstatement_sources"]
+    ]

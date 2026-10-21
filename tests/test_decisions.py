@@ -67,6 +67,7 @@ from tests.fakes import (
     NUMBAT_RISKS,
     PLAN_CONFIRMATION,
     PLAN_REJECT_ID,
+    PLAN_REJECT_REASON,
     PLANNING_FEATURES,
     TYPO_PROFILE,
     EngagementWrite,
@@ -88,8 +89,8 @@ from tests.fakes import (
     wait_idle,
 )
 from tests.fixture_sets import XERO
-from tests.xero_fakes import XERO17_MATERIALITY, XERO_RULES, make_xero_deps, xero_financial_store
-from tests.xero_flow import approve_acceptance, to_acceptance_gate
+from tests.xero_fakes import XERO17_MATERIALITY, XERO_PLAN_ROWS, XERO_RULES, make_xero_deps, xero_financial_store
+from tests.xero_flow import approve_acceptance, entered_p2_by, to_acceptance_gate
 
 NOW = datetime(2026, 10, 1, tzinfo=UTC)
 ANNOTATION = Annotation(section=ReportSection.opinion, comment="x")
@@ -1398,7 +1399,8 @@ async def test_same_version_with_different_content_in_store_rejected() -> None:
 
 
 def loss_making(base_amount_cents: int) -> Agents:
-    """PLN-01 同 Numbat, 但税前利润基准金额改为 base_amount_cents (亏损为负), 候选区间随之."""
+    """PLN-01 同 Numbat, 但税前利润基准金额改为 base_amount_cents (亏损为负), 候选区间随之; 不标本期不适用
+    (not_applicable, 需求 R351 起由 A4 标), 即旧材料的样子: 闸门按金额拒绝, 不看标记."""
 
     def agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
         numbat = cast(ScriptAgent, numbat_p1_agents(deps)["PLN-01"]).script
@@ -1466,7 +1468,6 @@ PLAN_APPROVE = GateDecision(
     decided_by="U-1",
     decided_at=NOW,
 )
-PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # 演示的驳回理由 (需求 R206 验收 3)
 # 需要项目质量复核, 也不确认不需要审计师的专家 (需求 R206 验收 2): 只作记录, 不拦截
 FIRST_YEAR_EQR = PlanConfirmation(
     eqr_required=True, eqr_basis="Firm policy for first-year audits", auditor_expert_not_required=False
@@ -1550,11 +1551,7 @@ async def test_plan_gate_stops_before_p2(plan_gate: Started) -> None:
     assert {(p.version, p.status) for p in p2} == {(1, ProcedureStatus.planned)}
     engagement = await s.engagement_store.get(EID)
     assert engagement is not None and engagement.phase is Phase.P1_Planning and values["phase"] is Phase.P1_Planning
-    assert not [
-        e
-        for e in trail_of(s, TrailKind.transition)
-        if e.payload["object"] == "engagement" and e.payload["to"] == Phase.P2_Executing
-    ]
+    assert entered_p2_by(trail_of(s, TrailKind.transition)) == []
     assert s.latest_procedure("PLN-15").status is ProcedureStatus.planned
     runs = {r.id: r for r in await s.output_store.latest(EID, ProcedureRun)}
     assert runs["RUN-PLN-15-1"].status is RunStatus.succeeded
@@ -1592,20 +1589,6 @@ OTHER_GATE_FIELDS = {
     "disposition": OpinionType.qualified,
     "annotations": [ANNOTATION],
 }
-
-
-# 停在 PLN-15 闸门时审计计划页的程序表 (需求 R314 验收 2): 按审计目标在状态中的顺序, 组内按程序编号; 都是全量
-XERO_PLAN_ROWS = [
-    ("OBJ-REV-OCC", "REV-03"),
-    ("OBJ-REV-OCC", "REV-08"),
-    ("OBJ-REV-CUT", "REV-02"),
-    ("OBJ-REV-CUT", "REV-03"),
-    ("OBJ-REV-CUT", "REV-08"),
-    ("OBJ-CASH-EXI", "CSH-02"),
-    ("OBJ-CASH-EXI", "CSH-04"),
-    ("OBJ-CASH-EXI", "CSH-05"),
-    (None, "DOC-06"),
-]
 
 
 async def plan_page(s: Started) -> PlanView:

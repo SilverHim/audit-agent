@@ -17,11 +17,13 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, ClassVar, Literal, TypeVar, cast
+from typing import Any, ClassVar, Literal, Protocol, TypeVar, cast
 from unittest import mock
 
 import httpx
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, ValidationError
 
 import backend.main
@@ -65,6 +67,7 @@ from backend.contracts.models import (
     TERMS_ACKNOWLEDGEMENTS,
     TERMS_ELEMENTS,
     AbnRecord,
+    AcceptanceScorecard,
     AgentId,
     AnalyticsResult,
     AsicCompanyRecord,
@@ -111,6 +114,8 @@ from backend.contracts.models import (
     JudgmentRef,
     LlmSettings,
     LlmSlot,
+    ManualRequest,
+    ManualResult,
     MaterialityCandidate,
     MaterialityCandidates,
     MaterialityChoice,
@@ -128,6 +133,7 @@ from backend.contracts.models import (
     PlanItem,
     PlanSection,
     PlanStatus,
+    PopulationItem,
     Procedure,
     ProcedureNote,
     ProcedureRun,
@@ -145,10 +151,13 @@ from backend.contracts.models import (
     ReviewTask,
     RiskItem,
     RuleOutcome,
+    RulePopulation,
+    RunPopulation,
     RunStatus,
     RunTrigger,
     ShareholderDirection,
     StepKind,
+    TargetType,
     TaskKind,
     TaskStatus,
     TermsCheck,
@@ -159,6 +168,7 @@ from backend.contracts.models import (
     UncorrectedItem,
     User,
     Versioned,
+    WorkingLanguage,
     WrittenRepresentationLetter,
 )
 from backend.contracts.ports import (
@@ -182,7 +192,7 @@ from backend.contracts.records import (
     TrialBalanceRow,
 )
 from backend.contracts.services import JudgmentContext, JudgmentOutcome, RuleResult
-from backend.contracts.state import StatePatch, initial_state
+from backend.contracts.state import EngagementState, StatePatch, initial_state
 from backend.core.config import get_settings
 from backend.core.security import create_access_token
 from backend.main import build_deps, create_app
@@ -198,10 +208,12 @@ from backend.services.abn import normalize_abn
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
-from backend.services.judgment_engine import JudgmentEngine, OutputValidator
+from backend.services.judgment_engine import MAX_ATTEMPTS, JudgmentEngine, OutputValidator
 from backend.services.llm_settings import LlmSettingsService
+from backend.services.populations import total_cents
 from backend.services.procedure_library import ProcedureLibrary
 from backend.services.review_queue import ReviewQueue
+from backend.services.rule_engine import rule_population
 from backend.services.xero_link import XeroLink
 from tests.external import snapshot_dir, supplements_dir
 
@@ -994,6 +1006,7 @@ class FakeEngagementStore:
         period_end: date,
         dataset: str | None,
         profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
     ) -> Engagement:
         raise NotImplementedError
 
@@ -1025,11 +1038,28 @@ class FakeEngagementStore:
             "client_profile_version": client_profile_version,
         }
         kept = {k: v for k, v in changes.items() if v is not None}
-        updated = current.model_copy(update={**kept, "updated_at": datetime.now(UTC)})
+        self._write(eid, current.model_copy(update={**kept, "updated_at": datetime.now(UTC)}), kept)
+
+    async def set_working_language(self, eid: str, language: WorkingLanguage) -> WorkingLanguage:
+        """改工作语言, 返回之前的值; 相同时不改. 不存在 LookupError, 已锁定 EngagementLocked (同 Postgres 的 writable);
+        在 output_store 的事务块内调用时加入该事务."""
+        current = await self.get(eid)
+        if current is None:
+            raise LookupError(f"Engagement {eid} not found")
+        if current.locked:
+            raise EngagementLocked(eid)
+        if current.working_language != language:
+            changes = {"working_language": language}
+            self._write(eid, current.model_copy(update={**changes, "updated_at": datetime.now(UTC)}), changes)
+        return current.working_language
+
+    def _write(self, eid: str, updated: Engagement, changes: dict[str, Any]) -> None:
+        """写入改后的项目 (update 与 set_working_language 共用): 在 output_store 的事务块内时暂存进该事务, 记下改动
+        changes, 块正常结束才生效; 否则立即生效."""
         txn = self._txn()
         if txn is not None:
             txn.engagements[eid] = updated
-            txn.log.append(EngagementWrite("update", eid, kept))
+            txn.log.append(EngagementWrite("update", eid, changes))
         else:
             self._apply_engagement(updated)
 
@@ -1115,6 +1145,71 @@ class FakeEngagementStore:
     async def list(self, owner_id: str | None = None) -> list[Engagement]:
         """owner_id 为空列全部 (供 recover), 否则只列该用户的项目."""
         return [e for e in self.engagements if owner_id is None or e.owner_id == owner_id]
+
+
+class CreatingEngagementStore(FakeEngagementStore):
+    """能建项目的假项目存储: 编号 ENG-2026-001 起顺排; 画像与该客户的各版比较内容, 有一版相同就沿用最新一版, 都不同
+    才出新版本 (同 PostgresEngagementStore.create 的效果)."""
+
+    async def create(
+        self,
+        *,
+        owner_id: str,
+        period_start: date,
+        period_end: date,
+        dataset: str | None,
+        profile: ClientProfile,
+        working_language: WorkingLanguage = "en",
+    ) -> Engagement:
+        if period_end < period_start:
+            raise ValueError("period_end precedes period_start")
+        versions = sorted((p for p in self.profiles if p.id == profile.id), key=lambda p: p.version)
+        if not versions:
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
+        elif any(v.model_copy(update={"version": profile.version}) == profile for v in versions):
+            profile = versions[-1]
+        else:
+            profile = profile.model_copy(update={"version": versions[-1].version + 1})
+            await self.save_profile(profile, source=ProfileSource.dataset, updated_by=owner_id)
+        engagement = Engagement(
+            id=f"ENG-2026-{len(self.engagements) + 1:03d}",
+            client_id=profile.id,
+            period_start=period_start,
+            period_end=period_end,
+            dataset=dataset,
+            owner_id=owner_id,
+            client_profile_version=profile.version,
+            phase=Phase.P0_Acceptance,
+            working_language=working_language,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        self.engagements.append(engagement)
+        return engagement
+
+
+async def evidence_pointers(
+    deps: AgentDeps, eid: str = ENGAGEMENT.id, *, everything: bool = False
+) -> list[EvidencePointer]:
+    """项目里判断 (推理链与证据), 合同与函证的证据指针. everything 时另含例外, 承接评分卡的登记检查与复核决定的人工
+    结果, 即存储中全部带指针的对象 (R56 验收 2; 假存储只预置了部分试算表行, 例外指针在假实现下解析不全). 走通的
+    汇总 (tests/live_walk) 与 R56 的检查共用."""
+    store = deps.output_store
+    pointers: list[EvidencePointer] = []
+    for j in await store.latest(eid, Judgment):
+        pointers += [*j.evidence, *(p for step in j.reasoning_chain for p in step.evidence)]
+    if everything:
+        for x in await store.latest(eid, AuditException):
+            pointers += x.evidence
+        for card in await store.latest(eid, AcceptanceScorecard):
+            pointers += [check.evidence for check in card.registry_checks]
+        for r in await store.latest(eid, ReviewRecord):
+            pointers += r.manual_result.evidence if r.manual_result is not None else []
+    for c in await deps.financial_store.contracts(eid):
+        pointers += c.evidence
+    for c in await store.latest(eid, Confirmation):
+        pointers += c.evidence
+    return pointers
 
 
 T = TypeVar("T", bound=Versioned)
@@ -1598,18 +1693,148 @@ NUMBAT_S01_ROWS = [  # REV-02 规则 S01 选中的发票 (合成数据集设计�
         ("0618", "CON-002", date(2026, 6, 29), 9500000),
     )
 ]
+
+
+def engine_result(procedure_id: str, result: RuleResult, recorded: Sequence[RulePopulation] = ()) -> RuleResult:
+    """预置的规则结果补上被测总体 (需求 R324), 口径同 SqlRuleEngine: 按程序 YAML 的规则顺序, 没有执行的规则 (outcomes)
+    不记; emit rows 的规则以预置的 rows 为总体 (rule_engine.rule_population); 写了总体 SQL 的规则取 recorded 中同规则
+    编号的 (须给, 缺了抛 KeyError); 其余 emit exception 的规则记为未记录."""
+    template = knowledge_library(KNOWLEDGE).load(procedure_id)
+    skipped = {o.rule_id for o in result.outcomes}
+    given = {p.rule_id: p for p in recorded}
+    populations = []
+    for rule in template.rules:
+        if rule.id in skipped:
+            continue
+        if rule.emit == "rows":
+            populations.append(rule_population(rule.id, result.rows[rule.id]))
+        elif rule.population is not None:
+            populations.append(given[rule.id])
+        else:
+            populations.append(RulePopulation(rule_id=rule.id))
+    return result.model_copy(update={"populations": populations})
+
+
+def receipt_matches(invoice_no: str, reference: str | None) -> bool:
+    """流水参考号对得上发票号 (REV-08 R03 的收款对应, 测试里独立写一遍): 包含发票号; 或发票号为字母前缀加纯数字时,
+    参考号里出现该数字串且前后都不是数字."""
+    if reference is None:
+        return False
+    if invoice_no in reference:
+        return True
+    digits = re.fullmatch(r"[A-Za-z]+([0-9]+)", invoice_no)
+    return digits is not None and re.search(rf"(^|[^0-9]){digits.group(1)}([^0-9]|$)", reference) is not None
+
+
+def rev08_populations(
+    invoices: Iterable[SalesInvoice],
+    notes: Iterable[DeliveryNote],
+    transactions: Iterable[BankTransaction],
+    period_end: date,
+    window_days: int,
+) -> list[RulePopulation]:
+    """REV-08 R01, R02, R03 的被测总体, 按 REV-08.yaml 总体 SQL 的口径由表独立算一遍: 期末前 window_days 天 (两端都含)
+    入账的发票, 按发票 ID, 每张一项; R01 为有服务完成记录的, R02 为全部, records 为记录数组 (按记录 ID, 每条
+    {delivery_no, signed_date, signed_by}, 没签收的为 None; 没有记录的为 None); R03 为找得到收款的 (正数流水, 见
+    receipt_matches), 带收款流水 ID 与收款日 (逗号连接, 按流水 ID) 及收款合计."""
+    start = period_end - timedelta(days=window_days)
+    window = sorted((i for i in invoices if start <= i.posting_date <= period_end), key=lambda i: i.id)
+    recorded: dict[str, list[DeliveryNote]] = {}
+    for note in sorted(notes, key=lambda n: n.id):
+        recorded.setdefault(note.invoice_id, []).append(note)
+
+    def item(invoice: SalesInvoice, **extra: Any) -> PopulationItem:
+        fields = {
+            "invoice_no": invoice.invoice_no,
+            "customer": invoice.customer,
+            "contract_id": invoice.contract_id,
+            "posting_date": invoice.posting_date.isoformat(),
+            "journal_entry_id": invoice.journal_entry_id,
+        }
+        return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
+
+    def with_notes(invoice: SalesInvoice) -> PopulationItem:
+        records = [
+            {
+                "delivery_no": n.delivery_no,
+                "signed_date": n.signed_date.isoformat() if n.signed_date else None,
+                "signed_by": n.signed_by,
+            }
+            for n in recorded.get(invoice.id, [])
+        ]
+        return item(invoice, records=records or None)
+
+    r03 = []
+    for invoice in window:
+        paid = sorted(
+            (t for t in transactions if t.amount_cents > 0 and receipt_matches(invoice.invoice_no, t.reference)),
+            key=lambda t: t.id,
+        )
+        if paid:
+            r03.append(
+                item(
+                    invoice,
+                    bank_transaction_ids=",".join(t.id for t in paid),
+                    received_dates=",".join(t.txn_date.isoformat() for t in paid),
+                    received_cents=sum(t.amount_cents for t in paid),
+                )
+            )
+    items = {
+        "R01": [with_notes(i) for i in window if i.id in recorded],
+        "R02": [with_notes(i) for i in window],
+        "R03": r03,
+    }
+    return [
+        RulePopulation(
+            rule_id=rule_id,
+            source_type="sales_invoice" if found else None,
+            items=found,
+            count=len(found),
+            amount_cents=total_cents(i.amount_cents for i in found),
+        )
+        for rule_id, found in items.items()
+    ]
+
+
+def no_population(value: Any) -> bool:
+    """片段或状态的值里没有被测总体 RunPopulation (需求 R324, 逐层看列表与字典): 总体只在 Store, 不进片段与状态."""
+    if isinstance(value, RunPopulation):
+        return False
+    if isinstance(value, dict):
+        return all(no_population(v) for v in value.values())
+    if isinstance(value, list):
+        return all(no_population(v) for v in value)
+    return True
+
+
+@functools.cache
+def numbat_rev08_populations() -> list[RulePopulation]:
+    """Numbat REV-08 的被测总体 (期末 2026-06-30, 特别风险的窗口 20 天), 由演示数据集的发票, 发运单与流水算出."""
+    return rev08_populations(
+        numbat_records("sales_invoices", SalesInvoice),
+        numbat_records("delivery_notes", DeliveryNote),
+        numbat_bank_transactions(),
+        ENGAGEMENT.period_end,
+        20,
+    )
+
+
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
-    "PLN-07": lambda run: RuleResult(
-        exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}
+    "PLN-07": lambda run: engine_result(
+        "PLN-07",
+        RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}),
     ),
-    "PLN-01": lambda run: RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS}),
-    "REV-08": lambda run: RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}),
-    "REV-02": lambda run: RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS}),
-    "CSH-05": lambda run: RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}),
-    "CSH-02": lambda run: RuleResult(
-        exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}
+    "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS})),
+    "REV-08": lambda run: engine_result(
+        "REV-08", RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}), numbat_rev08_populations()
     ),
-    "GEN-05": numbat_gen05_result,  # 功能 journals 打开时才执行
+    "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS})),
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={})),
+    "CSH-02": lambda run: engine_result(
+        "CSH-02",
+        RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),
+    ),
+    "GEN-05": lambda run: engine_result("GEN-05", numbat_gen05_result(run)),  # 功能 journals 打开时才执行
 }
 
 
@@ -1658,6 +1883,60 @@ class FakeJudgmentEngine:
     ) -> JudgmentOutcome:
         self.calls.append((template.id, ctx, performed_by))
         return self.outcomes[ctx.subject_id](ctx, run)
+
+
+Outcome = Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]  # FakeJudgmentEngine 对一个对象的预置结果
+
+
+def judgment(ctx: JudgmentContext, run: ProcedureRun, **changes: Any) -> Judgment:
+    """判断引擎会给出的判断: 缺省 accept, L2, 解释对象的全部规则例外; changes 改其中的字段."""
+    base = Judgment(
+        id=f"J-{run.procedure_id}-{run.run_no}-{ctx.subject_id}",
+        procedure_id=run.procedure_id,
+        run_id=run.id,
+        subject_id=ctx.subject_id,
+        conclusion="ok",
+        confidence=0.9,
+        confidence_parts={"llm": 0.9},
+        reasoning_chain=[],
+        evidence=[],
+        counter_argument="none",
+        proposed_action=ProposedAction.accept,
+        exception_ids=[x.id for x in ctx.rule_findings],
+        autonomy_level=AutonomyLevel.L2,
+        performed_by="U-1",
+        created_at=NOW,
+    )
+    return base.model_copy(update=changes)
+
+
+def passed(**changes: Any) -> Outcome:
+    """判断成功 (judgment, 一次调用)."""
+    return lambda ctx, run: JudgmentOutcome(
+        judgment=judgment(ctx, run, **changes), failure=None, attempts=1, trail_ids=["TR-1"]
+    )
+
+
+FailureKind = Literal["failed", "unattributed"]
+
+
+def failed(kind: FailureKind) -> Outcome:
+    """判断失败 (failure 为 kind), 用满 MAX_ATTEMPTS 次调用."""
+    trail = [f"TR-{n}" for n in range(1, MAX_ATTEMPTS + 1)]
+    return lambda ctx, run: JudgmentOutcome(judgment=None, failure=kind, attempts=MAX_ATTEMPTS, trail_ids=trail)
+
+
+def fails_first(times: int, kind: FailureKind = "unattributed") -> Outcome:
+    """前 times 次判断失败 (failed(kind)), 之后成功 (passed())."""
+    left = [times]
+
+    def outcome(ctx: JudgmentContext, run: ProcedureRun) -> JudgmentOutcome:
+        if left[0] > 0:
+            left[0] -= 1
+            return failed(kind)(ctx, run)
+        return passed()(ctx, run)
+
+    return outcome
 
 
 class FakeConfirmationChannel:
@@ -1718,7 +1997,8 @@ class FakeUserStore:
 
 class FakeRuleEngine:
     """假规则引擎: 按程序编号返回预置结果 (按本次执行生成, 例外 ID 随 run_no), 没有预置的程序返回空结果. 不执行
-    检查; 要模拟没有执行的规则时, 预置的 RuleResult 带上 outcomes (需求 R130).
+    检查; 要模拟没有执行的规则时, 预置的 RuleResult 带上 outcomes (需求 R130). 被测总体 (需求 R324) 也取预置的,
+    NUMBAT_RULES 与 XERO_RULES 经 engine_result 补齐; 没带总体的预置 (多为单个用例自己给的) 总体为空列表.
 
     calls 记下每次调用 (程序编号, Run ID, 参数). B 的 SqlRuleEngine 就绪前代替它.
     """
@@ -1906,12 +2186,15 @@ def numbat_tables() -> dict[TableKind, tuple[BaseModel, ...]]:
 
 
 @functools.cache
+def numbat_records[M: BaseModel](name: str, model: type[M]) -> tuple[M, ...]:
+    """Numbat 演示数据集的一张表 (data/demo/{name}.csv, 空串为空值, 读一次缓存)."""
+    with (DEMO_DATASET / f"{name}.csv").open(newline="", encoding="utf-8") as stream:
+        return tuple(model.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream))
+
+
 def numbat_bank_transactions() -> tuple[BankTransaction, ...]:
     """Numbat 演示数据集的银行流水 (data/demo/bank_transactions.csv, 读一次缓存)."""
-    with (DEMO_DATASET / "bank_transactions.csv").open(newline="", encoding="utf-8") as stream:
-        return tuple(
-            BankTransaction.model_validate({k: v or None for k, v in r.items()}) for r in csv.DictReader(stream)
-        )
+    return numbat_records("bank_transactions", BankTransaction)
 
 
 def csh02_voided(lines: Iterable[JournalEntry], pattern: str | None, template: str | None) -> set[str]:
@@ -2862,6 +3145,7 @@ def independence_declaration(run_id: str = "RUN-RPT-08-1", version: int = 1) -> 
 
 
 PLAN_REJECT_ID = "D-P15R"  # 合成计划第 2 修订起回应的 PLN-15 驳回决定
+PLAN_REJECT_REASON = "Add the planned timing of bank confirmations"  # 演示的驳回理由 (需求 R206 验收 3, R317)
 PLAN_EQR_BASIS = (
     "Not a listed entity; no engagement quality review is required by law or regulation, and the firm has not "
     "determined one is needed (ASQM 1 para 34(f))"
@@ -2925,7 +3209,7 @@ def audit_plan(
         eqr_basis=PLAN_EQR_BASIS if confirmed else None,
         auditor_expert_not_required=True if confirmed else None,
         addresses_decision_id=PLAN_REJECT_ID if revision > 1 else None,
-        revision_reason="Add the planned timing of bank confirmations" if revision > 1 else None,
+        revision_reason=PLAN_REJECT_REASON if revision > 1 else None,
         approved_by=NUMBAT_AUDITOR.id if confirmed else None,
         approved_at=NOW if confirmed else None,
     )
@@ -3329,6 +3613,7 @@ def numbat_report_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
             },
             judgment_refs=[JudgmentRef(id=j.id, version=j.version) for j in cited],
             addresses_decision_id=rejects[-1].id if revision > 1 and rejects else None,
+            run_id=ctx.run.id,
         )
         return {"procedure_runs": [finished(ctx.run)], "report_versions": [report]}
 
@@ -3363,10 +3648,10 @@ async def preset_rerun(
     rerun_params: dict[str, Any] | None = None,
     eid: str = ENGAGEMENT.id,
 ) -> ReviewRecord:
-    """模拟审计师对 failed 任务提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节决定的效果 rerun 行),
-    在一个事务内: 决定, 同程序全部待决的 failed 任务 decided 新版本 (一轮失败算一组, Q17), 程序 executing 新版本
-    (params 合并 rerun_params, rerun_subject_ids 取整组对象). 组与程序新版本用 DecisionSubmit 的同一套函数算.
-    返回写入的决定.
+    """模拟审计师对可重跑任务 (failed, unattributed) 提交 rerun 后 DecisionSubmit 写入 Store 的对象 (接口文档第 7 节
+    决定的效果 rerun 行), 在一个事务内: 决定, 同程序同一次执行全部待决的可重跑任务 decided 新版本 (一轮失败算一组,
+    Q17), 程序 executing 新版本 (params 合并 rerun_params, rerun_subject_ids 取整组对象). 组与程序新版本用
+    DecisionSubmit 的同一套函数算. 返回写入的决定.
     """
     record = ReviewRecord(
         id=record_id,
@@ -3495,14 +3780,20 @@ def make_runner(
     nodes = make_graph_nodes(deps)
     if agents is not None:
         nodes.agents.update(agents(deps))
-    saver = InMemorySaver(serde=checkpoint_serde())
-    if interrupt_before:  # 主图与闸门按 deps 的功能集取, 同 compile_graph (planning 打开时有 PLN-15 的节点)
-        app = build_graph(nodes, deps.features).compile(
-            checkpointer=saver, interrupt_before=[*gate_nodes(deps.features), *interrupt_before]
-        )
+    if interrupt_before:
+        app = stopping_graph(nodes, interrupt_before)
     else:
-        app = compile_graph(nodes, saver)
+        app = compile_graph(nodes, InMemorySaver(serde=checkpoint_serde()))
     return GraphRunner(app, deps), output_store
+
+
+def stopping_graph(nodes: GraphNodes, stops: Sequence[str]) -> CompiledStateGraph[EngagementState]:
+    """nodes 上的主图 (内存检查点), 闸门之外另在 stops 各节点之前停下; 主图与闸门按 nodes 的功能集取, 同 compile_graph
+    (planning 打开时有 PLN-15 的节点). make_runner 与 start_at_fan_in 共用."""
+    features = nodes.deps.features
+    return build_graph(nodes, features).compile(
+        checkpointer=InMemorySaver(serde=checkpoint_serde()), interrupt_before=[*gate_nodes(features), *stops]
+    )
 
 
 async def wait_idle(runner: GraphRunner, eid: str) -> None:
@@ -3510,6 +3801,103 @@ async def wait_idle(runner: GraphRunner, eid: str) -> None:
     task = runner.tasks.get(eid)
     if task is not None:
         await task
+
+
+def fin08_registered(
+    run_no: int, rows: Sequence[Mapping[str, Any]], decided_at: datetime = NOW
+) -> dict[str, list[Any]]:
+    """FIN-08 第 run_no 次执行已登记的状态片段 (需求 R161): 已决定的 manual 任务 T-RUN-FIN-08-{run_no}-v1 (第 2 版)
+    与对它的 manual_result 决定 D-FIN08-{run_no}, details 为 ManagementResponses 的 rows (JSON 形式)."""
+    run_id = f"RUN-FIN-08-{run_no}"
+    request = ManualRequest(instructions="", result_model="ManagementResponses", min_evidence=0, material={})
+    task = ReviewTask(
+        id=f"T-{run_id}-v1",
+        version=2,
+        kind=TaskKind.manual,
+        procedure_id="FIN-08",
+        target_type=TargetType.ProcedureRun,
+        target_id=run_id,
+        target_version=1,
+        run_id=run_id,
+        subject_id="RESULT",
+        status=TaskStatus.decided,
+        created_at=decided_at,
+        manual_request=request,
+    )
+    result = ManualResult(conclusion="已登记", performed_on=decided_at.date(), details={"responses": list(rows)})
+    record = ReviewRecord(
+        id=f"D-FIN08-{run_no}",
+        task_id=task.id,
+        target_version=1,
+        decision=Decision.manual_result,
+        manual_result=result,
+        reviewed_by=ENGAGEMENT.owner_id,
+        decided_at=decided_at,
+    )
+    return {"review_tasks": [task], "review_records": [record]}
+
+
+class Session(Protocol):
+    """在后台跑着主图的用例 (tests.test_decisions.Started): runner, 假审计产出存储与决定入口."""
+
+    runner: GraphRunner
+    output_store: FakeOutputStore
+    submit: GraphDecisionSubmit
+
+
+def latest(s: Session, model: type[T], oid: str) -> T:
+    """假 Store (默认项目) 中 oid 的最新版本; 没有抛 ValueError."""
+    return max((r for r in s.output_store.rows if isinstance(r, model) and r.id == oid), key=lambda r: r.version)
+
+
+async def submit_and_wait(s: Session, decision: Any, eid: str = ENGAGEMENT.id) -> None:
+    """提交决定, 等后台停下, 后台没有出错."""
+    await s.submit.submit(eid, decision)
+    await wait_idle(s.runner, eid)
+    assert s.runner.run_error(eid) is None
+
+
+def entries(s: Session, kind: TrailKind) -> list[TrailEntry]:
+    """runner 的假留痕中 kind 类的行, 按写入顺序."""
+    trail = s.runner.deps.trail
+    assert isinstance(trail, FakeTrail)
+    return [e for e in trail.entries if e.kind is kind]
+
+
+def record_writers(monkeypatch: pytest.MonkeyPatch, store: FakeOutputStore) -> dict[tuple[str, int], str]:
+    """之后经 store.put 写入的各 (ID, 版本) 的写入者 (假存储不记写入者): 记首次写入的那个, 重放时再写同一版本不改."""
+    writers: dict[tuple[str, int], str] = {}
+    put = store.put
+
+    async def recording(eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
+        for o in objs:
+            writers.setdefault((o.id, o.version), actor)
+        return await put(eid, objs, actor=actor)
+
+    monkeypatch.setattr(store, "put", recording)
+    return writers
+
+
+async def start_at_fan_in(
+    deps: AgentDeps,
+    state: EngagementState,
+    pack: Sequence[Procedure],
+    stops: Sequence[str],
+    stored: Sequence[Versioned] = (),
+) -> GraphRunner:
+    """把主图放在 P2 结清处起跑 (真实 Agent, 闸门之外另在 stops 各节点之前停下, 错报闭环的用例只看其中一段): 程序包与
+    stored (如错报的各版本) 先写进 Store (写入者 A1), 检查点以 fan_in 身份写入 state 与程序包, 后台推进到下一个停点
+    或等待; 返回 runner (后台已停下, 没有出错)."""
+    eid = state["engagement_id"]
+    async with deps.output_store.transaction(eid):
+        await deps.output_store.put(eid, [*pack, *stored], actor=AgentId.A1)
+    runner = GraphRunner(stopping_graph(GraphNodes(deps, 2), stops), deps)
+    await runner.app.aupdate_state(GraphRunner.config(eid), state | {"procedure_pack": list(pack)}, as_node="fan_in")
+    runner.acquire(eid)
+    runner.launch(eid, None)
+    await wait_idle(runner, eid)
+    assert runner.run_error(eid) is None
+    return runner
 
 
 # ── 经 HTTP 调接口: 依赖取自 make_runner 的 runner ──

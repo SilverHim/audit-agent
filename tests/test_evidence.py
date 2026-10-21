@@ -210,7 +210,7 @@ async def test_receipt_without_reply_raises(channel: FakeConfirmationChannel) ->
 async def test_shared_reply_document_listed_once() -> None:
     """一封回函答复两个账户 (同一内容, 存档得同一文件): 片段的文件去重, 两份函证都指向它, 合并校验通过; 重建时同样."""
     agent, ctx, _, trail, _ = setup(FakeConfirmationChannel(body=b"one letter for both accounts"))
-    patch, writer = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
+    patch, writer, _ = await GraphNodes(agent.deps, parallel_cap=2).run_agent(agent, ctx)
     assert writer is AgentId.A5, patch["procedure_runs"][0].failure_reason
     [document] = patch["documents"]
     assert [c.reply_document_id for c in patch["confirmations"]] == [document.id, document.id]

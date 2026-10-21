@@ -68,7 +68,7 @@ class ChatContext:
     model: ChatModel  # 当前生效的对话模型
     tools: ToolBox  # 工具箱
     env: ToolEnv  # 工具的运行环境 (绑定项目)
-    lang: Lang  # 回答语言, 决定 tool 事件的提示文字
+    ui_lang: Lang  # 界面语言 (提问带的), 决定 tool 事件的提示文字; 回答语言写在系统提示里 (需求 R342)
     max_steps: int  # 最多调几次带工具的模型; 到了再调一次收尾
     max_tokens: int  # 每次模型调用最多输出的 token 数
     tool_budget: int  # 本轮工具结果合计最多字符数, 超出的调用不执行, 回提示
@@ -122,7 +122,7 @@ async def run_tools(state: ChatState, runtime: Runtime[ChatContext]) -> dict[str
     ctx, write = runtime.context, runtime.stream_writer
     calls = state["messages"][-1].tool_calls
     for name in dict.fromkeys(c.name for c in calls):
-        write({"event": "tool", "data": {"label": ctx.tools.label(name, ctx.lang)}})
+        write({"event": "tool", "data": {"label": ctx.tools.label(name, ctx.ui_lang)}})
     over = state["tool_chars"] >= ctx.tool_budget
 
     async def run(call: ToolCall) -> ToolOutcome:

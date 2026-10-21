@@ -19,6 +19,7 @@ from backend.orchestration.decisions import (
     ReviewFields,
     check_review_fields,
     review_fields,
+    update_decisions,
 )
 from backend.services.review_queue import ALLOWED
 from tests.fakes import ENGAGEMENT, NUMBAT_CUTOFF_DRAFT
@@ -67,7 +68,7 @@ def test_allowed_has_one_row_per_task_kind() -> None:
     assert set(ALLOWED) == set(TaskKind)
     assert {
         TaskKind.normal: {Decision.confirm, Decision.override, Decision.misstatement},
-        TaskKind.unattributed: {Decision.override, Decision.misstatement},
+        TaskKind.unattributed: {Decision.override, Decision.misstatement, Decision.rerun},  # 需求 R347
         TaskKind.failed: {Decision.rerun},
         TaskKind.dispute: {Decision.dispute_resolution},
         TaskKind.manual: {Decision.manual_result},  # 需求 R92: 人工程序的任务只能提交结果
@@ -187,3 +188,22 @@ def test_update_required_where_human_replaces_the_ai() -> None:
     with pytest.raises(DecisionRejected) as e:
         check_review_fields(confirm, TaskKind.normal, "classification")
     assert (e.value.code, e.value.message) == ("FIELD_NOT_ALLOWED", "misstatement_update")
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        (TaskKind.normal, [Decision.override]),
+        (TaskKind.unattributed, [Decision.misstatement, Decision.override]),
+        (TaskKind.failed, [Decision.manual_result]),
+        (TaskKind.dispute, []),
+        (TaskKind.manual, []),
+    ],
+)
+def test_update_decisions_follow_the_field_rules(kind: TaskKind, expected: list[Decision]) -> None:
+    """R163 第 1 轮审核 R163-04: 复核队列告诉前端的须带载荷的决定, 为允许的决定 (failed 另加 manual_result) 中按
+    review_fields 必填 misstatement_update 的, 保持给定顺序; 模板没有载荷类别时为空."""
+    allowed = sorted(ALLOWED[kind] | ({Decision.manual_result} if kind is TaskKind.failed else set()))
+    needing = [d for d in allowed if "misstatement_update" in review_fields(kind, d, "classification").required]
+    assert update_decisions(kind, allowed, "classification") == needing == expected
+    assert update_decisions(kind, allowed, None) == []

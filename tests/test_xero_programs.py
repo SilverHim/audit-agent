@@ -171,14 +171,17 @@ def test_pln07_analytics_and_changes(flow: Flow) -> None:
 
 
 def test_pln01_candidates_and_presets(flow: Flow) -> None:
-    """验收 2: 三基准的候选 (税前亏损也照常列出), 比例范围; 状态里的审计目标与风险清单是 Xero 预置的 3 条与 3 条."""
+    """验收 2: 三基准的候选 (税前亏损也照常列出, 标本期不适用, 需求 R351), 比例范围; 状态里的审计目标与风险清单是
+    Xero 预置的 3 条与 3 条."""
     assert run_of(flow.at_gate, "PLN-01").status is RunStatus.succeeded
     candidates = flow.at_gate["materiality_candidates"]
     assert (candidates.id, candidates.version) == ("MATERIALITY", 1)
-    assert [(c.basis, c.base_amount_cents, c.low_cents, c.high_cents) for c in candidates.candidates] == [
-        ("revenue", 3243100, 16216, 32431),
-        ("total_assets", 1080529, 10805, 21611),
-        ("profit_before_tax", -1322696, -66135, -66135),
+    assert [
+        (c.basis, c.base_amount_cents, c.low_cents, c.high_cents, c.not_applicable) for c in candidates.candidates
+    ] == [
+        ("revenue", 3243100, 16216, 32431, None),
+        ("total_assets", 1080529, 10805, 21611, None),
+        ("profit_before_tax", -1322696, -66135, -66135, "loss"),
     ]
     assert (candidates.performance_pct_range, candidates.clearly_trivial_pct) == ((0.5, 0.75), 0.05)
     objectives, risks = xero_presets()

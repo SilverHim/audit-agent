@@ -40,17 +40,25 @@ from backend.contracts.models import (
     ReceiptChannel,
     TrailKind,
 )
-from backend.contracts.records import DatasetTraits
+from backend.contracts.records import DatasetTraits, DeliveryNote
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader, now
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import FakeJudgmentEngine, make_ctx
+from tests.fakes import FakeJudgmentEngine, make_ctx, numbat_rev08_populations, passed, rev08_populations
 from tests.test_data_store_postgres import table_rows
-from tests.test_fieldwork_judging import passed
-from tests.xero_fakes import SNAPSHOT_NAME, XERO_DATASET, XERO_RULES, XERO_S01_ROWS
+from tests.xero_fakes import (
+    SNAPSHOT_NAME,
+    XERO_DATASET,
+    XERO_PERIOD,
+    XERO_REV08_WINDOW,
+    XERO_RULES,
+    XERO_S01_ROWS,
+    xero_rev08_populations,
+    xero_tables,
+)
 from tests.xero_injection import file_hashes
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
@@ -400,9 +408,73 @@ async def test_xero_rules_on_postgres(tmp_path: Path) -> None:
     assert {path: file_hashes(path) for path in (snapshot, supplements)} == before
 
 
+async def test_rev08_populations_on_postgres(tmp_path: Path) -> None:
+    """需求 R324 验收 6: 连库的 REV-08 被测总体等于离线预置 (xero_rev08_populations, 其值见 tests/test_e2e_xero17
+    的 test_populations): R01, R02 六张 990000, R03 五张 935000 (没有 ORC1024); 每条例外所指的发票都在出它的规则的
+    总体里."""
+    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
+    project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
+    run, rev08 = (await run_rule_programs(project))["REV-08"]
+    assert run.params_snapshot["window_days"] == 20
+    assert rev08.populations == xero_rev08_populations()
+    assert [(p.rule_id, p.count, p.amount_cents) for p in rev08.populations] == [
+        ("R01", 6, 990000),
+        ("R02", 6, 990000),
+        ("R03", 5, 935000),
+    ]
+    tested = {p.rule_id: {i.source_id for i in p.items} for p in rev08.populations}
+    assert rev08.exceptions and all(set(x.source_ids) <= tested[x.rule_id] for x in rev08.exceptions)
+
+
+async def test_rev08_one_item_per_invoice_on_postgres(tmp_path: Path) -> None:
+    """R324-05, R324-13: 一张发票几条服务完成记录时总体仍一张一项. 测试库里本项目的服务完成记录另写一版, 给 ORC1020 加
+    一条没签收的与一条签收人写成 "姓, 名" 的 (补造目录不动): R01, R02 仍为 6 张 990000, ORC1020 的 records 为三条记录
+    (按记录 ID; 没签收的签收日与签收人为 null, 签收人里的逗号原样); 总体与由同一组表算出的 rev08_populations 相等."""
+    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
+    project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
+    tables = xero_tables()
+    [orc1020] = [i for i in tables["sales_invoices"] if i.invoice_no == "ORC1020"]
+    extra = [
+        DeliveryNote(
+            id=f"SR-ORC1020-{n}",
+            delivery_no=f"SR-ORC1020-{n}",
+            invoice_id=orc1020.id,
+            shipped_date=date(2026, 9, 2),
+            signed_date=signed_date,
+            signed_by=signed_by,
+        )
+        for n, signed_date, signed_by in ((2, None, None), (3, date(2026, 9, 29), "Reilly, Tom"))
+    ]
+    notes = [*tables["delivery_notes"], *extra]
+    await project.deps.data.write_tables(
+        project.engagement.id,
+        {TableKind.delivery_notes: notes},
+        source="import",
+        actor=project.owner,
+        file_name="delivery_notes.csv",
+    )
+    _, rev08 = (await run_rule_programs(project))["REV-08"]
+    assert rev08.populations == rev08_populations(
+        tables["sales_invoices"], notes, tables["bank_transactions"], XERO_PERIOD[1], XERO_REV08_WINDOW
+    )
+    assert [(p.rule_id, p.count, p.amount_cents) for p in rev08.populations] == [
+        ("R01", 6, 990000),
+        ("R02", 6, 990000),
+        ("R03", 5, 935000),
+    ]
+    for population in rev08.populations[:2]:
+        [item] = [i for i in population.items if i.source_id == orc1020.id]
+        assert item.fields["records"] == [
+            {"delivery_no": "SR-ORC1020", "signed_date": "2026-09-30", "signed_by": "Tom Reilly"},
+            {"delivery_no": "SR-ORC1020-2", "signed_date": None, "signed_by": None},
+            {"delivery_no": "SR-ORC1020-3", "signed_date": "2026-09-29", "signed_by": "Reilly, Tom"},
+        ]
+
+
 async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> None:
     """验收 10: 同一测试库上 Numbat (data/demo, CSV 数据集载入) 的同批 SQL 结果不变: PLN-07 A01 (1100, 52500000),
-    REV-08 R01 (SI-2026-0612, 14200000), CSH-05 B01 (BA-01, -5000000)."""
+    REV-08 R01 (SI-2026-0612, 14200000), CSH-05 B01 (BA-01, -5000000). REV-08 的被测总体等于离线预置 (需求 R324 审核
+    R324-03: 默认测试用的 Numbat 总体出自它)."""
     from backend.core.config import Settings
     from backend.main import build_deps
 
@@ -431,6 +503,8 @@ async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> No
         )
         result = await deps.rules.run(engagement.id, template, run, run.params_snapshot)
         found[procedure_id] = [(x.source_ids[0], x.amount_cents) for x in result.exceptions if x.rule_id == rule_id]
+        if procedure_id == "REV-08":
+            assert result.populations == numbat_rev08_populations()
     assert found == {
         "PLN-07": [("1100", 52500000)],
         "REV-08": [("SI-2026-0612", 14200000)],

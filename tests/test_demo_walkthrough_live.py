@@ -1,346 +1,61 @@
 """需求 R311: 演示走通用例 (R287, tests/test_demo_walkthrough.py) 的真实大模型变体. 同样只经 HTTP 接口照页面的做法走:
-新建项目, 每个停点按概览建议导入演示资料, 点 "数据已齐", 过四道闸门, 复核逐条决定, RPT-01 先退回再批准, 签字归档;
+新建项目, 每个停点按概览建议导入演示资料, 点 "数据已齐", 过各道闸门 (总体审计计划先退回一次再批准, 需求 R317),
+复核逐条决定, RPT-01 先退回再批准, 签字归档;
 全部大模型程序走真实模型 (组装根 LLM_MODE live), 功能集为演示配置, 存储为真实 Postgres (同 R287 的连库变体).
 
-真实模型的输出不固定, 所以驱动 (drive) 不按停点的固定顺序走, 每次停下按当时的状态办: 有待决任务先逐条决定, 概览建议
-导入就导入, 等数据就绪就确认数据已齐, 停在闸门就按闸门决定. 审计师的决定以演示决定表为准, 按决定表期望的结论下,
+驱动, 汇总与检查在 tests/live_walk (浏览器走查共用, 需求 R353). 真实模型的输出不固定, 所以驱动 (drive) 不按停点的
+固定顺序走, 每次停下按当时的状态办: 有待决任务先逐条决定, 概览建议导入就导入, 等数据就绪就确认数据已齐, 停在闸门
+就按闸门决定. 审计师的决定以演示决定表为准, 按决定表期望的结论下,
 不看模型的建议动作 (decision_table): BA-091 与 XJ-499 认定错报 (草稿同 R287), XJ-575 推翻为接受, 其余确认; 争议任务能
-维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 任务重跑, 每个对象
-至多一次. FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
+维持原判断就维持, 否则 "两者都不采用" 给出期望的结论; 无解释的例外按同一张表认定错报或推翻; failed 与 unattributed
+任务 (判断失败, 后者带规则例外, 需求 R347) 重跑, 每个对象至多一次, unattributed 重跑后仍失败才按决定表处理.
+FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见), RPT-03 由模型按所选意见起草.
 
-断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed 后重跑一次;
-带规则例外的对象判断失败时复核队列建的是 unattributed 任务, 不能重跑, 驱动按决定表推翻后照常走完, 但该对象缺模型
-结论, 硬性检查不过); 全部证据指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
+断言分两级. 硬性: 走到归档, 后台 run_error 始终为空; 每个判断对象有模型自己的结论 (一次通过, 或 failed, unattributed
+后重跑一次; 重跑后仍是 unattributed 的, 驱动按决定表推翻后照常走完, 但该对象缺模型结论, 硬性检查不过); 全部证据
+指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
 软性 (只告警): 判断的建议动作与固定输出 (演示运行副本) 不同的逐条列出. 汇总写 var/eval/demo-live-<UTC>.json.
 
 配置经 tests.external.live_llm_settings 取 (环境变量, LLM_ENV_FILE 或仓库 .env), 不写进任何文件; 没配时跳过. 不联网的
-自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有一对象先失败再重跑, 与带规则例外的对象失败两种),
-连库一遍 (同真实模型用例的路径, 只把大模型换成组装根的 mock); 决定的请求体另有合成数据的单元用例.
+自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有先失败再重跑的几种: 一个判断对象, 计划的两个
+修订, 报告的两稿; 与带规则例外的对象失败一种), 连库一遍 (同真实模型用例的路径, 只把大模型换成组装根的 mock);
+决定的请求体另有合成数据的单元用例.
 """
 
-import json
-import warnings
-from collections import Counter
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import httpx
 import pytest
 
 from backend.adapters.llm import SwitchableLLMClient
-from backend.adapters.registry_mock import DatasetRegistrySource
 from backend.api.schemas import ReviewRecordIn
-from backend.contracts.models import (
-    AuditReportVersion,
-    Confirmation,
-    Judgment,
-    OpinionType,
-    ReportStatus,
-    TrailEntry,
-    TrailKind,
-)
-from backend.orchestration.runner import GraphRunner
-from backend.services.data_service import DataService
-from backend.services.judgment_engine import REPORT_HEADINGS, PointerResolver
+from backend.contracts.models import AuditException, ExceptionDisposition, OpinionType, TrailEntry, TrailKind
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import LLM_KEYS, live_llm_settings
-from tests.fakes import NUMBAT_AUDITOR, FakeRuleEngine, FakeTrail, api_client, wait_idle
+from tests.fakes import api_client
 from tests.fixture_sets import XERO
-from tests.test_decisions import Started
-from tests.test_demo_default import CreatingEngagementStore
-from tests.test_demo_walkthrough import API, xero_link
-from tests.test_e2e_mock import evidence_pointers, real_storage
-from tests.test_e2e_xero17 import XERO_PERIOD
-from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, summary, write_summary
-from tests.xero_fakes import (
-    DEMO_FEATURES,
-    ORC1026,
-    XERO17_ANNOTATION,
-    XERO17_BA091_DRAFT,
-    XERO17_INVOICES,
-    XERO17_MATERIALITY,
-    XERO_DATASET,
-    XERO_RULES,
-    new_xero_deps,
-    xero_journal_reviews,
+from tests.live_walk import (
+    FIXED_CALLS,
+    JUDGED,
+    JUDGING,
+    MAX_CALLS,
+    FinPolicy,
+    LiveWalk,
+    assert_hard,
+    candidate_opinion,
+    decision_table,
+    drive,
+    evaluate,
+    review_body,
+    warn_soft,
 )
-from tests.xero_flow import READY_REASON, demo_source, drain, offline_runner
+from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用, 搬它不在需求 R353)
+from tests.tools.live_budget import EVAL_DIR, Budget, install_budget, write_summary
+from tests.xero_fakes import DEMO_FEATURES, ORC1026, XERO17_INVOICES, XERO_DATASET, XERO_PERIOD
+from tests.xero_flow import demo_offline, xero_link
 from tests.xero_harness import FlakyLLM, LayeredMockLLMClient
 
-MAX_CALLS = 150  # 用量上限: 固定输出走一遍 45 次 (另有 A7 两轮复核, 随模型输出触发), 留出校验重试与重跑的余量
-MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
-JUDGING = ("REV-03", "REV-02", "CSH-02", "GEN-02")  # 演示配置下出判断的大模型程序, 各对象的固定输出在运行副本里
-RERUN_REASON = "The model output did not pass validation; rerun."
-CONFIRM_CONCLUSION = "The original conclusion stands: no misstatement is identified for this item."
-BA091_REASON = "Accrued interest of AUD 48.53 confirmed by the bank was not recorded."
-
-
-@dataclass(frozen=True)
-class Expected:
-    """演示决定表中一个对象期望的结论: 认定错报 (带草稿), 推翻 (给出结论) 或确认."""
-
-    decision: str  # misstatement, override 或 confirm
-    reason: str | None = None
-    draft: dict[str, Any] | None = None  # 认定错报的草稿 (JSON)
-    conclusion: str | None = None  # 推翻或 "两者都不采用" 时的结论
-
-
-def decision_table(owner: str) -> dict[str, Expected]:
-    """演示决定表 (同 R287 的离线走法), 按判断对象: BA-091 认定错报; GEN-02 七笔同 R146 (XJ-499 认定错报, XJ-575 推翻
-    为接受, 其余确认). 表外的对象一律确认."""
-    table = {"BA-091": Expected("misstatement", BA091_REASON, XERO17_BA091_DRAFT.model_dump(exclude_none=True))}
-    for record in xero_journal_reviews(owner):
-        voucher = record.task_id.removeprefix("T-J-GEN-02-1-").removesuffix("-v1")
-        draft = record.misstatement_draft.model_dump(exclude_none=True) if record.misstatement_draft else None
-        table[voucher] = Expected(record.decision.value, record.reason, draft, record.override_conclusion)
-    return table
-
-
-FinPolicy = Callable[[dict[str, Any]], str]  # FIN-01 闸门的材料 (GET /gate 的 material) → 选定的意见类型
-
-
-def candidate_opinion(material: dict[str, Any]) -> str:
-    """按汇总表的候选意见决定 (需求 R311)."""
-    return cast(str, material["schedule"]["candidate_opinion"])
-
-
-@dataclass
-class LiveWalk:
-    """一次走法的记录, 驱动边走边写 (中途失败时汇总照样能写出已走到的部分)."""
-
-    eid: str | None = None
-    owner: str | None = None
-    gates: list[str] = field(default_factory=list)  # 依次决定过的闸门
-    fin: str | None = None  # FIN-01 选定的意见类型
-    candidate: str | None = None  # 汇总表的候选意见
-    failures: Counter[tuple[str, str]] = field(default_factory=Counter)  # (程序, 对象) → 出过的 failed 任务数
-    troubled: dict[str, tuple[str, str, str]] = field(default_factory=dict)  # 任务 ID → (程序, 对象, 类型), 非 normal
-    decisions: list[tuple[str, str]] = field(default_factory=list)  # (任务 ID, 决定)
-
-
-def subject_of(view: dict[str, Any]) -> str:
-    """任务所指的对象: 判断的 subject_id; 例外取 detail 的凭证号, 否则首个来源 (如回函应计利息的银行账户);
-    failed 任务取任务的 subject_id (整条程序失败为空串)."""
-    task, target = view["task"], view["target"]
-    if task["kind"] == "failed":
-        return cast(str, task.get("subject_id") or "")
-    if target.get("subject_id"):
-        return cast(str, target["subject_id"])
-    detail = target.get("detail") or {}
-    return cast(str, detail.get("entry_no") or (target.get("source_ids") or [""])[0])
-
-
-def review_body(view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk) -> dict[str, Any]:
-    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明)."""
-    task = view["task"]
-    kind, pid, subject = task["kind"], task["procedure_id"], subject_of(view)
-    body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
-    if kind != "normal":
-        walk.troubled[task["id"]] = (pid, subject, kind)
-    expected = table.get(subject, Expected("confirm"))
-    if kind == "failed":
-        walk.failures[pid, subject] += 1
-        if walk.failures[pid, subject] > 1:
-            pytest.fail(f"{pid} {subject or '(整条)'} 重跑后又失败: {task['id']}")
-        return body | {"decision": "rerun", "reason": RERUN_REASON}
-    if kind in ("normal", "unattributed"):  # 无解释的例外: 认定错报或推翻, 不能确认
-        if expected.decision == "misstatement":
-            return body | {"decision": "misstatement", "reason": expected.reason, "misstatement_draft": expected.draft}
-        if expected.decision == "override" or kind == "unattributed":
-            conclusion = expected.conclusion or CONFIRM_CONCLUSION
-            return body | {
-                "decision": "override",
-                "reason": expected.reason or conclusion,
-                "override_conclusion": conclusion,
-            }
-        return body | {"decision": "confirm"}
-    if kind == "dispute":
-        return body | dispute_fields(view, expected)
-    pytest.fail(f"没有预期的任务类型 {kind}: {task['id']}")
-
-
-def dispute_fields(view: dict[str, Any], expected: Expected) -> dict[str, Any]:
-    """争议任务的仲裁: 原判断 (A6) 与期望一致时维持原判断 (期望错报时须原判断也建议错报, 带草稿; 期望不认定错报时
-    原判断不建议错报); 否则 "两者都不采用" (neither), 给出期望的结论, 期望错报时附草稿. 期望为推翻的对象一律 neither."""
-    a6 = view["draft_rules"].get("a6_upheld")
-    want = expected.decision == "misstatement"
-    upheld = {"decision": "dispute_resolution", "dispute_resolution": "a6_upheld"}
-    if "a6_upheld" in view["allowed_resolutions"] and expected.decision != "override":
-        if want and a6 == "required":
-            return upheld | {"reason": expected.reason, "misstatement_draft": expected.draft}
-        if not want and a6 != "required":
-            return upheld | {"reason": CONFIRM_CONCLUSION}
-    conclusion = expected.conclusion or (expected.reason if want else CONFIRM_CONCLUSION)
-    fields: dict[str, Any] = {
-        "decision": "dispute_resolution",
-        "dispute_resolution": "neither",
-        "neither_action": "human_conclusion",
-        "override_conclusion": conclusion,
-        "reason": expected.reason or conclusion,
-    }
-    return fields | ({"misstatement_draft": expected.draft} if want else {})
-
-
-async def drive(
-    client: httpx.AsyncClient,
-    runner: GraphRunner,
-    service: DataService,
-    walk: LiveWalk,
-    *,
-    fin: FinPolicy = candidate_opinion,
-    budget: Budget | None = None,
-) -> LiveWalk:
-    """从新建项目走到归档 (见模块说明), 进度记在 walk. 每步之后等后台作业与图都停下, 后台始终没有错误; 每次提交前查
-    预算 (已超限即失败, 不再提交重跑)."""
-    walk.owner = (await client.get(f"{API}/users/me")).json()["id"]
-    table = decision_table(walk.owner)
-    clients = (await client.get(f"{API}/clients")).json()
-    [dataset] = [d for d in clients[0]["datasets"] if d["default"]]
-    created = await client.post(
-        f"{API}/engagements", json={k: dataset[k] for k in ("dataset", "period_start", "period_end")}
-    )
-    assert created.status_code == 201, created.text
-    eid = walk.eid = created.json()["engagement"]["id"]
-    base = f"{API}/engagements/{eid}"
-    ready_posted = False
-
-    async def post(path: str, body: dict[str, Any]) -> None:
-        if budget is not None:
-            budget.check()
-        posted = await client.post(f"{base}/{path}", json=body)
-        assert posted.status_code in (201, 202), (path, posted.text)
-
-    for _ in range(MAX_STEPS):
-        await drain(service)
-        await wait_idle(runner, eid)
-        overview = (await client.get(base)).json()
-        assert overview["run_error"] is None, overview["run_error"]
-        if overview["engagement"]["phase"] == "Archived":
-            return walk
-        pending = (await client.get(f"{base}/review-tasks", params={"status": "pending"})).json()
-        if pending:
-            body = review_body(pending[0], table, walk)
-            walk.decisions.append((body["task_id"], body["decision"]))
-            await post("review-records", body)
-            continue
-        suggested = (await client.get(f"{base}/data/summary")).json()["demo"]["suggested"]
-        if suggested is not None:
-            await post("data/demo-import", {"stage": suggested})
-            continue
-        if overview["awaiting_data"]:
-            assert not ready_posted, f"确认数据已齐之后仍在等数据: {overview['missing_tables']}"
-            ready_posted = True
-            await post("data/ready", {"reason": READY_REASON})
-            continue
-        gate = overview["current_gate"]
-        assert gate is not None, f"没有待决任务, 不等数据也不在闸门, 流程停住: {overview['procedures']}"
-        got = await client.get(f"{base}/gate")
-        assert got.status_code == 200, got.text
-        view = got.json()
-        body = {k: view[k] for k in ("gate", "target_id", "target_version")}
-        if gate == "PLN-01/03":
-            body |= {"decision": "approve", "materiality": XERO17_MATERIALITY.model_dump()}
-        elif gate == "FIN-01":
-            walk.candidate = view["material"]["schedule"]["candidate_opinion"]
-            walk.fin = fin(view["material"])
-            reason = f"Opinion follows the schedule of uncorrected misstatements (candidate {walk.candidate})."
-            body |= {"decision": "approve", "disposition": walk.fin, "reason": reason}
-        elif gate == "RPT-01" and "RPT-01" not in walk.gates:  # 先退回一次, 同 R287
-            reason = "The basis for opinion paragraph must name the financial reporting framework."
-            body |= {"decision": "reject", "annotations": [XERO17_ANNOTATION.model_dump()], "reason": reason}
-        else:
-            body |= {"decision": "approve"}
-        walk.gates.append(gate)
-        await post("gate-decisions", body)
-    pytest.fail(f"{MAX_STEPS} 步内未到归档")
-
-
-def latest_model_judgments(judgments: list[Judgment]) -> dict[tuple[str, str], Judgment]:
-    """模型自己给出的判断 (人工判断 -H 不算), 每个 (程序, 对象) 取最后一次执行的."""
-    latest: dict[tuple[str, str], Judgment] = {}
-    for j in sorted(judgments, key=lambda j: (j.run_id, j.version)):
-        if "-H" not in j.id:
-            latest[j.procedure_id, j.subject_id] = j
-    return latest
-
-
-def fixture_action(procedure_id: str, subject_id: str) -> str | None:
-    """演示运行副本里该对象固定输出的建议动作; 没有固定输出为空."""
-    path = XERO.runtime / procedure_id / f"{subject_id}.json"
-    return json.loads(path.read_text(encoding="utf-8"))["proposed_action"] if path.is_file() else None
-
-
-async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[str, Any]:
-    """汇总 (需求 R311 验收 4) 与两级检查的材料: 用量 (调用与 token 取预算, 尝试与失败级别取留痕), 各判断的建议动作与
-    固定输出的对照, 签字报告的意见类型, 解析不了的证据指针, 缺模型结论的判断对象, 重跑与非 normal 的任务."""
-    deps, eid = runner.deps, walk.eid
-    out: dict[str, Any] = {"engagement_id": eid, "gates": walk.gates, "fin_disposition": walk.fin}
-    out["candidate_opinion"] = walk.candidate
-    out["reruns"] = {f"{pid} {subject}": n for (pid, subject), n in sorted(walk.failures.items())}
-    out["troubled_tasks"] = [list(v) for _, v in sorted(walk.troubled.items())]
-    out["decisions"] = dict(sorted(Counter(decision for _, decision in walk.decisions).items()))
-    entries = await deps.trail.list(eid, TrailKind.llm_call, limit=10_000) if eid else []
-    out["usage"] = summary(entries, budget)
-    if eid is None:
-        return out
-    store = deps.output_store
-    judged = latest_model_judgments(await store.latest(eid, Judgment))
-    rows = []
-    for (pid, subject), j in sorted(judged.items()):
-        expected = fixture_action(pid, subject)
-        rows.append({"procedure_id": pid, "subject_id": subject, "proposed_action": j.proposed_action.value})
-        rows[-1] |= {"fixture": expected, "same": expected == j.proposed_action.value}
-    out["judgments"] = rows
-    out["differences"] = [r for r in rows if r["fixture"] is not None and not r["same"]]
-    expected_subjects = {(pid, p.stem) for pid in JUDGING for p in (XERO.runtime / pid).glob("*.json")}
-    out["missing_subjects"] = [f"{pid} {subject}" for pid, subject in sorted(expected_subjects - set(judged))]
-    signed = [r for r in await store.latest(eid, AuditReportVersion) if r.status is ReportStatus.signed]
-    out["report_opinion"] = [r.opinion_type.value for r in signed]
-    out["report_heading"] = [r.sections["opinion"].strip().splitlines()[:1] for r in signed]
-    out["contracts"] = len(await deps.financial_store.contracts(eid))
-    out["confirmations"] = len(await store.latest(eid, Confirmation))
-    out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
-    return out
-
-
-async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[str]]:
-    """项目的全部证据指针 (范围同 R56 的 everything: 判断, 合同, 函证, 例外, 评分卡, 人工结果) 经存储解析, 客户画像
-    指针按项目采用的画像解析; 返回指针数与解析不了的 (来源, 定位, 页与原因). R250 的程序级评测也用."""
-    deps = runner.deps
-    engagement = await deps.engagement_store.get(eid)
-    profile = await deps.engagement_store.client_profile(engagement.client_id) if engagement else None
-    resolver = PointerResolver(deps.judgments.validator, eid, None, profile)
-    started = Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
-    unresolved = []
-    pointers = await evidence_pointers(started, eid, everything=True)
-    for p in pointers:
-        resolved, reason = await resolver.resolve(p)
-        if resolved is None:
-            unresolved.append(f"{p.source_type} {p.source_id} {p.locator} p{p.page}: {reason}")
-    return len(pointers), unresolved
-
-
-def assert_hard(data: dict[str, Any]) -> None:
-    """硬性检查 (需求 R311 验收 2): 走到归档 (调用方已由驱动保证, run_error 始终为空); 每个判断对象有模型结论, 重跑至多
-    一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见的标题; 合同 3 份
-    与函证 2 户都已抽取. 软性的差异只告警 (warn_soft)."""
-    assert data["missing_subjects"] == [], data["missing_subjects"]
-    assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
-    assert data["pointers"] > 30
-    heading = REPORT_HEADINGS[OpinionType(data["fin_disposition"])][0]
-    assert (data["report_opinion"], data["report_heading"]) == ([data["fin_disposition"]], [[heading]])
-    assert (data["contracts"], data["confirmations"]) == (3, 2)
-    assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
-
-
-def warn_soft(data: dict[str, Any]) -> None:
-    """软性检查 (需求 R311 验收 3): 判断的建议动作与固定输出不同的逐条告警 (如 BA-091, XJ-499 是否为 misstatement)."""
-    for row in data["differences"]:
-        warnings.warn(
-            f"{row['procedure_id']} {row['subject_id']}: 建议动作 {row['proposed_action']}, 固定输出 {row['fixture']}",
-            stacklevel=1,
-        )
+GATES = ["ACC-01", "PLN-01/03", "PLN-15", "PLN-15", "FIN-01", "RPT-01", "RPT-01"]  # 依次决定的闸门
 
 
 async def real_walk(
@@ -384,7 +99,7 @@ async def real_walk(
 @pytest.mark.live(max_calls=MAX_CALLS)  # 用量上限 (需求 R115), LIVE_MAX_CALLS 等可覆盖
 async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> None:
     """验收 1-4: 真实大模型下照页面走法从新建项目走到归档 (real_walk, LLM_MODE live); 硬性与软性检查见 assert_hard,
-    warn_soft; 闸门依次为 ACC-01, PLN-01/03, FIN-01, RPT-01 两次; 留痕的模型为配置的; 汇总写
+    warn_soft; 闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 留痕的模型为配置的; 汇总写
     var/eval/demo-live-<UTC>.json."""
     configured = live_llm_settings()  # 没配时跳过
     XERO.ready()
@@ -392,7 +107,7 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
     walk, data, calls = await real_walk(tmp_path, live_budget, "demo-live", LLM_MODE="live", **llm)
     warn_soft(data)
     assert_hard(data)
-    assert walk.gates == ["ACC-01", "PLN-01/03", "FIN-01", "RPT-01", "RPT-01"]
+    assert walk.gates == GATES
     assert calls and all(e.model and e.model.startswith(configured.LLM_MODEL) for e in calls)
 
 
@@ -400,7 +115,8 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
 @pytest.mark.external
 async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
     """连库自测: 真实模型用例的同一条路径 (real_walk), 大模型换成组装根的 mock (按项目数据集读演示运行副本); FIN-01 选
-    无保留意见 (固定输出的报告两稿按它写). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用 45 次 (同 R287)."""
+    无保留意见 (固定输出的报告两稿按它写). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用 FIXED_CALLS 次 (同 R287
+    的离线走法)."""
     XERO.ready()
     budget = Budget(max_calls=MAX_CALLS)
     walk, data, calls = await real_walk(
@@ -412,93 +128,112 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
         LLM_MODE="mock",
     )
     assert_hard(data)
-    assert (data["differences"], data["reruns"], data["troubled_tasks"], data["usage"]["calls"]) == ([], {}, [], 45)
-    assert walk.gates == ["ACC-01", "PLN-01/03", "FIN-01", "RPT-01", "RPT-01"] and len(calls) == 45
+    assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
+    assert (data["usage"]["calls"], len(calls), walk.gates) == (FIXED_CALLS, FIXED_CALLS, GATES)
 
 
-async def offline_walk(tmp_path: Path, failing: dict[tuple[str, str], int]) -> tuple[LiveWalk, dict[str, Any]]:
+async def offline_walk(
+    tmp_path: Path, failing: dict[tuple[str, str], int]
+) -> tuple[LiveWalk, dict[str, Any], list[AuditException]]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
     离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
-    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录."""
+    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录.
+    返回走法记录, 汇总与走到归档时存储中各例外的最新版本."""
     XERO.ready()
-    store = CreatingEngagementStore()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
-    datasets = demo_source()
-    deps = new_xero_deps(
-        trail=FakeTrail(),
-        llm=llm,
-        review_llm=llm,
-        rules=FakeRuleEngine(dict(XERO_RULES)),
-        features=DEMO_FEATURES,
-        engagement_store=store,
-    )
-    deps = replace(deps, registry=DatasetRegistrySource(store, datasets.supplement_dir))
     budget = Budget(max_calls=MAX_CALLS)
-    install_budget(deps, budget)
-    runner = offline_runner(deps)
-    service = DataService(deps, runner, demo=datasets)
     walk = LiveWalk()
-    async with api_client(runner, NUMBAT_AUDITOR.id, xero=xero_link(deps, service)) as client:
+    async with demo_offline(llm) as (runner, service, client):
+        install_budget(runner.deps, budget)
         await drive(client, runner, service, walk, fin=lambda material: OpinionType.unqualified.value, budget=budget)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
-    return walk, data
+    return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException)
+
+
+def stranded(exceptions: list[AuditException]) -> list[str]:
+    """走到归档时仍为 unattributed 的例外: 没有待决任务再指向它们 (归档时已没有待决任务), 也没有判断解释它们."""
+    return sorted(x.id for x in exceptions if x.disposition is ExceptionDisposition.unattributed)
 
 
 @pytest.mark.external
 async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     """不联网的自测 (offline_walk): 走到归档, 硬性检查都过, 没有软性差异 (固定输出与自己比), 没有重跑与非 normal 任务;
-    闸门依次为 ACC-01, PLN-01/03, FIN-01, RPT-01 两次; 调用 45 次 (同 R287), 17 个判断对象, 决定同演示决定表."""
-    walk, data = await offline_walk(tmp_path, {})
+    闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 FIXED_CALLS 次 (同 R287 的离线走法), 17 个
+    判断对象, 决定同演示决定表."""
+    walk, data, exceptions = await offline_walk(tmp_path, {})
     assert_hard(data)
+    assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
-    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (
-        ["ACC-01", "PLN-01/03", "FIN-01", "RPT-01", "RPT-01"],
-        "qualified",
-        45,
-    )
+    assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
     actions = {(r["procedure_id"], r["subject_id"]): r["proposed_action"] for r in data["judgments"]}
-    assert len(actions) == 17 and (actions["CSH-02", "BA-091"], actions["GEN-02", "XJ-499"]) == ("misstatement",) * 2
+    assert (
+        len(actions) == JUDGED and (actions["CSH-02", "BA-091"], actions["GEN-02", "XJ-499"]) == ("misstatement",) * 2
+    )
     assert data["decisions"] == {"confirm": 14, "misstatement": 2, "override": 1}
     assert len(list(tmp_path.glob("demo-live-selftest-*.json"))) == 1
 
 
-ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed, 不能重跑)
+ORC1021 = XERO17_INVOICES[0]  # REV-02 判断对象里没有规则例外的一张 (有例外的 ORC1026 失败时转 unattributed)
 
 
+D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 各组都只有第 1 次执行为 BA-091 新建的这一条 D04
+
+
+@pytest.mark.parametrize(
+    ("failing", "kind"),
+    [
+        ([("REV-02", ORC1021)], "failed"),
+        # 带 REV-08 的 R03-1, 判断失败转 unattributed 任务, 驱动同 failed 先重跑一次 (需求 R347 验收 3)
+        ([("REV-02", ORC1026)], "unattributed"),
+        # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
+        ([("CSH-02", "BA-091")], "unattributed"),
+        # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed"),
+    ],
+    ids=["rev02", "rev02_findings", "csh02", "revisions"],
+)
 @pytest.mark.external
-async def test_live_driver_reruns_a_failed_object_once(tmp_path: Path) -> None:
-    """自测重跑一路: ORC1021 的 REV-02 判断前 3 次调用输出不是 JSON, 成为 failed 任务; 驱动重跑一次, 第 2 次执行给出
-    结论, 照常走到归档, 硬性检查都过; 汇总记重跑一次与这条 failed 任务, 调用多 3 次."""
-    _, data = await offline_walk(tmp_path, {("REV-02", ORC1021): 3})
+async def test_live_driver_reruns_a_failed_object_once(
+    tmp_path: Path, failing: list[tuple[str, str]], kind: str
+) -> None:
+    """自测重跑一路: 各对象 (REV-02 的 ORC1021 与带规则例外的 ORC1026, CSH-02 的 BA-091, 计划或报告的每个修订) 前
+    MAX_ATTEMPTS 次调用输出不是 JSON, 成为 kind 类任务 (failed; 带规则例外的为 unattributed); 驱动对每个各重跑一次,
+    第 2 次执行给出结果, 照常走到归档, 硬性检查都过 (没有缺结论的对象); 汇总记各重跑一次与这几条任务, 每个多调
+    MAX_ATTEMPTS 次. 重跑出的判断与固定输出的建议动作相同; 走到归档时没有仍为 unattributed 的例外 (重跑前置的那一版
+    由重跑的判断解释, 随复核决定归因)."""
+    _, data, exceptions = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
-    assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1021}": 1}, [["REV-02", ORC1021, "failed"]])
-    assert (data["usage"]["calls"], data["decisions"]["rerun"]) == (48, 1)
-    [row] = [r for r in data["judgments"] if r["subject_id"] == ORC1021]
-    assert (row["proposed_action"], row["same"]) == ("accept", True)
-
-
-@pytest.mark.external
-async def test_failed_object_with_rule_findings_is_a_hard_failure(tmp_path: Path) -> None:
-    """有规则例外的对象 (ORC1026 带 REV-08 的 R03-1) 判断失败时转为 unattributed 任务 (复核队列的规则, 不能重跑):
-    驱动按决定表推翻, 照常走到归档; 该对象没有模型结论, 硬性检查记为缺结论而不过 (需求 R311 验收 2)."""
-    _, data = await offline_walk(tmp_path, {("REV-02", ORC1026): 3})
-    assert (data["reruns"], data["troubled_tasks"]) == ({}, [["REV-02", ORC1026, "unattributed"]])
-    assert data["missing_subjects"] == [f"REV-02 {ORC1026}"]
-    with pytest.raises(AssertionError, match=ORC1026):
-        assert_hard(data)
+    assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in failing}
+    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in failing)
+    assert data["missing_subjects"] == []
+    assert data["usage"]["calls"] == FIXED_CALLS + MAX_ATTEMPTS * len(failing)
+    assert data["decisions"]["rerun"] == len(failing)
+    rows = {(r["procedure_id"], r["subject_id"]): r for r in data["judgments"]}
+    for key in (k for k in failing if k[0] in JUDGING):  # 判断对象 (与固定输出的建议动作相同)
+        assert rows[key]["same"], rows[key]
+    assert stranded(exceptions) == []
+    assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == D04  # 重跑不另建 D04
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:
     """合成的复核队列一项 (只填驱动用到的字段)."""
-    task = {"id": f"T-{subject}", "kind": kind, "procedure_id": "GEN-02", "target_version": 1, "subject_id": None}
+    task = {
+        "id": f"T-{subject}",
+        "kind": kind,
+        "procedure_id": "GEN-02",
+        "run_id": "RUN-GEN-02-1",
+        "target_version": 1,
+        "subject_id": None,
+    }
     target: dict[str, Any] = {"subject_id": subject} if kind != "unattributed" else {"detail": {"entry_no": subject}}
     return {"task": task, "target": target, "allowed_resolutions": [], "draft_rules": {}} | extra
 
 
 def test_review_bodies_follow_the_decision_table() -> None:
     """各类任务的决定都合复核接口的请求体 (ReviewRecordIn), 且按演示决定表: 争议任务原判断与期望一致时维持, 否则
-    "两者都不采用" 给出期望的结论, 期望错报时附草稿; 无解释的例外认定错报或推翻; 同一对象第二次失败即判失败."""
+    "两者都不采用" 给出期望的结论, 期望错报时附草稿; 无解释的例外先重跑一次, 仍失败再认定错报或推翻; failed 同一
+    对象第二次失败即判失败."""
     table, walk = decision_table("USR-1"), LiveWalk()
     both = {"allowed_resolutions": ["a6_upheld", "a7_upheld", "neither"]}
     cases = {
@@ -519,14 +254,37 @@ def test_review_bodies_follow_the_decision_table() -> None:
         record = ReviewRecordIn.model_validate(body)
         assert record.dispute_resolution == resolution, name
         assert (record.misstatement_draft is not None) == ("期望错报" in name), name
-    assert ReviewRecordIn.model_validate(review_body(view_of("unattributed", "XJ-499"), table, walk)).decision == (
-        "misstatement"
-    )
-    assert ReviewRecordIn.model_validate(review_body(view_of("unattributed", "XJ-601"), table, walk)).decision == (
-        "override"
-    )
-    failed = view_of("failed", "XJ-601")
-    failed["task"]["subject_id"] = "XJ-601"
+    # unattributed (需求 R347): 第一次先重跑, 重跑后仍失败才按决定表认定错报或推翻
+    for subject, then in (("XJ-499", "misstatement"), ("XJ-601", "override")):
+        unattributed = view_of("unattributed", subject)
+        assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == "rerun", subject
+        assert ReviewRecordIn.model_validate(review_body(unattributed, table, walk)).decision == then, subject
+    failed = view_of("failed", "XJ-430")
+    failed["task"]["subject_id"] = "XJ-430"
     assert ReviewRecordIn.model_validate(review_body(failed, table, walk)).decision == "rerun"
     with pytest.raises(pytest.fail.Exception, match="重跑后又失败"):
         review_body(failed, table, walk)
+
+
+def test_rerun_counts_the_whole_group() -> None:
+    """一轮失败算一组 (第 1 轮审核 R347-03): 对一条可重跑任务下 rerun 时, 同程序同一次执行其余待决的可重跑任务随之
+    重跑 (DecisionSubmit 一并关闭), 驱动一并计数. 同轮 XJ-430 failed 与 XJ-601 unattributed, 对 XJ-430 rerun 后两者
+    各记一次; 同程序的 normal 任务, 别的执行的与别的程序的失败任务不计 (第 2 轮审核 R347-14). XJ-601 第 2 轮仍是
+    unattributed 时已重跑过, 按决定表推翻."""
+    table, walk = decision_table("USR-1"), LiveWalk()
+    failed, unattributed, normal = (
+        view_of("failed", "XJ-430"),
+        view_of("unattributed", "XJ-601"),
+        view_of("normal", "XJ-397"),
+    )
+    failed["task"]["subject_id"] = "XJ-430"
+    elsewhere = view_of("failed", "BA-091")
+    elsewhere["task"] |= {"procedure_id": "CSH-02", "subject_id": "BA-091"}
+    earlier = view_of("failed", "XJ-575")
+    earlier["task"] |= {"subject_id": "XJ-575", "run_id": "RUN-GEN-02-0"}
+
+    pending = [failed, unattributed, normal, elsewhere, earlier]
+    assert review_body(failed, table, walk, pending)["decision"] == "rerun"
+    assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}
+    assert review_body(unattributed, table, walk, [unattributed])["decision"] == "override"
+    assert walk.failures == {("GEN-02", "XJ-430"): 1, ("GEN-02", "XJ-601"): 1}

@@ -16,6 +16,19 @@ fragments:
     text: |
       If, at the auditor’s request, management has examined a class of transactions, account balances or disclosures and corrected misstatements that were detected, the auditor shall perform additional audit procedures to determine whether misstatements remain.
     procedures: [FIN-09]
+  # 第 8 段句中 "management." 后的脚注号 3 按逐字规则去掉
+  - id: ASA450-P08
+    paragraph: "8"
+    topic: communicate_misstatements
+    text: |
+      The auditor shall communicate, unless prohibited by law or regulation, on a timely basis all misstatements accumulated during the audit with the appropriate level of management. The auditor shall request management to correct those misstatements.
+    procedures: [FIN-08]
+  - id: ASA450-P09
+    paragraph: "9"
+    topic: management_refuses_correction
+    text: |
+      If management refuses to correct some or all of the misstatements communicated by the auditor, the auditor shall obtain an understanding of management’s reasons for not making the corrections and shall take that understanding into account when evaluating whether the financial report as a whole is free from material misstatement.
+    procedures: [FIN-08]
   - id: ASA450-P10
     paragraph: "10"
     topic: reassess_materiality

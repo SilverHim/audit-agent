@@ -14,6 +14,7 @@ from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AgentId,
+    CorrectionNotice,
     Engagement,
     GateDecision,
     GateId,
@@ -47,7 +48,8 @@ def waiting_payloads(snapshot: StateSnapshot) -> list[Any]:
 
     种类与写法见 waits.py (WaitKind 五种): await_events 为 {"awaiting": "review", "phase"}, P2 以外节点等人为
     {"awaiting": "human", "procedure_id", "run_id", "records"}, p1_await_data 为 {"awaiting": "data"}, await_data 与
-    p0_inputs (需求 R290) 为 {"awaiting": "inputs", "procedure_ids"}, 等待更正 (correction) 由错报段使用.
+    p0_inputs (需求 R290) 为 {"awaiting": "inputs", "procedure_ids"}, await_correction 为 {"awaiting": "correction",
+    "misstatement_ids", "records"} (需求 R162).
     看待执行任务的 interrupts, 不看 next: 节点第二次及以后停下等待时 next 为空 (接口文档第 7 节恢复机制)."""
     return [waiting.value for task in snapshot.tasks for waiting in task.interrupts]
 
@@ -63,9 +65,18 @@ def awaiting_inputs(snapshot: StateSnapshot) -> bool:
 
 
 def review_waits(snapshot: StateSnapshot) -> list[Any]:
-    """节点内等审计师决定的等待载荷 (await_events, P2 以外节点等人, 以及之后的等待更正), 不含等数据 (就绪与程序
-    等数据, waits.DATA_WAITS). 哪些等待收哪个任务的决定再由 waits.accepts 判断."""
-    return [waiting for waiting in waiting_payloads(snapshot) if kind_of(waiting) not in DATA_WAITS]
+    """节点内等审计师复核决定的等待载荷 (await_events, P2 以外节点等人), 不含等数据 (就绪与程序等数据,
+    waits.DATA_WAITS) 与等待更正 (等的是更正通知, 需求 R162). 哪些等待收哪个任务的决定再由 waits.accepts 判断."""
+    return [
+        waiting
+        for waiting in waiting_payloads(snapshot)
+        if kind_of(waiting) not in DATA_WAITS and kind_of(waiting) is not WaitKind.correction
+    ]
+
+
+def correction_wait(snapshot: StateSnapshot) -> dict[str, Any] | None:
+    """图停在 await_correction 等更正通知时的载荷 (waits.correction_payload, 需求 R162), 不在等时为 None."""
+    return next((w for w in waiting_payloads(snapshot) if kind_of(w) is WaitKind.correction), None)
 
 
 RERUN_GATES = (GateId.FIN_01, GateId.RPT_01)  # 执行阶段之后, 签字之前的闸门: 停在这里时可重跑过期程序 (需求 R274)
@@ -91,7 +102,7 @@ def waiting_for_human(snapshot: StateSnapshot) -> bool:
 async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: StateSnapshot) -> str | None:
     """Store 已写入, 检查点却没跟上 (上次写完 Store 后中断) 的内容, 须先补做; 没有返回 None.
 
-    两种情况: Store 中有检查点里没有的决定 (闸门决定, 复核决定, 过期重跑请求); 项目采用的画像版本
+    两种情况: Store 中有检查点里没有的决定 (闸门决定, 复核决定, 过期重跑请求, 更正通知); 项目采用的画像版本
     (Engagement.client_profile_version) 高于检查点的.
     比的是本项目采用的版本, 不是全局最新画像: 同客户的其他项目改画像不应让本项目须补做.
     节点内等待时, 本节点已读回的决定在节点返回前不进状态, 列在等待载荷的 records 中 (如 ACC-04 重跑后又失败,
@@ -102,8 +113,9 @@ async def resume_required(deps: AgentDeps, engagement: Engagement, snapshot: Sta
     stored = {d.id for d in await deps.output_store.latest(eid, GateDecision)}
     stored |= {r.id for r in await deps.output_store.latest(eid, ReviewRecord)}
     stored |= {r.id for r in await deps.output_store.latest(eid, RerunRequest)}
+    stored |= {n.id for n in await deps.output_store.latest(eid, CorrectionNotice)}
     in_state = {d.id for d in values["gate_decisions"]} | {r.id for r in values["review_records"]}
-    in_state |= {r.id for r in values["rerun_requests"]}
+    in_state |= {r.id for r in values["rerun_requests"]} | {n.id for n in values["correction_notices"]}
     for waiting in waiting_payloads(snapshot):
         if isinstance(waiting, dict):
             in_state.update(waiting.get("records", []))

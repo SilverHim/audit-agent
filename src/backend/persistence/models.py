@@ -105,11 +105,12 @@ users.append_constraint(UniqueConstraint("email"))
 engagements = table(
     "engagements",
     "id:s client_id:s period_start:d period_end:d dataset:s owner_id:s phase:s locked:z "
-    "version_snapshot:j client_profile_version:i created_at:t updated_at:t",
+    "version_snapshot:j client_profile_version:i working_language:s created_at:t updated_at:t",
     ("id",),
     scoped=False,
 )
 engagements.c.owner_id.append_foreign_key(ForeignKey("users.id"))
+engagements.c.working_language.server_default = DefaultClause("en")  # 工作语言 (需求 R339, 迁移 0023), 之前的项目为 en
 # 客户画像: 每个客户 (id) 一组版本, 跨项目; source 为该版的来源 (ProfileSource), updated_by 为写入的用户 (迁移 0011)
 client_profiles = table(
     "client_profiles", "id:s version:i data:j source:s updated_by:s updated_at:t", ("id", "version"), scoped=False
@@ -246,11 +247,16 @@ import_batches = table(
 OUTPUT_KINDS = {
     "audit_objectives": ["AuditObjective"],
     "risk_register": ["RiskItem"],
-    "procedures": ["Procedure", "ProcedureRun"],
+    "procedures": ["Procedure", "ProcedureRun", "RunPopulation"],  # RunPopulation 需求 R324; kind 为字符串列, 不需迁移
     "exceptions": ["AuditException"],
     "judgments": ["Judgment"],
     "review_tasks": ["ReviewTask"],
-    "decisions": ["ReviewRecord", "GateDecision", "RerunRequest"],
+    "decisions": [
+        "ReviewRecord",
+        "GateDecision",
+        "RerunRequest",
+        "CorrectionNotice",
+    ],  # 更正通知需求 R162, kind 为文本列
     "confirmations": ["Confirmation"],
     "misstatements": ["Misstatement"],
     "report_versions": ["AuditReportVersion"],

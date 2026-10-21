@@ -2,14 +2,19 @@
 P2 程序由下一轮派发重跑, P2 以外的程序由所在节点重跑."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
 
+from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.errors import DecisionRejected, RuleError
 from backend.contracts.models import (
+    AuditException,
     Decision,
+    ExceptionDisposition,
     GateVerdict,
+    Judgment,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
@@ -25,15 +30,22 @@ from backend.orchestration.decisions import rerun_group, rerun_procedure
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_CONTRACTS,
     NUMBAT_PROFILE,
+    NUMBAT_RECORDS,
     FakeEngagementStore,
+    FakeFinancialStore,
+    FakeJudgmentEngine,
     FakeTrail,
     ScriptA6,
     ScriptAgent,
     assert_pack_synced,
+    fails_first,
     make_procedure,
     make_runner,
+    numbat_contracts,
     numbat_p2_agents,
+    passed,
     wait_idle,
 )
 from tests.test_decisions import Started, acc01_decision, pln_decision
@@ -96,10 +108,10 @@ def rev03_cannot_read_con003(seen: list[list[str]]) -> Agents:
     return rev03_cannot_read(seen)
 
 
-async def at_review(agents: Agents) -> Started:
-    """Numbat 跑过两道闸门, P2 派完可派发的程序后停在 await_events."""
+async def at_review(agents: Agents, **runner_options: Any) -> Started:
+    """Numbat 跑过两道闸门, P2 派完可派发的程序后停在 await_events. runner_options 原样转交 make_runner."""
     engagement_store = FakeEngagementStore([NUMBAT_PROFILE], [ENGAGEMENT])
-    runner, store = make_runner(engagement_store=engagement_store, agents=agents)
+    runner, store = make_runner(engagement_store=engagement_store, agents=agents, **runner_options)
     s = Started(runner, store, engagement_store)
     await runner.start(EID)
     await wait_idle(runner, EID)
@@ -278,12 +290,139 @@ def test_rerun_procedure() -> None:
 
 
 def test_rerun_group() -> None:
-    """rerun 关闭的组: 被决定的任务在前, 其后为同程序其余待决的 failed 任务 (按 ID); 别的程序的, 非 failed 的不在内."""
+    """rerun 关闭的组: 被决定的任务在前, 其后为同程序同一次执行其余待决的可重跑任务 (failed 与 unattributed, 需求
+    R347; 按 ID); 别的程序的, 别的执行的 (第 1 轮审核 R347-08, 同 recovery.closed_by), normal 等不可重跑的不在内."""
 
-    def task(tid: str, kind: TaskKind = TaskKind.failed, procedure_id: str = "REV-03") -> ReviewTask:
-        return ReviewTask.model_construct(id=tid, kind=kind, procedure_id=procedure_id)
+    def task(tid: str, kind: TaskKind = TaskKind.failed, procedure_id: str = "REV-03", run_no: int = 2) -> ReviewTask:
+        return ReviewTask.model_construct(
+            id=tid, kind=kind, procedure_id=procedure_id, run_id=f"RUN-{procedure_id}-{run_no}"
+        )
 
     decided = task("T-3")
-    pending = [task("T-2"), decided, task("T-1"), task("T-J", TaskKind.normal), task("T-X", procedure_id="REV-08")]
+    pending = [
+        task("T-2"),
+        decided,
+        task("T-1"),
+        task("T-U", TaskKind.unattributed),
+        task("T-J", TaskKind.normal),
+        task("T-D", TaskKind.dispute),
+        task("T-X", procedure_id="REV-08"),
+        task("T-OLD", run_no=1),
+    ]
 
-    assert [t.id for t in rerun_group(decided, pending)] == ["T-3", "T-1", "T-2"]
+    assert [t.id for t in rerun_group(decided, pending)] == ["T-3", "T-1", "T-2", "T-U"]
+    unattributed = task("T-U", TaskKind.unattributed)
+    assert [t.id for t in rerun_group(unattributed, pending)] == ["T-U", "T-1", "T-2", "T-3"]
+
+
+# ── 需求 R347: 带规则例外的对象判断失败 (unattributed) 也能重跑 ──
+
+CUTOFF = "X-REV-08-1-R01-1"  # REV-08 的跨期例外, REV-02 判断 SI-2026-0612 的规则例外
+SI0612 = "SI-2026-0612"
+SI0618 = "SI-2026-0618"  # REV-02 的另一个判断对象, 没有规则例外
+
+
+def rev02_judged_by(engine: FakeJudgmentEngine) -> Agents:
+    """REV-02 由真实的 A6 执行 (判断公共流程, 判断引擎为 engine), 其余同 Numbat 脚本."""
+
+    def agents(deps: Any) -> dict[str, Any]:
+        return {**p2_agents(deps), **numbat_p2_agents(deps), "REV-02": FieldworkAgent(replace(deps, judgments=engine))}
+
+    return agents
+
+
+async def rev03_confirmed(agents: Agents) -> Started:
+    """Numbat 停在 await_events, 复核完 REV-03 (三个 confirm) 后 REV-02 执行 (发票, 发运单与合同取 Numbat 的)."""
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, numbat_contracts())
+    s = await at_review(agents, financial_store=financial)
+    for n in (1, 2, 3):
+        await s.submit.submit(EID, record(f"T-J-REV-03-1-CON-00{n}-v1", id=f"D-{n}"))
+        await wait_idle(s.runner, EID)
+    return s
+
+
+async def unattributed_at_review(times: int) -> tuple[Started, FakeJudgmentEngine, ReviewTask]:
+    """rev03_confirmed 之后: 对 SI-2026-0612 的判断失败 times 次中的第 1 次已发生, 该对象有 REV-08 的跨期例外, 复核
+    队列建以例外 v2 (unattributed) 为目标的任务."""
+    engine = FakeJudgmentEngine({SI0612: fails_first(times), SI0618: passed()})
+    s = await rev03_confirmed(rev02_judged_by(engine))
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    [task] = [
+        t
+        for t in snapshot.values["review_tasks"]
+        if t.procedure_id == "REV-02" and t.kind is TaskKind.unattributed and t.status is TaskStatus.pending
+    ]
+    return s, engine, task
+
+
+def judged(engine: FakeJudgmentEngine) -> list[str]:
+    return [ctx.subject_id for pid, ctx, _ in engine.calls if pid == "REV-02"]
+
+
+async def test_rerun_of_unattributed_subject_judges_it_again() -> None:
+    """需求 R347 验收 1, 2: 带规则例外的对象判断失败, 任务为 unattributed (目标 X-REV-08-1-R01-1 v2), 允许
+    override, misstatement 与 rerun. 对它 rerun: 同一提交里任务 decided, REV-02 executing, 重判对象只有 SI-2026-0612;
+    重跑只判这一个对象 (判断引擎多 1 次调用), 成功后出 RUN-REV-02-2 的判断与 normal 任务. 确认这条判断时, 例外
+    按判断归因出新版本 (v3 attributed, attributed_by 为新判断)."""
+    s, engine, task = await unattributed_at_review(1)
+    assert (task.id, task.target_id, task.target_version, task.subject_id) == (f"T-{CUTOFF}-v2", CUTOFF, 2, SI0612)
+    assert s.runner.deps.queue.allowed(task) == frozenset({Decision.override, Decision.misstatement, Decision.rerun})
+    assert sorted(judged(engine)) == [SI0612, SI0618]
+    before = len(s.output_store.commits)
+
+    await s.submit.submit(EID, rerun(task.id, "D-RU").model_copy(update={"target_version": task.target_version}))
+    await wait_idle(s.runner, EID)
+
+    commit = s.output_store.commits[before]
+    assert [(o.id, o.status) for o in commit if isinstance(o, ReviewTask)] == [(task.id, TaskStatus.decided)]
+    [rev02] = [o for o in commit if isinstance(o, Procedure)]
+    assert (rev02.status, rev02.rerun_subject_ids) == (ProcedureStatus.executing, [SI0612])
+    assert sorted(judged(engine)) == [SI0612, SI0612, SI0618]  # 只重判这一个对象
+    assert (await run(s, "RUN-REV-02-2")).trigger is RunTrigger.rerun
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    pending = sorted(
+        (t.id, t.kind)
+        for t in snapshot.values["review_tasks"]
+        if t.procedure_id == "REV-02" and t.status is TaskStatus.pending
+    )
+    assert pending == [
+        (f"T-J-REV-02-1-{SI0618}-v1", TaskKind.normal),
+        (f"T-J-REV-02-2-{SI0612}-v1", TaskKind.normal),
+    ]
+    judgment = await s.output_store.get(EID, Judgment, f"J-REV-02-2-{SI0612}")
+    assert judgment is not None and judgment.exception_ids == [CUTOFF]
+
+    confirm = record(f"T-J-REV-02-2-{SI0612}-v1", Decision.confirm, id="D-OK")
+    await s.submit.submit(EID, confirm)
+    await wait_idle(s.runner, EID)
+    exception = await s.output_store.get(EID, AuditException, CUTOFF)
+    assert exception is not None
+    assert (exception.version, exception.disposition, exception.attributed_by) == (
+        3,
+        ExceptionDisposition.attributed,
+        f"J-REV-02-2-{SI0612}",
+    )
+
+
+async def test_unattributed_rerun_fails_again_then_reruns_again() -> None:
+    """需求 R347 验收 2 后半: 重跑后又失败, 又是一个 unattributed 任务 (目标为例外 v3), 同样可以 rerun; 再重跑成功时
+    出 RUN-REV-02-3 的判断与 normal 任务. 后端不限重跑次数, 同 failed 任务 (每个对象至多重跑一次是演示驱动的规则)."""
+    s, engine, task = await unattributed_at_review(2)
+    await s.submit.submit(EID, rerun(task.id, "D-R1").model_copy(update={"target_version": task.target_version}))
+    await wait_idle(s.runner, EID)
+
+    snapshot = await s.runner.app.aget_state(CONFIG)
+    [again] = [
+        t
+        for t in snapshot.values["review_tasks"]
+        if t.procedure_id == "REV-02" and t.kind is TaskKind.unattributed and t.status is TaskStatus.pending
+    ]
+    assert (again.id, again.target_version, again.run_id) == (f"T-{CUTOFF}-v3", 3, "RUN-REV-02-2")
+    assert Decision.rerun in s.runner.deps.queue.allowed(again)
+
+    await s.submit.submit(EID, rerun(again.id, "D-R2").model_copy(update={"target_version": again.target_version}))
+    await wait_idle(s.runner, EID)
+
+    assert judged(engine).count(SI0612) == 3
+    task3 = await s.output_store.get(EID, ReviewTask, f"T-J-REV-02-3-{SI0612}-v1")
+    assert task3 is not None and (task3.kind, task3.status) == (TaskKind.normal, TaskStatus.pending)

@@ -63,7 +63,7 @@ from backend.orchestration.nodes import apply_patch, assembled_procedure, build_
 from tests.fakes import NOW, FakeConfirmationChannel, FakeEvidenceStore, FakeRuleEngine, FakeTrail
 from tests.fixture_sets import XERO
 from tests.test_p2_agents_demo import LAYERS, OBJECTIVES, confirm_judgments
-from tests.test_xero_fixtures import ORC, REV03_CONTRACTS, xero_state
+from tests.test_xero_fixtures import ORC, REV03_CONTRACTS
 from tests.xero_fakes import (
     ORC1026,
     XERO17_FEATURES,
@@ -73,6 +73,7 @@ from tests.xero_fakes import (
     xero_confirmations,
     xero_engagement,
     xero_profile,
+    xero_state,
     xero_traits,
 )
 

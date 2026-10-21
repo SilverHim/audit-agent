@@ -162,8 +162,14 @@ export function evidencePointers(view: ManualTaskView, evidence: EvidenceChoice[
   })
 }
 
-// 人工结果的决定; 缺结论, 理由, 执行日期, 证据不够或结构化结果写不对时返回错误文案
-export function manualRecordBody(view: ManualTaskView, draft: ManualDraft, t: Messages): ReviewRecordIn | string {
+// 人工结果的决定; 缺结论, 理由, 执行日期, 证据不够或结构化结果写不对时返回错误文案. details 给了时用它 (如 FIN-08
+// 逐条错报的登记, lib/misstatements.responsesDetails), 不再按结果模型的字段解析
+export function manualRecordBody(
+  view: ManualTaskView,
+  draft: ManualDraft,
+  t: Messages,
+  given?: Record<string, unknown>,
+): ReviewRecordIn | string {
   const conclusion = draft.conclusion.trim()
   const reason = draft.reason.trim()
   if (!conclusion) return t.errors.conclusionRequired
@@ -171,7 +177,7 @@ export function manualRecordBody(view: ManualTaskView, draft: ManualDraft, t: Me
   if (!draft.performedOn) return t.manualPage.errors.performedOn
   const evidence = evidencePointers(view, draft.evidence)
   if (evidence.length < view.request.min_evidence) return t.manualPage.errors.evidence(view.request.min_evidence)
-  const details = parseDetails(resultFields(view.result_schema), draft.values, t)
+  const details = given ?? parseDetails(resultFields(view.result_schema), draft.values, t)
   if (typeof details === 'string') return details
   return {
     task_id: view.task.id,

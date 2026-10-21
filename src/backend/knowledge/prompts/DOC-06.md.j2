@@ -39,9 +39,12 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
 | oral | given orally |
 
 - `accrued_interest_cents`: interest the reply states has accrued up to the balance date but has not yet been credited or debited to the account, in integer cents.
+  - Take that amount whenever it will be paid: a statement that it is payable or will be credited on a later date, or that it belongs to an interest period running past the balance date, does not change it.
   - Positive when the bank owes it to the customer (credit interest); negative when the customer owes it to the bank (debit interest and fees).
   - 0 when the reply states accrued interest as nil.
   - null when the reply does not mention accrued interest.
-  - Do not take interest already credited or debited to the account, and do not take a full period's interest payable on a later date.
+  - Do not take interest already credited or debited to the account, and do not take interest for days after the balance date (such as the next period's interest).
+  - If the reply states only a whole period's interest, without the part accrued up to the balance date, use null; do not calculate the part.
+  - Example: "Interest accrued to 31 March 2026 and not yet paid: $210.75 (interest period 20 March to 19 April 2026, to be credited on 20 April 2026)" → 21075.
 - `evidence`: one pointer for each non-null field above, including `accrued_interest_cents` when it is not null:
   `{"type": "external", "source_type": "document", "source_id": "{{ document.id }}", "locator": "<field name>", "page": <page>, "reliability": "{{ document.reliability }}"}`

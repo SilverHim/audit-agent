@@ -12,6 +12,7 @@ from backend.contracts.models import ClientProfile
 from tests.external import supplements_dir
 from tests.fakes import (
     ENGAGEMENT,
+    CreatingEngagementStore,
     FakeEngagementStore,
     api_client,
     make_runner,
@@ -20,7 +21,6 @@ from tests.fakes import (
     xero_snapshot,
 )
 from tests.test_decisions import Started
-from tests.test_demo_default import CreatingEngagementStore
 from tests.test_flow import start_numbat
 
 EID = ENGAGEMENT.id

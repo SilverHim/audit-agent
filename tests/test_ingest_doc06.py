@@ -22,6 +22,7 @@ from backend.contracts.models import (
     TrailKind,
 )
 from backend.core.config import get_settings
+from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
@@ -186,12 +187,13 @@ def assert_ba01_handed_to_human(agent: IngestAgent, patch: dict[str, Any]) -> No
 
 
 async def test_account_number_mismatch_fails_that_account() -> None:
-    agent, ctx, trail = setup(scripted(BA_01=[raw("BA-01", account_no="99999999"), raw("BA-01")]))
+    """回函账号不是被函证账户的: 语义失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, BA-01 交人."""
+    agent, ctx, trail = setup(scripted(BA_01=[*[raw("BA-01", account_no="99999999")] * MAX_ATTEMPTS, raw("BA-01")]))
     patch = await agent.run(ctx)
     assert_ba01_handed_to_human(agent, patch)
-    [entry] = [e for e in trail.entries if e.payload.get("fixture_key") == "BA-01"]
-    assert entry.payload["level_failed"] == "semantic"  # 语义失败不重试
-    assert "99999999" in entry.payload["errors"][0] and "12345601" in entry.payload["errors"][0]
+    entries = [e for e in trail.entries if e.payload.get("fixture_key") == "BA-01"]
+    assert [e.payload["level_failed"] for e in entries] == ["semantic"] * MAX_ATTEMPTS
+    assert "99999999" in entries[-1].payload["errors"][0] and "12345601" in entries[-1].payload["errors"][0]
 
 
 async def test_receipt_channel_mismatch_only_noted() -> None:
@@ -211,10 +213,14 @@ async def test_retries_exhausted_fails_that_account() -> None:
 
 
 async def test_pointer_page_beyond_document_fails_that_account() -> None:
+    """指针页码超出回函页数: 引用失败, 回传重试 (需求 R348) MAX_ATTEMPTS 次仍不过, BA-01 交人; 备着的合格输出
+    不再调用."""
     bad = json.loads(raw("BA-01"))
     bad["evidence"][0]["page"] = 3
-    agent, ctx, _ = setup(scripted(BA_01=[json.dumps(bad)]))
+    llm = scripted(BA_01=[*[json.dumps(bad)] * MAX_ATTEMPTS, raw("BA-01")])
+    agent, ctx, _ = setup(llm)
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == MAX_ATTEMPTS
 
 
 # ── 回函应计利息 (需求 R104) ─────────────────────────────────────────
@@ -250,12 +256,12 @@ async def test_accrued_interest_is_written_to_the_confirmation(cents: int) -> No
 
 @pytest.mark.parametrize("page", [None, 3])  # 没有该指针; 指针页码超出页数 (2 页)
 async def test_accrued_interest_without_a_valid_pointer_fails_that_account(page: int | None) -> None:
-    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败不重试 (只调 1 次), BA-01 交人,
-    函证不更新, 另一账户照常."""
-    llm = scripted(BA_01=[with_accrued("BA-01", 4853, page), raw("BA-01")])
+    """应计利息 4853 却没有 locator 为 accrued_interest_cents 的有效指针: 引用失败, 回传重试 (需求 R348) MAX_ATTEMPTS
+    次仍不过, BA-01 交人, 函证不更新, 另一账户照常."""
+    llm = scripted(BA_01=[*[with_accrued("BA-01", 4853, page)] * MAX_ATTEMPTS, raw("BA-01")])
     agent, ctx, _ = setup(llm)
     assert_ba01_handed_to_human(agent, await agent.run(ctx))
-    assert [r.fixture_key for r in llm.requests].count("BA-01") == 1
+    assert [r.fixture_key for r in llm.requests].count("BA-01") == MAX_ATTEMPTS
 
 
 # 应计利息口径的关键词: 每条在应计利息一节里须有一个分句同时含这几个词 (不分大小写), 不比逐字原文
@@ -264,14 +270,19 @@ ACCRUED_RULES = {
     "客户欠银行为负": ("negative", "customer owes"),
     "nil 为 0": ("0", "nil"),
     "没提为 null": ("null", "not mention"),
+    "截至余额日已计的不论何时支付都取": ("whenever", "later date", "does not change"),
     "不取已入账的利息": ("not", "already credited"),
-    "不取以后应付的整期利息": ("not", "later date"),
+    "不取余额日之后才计的利息": ("not", "days after the balance date"),
+    "只写整期利息时为 null": ("only a whole period", "null"),
+    "不自行计算截至余额日的部分": ("not calculate",),
 }
+# 不得回来的旧口径 (需求 R354): 同一分句里既说整期利息又说以后某日, 模型曾据此把截至余额日已计的利息漏抽
+FORBIDDEN = [("full period", "later date"), ("whole period", "later date")]
 
 
 async def test_prompt_states_how_to_read_accrued_interest() -> None:
-    """渲染一次 DOC-06 提示词, 截出应计利息一节 (到下一个字段为止): 按分句查各条口径的关键词; evidence 一条另要求
-    给 accrued_interest_cents 的指针."""
+    """渲染一次 DOC-06 提示词, 截出应计利息一节 (到下一个字段为止): 按分句查各条口径的关键词, 旧口径的分句 (FORBIDDEN)
+    不得出现; evidence 一条另要求给 accrued_interest_cents 的指针."""
     llm = scripted()
     agent, ctx, _ = setup(llm, confirmations=CONFIRMATIONS[:1])
     await agent.run(ctx)
@@ -282,6 +293,7 @@ async def test_prompt_states_how_to_read_accrued_interest() -> None:
     clauses = [c.casefold() for line in lines[start:end] for c in re.split(r"[.;]\s", line)]
     missing = [rule for rule, words in ACCRUED_RULES.items() if not any(all(w in c for w in words) for c in clauses)]
     assert missing == []
+    assert [words for words in FORBIDDEN if any(all(w in c for w in words) for c in clauses)] == []
     assert lines[end].startswith("- `evidence`") and "accrued_interest_cents" in lines[end]
 
 
