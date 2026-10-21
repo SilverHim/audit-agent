@@ -147,6 +147,7 @@ export const en = {
     'GEN-05': 'Full journal entry scan',
     'GEN-02': 'Journal entry exception attribution',
     'GEN-03': 'Related party analysis',
+    'GEN-06': 'Subsequent events evaluation',
     'GEN-07': 'Subsequent events monitoring',
     'GEN-08': 'Ownership and related party map',
     'GEN-09': 'Independent review of judgments',
