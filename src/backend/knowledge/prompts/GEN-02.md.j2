@@ -142,9 +142,11 @@ Standards (cite only these IDs):
 
 ## proposed_action
 
+Reason from all the inputs together before choosing: the entry and its findings, the account balances in both periods, the related entries, invoices and records, and the linked documents such as registers and policies. When they are enough to reach a conclusion, choose `accept` or `misstatement`.
+
 - `accept`: the findings are explained and the inputs show the entry is appropriate and supported, or its effect is reversed in full by a supported entry.
-- `misstatement`: the inputs show that the entry, or the entry together with an entry it relates to, misstates an account balance. Fill `misstatement_draft`: `type` factual; `account` the misstated account as `<name> (<code>)`; `assertion` Existence or Occurrence when the account is overstated by an amount that should not have been recorded, Completeness when an amount is missing, Accuracy when it is recorded at the wrong amount; `direction` overstated or understated; `amount_cents` equal to a referenced row's amount, the difference between two referenced rows, or a finding's amount. Cite the row the amount comes from. State in `conclusion` the other accounts the error affects.
-- `more_evidence`: the inputs do not show the underlying transaction or the reason for the entry, so the findings cannot be explained without further documents or enquiry.
+- `misstatement`: the inputs show that the entry, or the entry together with an entry it relates to, misstates an account balance. Fill `misstatement_draft`: `type` factual; `account` the misstated account as `<name> (<code>)`; `assertion` Existence or Occurrence when the account is overstated by an amount that should not have been recorded, Completeness when an amount is missing, Accuracy when it is recorded at the wrong amount; `direction` overstated or understated; `amount_cents` equal to a referenced row's amount, the difference between two referenced rows, or a finding's amount. When the error affects several accounts, draft it on the account the entry recognises without basis (the revenue, expense or asset it records), not on the balancing receivable, payable, tax or contra account, and leave GST and other taxes out of `amount_cents`. Cite the row the amount comes from. State in `conclusion` the other accounts the error affects.
+- `more_evidence`: only when a specific item missing from the inputs would change the conclusion. Name that item in a `limitation` step, and state why the inputs given cannot rule out what it would settle.
 - Do not use `close`.
 
 ## Output (JudgmentDraft)

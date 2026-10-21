@@ -1,17 +1,27 @@
-"""状态迁移留痕 (A 负责): 项目阶段与程序状态每变一次, 在业务事务提交后写一行 transition (Demo需求文档第 4.2 节).
+"""状态迁移留痕 (A 负责): 项目阶段与程序状态每变一次, 在业务事务提交后写一行 transition (Demo需求文档第 4.2 节);
+程序每次执行另写开始与结束两行 run 留痕 (需求 R325).
 
 防重复键 (idempotency_key):
 - 程序状态: {eid}:transition:procedure:{程序编号}:v{新版本号}
 - 项目阶段: {eid}:transition:engagement:{eid}:{新阶段}; 过期重跑使阶段回到执行阶段后 (第 n 次重跑请求起) 再经过
   各阶段时为 {eid}:transition:engagement:{eid}:{新阶段}:{n}, n 为当时状态中的重跑请求数 (需求 R274)
-已有同键的留痕即跳过, 节点重放与恢复补做时不重复写. 首版与状态未变的新版本不写.
+- 程序执行: {eid}:run:{run_id}:started 与 {eid}:run:{run_id}:finished
+已有同键的留痕即跳过, 节点重放与恢复补做时不重复写. 首版与状态未变的新版本不写 transition.
 """
 
+import logging
 from collections.abc import Iterable
+from typing import Any, Literal
+
+from jinja2 import TemplateError
 
 from backend.contracts.data import DataReadiness
-from backend.contracts.models import AgentId, Phase, Procedure, TrailEntry, TrailKind
+from backend.contracts.knowledge import ProcedureTemplate
+from backend.contracts.models import AgentId, Phase, Procedure, ProcedureRun, RunStatus, TrailEntry, TrailKind
 from backend.contracts.ports import AuditOutputStore, AuditTrail
+from backend.services.procedure_library import render_text
+
+logger = logging.getLogger(__name__)
 
 
 def transition(
@@ -91,8 +101,63 @@ def data_ready_entry(eid: str, readiness: DataReadiness) -> TrailEntry:
     )
 
 
+def run_entry(
+    eid: str, template: ProcedureTemplate, run: ProcedureRun, action: Literal["started", "finished"], summary: str
+) -> TrailEntry:
+    """一行 run 留痕 (需求 R325), 写入者 A1. payload: action, procedure_id, run_id, run_no, trigger, phase (程序所属
+    阶段), scope (见 run_scope)."""
+    return TrailEntry(
+        engagement_id=eid,
+        kind=TrailKind.run,
+        actor=AgentId.A1,
+        procedure_id=run.procedure_id,
+        run_id=run.id,
+        summary=summary,
+        idempotency_key=f"{eid}:run:{run.id}:{action}",
+        payload={
+            "action": action,
+            "procedure_id": run.procedure_id,
+            "run_id": run.id,
+            "run_no": run.run_no,
+            "trigger": run.trigger.value,
+            "phase": template.phase.value,
+            "scope": run_scope(template, run),
+        },
+    )
+
+
+def run_scope(template: ProcedureTemplate, run: ProcedureRun) -> dict[str, str] | None:
+    """程序的范围说明按本次的参数快照渲染, {zh, en}; 模板没写为空. 按快照渲染不出 (程序库之后改了 scope, 重放升级前的
+    执行: 快照里缺占位用的参数, 或参数的类型对不上) 时也为空, 记一行 warning (执行 ID 与错误), 不让节点报错 (留痕在
+    终态提交之后写)."""
+    if template.scope is None:
+        return None
+    try:
+        return render_text(template.scope, run.params_snapshot).model_dump()
+    except (TemplateError, TypeError, ValueError) as e:
+        logger.warning("执行 %s 的范围说明渲染不出, scope 记为空: %s", run.id, e)
+        return None
+
+
+def run_started(eid: str, template: ProcedureTemplate, run: ProcedureRun) -> TrailEntry:
+    """开始执行的留痕: 建好执行记录之后, 调 Agent 之前写 (运行中的执行记录不写 Store, 这一行就是开始的记录)."""
+    return run_entry(eid, template, run, "started", f"开始执行 {run.procedure_id} {template.name}")
+
+
+def run_finished(eid: str, template: ProcedureTemplate, run: ProcedureRun, result: dict[str, Any] | None) -> TrailEntry:
+    """执行结束的留痕: 执行记录终态提交之后写. payload 另带 status (执行状态 succeeded 或 failed, 同 ProcedureRun),
+    failure_reason (同执行记录) 与 result (结果摘要, services.run_summary.run_result; 失败时为空)."""
+    if run.status is RunStatus.failed:
+        summary = f"{run.procedure_id} {template.name} 执行失败: {run.failure_reason}"
+    else:
+        summary = f"{run.procedure_id} {template.name} 完成"
+    entry = run_entry(eid, template, run, "finished", summary)
+    payload = {**entry.payload, "status": run.status.value, "failure_reason": run.failure_reason, "result": result}
+    return entry.model_copy(update={"payload": payload})
+
+
 async def record_transitions(trail: AuditTrail, entries: Iterable[TrailEntry]) -> None:
-    """依次写入留痕, 同键已有的跳过. transition 与确认数据已齐的 data 留痕共用."""
+    """依次写入留痕, 同键已有的跳过. transition, run 与确认数据已齐的 data 留痕共用."""
     for entry in entries:
         assert entry.idempotency_key is not None  # 这里写的留痕一律带键
         if await trail.find_success(entry.engagement_id, entry.idempotency_key) is None:

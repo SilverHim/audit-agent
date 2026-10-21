@@ -182,7 +182,13 @@ def test_manifest_layout() -> None:
             *(f"llm/{p.relative_to(uploads).as_posix()}" for p in uploads.glob("DOC-SHEET/*.json")),
         ]
     )
-    assert {"llm/RPT-03/r1.json", "llm/RPT-03/r2.json"} <= set(llm)  # 正本还没有 RPT-03, 应用里才走得到报告
+    # 正本的 RPT-03 按意见类型各两稿 (R260): 保留意见供演示走通, 无保留意见供只开现有程序时
+    assert [p for p in llm if p.startswith("llm/RPT-03/")] == [
+        "llm/RPT-03/qualified-r1.json",
+        "llm/RPT-03/qualified-r2.json",
+        "llm/RPT-03/unqualified-r1.json",
+        "llm/RPT-03/unqualified-r2.json",
+    ]
     assert [p for p in paths if not p.startswith("llm/")] == [
         "README.md",  # 生成方式与合同底稿的署名, 许可 (R286)
         "adjustments/journal_entries.csv",

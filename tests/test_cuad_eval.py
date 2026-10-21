@@ -1,15 +1,17 @@
-"""CUAD 评测的评分与反编造函数, 入库的逐页文本与 DOC-04 离线 mock 输出 (需求 R246). 只读 tests/fixtures/cuad, 不读
-data/external, 不联网, 默认就跑. 文中的摘录与条款出自 CUAD v1 (The Atticus Project, CC BY 4.0), 署名见
-tests/fixtures/cuad/README.md."""
+"""CUAD 评测的评分与反编造函数, 入库的逐页文本, DOC-04 离线 mock 输出 (需求 R246) 与金标准的自洽 (需求 R247). 只读
+tests/fixtures/cuad, 不读 data/external, 不联网, 默认就跑. 文中的摘录与条款出自 CUAD v1 (The Atticus Project,
+CC BY 4.0), 署名见 tests/fixtures/cuad/README.md."""
 
 import json
 from datetime import date
+from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from backend.agents.ingest import build_contract
 from backend.contracts.llm_outputs import ContractExtraction, ExtractedTerm
-from backend.contracts.models import DocumentRef
+from backend.contracts.models import DocumentRef, TermType
 from backend.contracts.ports import LLMResponse
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
@@ -17,17 +19,26 @@ from backend.services.judgment_engine import OutputValidator
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import NOW, FakeFinancialStore, FakeTrail
 from tests.tools.cuad_eval import (
-    ALIASES,
     FIXTURES,
+    GOLD,
+    GOODS_TERMS,
     LLM,
+    PAGE_FIXTURES,
     PAGES,
+    SUMS,
+    GoldContract,
+    aggregate,
     fabricated,
+    gold_by_alias,
+    load_gold,
     load_pages,
     locate,
     normalize_party,
     parse_cuad_date,
     same_party,
+    score_contract,
     split_omitted,
+    starts_on,
 )
 from tests.tools.cuad_fetch import ATTRIBUTION, DISCLAIMER, LICENSE_URL, RECORD_URL
 
@@ -116,6 +127,53 @@ def test_locate_and_fabricated() -> None:
         assert [t.term_type for t in found if fabricated(t, pages)] == [], alias
 
 
+# 真实模型的条款文本 (需求 R249 的金标准评测, 各取开头): 按提示词连号照抄, 不带标题
+NETGEAR_PAYMENT = (  # CUAD-01 第 2 页, 原文 "E. PAYMENT. Except ...", 号前拼上了上级的 4
+    "4.E. Except as may be specifically authorized in writing by NETGEAR, and subject to NETGEAR's continuing approval "
+    "of Distributor's credit status"
+)
+LIME_DELIVERY = (  # CUAD-03 第 3 页, 原文 "2.3 Delivery. Other than ..."
+    '2.3 Other than "drop ship" deliveries, all deliveries made pursuant to this Agreement shall be FOB the Company\'s '
+    "facilities"
+)
+LIME_RETURNS = (  # CUAD-03 第 4 页, 原文 "(A) Non-defective Products. Unless ...", 号与括号之间有空格
+    "2.6 (A) Unless the Company has first authorized or permitted the return of any non-defective Products and except "
+    "as otherwise permitted"
+)
+LIME_TERMINATION = (  # CUAD-03 第 6 页, 原文 "upon 30 days" 与 "prior written notice" 之间夹着印刷页码 "Page -8-" 一行
+    "4.2 Either party may terminate this Agreement upon 30 days prior written notice to the other upon the occurrence "
+    "of any of the following events"
+)
+
+
+@pytest.mark.parametrize(
+    ("alias", "text", "page", "expected"),
+    [
+        ("CUAD-01", NETGEAR_PAYMENT, 2, False),
+        ("CUAD-03", LIME_DELIVERY, 3, False),
+        ("CUAD-03", LIME_RETURNS, 4, False),
+        ("CUAD-03", LIME_TERMINATION, 6, False),
+        ("CUAD-01", NETGEAR_PAYMENT, 3, True),  # 声明的页不对
+        ("CUAD-03", LIME_DELIVERY.replace('"drop ship"', "express"), 3, True),  # 正文改了
+        ("CUAD-03", LIME_TERMINATION.replace("30 days", "60 days"), 6, True),
+    ],
+    ids=[
+        "parent_number",
+        "heading_dropped",
+        "spaced_number",
+        "page_mark",
+        "wrong_page",
+        "changed_text",
+        "changed_across_mark",
+    ],
+)
+def test_fabricated_on_live_output_shapes(alias: str, text: str, page: int, expected: bool) -> None:
+    """需求 R249 排查: 反编造检查对真实模型的条款写法不误判. 条款号在原文里与正文不相连 (拼上上级号, 去掉了标题)
+    时按去掉条款号的正文取锚点; 夹在条款中间的印刷页码行不算正文. 页不对或正文改了仍判编造."""
+    term = ExtractedTerm(term_type=TermType.payment, text=text, page=page)
+    assert fabricated(term, load_pages(alias)["pages"]) is expected
+
+
 async def test_validator_and_contract() -> None:
     """验收 4: CUAD-01 的 mock 输出原样通过四级校验, 经 build_contract 得到 ABN 与金额都为空的合同 (编号, 文件 ID
     为别名); CUAD-03 (page_count 10) 的 mock 原样通过, 把一条条款的页码写成印刷页码 14 时判 reference 级失败."""
@@ -137,17 +195,150 @@ async def test_validator_and_contract() -> None:
 
 def test_readme_credits_every_cuad_file() -> None:
     """验收 5: README 写明署名句, 作者, 数据集名与版本, CC BY 4.0 与链接, Zenodo 链接, CUAD 的免责句, 改动说明, 别名到
-    原文件名的映射, 并列出入库的每个含 CUAD 文本的文件; 目录里没有 PDF; 逐页文本的别名与 ALIASES 一致."""
+    原文件名的映射 (金标准 10 份), 并列出入库的每个含 CUAD 文本的文件; 目录里没有 PDF; 逐页文本即 PAGE_FIXTURES."""
     readme = (FIXTURES / "README.md").read_text(encoding="utf-8")
     for text in (ATTRIBUTION, "The Atticus Project", "CUAD", "v1", LICENSE_URL, RECORD_URL, DISCLAIMER):
         assert text in readme, text
     for change in ("pdfplumber", "节选", "人工标注", "模型生成"):
         assert change in readme, change
-    for alias, source in ALIASES.items():
-        assert f"| {alias} | `{source}` |" in readme, alias
+    for alias, contract in load_gold().items():
+        assert f"| {alias} | `{contract.pdf}` |" in readme, alias
     committed = sorted(p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*") if p.is_file())
     assert [p for p in committed if p.lower().endswith(".pdf")] == []
     for path in [p for p in committed if p != "README.md"] + ["tests/test_cuad_eval.py"]:
         assert f"`{path}`" in readme, path
-    assert sorted(p.stem for p in PAGES.glob("*.json")) == sorted(ALIASES)
-    assert all(load_pages(alias)["page_count"] == len(load_pages(alias)["pages"]) for alias in ALIASES)
+    assert sorted(p.stem for p in PAGES.glob("*.json")) == list(PAGE_FIXTURES)
+    assert all(load_pages(alias)["page_count"] == len(load_pages(alias)["pages"]) for alias in PAGE_FIXTURES)
+
+
+# 需求 R247 验收 1: 别名, 类型与页数
+GOLD_LIST = [
+    ("CUAD-01", "Distributor", 8),
+    ("CUAD-02", "Distributor", 16),
+    ("CUAD-03", "Distributor", 10),
+    ("CUAD-04", "Supply", 13),
+    ("CUAD-05", "Supply", 7),
+    ("CUAD-06", "Reseller", 5),
+    ("CUAD-07", "Manufacturing", 21),
+    ("CUAD-08", "Service", 7),
+    ("CUAD-09", "Maintenance", 7),
+    ("CUAD-10", "License", 12),
+]
+
+
+def test_gold_contracts() -> None:
+    """需求 R247 验收 1-3: 10 份依次为 GOLD_LIST; 签订日的三处特例 (LIMEENERGY 只认首段并注明 CUAD 原值, PAXMEDICA 首段
+    与签字栏都认, SPARKLING 不计分); 金额都为 null (都没有总价); 货物合同 CUAD-01 至 06 有四类条款与 REV-03 结论,
+    Healthcare (06) 为 more_evidence, 其余 accept; Apollo (07) 起只评 DOC-04; 起草状态都在两种之内."""
+    gold = load_gold()
+    assert [(c.alias, c.category, c.page_count) for c in gold.values()] == GOLD_LIST
+    assert (gold["CUAD-03"].sign_date, "7/7/99" in (gold["CUAD-03"].sign_date_note or "")) == ([date(1999, 9, 7)], True)
+    assert gold["CUAD-08"].sign_date == [date(2018, 5, 25), date(2008, 5, 25)]
+    assert gold["CUAD-09"].sign_date is None
+    assert {c.amount_cents for c in gold.values()} == {None}
+    assert {a: c.rev03 for a, c in gold.items() if c.rev03} == {
+        "CUAD-01": "accept",
+        "CUAD-02": "accept",
+        "CUAD-03": "accept",
+        "CUAD-04": "accept",
+        "CUAD-05": "accept",
+        "CUAD-06": "more_evidence",
+    }
+
+
+@pytest.mark.parametrize("alias", PAGE_FIXTURES)
+def test_gold_matches_page_fixtures(alias: str) -> None:
+    """需求 R247 验收 4: 有逐页文本的三份, 金标准的原文件, 页数与 PDF 哈希 (SHA256SUMS) 同逐页文本; 每条条款的锚点
+    从所记的页开始; 对方出现的页即其别名定位到的页."""
+    contract, fixture = load_gold()[alias], load_pages(alias)
+    pages = fixture["pages"]
+    assert (contract.pdf, contract.page_count) == (fixture["source"], fixture["page_count"])
+    assert f"{fixture['pdf_sha256']}  full_contract_pdf/{contract.pdf}\n" in SUMS.read_text(encoding="utf-8")
+    clauses = [c for found in (contract.terms or {}).values() for c in found]
+    assert clauses and [c.clause for c in clauses if not starts_on(pages, c.page, c.anchor)] == []
+    assert contract.counterparty_pages == sorted({n for a in contract.counterparty_aliases for n in locate(pages, a)})
+
+
+def gold_entry(**changes: Any) -> dict[str, Any]:
+    """金标准 CUAD-01 一条的 JSON 形式, 改 changes 中的字段."""
+    [entry] = [e for e in json.loads(GOLD.read_text(encoding="utf-8")) if e["alias"] == "CUAD-01"]
+    return entry | changes
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"sign_date": []}, {"rev03": None}, {"terms": None}, {"terms": {t: [] for t in GOODS_TERMS[:3]}}],
+    ids=["empty_sign_date", "terms_without_rev03", "rev03_without_terms", "missing_term_type"],
+)
+def test_gold_rejects_inconsistent_entries(changes: dict[str, Any]) -> None:
+    """需求 R247 验收 4: 签订日集合为空 (不计分须写 null), 四类条款与 REV-03 结论缺一, 或少一类条款时读不进来."""
+    GoldContract.model_validate(gold_entry())
+    with pytest.raises(ValidationError):
+        GoldContract.model_validate(gold_entry(**changes))
+
+
+def test_gold_aliases_unique() -> None:
+    """需求 R247 验收 4: 别名重复时读不进来."""
+    first = GoldContract.model_validate(gold_entry())
+    with pytest.raises(ValueError, match="别名重复"):
+        gold_by_alias([first, first])
+
+
+# CUAD-01 在 master_clauses.csv 的 Termination For Convenience 第 2 条摘录 (第 6 页 15.B), 作 termination 真值
+CANCEL = (
+    "This Agreement may be canceled at any time without cause, by either party upon ninety (90) days written notice"
+)
+
+
+def mock_contract(alias: str, **changes: Any) -> Any:
+    """离线 mock 输出经 build_contract 得到的合同, 改 changes 中的字段 (条款与证据另经 model_copy 改)."""
+    extraction = ContractExtraction.model_validate(mock_output(alias))
+    return build_contract(alias, document(alias), extraction, "RUN-DOC-04-1").model_copy(update=changes)
+
+
+def test_score_contract_against_gold() -> None:
+    """需求 R249 评分: CUAD-01 的 mock 输出对金标准, 当事方, 签订日, ABN 与金额都对, 条款都不算编造, 四类条款都对上,
+    termination 真值召回 1/1, 页码命中 8/8 (两个证据指针, 文本含真值锚点的 6 条条款; 8 节退货的开头与 5.C 末尾同文,
+    对上其中一处即可). 把 5.D 的页码改到第 4 页时少一处命中; 没有 termination 条款时召回为 0, 文字改写过的终止条款
+    起始页是真值页才算召回; 没通过校验的只记 validated 为假."""
+    gold, pages = load_gold()["CUAD-01"], load_pages("CUAD-01")["pages"]
+    truth = [(CANCEL, locate(pages, CANCEL))]
+    assert truth[0][1] == [6]
+    score = score_contract(gold, mock_contract("CUAD-01"), pages, truth)
+    assert {k: score[k] for k in ("counterparty", "sign_date", "abn_null", "amount", "fabricated")} == {
+        "counterparty": True,
+        "sign_date": True,
+        "abn_null": True,
+        "amount": True,
+        "fabricated": [],
+    }
+    assert score["found"] == {"payment": True, "control_transfer": True, "return_right": True, "rebate": True}
+    assert (score["termination"], score["page_hits"]) == ([1, 1], [8, 8])
+    terms = mock_contract("CUAD-01").terms
+    moved = [t.model_copy(update={"page": 4}) if t.id == "CUAD-01-T5" else t for t in terms]
+    assert score_contract(gold, mock_contract("CUAD-01", terms=moved), pages, truth)["page_hits"] == [7, 8]
+    kept = [t for t in terms if t.term_type is not TermType.termination]
+    assert score_contract(gold, mock_contract("CUAD-01", terms=kept), pages, truth)["termination"] == [0, 1]
+    for page, recalled in ((6, 1), (5, 0)):  # 改写了文字的终止条款: 起始页是真值页才算召回
+        reworded = [t.model_copy(update={"text": "Either party may end it.", "page": page}) for t in terms[-1:]]
+        changed = mock_contract("CUAD-01", terms=[*kept, *reworded])
+        assert score_contract(gold, changed, pages, truth)["termination"] == [recalled, 1]
+    assert score_contract(gold, None, pages, truth) == {"alias": "CUAD-01", "validated": False}
+
+
+def test_aggregate_checks() -> None:
+    """需求 R249 验收 3, 4: 10 份中 9 份通过, ABN 都为 null, 条款都不编造时硬性检查通过; 再少一份通过, 或有一份
+    ABN 不为 null 时报出. 软性: 当事方 9 份对上不告警, 只对上 8 份时告警; REV-03 结论按 (模型, 金标准) 计一致数,
+    1 份一致低于门槛告警."""
+    gold, pages = load_gold()["CUAD-01"], load_pages("CUAD-01")["pages"]
+    good = score_contract(gold, mock_contract("CUAD-01"), pages, [])
+    failed = score_contract(gold, None, pages, [])
+    rev03 = {"CUAD-01": ("accept", "accept"), "CUAD-06": (None, "more_evidence")}
+    passing = aggregate([good] * 9 + [failed], rev03)
+    assert (passing["validated"], passing["hard"], passing["rev03"]) == (9, [], 1)
+    assert [line.split(" ")[0] for line in passing["soft"]] == ["rev03"]
+    assert aggregate([good] * 8 + [failed] * 2, rev03)["hard"] == ["通过四级校验 8/10, 门槛 9"]
+    abn = score_contract(gold, mock_contract("CUAD-01", counterparty_abn="12345678901"), pages, [])
+    assert aggregate([good] * 9 + [abn], rev03)["hard"] == ["counterparty_abn 不为 null: CUAD-01"]
+    other = score_contract(gold, mock_contract("CUAD-01", counterparty="Someone Else"), pages, [])
+    assert "counterparty 8, 门槛 9" in aggregate([good] * 8 + [other] * 2, rev03)["soft"]

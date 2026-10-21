@@ -46,6 +46,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewStatus,
     RuleOutcome,
+    RunTrigger,
 )
 from backend.contracts.records import BankAccount, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
@@ -68,6 +69,7 @@ class CashFindings:
 
 # 规则程序为规则结果, 判断程序为各对象的判断结果 (带取对象时没有执行的规则), CSH-02 为两者
 Findings = RuleResult | JudgedRun | CashFindings
+UNLIMITED_RULE = "R06"  # GEN-05 中不受 entry_nos 限制的规则 (需求 R194): 增量执行里按数据去重, 见 gen05_patch
 
 
 def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[str, Any]], trivial_cents: int) -> bool:
@@ -107,6 +109,24 @@ SubjectSource = Callable[[RunContext], Awaitable[Subjects]]  # 判断程序取�
 __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "in_scope", "subjects_awaiting_review"]
 
 
+def gen05_patch(ctx: RunContext, findings: object) -> StatePatch:
+    """GEN-05 的解读: 同 rule_patch (例外原样返回). 增量执行 (trigger incremental, 需求 R194) 另去掉 R06 中自最近一次
+    全量执行 (含它) 以来 GEN-05 已以同一 source_id 出过的例外 (审核 R194-05): R06 查审计调整期间录入的其他分录, 不受
+    entry_nos 限制, 每轮增量都会再查到同一行. 按数据去重, 不用时间下界 (演示数据的录入时间与墙钟无关); 例外 ID 照
+    规则引擎的编号 (去掉的留空号). 全量执行照旧出全部."""
+    patch = rule_patch(ctx, findings)
+    if ctx.run.trigger is not RunTrigger.incremental:
+        return patch
+    runs = [r for r in ctx.state["procedure_runs"] if r.procedure_id == ctx.procedure.id]
+    full = max((r.run_no for r in runs if r.trigger is not RunTrigger.incremental), default=0)
+    since = {r.id for r in runs if r.run_no >= full}
+    seen = {x.source_ids[0] for x in ctx.state["exceptions"] if x.run_id in since and x.rule_id == UNLIMITED_RULE}
+    patch["exceptions"] = [
+        x for x in patch["exceptions"] if not (x.rule_id == UNLIMITED_RULE and x.source_ids[0] in seen)
+    ]
+    return patch
+
+
 class FieldworkAgent(ProcedureAgent[Findings]):
     """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02), 关联方图谱研判 (GEN-03) 与
     期后事项研判 (GEN-06), 产出例外与判断.
@@ -140,7 +160,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         handlers: dict[str, tuple[Execute, Interpret]] = {
             "REV-08": (functools.partial(run_rules, self.deps), rule_patch),  # 纯规则程序 (同 A5 的 GEN-07)
             "CSH-05": (functools.partial(run_rules, self.deps), rule_patch),
-            "GEN-05": (functools.partial(run_rules, self.deps), rule_patch),
+            "GEN-05": (functools.partial(run_rules, self.deps), gen05_patch),
             "CSH-02": (self.assess_confirmations, self.cash_patch),
         }
         handlers |= {pid: (self.judge_subjects, self.judgments_patch) for pid in self.subject_sources}

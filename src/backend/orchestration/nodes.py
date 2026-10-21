@@ -3,8 +3,9 @@
 闸门节点不做业务处理: 决定由 DecisionSubmit 写入, 并以 aupdate_state(as_node=闸门节点) 直接越过闸门.
 """
 
+import functools
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -45,7 +46,9 @@ from backend.contracts.models import (
     TargetType,
     TaskKind,
     TaskStatus,
+    TrailEntry,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.records import DatasetTraits
@@ -68,13 +71,20 @@ from backend.orchestration.merge import (
     objects,
 )
 from backend.orchestration.scheduler import build_schedule, p2_procedures
-from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions
+from backend.orchestration.trail import (
+    phase_transition,
+    procedure_transitions,
+    record_transitions,
+    run_finished,
+    run_started,
+)
 from backend.orchestration.waits import correction_payload, data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
 from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import RERUNNABLE, ReviewQueue
+from backend.services.run_summary import run_result
 from backend.services.staleness import current_results
 
 logger = logging.getLogger(__name__)
@@ -122,14 +132,21 @@ def run_population(
     return RunPopulation(id=population_id(run.id), run_id=run.id, procedure_id=run.procedure_id, rules=populations)
 
 
-def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
-    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no."""
+def next_run(
+    procedure_id: str,
+    runs: list[ProcedureRun],
+    params: dict[str, Any],
+    started_at: datetime,
+    trigger: RunTrigger | None = None,
+) -> ProcedureRun:
+    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no; trigger 为空时第 1 次为 initial, 其后为
+    rerun (增量实例给 incremental)."""
     run_no = next_run_no(procedure_id, runs)
     return ProcedureRun(
         run_no=run_no,
         id=run_id_of(procedure_id, run_no),
         procedure_id=procedure_id,
-        trigger=RunTrigger.initial if run_no == 1 else RunTrigger.rerun,
+        trigger=trigger or (RunTrigger.initial if run_no == 1 else RunTrigger.rerun),
         params_snapshot=params,
         started_at=started_at,
         status=RunStatus.running,
@@ -146,17 +163,23 @@ def build_run(
     *,
     traits: DatasetTraits,
     profile: ClientProfile | None,
+    trigger: RunTrigger | None = None,
+    overrides: Mapping[str, Any] | None = None,
+    language: WorkingLanguage | None = None,
 ) -> ProcedureRun:
-    """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
+    """建某条程序的下一次执行记录, execute, fieldwork 与增量实例 (scan_increment) 共用.
 
     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
-    为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
-    本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
-    记录. language 取项目当时的工作语言 (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
+    为准), 最后叠加 overrides (增量实例的 entry_nos, 需求 R194). 解析用的风险等级取程序关联审计目标的最高等级,
+    dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目采用版本的客户画像 profile. trigger 见 next_run.
+    参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录. language 为执行记录的生成语言,
+    节点按 AgentDeps.run_language 给 (mock 为 en, 需求 R343); 没给时取项目当时的工作语言 (需求 R339): 之后改了工作
+    语言, 新的执行用新语言, 已有的不变.
     """
     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
-    run = next_run(procedure.id, state["procedure_runs"], params, started_at)
-    return run.model_copy(update={"language": engagement.working_language})
+    params |= overrides or {}
+    run = next_run(procedure.id, state["procedure_runs"], params, started_at, trigger)
+    return run.model_copy(update={"language": language or engagement.working_language})
 
 
 def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datetime) -> StatePatch:
@@ -255,7 +278,7 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
 MISSTATEMENT_NODES: dict[str, tuple[str, ...]] = {
     "misstatement_triage": ("FIN-03",),
     "communicate": ("FIN-08",),
-    "verify_correction": ("FIN-09",),
+    "verify_correction": ("GEN-05", "FIN-09"),  # 先对更正分录做 GEN-05 增量扫描 (需求 R194)
     "p3_reassess": ("PLN-19",),
     "summarize": ("FIN-04",),
     "final_review": ("FIN-15",),
@@ -543,6 +566,22 @@ def awaiting_correction(state: EngagementState) -> list[str]:
     )
 
 
+def increment_entry_nos(state: EngagementState, available: Callable[[], Sequence[str]]) -> list[str]:
+    """增量实例要扫的凭证号 (需求 R194): 状态中各份 adjustments_posted 更正通知载入的凭证 (通知的凭证号为空即载入了全部
+    未载入的, 这时才调 available 取数据集可载入的全部更正分录, 至多一次), 去掉已有的增量执行 (trigger incremental,
+    同 workpaper.increment_findings 的口径; 只有 GEN-05 有增量实例) 参数快照里 entry_nos 扫过的, 排序."""
+    every = functools.cache(available)
+    posted = [n for n in state["correction_notices"] if n.kind == "adjustments_posted"]
+    loaded = {no for n in posted for no in (n.adjustment_entry_nos or every())}
+    scanned = {
+        no
+        for r in state["procedure_runs"]
+        if r.trigger is RunTrigger.incremental
+        for no in r.params_snapshot.get("entry_nos") or []
+    }
+    return sorted(loaded - scanned)
+
+
 def after_notice(misstatement: Misstatement, notice: CorrectionNotice) -> Misstatement:
     """按更正通知写出的错报新版本 (接口文档第 2.5 节迁移表): adjustments_posted 转 verifying, stop_waiting 记
     uncorrected (stopped_waiting); 都记 correction_notice_id, needs_recommunication 置假. 经 model_validate 重建.
@@ -640,34 +679,18 @@ class GraphNodes:
 
         state: 本次执行看到的状态, 其 procedure_runs 决定 run_no, procedure_pack 中本程序的版本为执行依据.
         instance: fieldwork 实例名, 记入执行记录; P2 以外为空.
+        调 Agent 之前写开始的 run 留痕 (record_started, 需求 R325); 结束留痕由提交终态的 attempt, fan_in 写.
         返回程序编号, 执行记录 ID, 写入者与要写入的片段; 规则程序成功执行时另有被测总体 (见 run_population).
         重放 (接口文档第 3 节): 本次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (见 stored_outputs);
         取回的执行是失败的, 写入者为 A1. 重放不带被测总体: 已与执行记录终态一起写过.
         """
         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
         template = self.deps.library.load(procedure_id)
-        dataset = engagement.dataset  # 没有数据集的项目 (新建的客户) 取缺省声明
-        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
-        # 画像按本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用
-        version = state["client_profile_version"]
-        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
-        procedure_run = build_run(
-            self.deps.library,
-            template,
-            procedure,
-            engagement,
-            state,
-            datetime.now(UTC),
-            traits=traits,
-            profile=profile,
-        )
-        # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
-        data_version = None
-        if template.phase is not Phase.P0_Acceptance:
-            data_version = (await self.deps.data.readiness(engagement.id)).data_version
-        procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
+        procedure_run = await self.new_run(state, engagement, template, procedure)
+        procedure_run = procedure_run.model_copy(update={"instance": instance})
         agent = self.agents[procedure_id]
         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+        await self.record_started(engagement.id, template, procedure_run, stored_run)
         population = None
         if stored_run is None or stored_run.status is RunStatus.running:
             ctx = RunContext(
@@ -688,6 +711,95 @@ class GraphNodes:
             staged["population"] = population
         return staged
 
+    async def new_run(
+        self,
+        state: EngagementState,
+        engagement: Engagement,
+        template: ProcedureTemplate,
+        procedure: Procedure,
+        trigger: RunTrigger | None = None,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> ProcedureRun:
+        """本程序的下一次执行记录 (build_run): 数据集声明取项目的 (没有数据集的项目, 即新建的客户, 取缺省声明), 画像按
+        本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用; 记执行时的数据版本, 总览
+        据此标过期 (需求 R16; 承接阶段只看客户资料, 不读财务数据, 不记). perform 与 scan_increment 共用."""
+        dataset = engagement.dataset
+        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
+        version = state["client_profile_version"]
+        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
+        run = build_run(
+            self.deps.library,
+            template,
+            procedure,
+            engagement,
+            state,
+            datetime.now(UTC),
+            traits=traits,
+            profile=profile,
+            trigger=trigger,
+            overrides=overrides,
+            language=self.deps.run_language(engagement),
+        )
+        data_version = None
+        if template.phase is not Phase.P0_Acceptance:
+            data_version = (await self.deps.data.readiness(engagement.id)).data_version
+        return run.model_copy(update={"data_version": data_version})
+
+    async def scan_increment(
+        self, state: EngagementState, engagement: Engagement, procedure_id: str, entry_nos: Sequence[str]
+    ) -> StatePatch:
+        """程序的增量实例 (需求 R194; 模板 incremental, 即 GEN-05): 只扫 entry_nos 这些凭证. 建下一次执行记录 (new_run:
+        trigger incremental, 参数为模板参数的解析结果, entry_nos 换成排序后的这些凭证号), 调 Agent, 片段经合并校验后
+        与执行记录, 被测总体 (run_population, 需求 R324) 在一个事务内写入 Store; 程序不出新版本 (仍 completed), 不建
+        任务. 返回写入后的片段, 由节点并入状态. run 留痕 (需求 R325) 同 perform 与 attempt: 调 Agent 之前写开始
+        (record_started), 提交之后写结束 (run_finished_entry); 重放时同键跳过, 缺了补写.
+        重放: 这次执行已在 Store 中且为终态时不调 Agent, 只取回执行记录与它 run_id 下的例外, 再查一遍外键 (同 perform).
+        模板 incremental 为假抛 ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过
+        为节点错误, 照常抛出 (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error,
+        恢复时重做."""
+        template = self.deps.library.load(procedure_id)
+        if not template.incremental:
+            raise ValueError(f"{procedure_id} 没有增量实例 (模板 incremental 为假)")
+        if not entry_nos:
+            return {}
+        eid = engagement.id
+        procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
+        overrides = {"entry_nos": sorted(entry_nos)}
+        run = await self.new_run(state, engagement, template, procedure, RunTrigger.incremental, overrides)
+        stored = await self.deps.output_store.get(eid, ProcedureRun, run.id)
+        await self.record_started(eid, template, run, stored)
+        if stored is not None and stored.status is not RunStatus.running:
+            # 只取回本次执行自己写入的: 执行记录与它 run_id 下的例外 (最新版本). stored_outputs 另会补齐以这些例外为
+            # 目标的别的程序的任务与执行 (如 FIN-09 对增量例外的 unattributed 任务与 RUN-FIN-09-1), 并进状态会让 FIN-09
+            # 的 run_no 前移而重新执行 (审核 R194-01)
+            replayed = await stored_outputs(self.deps, eid, template, stored)
+            own: StatePatch = {
+                "procedure_runs": [stored],
+                "exceptions": [x for x in replayed.get("exceptions", []) if x.run_id == stored.id],
+            }
+            problems = check_refs(own, state)
+            if problems:
+                raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
+            await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, own, stored.id)])
+            return own
+        agent = self.agents[procedure_id]
+        writer = writer_of(template, agent)
+        output = await agent.outcome(
+            RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
+        )
+        patch = output.patch
+        check_patch(
+            patch, writer=writer, procedure_id=procedure_id, run_id=run.id, state=state, outputs=template.outputs
+        )
+        ended = next(r for r in patch["procedure_runs"] if r.id == run.id)
+        population = run_population(template, ended, output.populations)
+        async with self.deps.output_store.transaction(eid):
+            saved = await save_outputs(self.deps.output_store, eid, patch, actor=writer)
+            if population is not None:
+                await self.deps.output_store.put(eid, [population], actor=writer)
+        await record_transitions(self.deps.trail, [await self.run_finished_entry(eid, template, saved, run.id)])
+        return saved
+
     async def attempt(
         self,
         state: EngagementState,
@@ -706,7 +818,8 @@ class GraphNodes:
         之前各次执行留下的可重跑任务 (failed, unattributed) 都已由读回的 rerun 决定整组关闭 (Q17), 不再拖住程序.
         重放时程序新版本也取 Store 中已存的那一版, 其状态即当时是否等人, 不受之后的决定影响.
         规则程序成功执行的被测总体 (需求 R324) 在同一事务内写入, 不并入状态.
-        提交后写程序状态与阶段的 transition 留痕 (原阶段取 state, 重放时同键跳过).
+        提交后写结束的 run 留痕 (需求 R325), 再写程序状态与阶段的 transition 留痕 (原阶段取 state); 重放时都同键跳过,
+        缺了补写.
         """
         result = await self.perform(state, engagement, procedure_id)
         patch, writer = result["patch"], result["writer"]
@@ -732,13 +845,32 @@ class GraphNodes:
             [saved] = await self.deps.output_store.put(engagement.id, [updated], actor=AgentId.A1)
             if phase is not None:
                 await self.deps.engagement_store.update(engagement.id, phase=phase)
-        entries = await procedure_transitions(self.deps.output_store, engagement.id, [saved])
+        entries = [await self.run_finished_entry(engagement.id, template, stored, result["run_id"])]
+        entries += await procedure_transitions(self.deps.output_store, engagement.id, [saved])
         if phase is not None:
             entries += phase_transition(
                 engagement.id, state["phase"], phase, procedure_id, reruns=len(state["rerun_requests"])
             )
         await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
+
+    async def record_started(
+        self, eid: str, template: ProcedureTemplate, run: ProcedureRun, stored: ProcedureRun | None
+    ) -> None:
+        """写一次执行的开始留痕 (需求 R325): 调 Agent 之前写, 运行中的执行记录不写 Store; 重放时同键跳过. 缺了补写时,
+        执行在 Store 中 (stored) 已是终态的取 Store 中的那次 (程序库之后改了参数也与结束留痕说的同一范围), 否则取本次
+        建的 run. perform 与 scan_increment 共用."""
+        started = stored if stored is not None and stored.status is not RunStatus.running else run
+        await record_transitions(self.deps.trail, [run_started(eid, template, started)])
+
+    async def run_finished_entry(
+        self, eid: str, template: ProcedureTemplate, patch: StatePatch, run_id: str
+    ) -> TrailEntry:
+        """一次执行的结束留痕 (需求 R325): 终态取写入后的片段, 结果摘要按片段与 Store 中的被测总体 (与终态同一事务写入,
+        重放时也在) 算 (services.run_summary). 在终态提交之后调用."""
+        run = next(r for r in patch["procedure_runs"] if r.id == run_id)
+        population = await self.deps.output_store.get(eid, RunPopulation, population_id(run_id))
+        return run_finished(eid, template, run, run_result(template, run, patch, population))
 
     async def pending_tasks(self, eid: str, procedure_id: str, patch: StatePatch) -> list[ReviewTask]:
         """本程序在片段写入后仍待决的任务: Store 中本程序各任务的最新版本, 换成片段中的同 ID 版本, 加上片段新建的."""
@@ -994,14 +1126,31 @@ class GraphNodes:
         合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕).
         先执行的程序读回的决定传给后面的 (execute 的 earlier).
         模板 inputs 的资料还缺的程序不执行, 记 awaiting_data 或 no_data (execute 每次执行前查, 需求 R272, R280), 节点
-        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
+        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门).
+        有增量实例的程序 (模板 incremental, 只在 verify_correction 的 GEN-05) 不经 execute, 走 increment."""
         result: StatePatch = {}
         for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
-            earlier = [r.id for r in result.get("review_records", [])]
-            patch = await self.execute(state, procedure_id, phase, earlier)
+            if self.deps.library.load(procedure_id).incremental:
+                patch = await self.increment(state, procedure_id)
+            else:
+                earlier = [r.id for r in result.get("review_records", [])]
+                patch = await self.execute(state, procedure_id, phase, earlier)
             merge_patch(result, patch)
             state = apply_patch(state, patch)
         return result
+
+    async def increment(self, state: EngagementState, procedure_id: str) -> StatePatch:
+        """对更正通知载入而还没扫过的凭证 (increment_entry_nos; 数据集可载入的更正分录取 DatasetLoader) 做本程序的增量
+        实例 (scan_increment, 需求 R194); 没有要扫的返回 {}."""
+        engagement = await self.deps.engagement_store.get(state["engagement_id"])
+        if engagement is None:
+            raise LookupError(f"Engagement {state['engagement_id']} not found")
+        dataset = engagement.dataset
+
+        def available() -> Sequence[str]:
+            return self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
+
+        return await self.scan_increment(state, engagement, procedure_id, increment_entry_nos(state, available))
 
     async def inputs_before_run(self, state: EngagementState, procedure_id: str) -> StatePatch:
         """执行一条 P2 以外的程序前查它要的资料 (需求 R272), 首次执行与 rerun 都经过这里 (execute): 按现有资料重定
@@ -1267,7 +1416,7 @@ class GraphNodes:
         (状态中已有的与本轮新建的, 同 ID 取新版本) 为 awaiting_human (功能 collab 打开且有待决的 dispute 任务时为
         in_dispute, 见 waiting_status), 否则为 completed; rerun_subject_ids 清空.
         重放: 对象已在 Store 中时 put 跳过并返回已存对象, 程序新版本同理, 返回与首次相同.
-        提交后写程序状态的 transition 留痕.
+        提交后按暂存项的顺序写各次执行结束的 run 留痕 (需求 R325), 再写程序状态的 transition 留痕; 同键跳过, 缺了补写.
         没有暂存结果 (如 await_events 之后回到这里) 时只清空, 不写.
         """
         staged = state["staged_results"]
@@ -1278,6 +1427,7 @@ class GraphNodes:
         executed = list(dict.fromkeys(item["procedure_id"] for item in staged))
         result: StatePatch = {}
         current = state  # 已并入本轮前面各项的状态, 用来校验后面的项
+        finished: list[tuple[str, StatePatch, str]] = []  # 各项 (程序编号, 写入后的片段, 执行 ID), 提交后写结束留痕
         async with store.transaction(eid):
             for item in staged:
                 patch, writer, population = item["patch"], item["writer"], item.get("population")
@@ -1290,6 +1440,7 @@ class GraphNodes:
                 saved = await save_outputs(store, eid, patch, actor=writer, evidence_store=self.deps.evidence_store)
                 if population is not None:
                     await store.put(eid, [population], actor=writer)
+                finished.append((item["procedure_id"], saved, item["run_id"]))
                 merge_patch(result, saved)
                 current = apply_patch(current, saved)
             tasks = current["review_tasks"]
@@ -1300,7 +1451,9 @@ class GraphNodes:
                 status = waiting_status(pending, collab) or ProcedureStatus.completed
                 pack = update_procedure(pack, procedure_id, status=status, rerun_subject_ids=[])
             stored = await store.put(eid, [p for p in pack if p.id in executed], actor=AgentId.A1)
-        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, stored))
+        library = self.deps.library
+        entries = [await self.run_finished_entry(eid, library.load(pid), saved, rid) for pid, saved, rid in finished]
+        await record_transitions(self.deps.trail, [*entries, *await procedure_transitions(store, eid, stored)])
         saved_versions = {p.id: cast(Procedure, p) for p in stored}
         pack = [saved_versions.get(p.id, p) for p in pack]
         return {**result, "procedure_pack": pack, "staged_results": None}
@@ -1391,7 +1544,8 @@ class GraphNodes:
         return {"misstatements": written, "correction_notices": [notice]}
 
     async def verify_correction(self, state: EngagementState) -> StatePatch:
-        """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""
+        """验证更正: 先对更正通知载入而还没扫过的更正分录做 GEN-05 的增量实例 (需求 R194, 程序包没有 GEN-05 时跳过),
+        再由 A8 执行 FIN-09 (需求 R165)."""
         return await self.run_node(state, "verify_correction")
 
     async def p3_reassess(self, state: EngagementState) -> StatePatch:

@@ -4,14 +4,15 @@
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.contracts.models import AcceptanceScorecard, ProcedureRun, TrailKind
+from backend.contracts.models import AcceptanceScorecard, ProcedureRun, TrailKind, WorkingLanguage
 from backend.core.config import Settings, get_settings
+from backend.main import build_deps
 from backend.orchestration.checkpoint import checkpoint_serde
 from backend.orchestration.graph import compile_graph
 from backend.orchestration.runner import GraphRunner
@@ -19,6 +20,7 @@ from backend.persistence import seed as seed_module
 from backend.persistence.stores import CsvDatasetLoader, RoutingDatasetLoader, XeroDatasetLoader
 from tests.external import needs, snapshot_location, supplements_path
 from tests.fakes import (
+    ENGAGEMENT,
     NUMBAT_AUDITOR,
     CreatingEngagementStore,
     FakeOutputStore,
@@ -37,10 +39,13 @@ needs_snapshot = needs("q1_snapshot", "q1_supplements")  # 标 external, 没有�
 NO_DB: Any = object()  # 建项目与 ACC-04 不读写财务表
 
 
-def demo_runner(registry: Callable[[Any, Callable[[str], Path | None], Any], Any] | None = None) -> GraphRunner:
+def demo_runner(
+    registry: Callable[[Any, Callable[[str], Path | None], Any], Any] | None = None,
+    fixed_language: WorkingLanguage | None = "en",
+) -> GraphRunner:
     """与组装根相同的数据集载入器 (CSV 加带补造目录的 Xero 快照) 与按项目数据集定位的登记 mock; 其余为假实现.
     registry 给出时以 (项目存储, 数据集目录的定位函数, 依赖) 建登记来源 (如组合实现, 其上传摘录一侧读依赖里的存储),
-    替代登记 mock."""
+    替代登记 mock. fixed_language 见 tests.fakes.make_deps (缺省同组装根的 mock 模式)."""
     datasets = RoutingDatasetLoader(
         CsvDatasetLoader(SETTINGS.DATASET_ROOT, NO_DB, NO_DB),
         {
@@ -54,7 +59,7 @@ def demo_runner(registry: Callable[[Any, Callable[[str], Path | None], Any], Any
         },
     )
     engagements = CreatingEngagementStore()
-    deps = make_deps(FakeRegistry(), FakeTrail(), engagements, FakeOutputStore())
+    deps = make_deps(FakeRegistry(), FakeTrail(), engagements, FakeOutputStore(), fixed_language=fixed_language)
     source = (
         registry(engagements, datasets.supplement_dir, deps)
         if registry is not None
@@ -92,10 +97,21 @@ async def test_demo_created_with_any_period() -> None:
     assert overview["run_languages"] == {}
 
 
-async def test_demo_created_in_chinese() -> None:
-    """需求 R339 验收 1, 3: 带 working_language zh 建项目, 项目与跑到 ACC-01 的各次执行都是 zh. 总览的
-    run_languages 只给生成语言与当前工作语言不同的执行 (审核 R339-09): 都是 zh 时为空, 改为 en 后列出这些执行."""
-    runner = demo_runner()
+@pytest.mark.parametrize(("mode", "fixed"), [("mock", "en"), ("live", None)])
+def test_assembly_fixes_the_language_only_in_mock_mode(mode: Literal["mock", "live"], fixed: str | None) -> None:
+    """需求 R343: 组装根在 LLM_MODE=mock 时把 AgentDeps.fixed_language 填 en (固定输出都是英文, 执行照实记 en), live
+    为空 (执行记项目的工作语言)."""
+    deps = build_deps(Settings(LLM_MODE=mode))
+    assert deps.fixed_language == fixed
+    assert deps.run_language(ENGAGEMENT.model_copy(update={"working_language": "zh"})) == (fixed or "zh")
+
+
+@pytest.mark.parametrize(("fixed", "generated"), [(None, "zh"), ("en", "en")], ids=["live", "mock"])
+async def test_demo_created_in_chinese(fixed: Literal["en"] | None, generated: Literal["zh", "en"]) -> None:
+    """需求 R339 验收 1, 3: 带 working_language zh 建项目, 项目为 zh, 跑到 ACC-01 的各次执行都是 zh; mock (需求 R343)
+    时执行照实记 en. 总览的 run_languages 只给生成语言与当前工作语言不同的执行 (审核 R339-09): live 时都是 zh, 为空,
+    改为 en 后列出这些执行; mock 时反过来, 改为 en 之前列出, 之后为空 (页面据此标 "以英文生成")."""
+    runner = demo_runner(fixed_language=fixed)
     async with api_client(runner) as client:
         created = await client.post("/api/v1/engagements", json={**DEMO_BODY, "working_language": "zh"})
         assert created.status_code == 201, created.text
@@ -105,9 +121,10 @@ async def test_demo_created_in_chinese() -> None:
         changed = await client.put(f"/api/v1/engagements/{eid}/working-language", json={"language": "en"})
         after = (await client.get(f"/api/v1/engagements/{eid}")).json()
     runs = await runner.deps.output_store.latest(eid, ProcedureRun)
-    assert before["engagement"]["working_language"] == "zh" and runs and {run.language for run in runs} == {"zh"}
-    assert before["run_languages"] == {} and changed.status_code == 200
-    assert after["run_languages"] == {run.id: "zh" for run in runs}
+    assert before["engagement"]["working_language"] == "zh" and runs and {run.language for run in runs} == {generated}
+    listed = {run.id: generated for run in runs}
+    assert changed.status_code == 200
+    assert (before["run_languages"], after["run_languages"]) == (({}, listed) if fixed is None else (listed, {}))
 
 
 @needs_snapshot

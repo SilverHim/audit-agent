@@ -186,6 +186,9 @@ class ProcedureTemplate(Model):
     # P2 固定集: PLN-01/03 通过后不论审计目标一律装配 (所属功能未启用时不装配) 并补齐依赖, objective_ids 为空,
     # 不计入审计目标覆盖; 只用于 P2 程序, 参数不能按风险等级取值
     fixed: bool = False
+    # 有增量实例 (需求 R194, GEN-05): 更正分录接入后, verify_correction 节点以参数 entry_nos 只扫这些凭证, 写新的执行
+    # 记录与例外, 程序不出新版本 (GraphNodes.scan_increment)
+    incremental: bool = False
     params: dict[str, Any] = {}  # 参数: 字面量, {by_risk: ...} 或 {ref: 名称}
     depends_on: list[str] = []  # 前置程序
     inputs: ProcedureInputs = ProcedureInputs()  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)

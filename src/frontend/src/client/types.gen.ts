@@ -2307,6 +2307,7 @@ export type EngagementOverview = {
      * Procedures
      */
     procedures: Array<ProcedureSummary>;
+    progress: PhaseProgress;
     /**
      * Stale Procedure Ids
      */
@@ -3876,6 +3877,27 @@ export type PeriodSource = {
 export type Phase = 'P0_Acceptance' | 'P1_Planning' | 'P2_Executing' | 'P3_Completion' | 'P4_Reporting' | 'Archived' | 'Declined';
 
 /**
+ * PhaseProgress
+ *
+ * 当前阶段的进度 (需求 R325): 工作区顶部 "正在执行 n/m" 与审计助理 "现在在做什么" 用.
+ */
+export type PhaseProgress = {
+    phase: Phase;
+    /**
+     * Done
+     */
+    done: number;
+    /**
+     * Total
+     */
+    total: number;
+    /**
+     * Running
+     */
+    running: Array<string>;
+};
+
+/**
  * PlanConfirmation
  *
  * 审计师在 PLN-15 批准时的确认 (需求 R203), 写进所批准的计划: 是否需要项目质量复核及依据 (ASQM 1 第 34(f) 段),
@@ -5046,7 +5068,7 @@ export type RunStatus = 'running' | 'succeeded' | 'failed';
  *
  * 一次执行的起因.
  */
-export type RunTrigger = 'initial' | 'rerun';
+export type RunTrigger = 'initial' | 'rerun' | 'incremental';
 
 /**
  * ServiceOrganisation
@@ -5614,7 +5636,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'run';
 
 /**
  * UncorrectedItem

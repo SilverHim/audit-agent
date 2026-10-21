@@ -146,7 +146,8 @@ def fin01(opinion: OpinionType) -> GateDecision:
 def setup(
     opinion: OpinionType = OpinionType.qualified, llm: Any = None
 ) -> tuple[ConciergeAgent, RunContext, FakeTrail]:
-    """A10 与 RPT-03 第 1 次执行: 状态在 FIN-01 通过之后 (第 7 节第 15 行). llm 缺省为 mock 模式 (读 RPT-03/r1.json)."""
+    """A10 与 RPT-03 第 1 次执行: 状态在 FIN-01 通过之后 (第 7 节第 15 行). llm 缺省为 mock 模式 (读
+    RPT-03/{意见类型}-r1.json)."""
     trail = FakeTrail()
     deps = make_deps(FakeRegistry(), trail, llm=llm)
     ctx = make_ctx(deps, "RPT-03")
@@ -214,7 +215,9 @@ async def test_first_revision_report() -> None:
 async def test_sections_combine_model_text_and_fixed_template() -> None:
     agent, ctx, _ = setup()
     [report] = (await agent.run(ctx))["report_versions"]
-    draft = ReportDraft.model_validate_json((get_settings().LLM_FIXTURES_ROOT / "RPT-03" / "r1.json").read_text())
+    draft = ReportDraft.model_validate_json(
+        (get_settings().LLM_FIXTURES_ROOT / "RPT-03" / "qualified-r1.json").read_text()
+    )
     assert list(report.sections) == list(ReportSection)
     assert report.sections[ReportSection.opinion] == draft.opinion
     assert report.sections[ReportSection.basis_for_opinion] == draft.basis_for_opinion
@@ -245,7 +248,7 @@ async def test_request_and_trail() -> None:
     await agent.run(ctx)
     [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
     assert (entry.actor, entry.procedure_id, entry.run_id) == (AgentId.A10, "RPT-03", "RUN-RPT-03-1")
-    assert entry.payload["fixture_key"] == "r1"
+    assert entry.payload["fixture_key"] == "qualified-r1"
     prompt = entry.payload["messages"][0]["content"]
     assert "Opinion type: **qualified**" in prompt
     assert "key `REV-02:SI-2026-0612` (REV-02, subject SI-2026-0612)" in prompt and REASON in prompt
@@ -259,7 +262,7 @@ async def test_request_and_trail() -> None:
 
 async def test_unqualified_uses_unqualified_template_and_no_misstatements() -> None:
     draft = ReportDraft(opinion="Opinion\n\nclean.", basis_for_opinion="Basis for Opinion\n\nok.", judgment_keys=[])
-    llm = ScriptedLLM({"r1": [draft.model_dump_json()]})
+    llm = ScriptedLLM({"unqualified-r1": [draft.model_dump_json()]})
     agent, ctx, _ = setup(OpinionType.unqualified, llm)
     [report] = (await agent.run(ctx))["report_versions"]
     assert report.opinion_type is OpinionType.unqualified
@@ -291,7 +294,7 @@ async def test_report_follows_the_language_of_its_run(
     审计师责任段的标题与日期写法, 末尾的输出语言一节随之; 固定段落取 report.yaml 中该语言的一份 (zh 的签名块同 en:
     姓名, 事务所与地址不译). 中文执行记录下英文标题的输出判 semantic, 重试用完执行失败; 英文执行记录照旧通过."""
     raw = draft.model_dump_json() if draft is not None else r1_raw()
-    llm = ScriptedLLM({"r1": [raw] * MAX_ATTEMPTS})
+    llm = ScriptedLLM({"qualified-r1": [raw] * MAX_ATTEMPTS})
     agent, ctx, _ = setup(llm=llm)
     ctx = RunContext(
         ctx.engagement, ctx.procedure, ctx.template, ctx.run.model_copy(update={"language": language}), ctx.state
@@ -374,7 +377,7 @@ async def test_second_revision_addresses_reject(language: Literal["zh", "en"]) -
     """退回后的第 2 稿带上一稿与批注. 上一稿 (没有 run_id 的旧稿, 按 en) 与本次同语言时要求其余措辞不变; 本次为 zh
     (退回后项目改了工作语言) 时写明上一稿是英文, 按中文重写全文, 保持意思, 不再要求措辞不变 (R341 审核 01)."""
     first = report(1)
-    llm = ScriptedLLM({"r2": [ZH_R1.model_dump_json()]}) if language == "zh" else None
+    llm = ScriptedLLM({"qualified-r2": [ZH_R1.model_dump_json()]}) if language == "zh" else None
     agent, ctx, trail = revising(
         {"report_versions": [first], "gate_decisions": [fin01(OpinionType.qualified), REJECT]}, run_no=2, llm=llm
     )
@@ -385,7 +388,7 @@ async def test_second_revision_addresses_reject(language: Literal["zh", "en"]) -
     assert patch["procedure_runs"][0].id == "RUN-RPT-03-2" and patch["procedure_runs"][0].trigger is RunTrigger.rerun
     assert ctx.state["report_versions"] == [first]  # REPORT-1 不变
     [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
-    assert entry.payload["fixture_key"] == "r2"
+    assert entry.payload["fixture_key"] == "qualified-r2"
     prompt = entry.payload["messages"][0]["content"]
     assert "## Revision 2" in prompt
     assert first.sections[ReportSection.opinion] in prompt and first.sections[ReportSection.basis_for_opinion] in prompt
@@ -424,7 +427,7 @@ async def test_third_revision_uses_latest_reject_only() -> None:
         "report_versions": [report(1), report2],
         "gate_decisions": [fin01(OpinionType.qualified), REJECT, second_reject, pending],
     }
-    llm = ScriptedLLM({"r3": [ReportDraft.model_validate_json(r1_raw()).model_dump_json()]})
+    llm = ScriptedLLM({"qualified-r3": [ReportDraft.model_validate_json(r1_raw()).model_dump_json()]})
     agent, ctx, _ = revising(state, run_no=3, llm=llm)
     [report3] = (await agent.run(ctx))["report_versions"]
     assert (report3.id, report3.revision, report3.addresses_decision_id) == ("REPORT-3", 3, "D-r2")
@@ -439,7 +442,7 @@ async def test_latest_reject_of_previous_report_wins() -> None:
         update={"id": "D-r-later", "annotations": [Annotation(section=ReportSection.opinion, comment="Later note.")]}
     )
     state = {"report_versions": [report(1)], "gate_decisions": [fin01(OpinionType.qualified), REJECT, later]}
-    llm = ScriptedLLM({"r2": [r1_raw()]})
+    llm = ScriptedLLM({"qualified-r2": [r1_raw()]})
     agent, ctx, _ = revising(state, run_no=2, llm=llm)
     [report2] = (await agent.run(ctx))["report_versions"]
     assert report2.addresses_decision_id == "D-r-later"
@@ -460,12 +463,12 @@ async def test_revision_without_reject_of_previous_report_raises(decisions: list
 
 
 def r1_raw(**changes: Any) -> str:
-    raw = (get_settings().LLM_FIXTURES_ROOT / "RPT-03" / "r1.json").read_text()
+    raw = (get_settings().LLM_FIXTURES_ROOT / "RPT-03" / "qualified-r1.json").read_text()
     return ReportDraft.model_validate_json(raw).model_copy(update=changes).model_dump_json()
 
 
 async def test_retry_after_parse_error() -> None:
-    agent, ctx, trail = setup(llm=ScriptedLLM({"r1": ["not json", r1_raw()]}))
+    agent, ctx, trail = setup(llm=ScriptedLLM({"qualified-r1": ["not json", r1_raw()]}))
     [report] = (await agent.run(ctx))["report_versions"]
     assert report.id == "REPORT-1"
     assert [e.payload["attempt"] for e in trail.entries if e.kind is TrailKind.llm_call] == [1, 2]
@@ -495,7 +498,7 @@ async def handed_to_human(agent: ConciergeAgent, ctx: RunContext) -> dict[str, A
 async def test_failures_of_any_level_fail_the_run(bad: str, level: str, error: str) -> None:
     """任一级不过都回传重试 (语法与结构 R34, 引用与语义 R348); MAX_ATTEMPTS 次都不过即执行失败, 失败原因带级别与
     错误, 每次一行留痕, 备着的合格稿不再调用."""
-    llm = ScriptedLLM({"r1": [*[bad] * MAX_ATTEMPTS, r1_raw()]})
+    llm = ScriptedLLM({"qualified-r1": [*[bad] * MAX_ATTEMPTS, r1_raw()]})
     agent, ctx, trail = setup(llm=llm)
     result = await handed_to_human(agent, ctx)
     assert f"未通过 {level} 校验" in result["failure_reason"] and error in result["failure_reason"]
@@ -507,7 +510,7 @@ async def test_report_node_failure_waits_then_rerun_drafts_report() -> None:
     """(Codex R52 探针) report_draft 节点中校验失败 (意见段标题不对, 语义级重试用完): 写失败的 Run, 任务与
     awaiting_human, 节点内等待, 不出报告; 重放不重调模型; 审计师 rerun 后第 2 次执行出 REPORT-1."""
     bad_replies = [r1_raw(opinion="## Qualified Opinion\n\nbody")] * MAX_ATTEMPTS
-    llm = ScriptedLLM({"r1": [*bad_replies, r1_raw()]})
+    llm = ScriptedLLM({"qualified-r1": [*bad_replies, r1_raw()]})
     agent, ctx, _ = setup(llm=llm)
     store = agent.deps.output_store
     await store.put(ENGAGEMENT.id, [ctx.procedure], actor=AgentId.A1)
@@ -717,7 +720,7 @@ async def test_reject_revision_and_sign_on_main_graph(monkeypatch: pytest.Monkey
         ("RUN-RPT-03-2", RunTrigger.rerun, RunStatus.succeeded),
     ]
     calls = [e for e in s.runner.deps.trail.entries if e.kind is TrailKind.llm_call and e.procedure_id == "RPT-03"]
-    assert [e.payload["fixture_key"] for e in calls] == ["r1", "r2"]
+    assert [e.payload["fixture_key"] for e in calls] == ["qualified-r1", "qualified-r2"]
     assert first.sections[ReportSection.opinion] in calls[1].payload["messages"][0]["content"]
     view = await GraphStateQuery(s.runner.app, s.runner.deps, s.runner).gate(EID)
     assert view is not None and (view.target_id, view.target_version) == ("REPORT-2", 1)
@@ -750,8 +753,8 @@ def test_previous_draft_is_current_version_of_previous_revision() -> None:
 def test_r2_fixture_only_adds_contract_clause() -> None:
     """r2 与 r1 只差基础段补写的第 5.1 条一句, 意见段与引用不变."""
     root = get_settings().LLM_FIXTURES_ROOT / "RPT-03"
-    first = json.loads((root / "r1.json").read_text())
-    second = json.loads((root / "r2.json").read_text())
+    first = json.loads((root / "qualified-r1.json").read_text())
+    second = json.loads((root / "qualified-r2.json").read_text())
     insertion = (
         "Clause 5.1 of contract CON-001 with Bilby Robotics Pty Ltd provides that title to and risk in the goods pass "
         "to the customer when its authorised representative signs the delivery note. "

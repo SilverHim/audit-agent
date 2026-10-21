@@ -245,7 +245,9 @@ async def test_second_account_failure_then_replay_and_rerun() -> None:
     await deps.output_store.put(EID, state["procedure_pack"], actor="A1")
     failed = await nodes.fieldwork(dispatch(state, "CSH-04"))
     assert set(failed["staged_results"][0]["patch"]) == {"procedure_runs", "review_tasks"}
-    assert channel.attempts == KEYS and [e.idempotency_key for e in trail.entries] == [KEYS[0]]
+    # 留痕为开始执行的 run 留痕 (需求 R325; 结束的在 fan_in 之后) 与成功发出的第一封函
+    started = f"{EID}:run:RUN-CSH-04-1:started"
+    assert channel.attempts == KEYS and [e.idempotency_key for e in trail.entries] == [started, KEYS[0]]
     failed_state = apply_patch(state, failed)
     failed_state = apply_patch(failed_state, await nodes.fan_in(failed_state))
     assert failed_state["confirmations"] == [] and await deps.output_store.latest(EID, Confirmation) == []

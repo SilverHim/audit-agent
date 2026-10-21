@@ -1,7 +1,8 @@
 """mock 模式的对话模型: 不调真实模型, 按问题关键词调工具, 再用工具结果拼出确定的回答.
 
 完整的 Agent 循环 (调模型 → 调工具 → 再调模型) 在 mock 模式下照样走一遍, 离线演示与测试都能跑.
-覆盖的问题: 进度, 待处理事项 (含稍后处理), 重要性; 要求代为确认, 批准的给出引导; 其余回固定话术.
+覆盖的问题: 进度, 现在在做什么 (当前阶段 n/m 与正在运行的程序, 需求 R325), 待处理事项 (含稍后处理), 重要性;
+要求代为确认, 批准的给出引导; 其余回固定话术.
 不带工具调用时 (压缩摘要) 列出被压缩各轮的问题, 作为确定的摘要, 语言按压缩提示词的要求.
 """
 
@@ -19,15 +20,21 @@ LANGUAGE = re.compile(r"^Language: (zh|en)$", re.MULTILINE)  # 系统提示词�
 AUDITOR = "[Auditor] "  # 压缩提示词里审计师问题行的前缀
 SUMMARY_LANGUAGE = re.compile(r"^Write the new summary in Simplified Chinese\b", re.MULTILINE)  # 压缩提示词要中文摘要
 
-Intent = Literal["todo", "approve", "materiality", "progress", "other"]
+Intent = Literal["todo", "approve", "materiality", "activity", "progress", "other"]
 # 按顺序匹配, 先中先得: "有什么需要我确认" 是问待办, 不是要求代为确认, 所以 todo 在 approve 之前
 INTENTS: tuple[tuple[Intent, re.Pattern[str]], ...] = (
     ("todo", re.compile(r"待办|待处理|需要我|要我做|稍后处理|待复核|to ?do|pending|open items|deferred|need me", re.I)),
     ("approve", re.compile(r"确认|批准|同意|签发|签字|通过吧|approve|confirm|sign[ -]?off", re.I)),
     ("materiality", re.compile(r"重要性|materiality", re.I)),
+    ("activity", re.compile(r"在做什么|在干什么|在跑什么|正在执行|doing|working on|running", re.I)),
     ("progress", re.compile(r"哪一步|进度|阶段|到哪|完成了|progress|stage|status|where", re.I)),
 )
-TOOL_FOR: dict[Intent, str] = {"todo": "list_open_items", "materiality": "get_overview", "progress": "get_overview"}
+TOOL_FOR: dict[Intent, str] = {
+    "todo": "list_open_items",
+    "materiality": "get_overview",
+    "activity": "get_overview",
+    "progress": "get_overview",
+}
 
 PHASES: dict[str, dict[Lang, str]] = {
     "P0_Acceptance": {"zh": "承接", "en": "acceptance"},
@@ -95,6 +102,20 @@ def progress(data: dict[str, Any], lang: Lang) -> str:
     return text
 
 
+def activity(data: dict[str, Any], lang: Lang) -> str:
+    """现在在做什么: 当前阶段, 本阶段已结清的程序数/总数 (已完成与未执行 (无数据) 都算结清, 不说 "已完成"),
+    正在运行的程序 (编号与名称)."""
+    progress = data["progress"]
+    phase = PHASES.get(progress["phase"], {"zh": progress["phase"], "en": progress["phase"]})[lang]
+    done, total = progress["done"], progress["total"]
+    names = [f"{p['id']} {p['name']}" for p in progress["running"]]
+    if lang == "zh":
+        text = f"项目目前处于{phase}阶段，本阶段 {done}/{total} 个审计程序已结清。"
+        return text + (f"正在执行：{'、'.join(names)}。" if names else "现在没有正在执行的程序。")
+    text = f"The engagement is in the {phase} phase: {done} of {total} procedures in this phase are settled."
+    return text + (f" Running now: {', '.join(names)}." if names else " No procedure is running right now.")
+
+
 def materiality(data: dict[str, Any], lang: Lang) -> str:
     overall = data.get("materiality")
     if overall is None:
@@ -160,6 +181,8 @@ def compose(intent: Intent, results: list[dict[str, Any]], lang: Lang) -> str:
         return OTHER[lang]
     if intent == "progress":
         return progress(data, lang)
+    if intent == "activity":
+        return activity(data, lang)
     if intent == "materiality":
         return materiality(data, lang)
     if intent == "todo":

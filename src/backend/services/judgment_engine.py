@@ -112,12 +112,14 @@ SYSTEM_PROMPT = """Reply with a single JSON object that conforms to the JSON sch
 Write nothing before or after the object.
 
 {schema}"""
-# 判断 (judge) 的系统提示词: 另写明规则例外不是证据来源. 规则例外没有对应的指针类型, 模型曾用 source_type trail
-# 引 D04 例外的 ID, 解析不了, 照引用级的规则原样留在判断里 (需求 R312)
+# 判断 (judge) 的系统提示词: 另写明规则例外与计划阶段的风险不是证据来源. 两者都没有对应的指针类型: 模型曾用
+# source_type trail 引 D04 例外的 ID (需求 R312), 用 client_profile 引 GEN-02 上下文里的舞弊风险 RISK-REV-OCC
+# (R251 真实模型首跑), 都解析不了, 照引用级的规则原样留在判断里
 JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
     "{schema}",
-    "Rule findings are not evidence sources: never put a finding ID in an evidence pointer. "
-    "Cite the rows, document pages or fields that the finding is about.\n\n{schema}",
+    "Rule findings and planning risks are not evidence sources: never put a finding ID or a risk ID in an evidence "
+    "pointer. Cite the rows, document pages or fields that the finding is about; name a risk by its ID in the step "
+    "text.\n\n{schema}",
 )
 # 没通过校验后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:

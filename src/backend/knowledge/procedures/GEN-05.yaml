@@ -4,10 +4,14 @@ workpaper: {ref: G-1, area: G}  # 底稿索引号与所属区 (需求 R329, know
 # 规格书 6.3 GEN-05; ASA 240 第 32, 33(a) 段, A44 段. 对本期全部分录按规则取例外, 原样返回, 不作判断, 不建复核
 # 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08, 期末后补记 R13 (需求 R131) 与不看录入时间的新规则
 # R09-R12 (需求 R132; 设计稿第 5.3 节, R09 依 ASA 240 A44 段的 nonstandard journal entries, R10-R12 是据此自定的口径);
-# 更正分录接入后的增量实例由 JR-6c 改 (entry_nos, audit_adjustment_start).
+# 更正分录接入后的增量实例 (需求 R194): verify_correction 节点以 entry_nos 只扫更正通知载入的凭证 (GraphNodes.scan_increment),
+# 写新的执行记录 (trigger incremental) 与例外, 程序不出新版本.
 #
 # 通用口径 (各规则的 SQL 都这样写):
-# - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行.
+# - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行. 增量实例 (entry_nos 非空) 另只出凭证号在
+#   entry_nos 中的例外 (各规则最后一步按 entry_no 筛, 中间步骤照全期算: R07 的录入人计数, R10, R12 的贷项凭证, R11 的
+#   原凭证与重记都按全期; R12 即只取 journal_entry_id 落在这些凭证上的发票); R06 不受 entry_nos 限制 (它查的是审计
+#   调整期间录入的其他分录, 不是更正分录).
 # - 每条规则每笔凭证 (entry_no) 至多一条例外: source_id 取该凭证命中行中金额 (借贷两侧绝对值之和) 最大的行, 并列取
 #   ID 最小的行 (按字节序); amount_cents 取这一行的金额. 例外按 (posting_date, entry_no 自然序, entry_no) 编号: 自然序
 #   把凭证号中的每段数字补足到 10 位再按字节序比较 (XJ-9 在 XJ-10 之前), 数字段以 10 位为限 (更长的段不保证按数值排);
@@ -42,6 +46,7 @@ cycle: Pervasive
 owner: A6
 feature: journals                 # 功能开关 (services/features.py): 分录测试
 fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+incremental: true                 # 增量实例 (需求 R194): 更正分录接入后在 verify_correction 只扫这些凭证
 outputs: [exceptions]
 reads: [journal_entries, accounts, sales_invoices, delivery_notes]   # 后两者: R10, R12 的发票与发运或服务完成记录
 engine: rule
@@ -67,8 +72,8 @@ params:
   revenue_categories: [revenue]
   receivables_categories: [receivables]
   cash_categories: [cash]
-  entry_nos: null                 # 增量实例的凭证号 (JR-6c); 初始实例为空, 本文件的 SQL 不用
-  audit_adjustment_start: null    # 首次发出错报沟通的时间 (JR-6c 改为派生引用); 为空时 R06 不执行
+  entry_nos: null                 # 增量实例的凭证号 (排序后, 由 scan_increment 覆盖); 初始实例为空, 各规则不按它筛
+  audit_adjustment_start: {ref: first_misstatement_communicated_at}   # 首次发出错报沟通的时间; 为空时 R06 不执行
 standards: [ASA240-P32, ASA240-P33]
 rules:
   - id: R01
@@ -93,6 +98,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              created_at_local
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -128,6 +134,7 @@ rules:
       )
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -161,6 +168,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              CAST(:approval_limit_cents AS bigint) AS approval_limit_cents
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -189,6 +197,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              created_by, approved_by
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -212,6 +221,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              description, source_doc
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -278,6 +288,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              created_by, preparer_entries
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -305,6 +316,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              created_at_local
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -342,6 +354,7 @@ rules:
              description, source_doc
       FROM picked
       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -397,6 +410,7 @@ rules:
              credited_cents, matched_invoices
       FROM picked
       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -461,6 +475,7 @@ rules:
              original_entry_no, reversal_entry_no, original_name, repost_name
       FROM picked
       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
+        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -538,6 +553,7 @@ rules:
       )
       SELECT * FROM hits
       WHERE paired_invoices IS NOT NULL AND amount_cents>CAST(:clearly_trivial_cents AS bigint)
+        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
@@ -565,6 +581,7 @@ rules:
       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
              created_at_local
       FROM picked
+      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
       ORDER BY posting_date,
                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",

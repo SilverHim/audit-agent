@@ -366,6 +366,17 @@ async def test_versions_rollback_trail_and_lock(storage):
     assert (await PostgresFinancialDataStore(engine).documents(e.id))[0].status == "received"
     assert (await engagements.client_profile(e.client_id)).version == 1
     assert await trail.find_success(e.id, "rollback-test")
+    # 算不算写成只看 error 与 success, 不看 payload 的 status: 失败执行的结束留痕也算 (需求 R325)
+    for key, payload, written in [
+        ("run-failed", {"action": "finished", "status": "failed"}, True),
+        ("call-error", {"error": "boom"}, False),
+        ("call-unsuccessful", {"success": False}, False),
+    ]:
+        entry = TrailEntry(
+            engagement_id=e.id, kind=TrailKind.run, actor="A1", summary=key, idempotency_key=key, payload=payload
+        )
+        await trail.record(entry)
+        assert (await trail.find_success(e.id, key) is not None) is written, key
     with pytest.raises(DBAPIError):
         async with transaction(engine, e.id) as conn:
             await conn.execute(text("DELETE FROM audit_trail"))

@@ -14,13 +14,12 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 import pytest_asyncio
 
 from backend.adapters.llm import SwitchableLLMClient
-from backend.agents.base import ProcedureAgent, RunContext
 from backend.agents.ingest import DETAILS
 from backend.contracts.data import XERO_TABLES, DataInput
 from backend.contracts.errors import DecisionRejected, EngagementLocked
@@ -55,7 +54,6 @@ from backend.contracts.models import (
 )
 from backend.contracts.views import GateView, PlanningMaterial
 from backend.orchestration.decisions import GraphDecisionSubmit
-from backend.orchestration.nodes import GraphNodes
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.orchestration.scheduler import build_schedule
@@ -64,7 +62,7 @@ from backend.services.features import BASELINE
 from backend.services.populations import distinct_items, judged_subjects, total_cents
 from backend.services.procedure_library import render_text
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, no_population, wait_idle
+from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, no_population, wait_idle
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
 from tests.test_e2e_mock import Demo, assert_pointers_resolve, real_storage, trail_of
@@ -88,7 +86,14 @@ from tests.xero_fakes import (
     xero_rev08_populations,
     xero_uploads,
 )
-from tests.xero_flow import approve_acceptance, confirm_ready, demo_source, import_stage, offline_runner
+from tests.xero_flow import (
+    approve_acceptance,
+    confirm_ready,
+    demo_source,
+    import_stage,
+    offline_runner,
+    recorded_agents,
+)
 from tests.xero_harness import LayeredMockLLMClient
 from tests.xero_injection import changed, originals
 
@@ -173,15 +178,7 @@ async def drive_xero17(
     逐文件哈希. client 须已是 runner.deps 的主模型与复核模型; before_review, reviews 与 stop_at_fin 见 finish_xero17."""
     before = originals()
     deps = runner.deps
-    agents: list[tuple[str, str, bool]] = []
-    run_agent = GraphNodes.run_agent
-
-    async def record_agent(self: GraphNodes, agent: ProcedureAgent[Any], ctx: RunContext) -> Any:
-        agents.append((ctx.procedure.id, type(agent).__name__, isinstance(agent, ScriptAgent)))
-        return await run_agent(self, agent, ctx)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(GraphNodes, "run_agent", record_agent)
+    with recorded_agents() as agents:
         await runner.start(eid)
         await wait_idle(runner, eid)
         assert (await runner.app.aget_state(GraphRunner.config(eid))).next == ("gate_acc01",), runner.run_error(eid)
@@ -389,10 +386,24 @@ async def test_report_and_lock(xero17: Xero17) -> None:
     assert e.value.code == "ENGAGEMENT_LOCKED"
 
 
-async def assert_report(x: Xero17, reject_id: str | None = None) -> None:
-    """REPORT-1 v1 draft; REPORT-2 v2 signed (负责人签字, 回应退回决定): 意见段以 "Opinion" 开头, 没有持续经营段,
-    基础段写明 Simplified Disclosures, 签名块以 "Jordan Ellis\\n" 开头, 不引判断; 项目归档并锁定. reject_id 为
-    RPT-01 退回决定的 ID, 缺省为本路径决定表的 (经接口提交时由接口生成, 需求 R287 传入)."""
+# 报告两段的标题 (templates/report.yaml 的 en)
+HEADINGS = {
+    OpinionType.unqualified: ("Opinion", "Basis for Opinion"),
+    OpinionType.qualified: ("Qualified Opinion", "Basis for Qualified Opinion"),
+}
+
+
+async def assert_report(
+    x: Xero17,
+    reject_id: str | None = None,
+    opinion: OpinionType = OpinionType.unqualified,
+    cited: Sequence[str] = (),
+) -> None:
+    """REPORT-1 v1 draft; REPORT-2 v2 signed (负责人签字, 回应退回决定): 两稿的意见类型为 opinion, 意见段与基础段以该
+    意见的标题开头, 引用判断 cited (各为已确认的第 2 版); 没有持续经营段, 只有 REPORT-2 的基础段写明 Simplified
+    Disclosures, 签名块以 "Jordan Ellis\\n" 开头; 项目归档并锁定. 缺省为本路径的无保留意见, 不引判断; 演示走通
+    (需求 R260) 为保留意见, 引两笔未更正错报的来源判断. reject_id 为 RPT-01 退回决定的 ID, 缺省为本路径决定表的
+    (经接口提交时由接口生成, 需求 R287 传入)."""
     reports = {r.id: r for r in await x.runner.deps.output_store.latest(x.eid, AuditReportVersion)}
     assert (reports["REPORT-1"].version, reports["REPORT-1"].status) == (1, ReportStatus.draft)
     signed = reports["REPORT-2"]
@@ -402,9 +413,13 @@ async def assert_report(x: Xero17, reject_id: str | None = None) -> None:
         x.owner,
         reject_id or xero17_gates(x.owner)["rpt_reject"].id,
     )
-    assert (signed.opinion_type, signed.judgment_refs) == (OpinionType.unqualified, [])
+    opinion_heading, basis_heading = HEADINGS[opinion]
+    for report in reports.values():
+        assert report.opinion_type is opinion
+        assert [(r.id, r.version) for r in report.judgment_refs] == [(j, 2) for j in cited]
+        assert report.sections[ReportSection.opinion].startswith(f"{opinion_heading}\n")
+        assert report.sections[ReportSection.basis_for_opinion].startswith(f"{basis_heading}\n")
     sections = signed.sections
-    assert sections[ReportSection.opinion].startswith("Opinion\n")
     assert "going_concern" not in sections
     assert "Simplified Disclosures" in sections[ReportSection.basis_for_opinion]
     assert "Simplified Disclosures" not in reports["REPORT-1"].sections[ReportSection.basis_for_opinion]
@@ -477,15 +492,15 @@ async def test_pointers_fixtures_and_agents(xero17: Xero17) -> None:
 
 async def assert_pointers_and_reads(x: Xero17, *, everything: bool = False) -> list[EvidencePointer]:
     """判断, 合同与函证的证据指针都能解析 (everything 时另含例外, 承接评分卡与人工结果; 返回检查过的指针); 大模型
-    读取: RPT-03 两次读自 llm_xero_only17 (r1, r2), 其余 36 次读自运行副本 (DOC-CLASSIFY 21, DOC-04 3, DOC-06 2,
-    REV-03 3, REV-02 6, CSH-02 1), 每个文件一次, 都是 attempt 1 且没有失败级别."""
+    读取: RPT-03 两次读自 llm_xero_only17 (unqualified-r1, unqualified-r2: FIN-01 选无保留), 其余 36 次读自运行副本
+    (DOC-CLASSIFY 21, DOC-04 3, DOC-06 2, REV-03 3, REV-02 6, CSH-02 1), 每个文件一次, 都是 attempt 1 且没有失败级别."""
     deps = x.runner.deps
     started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
     pointers = await assert_pointers_resolve(started, x.eid, everything=everything)
     reads = [(r.procedure_id, r.fixture_key, r.root, r.file) for r in x.client.reads]
     assert sorted(r for r in reads if r[0] == "RPT-03") == [
-        ("RPT-03", "r1", ONLY17, "RPT-03/r1.json"),
-        ("RPT-03", "r2", ONLY17, "RPT-03/r2.json"),
+        ("RPT-03", "unqualified-r1", ONLY17, "RPT-03/unqualified-r1.json"),
+        ("RPT-03", "unqualified-r2", ONLY17, "RPT-03/unqualified-r2.json"),
     ]
     rest = [r for r in reads if r[0] != "RPT-03"]
     assert {(root, file == f"{pid}/{key}.json") for pid, key, root, file in rest} == {(XERO.runtime, True)}

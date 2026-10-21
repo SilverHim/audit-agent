@@ -9000,6 +9000,9 @@
             "type": "array",
             "title": "Procedures"
           },
+          "progress": {
+            "$ref": "#/components/schemas/PhaseProgress"
+          },
           "stale_procedure_ids": {
             "items": {
               "type": "string"
@@ -9093,6 +9096,7 @@
           "awaiting_data",
           "missing_tables",
           "procedures",
+          "progress",
           "pending_tasks",
           "materiality_cents",
           "performance_materiality_cents",
@@ -12032,6 +12036,38 @@
         "title": "Phase",
         "description": "项目阶段."
       },
+      "PhaseProgress": {
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "running": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Running"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phase",
+          "done",
+          "total",
+          "running"
+        ],
+        "title": "PhaseProgress",
+        "description": "当前阶段的进度 (需求 R325): 工作区顶部 \"正在执行 n/m\" 与审计助理 \"现在在做什么\" 用."
+      },
       "PlanConfirmation": {
         "properties": {
           "eqr_required": {
@@ -14163,7 +14199,8 @@
         "type": "string",
         "enum": [
           "initial",
-          "rerun"
+          "rerun",
+          "incremental"
         ],
         "title": "RunTrigger",
         "description": "一次执行的起因."
@@ -15262,7 +15299,8 @@
           "conversation",
           "conversation_summary",
           "data",
-          "presentation"
+          "presentation",
+          "run"
         ],
         "title": "TrailKind",
         "description": "留痕类型."

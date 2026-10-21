@@ -13,7 +13,7 @@ from backend.agents.concierge_chat.service import ChatLimits, ConciergeChat
 from backend.contracts.conversation import AssistantTurn, ChatEvent, ChatMessage, Lang, TextDelta, ToolCall, ToolSpec
 from backend.contracts.models import Engagement, Phase
 from backend.contracts.ports import ChatModel
-from backend.contracts.views import EngagementOverview, GateView, ProcedureSummary
+from backend.contracts.views import EngagementOverview, GateView, PhaseProgress, ProcedureSummary
 from backend.core.security import create_access_token
 from backend.main import create_app
 from tests.fakes import ENGAGEMENT, NUMBAT_AUDITOR, FakeRegistry, FakeTrail, make_deps
@@ -104,7 +104,8 @@ def procedure_summary(pid: str, status: str = "completed", pending: int = 0) -> 
 
 
 def make_overview(engagement: Engagement = ENGAGEMENT, **changes: Any) -> EngagementOverview:
-    """项目总览: 缺省为执行阶段, 3 条程序完成 2 条, 1 项待复核, 重要性已定, 不在阶段决定处."""
+    """项目总览: 缺省为执行阶段, 3 条程序完成 2 条 (本阶段进度 2/3, 没有正在运行的), 1 项待复核, 重要性已定, 不在
+    阶段决定处. changes 改其中的字段, 合成后按 EngagementOverview 校验 (拼错的键, 改了名的旧参数报错)."""
     base = EngagementOverview(
         engagement=engagement.model_copy(update={"phase": Phase.P2_Executing}),
         client_name="Numbat Electronics Pty Ltd",
@@ -119,13 +120,14 @@ def make_overview(engagement: Engagement = ENGAGEMENT, **changes: Any) -> Engage
             procedure_summary("CSH-05"),
             procedure_summary("REV-02", status="awaiting_human", pending=1),
         ],
+        progress=PhaseProgress(phase=Phase.P2_Executing, done=2, total=3, running=[]),
         pending_tasks=1,
         materiality_cents=12_000_000,
         performance_materiality_cents=9_000_000,
         clearly_trivial_cents=600_000,
         opinion_route=None,
     )
-    return base.model_copy(update=changes)
+    return EngagementOverview.model_validate(base.model_dump() | changes)  # 经校验: 不认识的键报错 (审核 R325-07)
 
 
 @dataclass

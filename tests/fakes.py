@@ -770,8 +770,7 @@ class FakeTrail:
         return next((e for e in self.entries if e.engagement_id == eid and e.id == id), None)
 
     async def find_success(self, eid: str, idempotency_key: str) -> TrailEntry | None:
-        """同 PostgresAuditTrail: 按写入顺序取该键的第一条成功留痕; payload 带 error, success 为假或 status 为
-        failed, error 的不算成功."""
+        """同 PostgresAuditTrail: 按写入顺序取该键的第一条成功留痕; payload 带 error 或 success 为假的不算成功."""
         return next(
             (
                 e
@@ -780,7 +779,6 @@ class FakeTrail:
                 and e.idempotency_key == idempotency_key
                 and not e.payload.get("error")
                 and e.payload.get("success") is not False
-                and e.payload.get("status") not in {"failed", "error"}
             ),
             None,
         )
@@ -2920,11 +2918,14 @@ def make_deps(
     review_llm: LLMClient | None = None,
     features: frozenset[str] | None = None,
     data: FakeDataStore | None = None,
+    fixed_language: WorkingLanguage | None = "en",
 ) -> AgentDeps:
     """真实依赖里换掉登记系统, 留痕, 项目存储, 审计产出存储, 财务数据存储, 证据文件存储, 数据集载入, 规则引擎,
     函证平台与用户 (给了 library 时另换程序库).
     features: 启用的功能, 写入 AgentDeps.features. 没给 library 时缺省为基线, 按它建 knowledge 目录的程序库 (同
     组装根); 给了 library 时不重建, 缺省取 library.features, 给了而与之不同时抛 ValueError (两处功能集须一致).
+    fixed_language: 写入 AgentDeps.fixed_language; 缺省 en, 同组装根的 mock 模式 (需求 R343); None 为 live 的口径
+    (执行记录按项目的工作语言, 需求 R339).
     其余依赖只构造不连接. 判断引擎按替换后的大模型, 财务数据存储, 留痕与程序库重建, 复核队列与自主度降级的知识
     (AgentDeps.autonomy) 按替换后的程序库重建.
 
@@ -2984,6 +2985,7 @@ def make_deps(
         review_llm=review_llm,
         features=features,
         autonomy=AutonomyPolicy.load(library),
+        fixed_language=fixed_language,
     )
     return with_manual_owners(deps)  # 同组装根: 按换好的程序库与假实现重找人工程序的 owner
 
@@ -3897,6 +3899,7 @@ def make_runner(
     features: frozenset[str] | None = None,
     data: FakeDataStore | None = None,
     llm: LLMClient | None = None,
+    fixed_language: WorkingLanguage | None = "en",
 ) -> tuple[GraphRunner, FakeOutputStore]:
     """新项目的 runner: 登记系统缺省有 Numbat 的记录, Store 缺省为空 (由 start 写入固定集). 返回 runner 与审计产出存储.
 
@@ -3909,6 +3912,7 @@ def make_runner(
     features: 启用的功能, 缺省为基线, 给了 library 时缺省取它的 (见 make_deps).
     data: 数据管理存储, 缺省为种子已载入 (视同已确认就绪, P1 前不等数据).
     llm: 主模型, 缺省为 mock 模式的固定输出 (见 make_deps; 给了时 review_llm 也要给, 否则 A7 不复核).
+    fixed_language: 执行记录的固定生成语言, 见 make_deps.
     """
     if registry is None:
         registry = FakeRegistry({NUMBAT_ABN.abn: NUMBAT_ABN}, {NUMBAT_ASIC.acn: NUMBAT_ASIC})
@@ -3926,6 +3930,7 @@ def make_runner(
         features=features,
         data=data,
         llm=llm,
+        fixed_language=fixed_language,
     )
     nodes = make_graph_nodes(deps)
     if agents is not None:

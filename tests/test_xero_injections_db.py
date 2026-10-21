@@ -1,9 +1,10 @@
 """注入测试的连库断言 (设计稿 v2.1 第 8 节): 副本 (xero_case) 经补造清单写入测试库, 用真实 SQL 与存储跑现有程序,
 检真实 SQL 与取数能否把注入的事实带到判断面前 (大模型仍读 fixture). T0 基线副本 (需求 R121), T1 收入截止 (需求
-R122), T4 银行回函余额差异 (需求 R123). 例外按 (规则, 对象 ID) 比, 不按序号. 设 TEST_DATABASE_URL 为已迁移的
-独立测试库 (没配时跳过); 要本地快照.
+R122), T2 重复开票未冲销 (需求 R252), T4 银行回函余额差异 (需求 R123), T5 与 T5' 折旧错记 (需求 R253); T2, T5 在演示
+配置的功能集上跑. 例外按 (规则, 对象 ID) 比, 不按序号. 设 TEST_DATABASE_URL 为已迁移的独立测试库 (没配时跳过);
+要本地快照.
 
-live 组 (需求 R124, 设计稿第 8.1 节): 识别能力只由真实模型证明, 同一判断对象在基线 (T0) 与注入副本上成对断言,
+live 组 (需求 R124, R255, 设计稿第 8.1 节): 识别能力只由真实模型证明, 同一判断对象在基线 (T0) 与注入副本上成对断言,
 两侧都必须通过. 只有被测对象交真实模型, 其余读 fixture; 另标 live (须配 LLM_MODEL 与 LLM_API_KEY, 见
 tests.external.live_llm_settings, 没配时跳过)."""
 
@@ -14,20 +15,31 @@ from typing import Any
 import pytest
 
 from backend.adapters.llm import make_llm_client
+from backend.contracts.data import TableKind
 from backend.contracts.models import TrailEntry, TrailKind
 from backend.contracts.ports import LLMClient
 from backend.contracts.services import RuleResult
+from backend.contracts.state import EngagementState
 from tests.external import live_llm_settings, snapshot_dir, supplements_dir
 from tests.fakes import rev08_populations
 from tests.test_fieldwork_csh02 import assert_d04_unattributed, flaky_ba091
 from tests.test_xero_injections import (
+    JOURNAL_FEATURES,
     LLM_INJECTED,
     T1_ORC1026,
     T1_RULES,
+    T2_RULES,
+    T2_XJ405,
     T4_TRANSIT,
+    T5P_RULES,
     assert_t1_pair,
+    assert_t2_judgments,
+    assert_t2_pair,
+    assert_t2_rules,
     assert_t4_pair,
+    assert_t5,
     paired_side,
+    t2_request,
     t4_rules,
 )
 from tests.test_xero_rules_db import (
@@ -47,12 +59,20 @@ from tests.xero_fakes import (
     SNAPSHOT_NAME,
     XERO_PERIOD,
     XERO_REV08_WINDOW,
+    XERO_RULES,
     manifest_documents,
     xero_rev08_populations,
     xero_tables,
     xero_uploads,
 )
-from tests.xero_harness import LayeredMockLLMClient, XeroHarness, db_deps, request_text, run_programs
+from tests.xero_harness import (
+    LayeredMockLLMClient,
+    XeroHarness,
+    db_deps,
+    imported_tables,
+    request_text,
+    run_programs,
+)
 from tests.xero_injection import DeleteOp, Patch, SetOp, XeroCase
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
@@ -170,6 +190,72 @@ async def test_t4_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
     assert len(changes) == 8 and "090" not in changes and changes["610"] == 964950
 
 
+async def journals_side(case: XeroCase, roots: list[Path]) -> tuple[EngagementState, LayeredMockLLMClient]:
+    """连库测试台 (演示配置的功能集) 上跑 GEN-02 的依赖闭包; 大模型先读 roots, 再读副本的运行副本."""
+    client = LayeredMockLLMClient([*roots, case.supplements / "llm"])
+    ran = await run_programs(await db_deps(case, llm=client, features=JOURNAL_FEATURES), ["GEN-02"])
+    return ran.state, client
+
+
+def a01_changes(state: EngagementState) -> dict[str, int | None]:
+    """PLN-07 A01 的例外: 科目代码 → 变动额."""
+    return {x.source_ids[0]: x.amount_cents for x in state["exceptions"] if x.rule_id == "A01"}
+
+
+async def test_t2_on_postgres(xero_case: Any) -> None:
+    """R252 验收 2, 4, 5: 演示配置的功能集下, T0 与 T2 副本各经连库测试台 (真实 SQL 与存储) 跑 GEN-02 的依赖闭包,
+    T2 一侧 XJ-405 的大模型输出取 llm_injected/T2.
+    - GEN-05: 真实 SQL 的例外与离线预置相同 (T0 为 XERO_RULES, T2 为 T2_RULES); 规则层的区分见 assert_t2_rules
+      (R10 少 XJ-430-2, R12 的 full_credits 由 [XJ-430] 变为 [], paired_invoices 与 R09, R11 不变).
+    - GEN-02 对 XJ-405 的请求: T0 含 XJ-430 的 3 行, T2 不含 "XJ-430"; 判断见 assert_t2_judgments (XJ-397, 449, 499,
+      575, 601 同 T0).
+    - 随之变化: 重要性由 32431 / 16216 / 1622 变为 32931 / 16466 / 1647 (收入 3243100 变为 3293100 的 1%, 50%, 5%);
+      PLN-07 A01 仍为 9 条, 610 由 1019950 变为 1074950, 820 由 -198317 变为 -203317, 其余不变; R09 的 XJ-539 (9 分)
+      与 R11 的 XJ-585 (1050 分) 低于新的明显微小 1647 (GEN-05 的参数快照), 两边都不出例外."""
+    t0, t2 = xero_case("T0", base="t0"), xero_case("T2", base="t2")
+    base, base_client = await journals_side(t0, [])
+    injected, client = await journals_side(t2, [LLM_INJECTED / "T2"])
+    states = (base, injected)
+    for state, rules in ((base, XERO_RULES), (injected, T2_RULES)):
+        [run] = [r for r in state["procedure_runs"] if r.procedure_id == "GEN-05"]
+        assert [x for x in state["exceptions"] if x.procedure_id == "GEN-05"] == rules["GEN-05"](run).exceptions
+    assert_t2_rules(base, injected)
+    assert all(f'"id": "XJ-430-{n}"' in t2_request(base_client) for n in (1, 2, 3))
+    assert "XJ-430" not in t2_request(client)
+    assert_t2_judgments(base, injected, project_fields={"performed_by"})  # 两个项目各自新建的负责人
+    amounts = [(s["materiality_cents"], s["performance_materiality_cents"], s["clearly_trivial_cents"]) for s in states]
+    assert amounts == [(32431, 16216, 1622), (32931, 16466, 1647)]
+    assert a01_changes(injected) == a01_changes(base) | {"610": 1074950, "820": -203317}
+    assert (len(a01_changes(base)), a01_changes(base)["610"], a01_changes(base)["820"]) == (9, 1019950, -198317)
+    [run] = [r for r in injected["procedure_runs"] if r.procedure_id == "GEN-05"]
+    trivial = run.params_snapshot["clearly_trivial_cents"]
+    lines = imported_tables(t2.loader)[TableKind.journal_entries]
+    largest = {
+        no: max(abs(r.debit_cents - r.credit_cents) for r in lines if r.entry_no == no) for no in ("XJ-539", "XJ-585")
+    }
+    assert (trivial, largest) == (1647, {"XJ-539": 9, "XJ-585": 1050})
+    flagged = {str(x.detail["entry_no"]) for s in states for x in s["exceptions"] if x.procedure_id == "GEN-05"}
+    assert not flagged & set(largest)
+
+
+async def test_t5_on_postgres(xero_case: Any) -> None:
+    """R253 验收 1, 3 (连库): 演示配置的功能集下, T0 (即 T5) 与 T5' 副本各经连库测试台跑 GEN-02 的依赖闭包, 大模型都读
+    运行副本: 真实 SQL 的 GEN-05 与离线预置相同 (T0 为 XERO_RULES, T5' 为 T5P_RULES), 两边的对比见 assert_t5; 重要性
+    两边都是 32431 / 16216 / 1622 (收入不变); PLN-07 A01 由 9 条变为 7 条, 少 710 与 711 (余额都为 0, 没有变动), 820
+    由 -198317 变为 -205817 (本期 -126697 减期初 79120), 其余不变."""
+    t0, t5p = xero_case("T0", base="t0"), xero_case("T5p", base="t5p")
+    base, _ = await journals_side(t0, [])
+    removed, _ = await journals_side(t5p, [])
+    for state, rules in ((base, XERO_RULES), (removed, T5P_RULES)):
+        [run] = [r for r in state["procedure_runs"] if r.procedure_id == "GEN-05"]
+        assert [x for x in state["exceptions"] if x.procedure_id == "GEN-05"] == rules["GEN-05"](run).exceptions
+        amounts = (state["materiality_cents"], state["performance_materiality_cents"], state["clearly_trivial_cents"])
+        assert amounts == (32431, 16216, 1622)
+    assert_t5(base, removed, project_fields={"performed_by"})  # 两个项目各自新建的负责人
+    expected = {code: v for code, v in a01_changes(base).items() if code not in ("710", "711")} | {"820": -205817}
+    assert (len(a01_changes(base)), a01_changes(removed)) == (9, expected)
+
+
 # ── REV-08 被测总体随注入变 (需求 R324 审核 R324-02): 补丁只在副本上执行, 期望值由副本的表经 rev08_populations 算出 ──
 
 ORC1024_RECORD = {  # 补造的 ORC1024 服务完成记录 (delivery_notes.csv 一行)
@@ -256,7 +342,7 @@ async def test_rev08_populations_follow_injections(xero_case: Any, tmp_path: Pat
     assert item.fields["records"] == orc1024
 
 
-# ── live 组: T1, T4 真实大模型成对断言 (需求 R124); 两个用例的调用上限合计 15 次 ──
+# ── live 组: T1, T4 (需求 R124) 与 T2 (需求 R255) 真实大模型成对断言; 三个用例的调用上限合计 25 次 ──
 
 
 def live_client() -> LLMClient:
@@ -318,3 +404,29 @@ async def test_live_t4_pair(xero_case: Any, live_budget: Budget) -> None:
     finally:
         await usage("test_live_t4_pair", built, live_budget)
     assert_t4_pair(base.state, transit.state)
+
+
+async def journals_build(case: XeroCase, llm: LLMClient) -> XeroHarness:
+    return await db_deps(case, llm=llm, features=JOURNAL_FEATURES)
+
+
+@pytest.mark.live(max_calls=10)  # 两侧各至多 2 次执行 x 3 次尝试 = 12, 正常 2 次; 超限即停发并失败
+async def test_live_t2_pair(xero_case: Any, live_budget: Budget) -> None:
+    """R255 验收 1, 2, 4 (只做 T2): 连库测试台, 演示配置的功能集, 只有 GEN-02 对 XJ-405 交真实模型 (其余凭证读运行
+    副本). T0 副本上不认定错报 (accept 或 more_evidence) 且无错报草稿, T2 副本上为 misstatement (50000, Occurrence,
+    overstated, 科目含 200 或 Sales); 判断没出来的一侧重做至多 1 次; 结束时打印用量汇总."""
+    live = live_client()
+    t0, t2 = xero_case("T0", base="t0"), xero_case("T2", base="t2")
+    key, built = ("GEN-02", "XJ-405"), []
+    try:
+        base, runs = await paired_side(
+            journals_build, t0, [t0.supplements / "llm"], live, key, live_budget, ["GEN-02"], T2_XJ405
+        )
+        built += runs
+        duplicate, runs = await paired_side(
+            journals_build, t2, [t2.supplements / "llm"], live, key, live_budget, ["GEN-02"], T2_XJ405
+        )
+        built += runs
+    finally:
+        await usage("test_live_t2_pair", built, live_budget)
+    assert_t2_pair(base.state, duplicate.state)

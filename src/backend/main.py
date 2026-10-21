@@ -109,6 +109,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         autonomy=AutonomyPolicy.load(library),
         review_llm=review_llm,
         features=features,
+        fixed_language="en" if settings.LLM_MODE == "mock" else None,  # mock 的固定输出都是英文 (需求 R343)
     )
     return with_manual_owners(deps)  # 人工程序的 owner 最后找, 各处共用 (需求 R93)
 

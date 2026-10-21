@@ -5,7 +5,7 @@ PostgresFinancialDataStore 与 SqlRuleEngine 执行, 参数同 GraphNodes 用 bu
 R131-01). R132 另核对作废对的个数与删去一笔贷项凭证后 R10, R12 的变化. 没有 TEST_DATABASE_URL 时跳过."""
 
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -17,14 +17,14 @@ from sqlalchemy import delete, insert, select
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
-from backend.contracts.records import DatasetTraits
+from backend.contracts.records import DatasetTraits, JournalEntry
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.db import bind_engagement
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import NUMBAT_RULES
+from tests.fakes import NUMBAT_RULES, numbat_records
 from tests.test_knowledge import voided_cte
 from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
 from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
@@ -286,3 +286,161 @@ async def test_xero_overrides_make_rules_hit(
     result = await gen05(xero, **overrides)
     assert hits(result, rule_id) == expected
     assert next((o.status for o in result.outcomes if o.rule_id == rule_id), None) == outcome
+
+
+# ── 需求 R194: 增量实例 (entry_nos 只取更正通知载入的凭证) ──
+
+
+@asynccontextmanager
+async def with_rows(project: Gen05Project, table_name: str, rows: list[dict[str, object]]) -> AsyncIterator[None]:
+    """在测试库的项目中暂时插入账表的行 (测试库是副本, 原文件不改), 退出时按 ID 删去, 共用项目的其余用例不受影响."""
+    engine = project.deps.data.engine  # type: ignore[attr-defined]
+    table = m.FINANCIAL[table_name]
+    ids = [row["id"] for row in rows]
+    async with engine.begin() as conn:
+        await bind_engagement(conn, project.eid)
+        await conn.execute(insert(table), [{"engagement_id": project.eid, **row} for row in rows])
+    try:
+        yield
+    finally:
+        async with engine.begin() as conn:
+            await bind_engagement(conn, project.eid)
+            await conn.execute(delete(table).where((table.c.engagement_id == project.eid) & table.c.id.in_(ids)))
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
+async def xero_corrected(tmp_path_factory: pytest.TempPathFactory) -> Gen05Project:
+    """另建一个 Xero 项目, 载入补造的全部更正分录 (AJE-X01 至 X05, 11 行; DatasetLoader.load_adjustments)."""
+    project = await build_xero_project(
+        database_url(), snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME), tmp_path_factory.mktemp("xero")
+    )
+    eid = project.engagement.id
+    loaded = await project.deps.datasets.load_adjustments(eid, project.engagement.dataset, None, actor=project.owner)  # type: ignore[arg-type]
+    assert len(loaded) == 11
+    run = gen05_run(project.deps, project.engagement, project.state, project.traits, project.profile)
+    return Gen05Project(project.deps, eid, run)
+
+
+FIRST_ROUND, SECOND_ROUND = ["AJE-X01", "AJE-X05"], ["AJE-X02", "AJE-X03", "AJE-X04"]
+NOT_RUN = {  # Xero 上不执行的规则 (录入时间不可靠, 没有审批人, 录入人不足 2 个)
+    ("R01", "skipped"),
+    ("R06", "skipped"),
+    ("R08", "skipped"),
+    ("R13", "skipped"),
+    ("R04", "not_executable"),
+    ("R07", "not_executable"),
+}
+
+
+@pytest.mark.external
+@pytest.mark.parametrize("entry_nos", [FIRST_ROUND, SECOND_ROUND], ids=["round1", "round2"])
+async def test_xero_increment_finds_nothing(xero_corrected: Gen05Project, entry_nos: list[str]) -> None:
+    """验收 4: 两轮更正通知的增量实例各 0 条例外 (R09 剔除 AJE- 前缀, R02 不是 10,000 的整数倍, R03 不是付款, R05
+    说明不含 revers); 不执行的规则同初始实例, R11 照常执行."""
+    result = await gen05(xero_corrected, entry_nos=entry_nos)
+    assert result.exceptions == []
+    assert {(o.rule_id, o.status) for o in result.outcomes} == NOT_RUN
+
+
+def adjustment_line(lid: str, entry_no: str, account: str, debit: int, credit: int) -> dict[str, object]:
+    """一行手工调整分录 (09-30, is_adjustment 真, 录入人与审批人为空, 录入时间为空)."""
+    return {
+        "id": lid,
+        "entry_no": entry_no,
+        "posting_date": date(2026, 9, 30),
+        "account_code": account,
+        "debit_cents": debit,
+        "credit_cents": credit,
+        "description": f"Manual journal {entry_no}",
+        "source_doc": entry_no,
+        "is_adjustment": True,
+    }
+
+
+EXTRA = [  # 验收 5: 同额同科目的两笔, 一笔是审计更正分录 (前缀 AJE-)
+    adjustment_line("XJ-9001-1", "XJ-9001", "477", 1000000, 0),
+    adjustment_line("XJ-9001-2", "XJ-9001", "804", 0, 1000000),
+    adjustment_line("AJE-X09-1", "AJE-X09", "477", 1000000, 0),
+    adjustment_line("AJE-X09-2", "AJE-X09", "804", 0, 1000000),
+]
+
+
+@pytest.mark.external
+async def test_increment_limits_rules_to_entry_nos(xero_corrected: Gen05Project) -> None:
+    """验收 5: 插入 XJ-9001 与 AJE-X09 (借 477 / 贷 804 10,000.00): entry_nos 含两者时 R09 只命中 XJ-9001 (剔除审计
+    更正分录), R02 两笔都命中; entry_nos 不含它们时两条规则都不命中."""
+    async with with_rows(xero_corrected, "journal_entries", EXTRA):
+        both = await gen05(xero_corrected, entry_nos=["AJE-X01", "AJE-X09", "XJ-9001"])
+        others = await gen05(xero_corrected, entry_nos=FIRST_ROUND)
+    assert (hits(both, "R09"), hits(both, "R02")) == (["XJ-9001-1"], ["AJE-X09-1", "XJ-9001-1"])
+    assert (hits(others, "R09"), hits(others, "R02")) == ([], [])
+
+
+async def assert_limited(
+    project: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...], extra: Sequence[str] = ()
+) -> None:
+    """参数覆盖下这些规则命中; entry_nos 为命中的全部凭证 (再加上 extra 中全期不命中的凭证) 时这些规则的例外连同明细
+    都不变 (extra 仍不命中), 为不相干的凭证号时都不命中."""
+    full = await gen05(project, **overrides)
+    picked = set(rule_ids)
+    entries = sorted({x.detail["entry_no"] for x in full.exceptions if x.rule_id in picked})
+    assert {x.rule_id for x in full.exceptions} >= picked
+    same = await gen05(project, entry_nos=[*entries, *extra], **overrides)
+    others = await gen05(project, entry_nos=["NOT-AN-ENTRY"], **overrides)
+    assert [x for x in same.exceptions if x.rule_id in picked] == [x for x in full.exceptions if x.rule_id in picked]
+    assert [x for x in others.exceptions if x.rule_id in picked] == []
+
+
+@pytest.mark.parametrize(
+    ("overrides", "rule_ids", "regular"),
+    [
+        ({}, ("R01", "R04", "R08"), None),  # SJ-2026-0612
+        ({"approval_limit_cents": 1555001}, ("R03",), None),
+        ({"rare_user_max": 78}, ("R07",), "ar.clerk"),  # 录入人计数按全期, 只在最后一步筛
+    ],
+    ids=["R01-R04-R08", "R03", "R07"],
+)
+async def test_numbat_entry_nos_limits_rules(
+    numbat: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...], regular: str | None
+) -> None:
+    """R06 以外各规则的 entry_nos 筛选 (R02, R09 至 R12 见上面两条用例), Numbat 上命中的规则 (同
+    test_numbat_gen05_on_postgres, test_numbat_overrides_make_rules_hit): 见 assert_limited. R07 的 entry_nos 另加
+    一笔常规录入人 (本期凭证多于 rare_user_max) 的凭证: 计数若只按 entry_nos 算, 这一笔会命中, 命中的计数也会变."""
+    params = numbat.run.params_snapshot
+    extra = [
+        j.entry_no
+        for j in numbat_records("journal_entries", JournalEntry)
+        if j.created_by == regular and str(params["period_start"]) <= str(j.posting_date) <= str(params["period_end"])
+    ][:1]
+    assert len(extra) == (regular is not None)
+    await assert_limited(numbat, overrides, rule_ids, extra)
+
+
+@pytest.mark.external
+@pytest.mark.parametrize(
+    ("overrides", "rule_ids"),
+    [({"period_end": "2026-07-17"}, ("R05",)), ({"entry_timestamps_reliable": True}, ("R13",)), ({}, ("R11",))],
+    ids=["R05", "R13", "R11"],
+)
+async def test_xero_entry_nos_limits_rules(
+    xero: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]
+) -> None:
+    """同上, Xero 上以参数覆盖命中的 R05, R13 (同 test_xero_overrides_make_rules_hit, test_xero_gen05_on_postgres) 与
+    缺省参数下命中的 R11: entry_nos 只有命中的重记凭证 (原凭证与冲回凭证都不在其中, 由全期的作废对找到) 时仍命中."""
+    await assert_limited(xero, overrides, rule_ids)
+
+
+async def test_numbat_r06_runs_after_first_communication(numbat: Gen05Project) -> None:
+    """验收 6: 录入时间可信的 Numbat 上, R06 在首次错报沟通时间为空时 skipped; 为 2026-10-18T23:00:00Z 时执行, 插入
+    一笔其后录入的非更正分录即命中这一笔 (R06 不受 entry_nos 限制)."""
+    unset = await gen05(numbat)
+    assert next(o.status for o in unset.outcomes if o.rule_id == "R06") == "skipped"
+    late = [
+        adjustment_line("GJ-LATE-1", "GJ-LATE", "1100", 50000, 0) | {"posting_date": date(2026, 6, 30)},
+        adjustment_line("GJ-LATE-2", "GJ-LATE", "4100", 0, 50000) | {"posting_date": date(2026, 6, 30)},
+    ]
+    late = [row | {"created_at": datetime(2026, 10, 19, tzinfo=UTC)} for row in late]
+    async with with_rows(numbat, "journal_entries", late):
+        result = await gen05(numbat, audit_adjustment_start="2026-10-18T23:00:00Z", entry_nos=["AJE-2026-001"])
+    assert "R06" not in {o.rule_id for o in result.outcomes}
+    assert hits(result, "R06") == ["GJ-LATE-1"]

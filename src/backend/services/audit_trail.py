@@ -24,6 +24,7 @@ class PostgresAuditTrail(Store):
         return TrailEntry.model_validate(rows[0]) if rows else None
 
     async def find_success(self, eid: str, idempotency_key: str) -> TrailEntry | None:
+        """按写入顺序取该键的第一条成功留痕: payload 带 error 或 success 为假的不算成功."""
         rows = await self.rows(
             eid,
             select(audit_trail)
@@ -32,11 +33,7 @@ class PostgresAuditTrail(Store):
         )
         for row in rows:
             payload = row["payload"]
-            if (
-                not payload.get("error")
-                and payload.get("success") is not False
-                and payload.get("status") not in {"failed", "error"}
-            ):
+            if not payload.get("error") and payload.get("success") is not False:
                 return TrailEntry.model_validate(row)
         return None
 

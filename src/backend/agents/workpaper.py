@@ -24,6 +24,7 @@ from backend.agents.judging import (
     judge_all,
     judging_steps,
     judgments_patch,
+    open_findings,
 )
 from backend.agents.review import ReviewAgent
 from backend.contracts.errors import VersionConflict
@@ -45,6 +46,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewRecord,
     ReviewTask,
+    RunTrigger,
     SourceType,
 )
 from backend.contracts.services import JudgmentOutcome
@@ -305,6 +307,18 @@ def mismatch_exception(
     )
 
 
+def increment_findings(state: Any, lines: Sequence[dict[str, Any]]) -> list[AuditException]:
+    """增量扫描 (GEN-05 的增量实例, 需求 R194) 在匹配凭证上的例外: 增量执行 (trigger incremental) 引出而尚未归因的例外
+    (open_findings) 里, detail.entry_no 为匹配行所在凭证的, 按 ID. 接在 V02 之后作该错报判断的规则例外. 纯函数."""
+    incremental = {r.id: r.procedure_id for r in state["procedure_runs"] if r.trigger is RunTrigger.incremental}
+    entries = {r["entry_no"] for r in lines}
+    return [
+        x
+        for x in open_findings(state, set(incremental.values()))
+        if x.run_id in incremental and x.detail.get("entry_no") in entries
+    ]
+
+
 def verification_subject(
     misstatement: Misstatement,
     source: Judgment,
@@ -405,8 +419,9 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
         更正分录的全部行; 逐条错报在代码中匹配 (matched_lines), 算已更正额 (corrected_cents) 与验证载荷
         (verification_update), 对不上时建 V02 例外 (mismatch_exception) 作该对象的规则例外; 当前结果里该错报已有本程序
         尚未归因的 V02 (judging.earlier_findings, 同 CSH-02 的 D01, D04, 需求 R347) 时沿用, 不看本次比对, 不再新建 (对
-        unattributed 任务 rerun 后旧 V02 才有任务指向; 本次对得上也沿用, 同 CSH-02 数据变了不另处理). 再交判断公共流程,
-        成功的判断经 annotate 写上验证载荷. 来源判断不在状态中抛 LookupError."""
+        unattributed 任务 rerun 后旧 V02 才有任务指向; 本次对得上也沿用, 同 CSH-02 数据变了不另处理). 其后接增量扫描在
+        匹配凭证上的例外 (increment_findings, 需求 R194). 再交判断公共流程, 成功的判断经 annotate 写上验证载荷. 来源
+        判断不在状态中抛 LookupError."""
         targets = [m for m in to_verify(ctx.state) if in_scope(ctx, m.id)]
         if not targets:
             return VerifiedRun([])
@@ -428,6 +443,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             if not findings and updates[m.id].status is MisstatementStatus.communicated:
                 exceptions.append(mismatch_exception(ctx, m, source.subject_id, lines, corrected, len(exceptions) + 1))
                 findings.append(exceptions[-1])
+            findings += increment_findings(ctx.state, lines)
             subjects.append(verification_subject(m, source, lines, rows, corrected, findings))
         judged = await judge_all(
             self.deps,

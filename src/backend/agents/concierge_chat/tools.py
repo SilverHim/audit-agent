@@ -303,6 +303,13 @@ async def get_overview(env: ToolEnv, args: NoArgs) -> Found:
             "pending_review_tasks": o.pending_tasks,
             "procedures_total": len(o.procedures),
             "procedures_completed": completed,
+            # 当前阶段的进度与正在运行的程序 (需求 R325): done 为本阶段已结清 (完成或无数据未执行) 的程序数
+            "progress": {
+                "phase": o.progress.phase.value,
+                "done": o.progress.done,
+                "total": o.progress.total,
+                "running": [{"id": pid, "name": procedure_name(env, pid)} for pid in o.progress.running],
+            },
             "materiality": aud(o.materiality_cents),
             "performance_materiality": aud(o.performance_materiality_cents),
             "clearly_trivial_threshold": aud(o.clearly_trivial_cents),
@@ -719,7 +726,8 @@ async def search_trail(env: ToolEnv, args: TrailArgs) -> Found:
 TOOLS: tuple[Tool, ...] = (
     Tool(
         "get_overview",
-        "项目总览: 客户, 审计期间, 所处阶段, 是否在执行, 停在哪个阶段决定, 各程序状态, 待复核数, 重要性水平, 意见类型.",
+        "项目总览: 客户, 审计期间, 所处阶段, 是否在执行, 停在哪个阶段决定, 各程序状态, 当前阶段的进度 (已结清/总数) 与"
+        "正在运行的程序, 待复核数, 重要性水平, 意见类型.",
         NoArgs,
         get_overview,
         {"zh": "查看项目进度", "en": "Checking engagement progress"},

@@ -1,0 +1,24 @@
+{
+  "hard": {
+    "GEN-02": {
+      "XJ-499": {
+        "judgment_id": "J-GEN-02-1-XJ-499",
+        "proposed_action": "misstatement",
+        "amount_cents": 75000,
+        "direction": "overstated",
+        "assertion": "Existence",
+        "account_any": ["710", "Office equipment"]
+      },
+      "XJ-397": {"misstatement": false},
+      "XJ-405": {"misstatement": false},
+      "XJ-430": {"misstatement": false},
+      "XJ-449": {"misstatement": false},
+      "XJ-601": {"misstatement": false}
+    }
+  },
+  "soft": {
+    "GEN-02": {
+      "XJ-575": {"proposed_action": "more_evidence"}
+    }
+  }
+}

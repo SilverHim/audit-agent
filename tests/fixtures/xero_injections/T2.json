@@ -1,0 +1,82 @@
+{
+  "scenario": "T2",
+  "title": "Duplicate invoice not reversed: credit note CR1003 for the duplicate ORC1003 is voided, so its posting (JournalNumber 430) is gone",
+  "ops": [
+    {
+      "op": "delete",
+      "file": "api/journals.json",
+      "match": {"JournalNumber": 430},
+      "before": {
+        "JournalID": "048c01b8-1cf4-51f8-a5db-6f00843db7e1",
+        "JournalDate": "/Date(1785024000000+0000)/",
+        "JournalNumber": 430,
+        "CreatedDateUTC": "/Date(1791079066283+0000)/",
+        "Reference": "Hamilton Smith Pty",
+        "JournalLines": [
+          {
+            "JournalLineID": "31975a8d-8bac-5390-a3b0-739fc7423fa6",
+            "AccountID": "e2bacdc6-2006-43c2-a5da-3c0e5f43b452",
+            "AccountCode": "200",
+            "AccountType": "REVENUE",
+            "AccountName": "Sales",
+            "Description": "",
+            "NetAmount": 500.0,
+            "GrossAmount": 500.0,
+            "TaxAmount": 0.0
+          },
+          {
+            "JournalLineID": "70113f52-a567-5513-923b-1a37b57b972e",
+            "AccountID": "3dd5c80d-e109-4313-8c61-41648e33704f",
+            "AccountCode": "610",
+            "AccountType": "CURRENT",
+            "AccountName": "Accounts Receivable",
+            "Description": "",
+            "NetAmount": -550.0,
+            "GrossAmount": -550.0,
+            "TaxAmount": 0.0
+          },
+          {
+            "JournalLineID": "2d816110-d7cb-5e3b-9810-f87be80c7a34",
+            "AccountID": "66e60a82-99d8-47d1-956b-5baea404acba",
+            "AccountCode": "820",
+            "AccountType": "CURRLIAB",
+            "AccountName": "GST",
+            "Description": "",
+            "NetAmount": 50.0,
+            "GrossAmount": 50.0,
+            "TaxAmount": 0.0
+          }
+        ],
+        "SourceType": "ACCRECCREDIT",
+        "SourceID": "371cd138-1e5c-4ec1-a8c6-a1c10e8bdab1"
+      }
+    },
+    {
+      "op": "set",
+      "file": "api/credit_notes.json",
+      "match": {"CreditNoteNumber": "CR1003"},
+      "field": "Status",
+      "before": "PAID",
+      "after": "VOIDED"
+    },
+    {
+      "op": "set",
+      "file": "api/invoices.json",
+      "match": {"InvoiceID": "4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4"},
+      "field": "Status",
+      "before": "PAID",
+      "after": "AUTHORISED"
+    },
+    {
+      "op": "set",
+      "file": "api/invoices.json",
+      "match": {"InvoiceID": "4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4"},
+      "field": "AmountDue",
+      "before": 0.0,
+      "after": 550.0
+    },
+    {"op": "tb_shift", "code": "200", "delta_cents": -50000},
+    {"op": "tb_shift", "code": "610", "delta_cents": 55000},
+    {"op": "tb_shift", "code": "820", "delta_cents": -5000}
+  ]
+}

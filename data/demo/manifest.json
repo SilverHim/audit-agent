@@ -208,11 +208,11 @@
       "sha256": "c0062c68aba9058b7809877944eb2f9a4badf66b5da87cd78d07d6ee8a3f6191"
     },
     {
-      "path": "llm/RPT-03/r1.json",
+      "path": "llm/RPT-03/qualified-r1.json",
       "sha256": "c018d35e4376529f96272834ea6c1907555a33bc178a0454355a1a63a447f7d5"
     },
     {
-      "path": "llm/RPT-03/r2.json",
+      "path": "llm/RPT-03/qualified-r2.json",
       "sha256": "5f62a988119f7a29cfab531688ad06231a438b1ee830e682660766fec7747800"
     },
     {

@@ -67,8 +67,9 @@ from tests.fakes import (
     make_run,
     wait_idle,
 )
+from tests.interrupts import kill
 from tests.test_e2e_mock import start_demo
-from tests.test_e2e_restart import kill, restart
+from tests.test_e2e_restart import restart
 from tests.xero_fakes import (
     XERO_DATASET,
     XeroFakeEvidenceStore,
@@ -992,7 +993,7 @@ async def test_restart_after_third_query_recovers_without_requery() -> None:
     registry, trail = numbat_chain_registry(), PausingTrail()
     s = await start_demo(trail=trail, features=features, registry=registry)
     await asyncio.wait_for(trail.paused.wait(), timeout=10)
-    await kill(s)
+    await kill(s.runner, EID)
     s = await restart(s)
     await wait_idle(s.runner, EID)
     assert s.runner.run_error(EID) is None and await s.next_nodes() == ("await_events",)

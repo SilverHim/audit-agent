@@ -40,6 +40,7 @@ from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ConfirmationExtraction, DocumentClassification, ReportDraft
 from backend.contracts.models import (
     AuditException,
+    AutonomyLevel,
     ConfirmationResult,
     CriticReasonCode,
     CriticVerdict,
@@ -84,6 +85,7 @@ from tests.test_knowledge import document_pointers
 from tests.xero_fakes import (
     ORC1026,
     XERO_RULES,
+    fixture_judgment,
     make_xero_deps,
     xero_contracts,
     xero_engagement,
@@ -991,7 +993,8 @@ def test_rev02_confirm_attributes_the_receipt_finding(revenue: Revenue) -> None:
     )
 
 
-# ── 只开现有 17 条路径的 RPT-03 两稿 (需求 R117): 由 R118 的分层 mock 排在运行副本之前, 其余程序读运行副本 ──
+# ── RPT-03 两稿: 只开现有 17 条路径的无保留意见 (需求 R117) 由 R118 的分层 mock 排在运行副本之前, 其余程序读运行副本;
+# 正本按意见类型各有两稿 (需求 R260): 保留意见供演示走通, 无保留意见同 only17, 供应用里只开现有程序时 ──
 
 # 正本的另一个根; manifest 等同 XERO (补造目录)
 ONLY17 = replace(XERO, name="xero_only17", fixtures=XERO.fixtures.with_name("llm_xero_only17"))
@@ -1002,34 +1005,50 @@ FRAMEWORK = (
 )
 
 
-def only17_report(revision: int) -> ReportDraft:
-    path = ONLY17.fixtures / "RPT-03" / f"r{revision}.json"
+def xero_report(fs: FixtureSet, opinion: OpinionType, revision: int) -> ReportDraft:
+    """RPT-03 第 revision 稿的固定输出 (fixture_key 为 {意见类型}-r{修订号})."""
+    path = fs.fixtures / "RPT-03" / f"{opinion.value}-r{revision}.json"
     return ReportDraft.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 @pytest.mark.external  # document 指针核对取补造的 manifest
 def test_only17_fixtures_are_valid() -> None:
-    """目录里恰为 RPT-03 的 r1, r2 两份, 按 fixture_problems 合格: 能按 RPT-03 的输出模型解析, document 指针在补造
-    manifest 中且页码不超过页数 (ReportDraft 现在没有指针字段, 防以后加了引错). 目录缺失时 fixture_problems 不报,
-    所以先核对文件清单."""
-    assert sorted(f"{p.parent.name}/{p.stem}" for p in ONLY17.fixtures.glob("*/*.json")) == ["RPT-03/r1", "RPT-03/r2"]
+    """目录里恰为 RPT-03 无保留意见的两稿 (fixture_key 为 {意见类型}-r{修订号}), 按 fixture_problems 合格: 能按
+    RPT-03 的输出模型解析, document 指针在补造 manifest 中且页码不超过页数 (ReportDraft 现在没有指针字段, 防以后加了
+    引错). 目录缺失时 fixture_problems 不报, 所以先核对文件清单."""
+    assert sorted(f"{p.parent.name}/{p.stem}" for p in ONLY17.fixtures.glob("*/*.json")) == [
+        "RPT-03/unqualified-r1",
+        "RPT-03/unqualified-r2",
+    ]
     assert fixture_problems(ONLY17) == []
 
 
+@pytest.mark.parametrize(
+    ("fs", "opinion", "sources"),
+    [
+        pytest.param(ONLY17, OpinionType.unqualified, [], id="only17_unqualified"),
+        pytest.param(XERO, OpinionType.unqualified, [], id="unqualified"),
+        pytest.param(XERO, OpinionType.qualified, [("CSH-02", "BA-091"), ("GEN-02", "XJ-499")], id="qualified"),
+    ],
+)
 @pytest.mark.external  # 单位名称与期末取补造画像与快照
-def test_only17_reports_are_unqualified() -> None:
-    """r1 为无保留意见的两段: 经 report_checks (引用与语义两级, 没有可引用的判断) 通过, 不引判断 (报告的
-    judgment_refs 为空); 单位名称与期末同补造画像与快照; 没有持续经营段与其他事项段. r2 回应 R119 的 RPT-01 退回
-    批注 (基础段写明编制框架): 只在基础段正文开头加 FRAMEWORK 一句, 意见段与其余文字不变 (同 Numbat r2 的写法)."""
-    r1, r2 = only17_report(1), only17_report(2)
-    ctx = ValidationContext(opinion=OpinionType.unqualified, standards_of=None)
+def test_xero_reports(fs: FixtureSet, opinion: OpinionType, sources: list[tuple[str, str]]) -> None:
+    """Xero 的 RPT-03 两稿: xero17 走通 (FIN-01 选无保留) 读 only17 的无保留意见; 演示走通 (需求 R260: 两笔未更正
+    错报合计超过整体重要性, FIN-01 选保留) 读正本的保留意见; 应用里只开现有程序 (只有 BA-091 一笔错报, FIN-01 选
+    无保留) 读正本的无保留意见. r1 经 report_checks (引用与语义两级) 通过: 可引用的
+    判断为两笔错报的来源判断 (第 2 版 confirmed), 引用键恰为这些; 单位名称与期末同补造画像与快照; 没有持续经营段与
+    其他事项段. r2 回应 RPT-01 的退回批注 (XERO17_ANNOTATION: 基础段写明编制框架): 只在基础段的标准段落前加
+    FRAMEWORK 一句, 意见段, 引用与其余文字不变 (同 Numbat r2 的写法)."""
+    r1, r2 = xero_report(fs, opinion, 1), xero_report(fs, opinion, 2)
+    judgments = [fixture_judgment(pid, subject, AutonomyLevel.L2) for pid, subject in sources]
+    ctx = ValidationContext(opinion=opinion, judgments=judgments, standards_of=None)
     assert [report_checks(r, ctx, LIBRARY.report_headings("en")) for r in (r1, r2)] == [(None, [])] * 2
-    assert r1.judgment_keys == r2.judgment_keys == []
+    assert r1.judgment_keys == r2.judgment_keys == [f"{pid}:{subject}" for pid, subject in sources]
     period = LIBRARY.report_date(xero_engagement().period_end, "en")
     assert f"the financial report of {xero_profile().legal_name} (the Company)" in r1.opinion
     assert r1.opinion.count(f"as at {period}") == 2
     for text in (r1.opinion, r1.basis_for_opinion, r2.basis_for_opinion):
         assert "going concern" not in text.lower() and "other matter" not in text.lower()
     assert "Simplified Disclosures" not in r1.basis_for_opinion
-    assert r2.basis_for_opinion.startswith(f"Basis for Opinion\n\n{FRAMEWORK}We conducted")
+    assert r2.basis_for_opinion.count(f"\n\n{FRAMEWORK}We conducted our audit") == 1
     assert r2.opinion == r1.opinion and r2.basis_for_opinion.replace(FRAMEWORK, "") == r1.basis_for_opinion
