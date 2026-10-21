@@ -1,0 +1,1537 @@
+From 58807911db43b63591e5b15d80f0e10b4a4892a7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 03:15:27 +0000
+Subject: [PATCH] =?UTF-8?q?wip:=20R141=20GEN-01=20=E5=85=B3=E8=81=94?=
+ =?UTF-8?q?=E6=96=B9=E5=AE=8C=E6=95=B4=E6=80=A7=E7=BB=88=E5=AE=A1=20(?=
+ =?UTF-8?q?=E6=9C=AA=E5=AE=8C)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ .../llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json   | 266 ++++++++++
+ data/xero_demo/20261017-q1/manifest.json      |   7 +
+ ...45\345\217\243\346\226\207\346\241\243.md" |  16 +-
+ src/backend/agents/fieldwork.py               |  78 ++-
+ src/backend/agents/judging.py                 |  14 +
+ src/backend/knowledge/procedures/GEN-01.yaml  |  32 ++
+ src/backend/knowledge/prompts/GEN-01.md.j2    | 109 ++++
+ src/backend/knowledge/workpapers.yaml         |   2 +-
+ src/frontend/src/locales/en.ts                |   1 +
+ src/frontend/src/locales/zh.ts                |   1 +
+ .../GEN-01/CLIENT-XERO-3C1332BB-Q1.json       | 266 ++++++++++
+ tests/test_autonomy_policy.py                 |   2 +-
+ tests/test_fieldwork_gen01.py                 | 477 ++++++++++++++++++
+ tests/test_knowledge.py                       |  12 +-
+ 14 files changed, 1250 insertions(+), 33 deletions(-)
+ create mode 100644 data/xero_demo/20261017-q1/llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+ create mode 100644 src/backend/knowledge/procedures/GEN-01.yaml
+ create mode 100644 src/backend/knowledge/prompts/GEN-01.md.j2
+ create mode 100644 tests/fixtures/llm_xero/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+ create mode 100644 tests/test_fieldwork_gen01.py
+
+diff --git a/data/xero_demo/20261017-q1/llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json b/data/xero_demo/20261017-q1/llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+new file mode 100644
+index 0000000..70f0a01
+--- /dev/null
++++ b/data/xero_demo/20261017-q1/llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+@@ -0,0 +1,266 @@
++{
++  "conclusion": "Management's declaration of related parties lists Alex Morgan and Morgan Advisory Pty Ltd but omits Victoria Property Agency Pty Ltd (VPA), which GEN-03 identified as a related party through Alex Morgan's directorship and 50% shareholding, so the declaration is incomplete. Under ASA 550 para 22, management is to be requested to identify all transactions with VPA, the auditor is to enquire why the entity's controls failed to identify or disclose the relationship, and the risk that other undisclosed related parties exist is to be reconsidered; the written representations on related parties required by para 26 are to be obtained in FIN-07. Para 27 applies \"Unless all of those charged with governance are involved in managing the entity\": the sole director, Alex Morgan, is also management, so that condition holds and the communication requirement of para 27 does not apply. If management does not add VPA to the related party disclosures, the opinion is to be modified under para Aus 27.2.",
++  "reasoning_chain": [
++    {
++      "kind": "fact",
++      "text": "Management's declaration of related parties lists Alex Morgan (sole director and 85% shareholder) and Morgan Advisory Pty Ltd (company controlled by the director); Victoria Property Agency Pty Ltd is not in it.",
++      "evidence": [
++        {
++          "type": "voucher",
++          "source_type": "client_profile",
++          "source_id": "CLIENT-XERO-3C1332BB-Q1",
++          "locator": "related_parties",
++          "page": null,
++          "reliability": "internal_copy"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "The auditor enquires of management the identity of the entity's related parties and the nature of the relationships (ASA 550 para 13); the declaration is the result of that enquiry.",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P13",
++          "locator": "para 13",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "Alex Morgan holds 85 of the 100 shares of Demo Company (AU) Pty Ltd (85%).",
++      "evidence": [
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-c15d981bf4f9",
++          "locator": "shareholders[0]",
++          "page": 2,
++          "reliability": "external_original"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "Alex Morgan is a director of Victoria Property Agency Pty Ltd and holds 50% of its shares.",
++      "evidence": [
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-d7305364b2ae",
++          "locator": "officeholders[1]",
++          "page": 1,
++          "reliability": "external_original"
++        },
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-d7305364b2ae",
++          "locator": "shareholders[1]",
++          "page": 2,
++          "reliability": "external_original"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "Victoria Property Agency Pty Ltd is a related party identified in the audit (the confirmed GEN-03 judgment J-GEN-03-1-ACN-900043030) that the declaration omits; Morgan Advisory Pty Ltd, the other company in the ownership graph, is declared. The declaration is therefore incomplete.",
++      "evidence": [],
++      "from_steps": [
++        0,
++        1,
++        2,
++        3
++      ]
++    },
++    {
++      "kind": "standard",
++      "text": "For related parties that management has not identified or disclosed, the auditor requests management to identify all transactions with them, enquires why the entity's controls failed to identify or disclose them, and reconsiders the risk that other undisclosed related parties exist (ASA 550 para 22(b) and (d)).",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P22",
++          "locator": "para 22",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "The auditor obtains written representations from management that they have disclosed the identity of the entity's related parties and all the relationships and transactions of which they are aware (ASA 550 para 26); these are obtained in FIN-07.",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P26",
++          "locator": "para 26",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "The client profile records the board as the governing body, with one member, Alex Morgan, who is also involved in management, and records that all of those charged with governance are involved in managing the entity.",
++      "evidence": [
++        {
++          "type": "voucher",
++          "source_type": "client_profile",
++          "source_id": "CLIENT-XERO-3C1332BB-Q1",
++          "locator": "governance",
++          "page": null,
++          "reliability": "internal_copy"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "ASA 550 para 27: \"Unless all of those charged with governance are involved in managing the entity, the auditor shall communicate with those charged with governance significant matters arising during the audit in connection with the entity's related parties.\"",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P27",
++          "locator": "para 27",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "All of those charged with governance are involved in managing the entity, so the condition in para 27 holds and its communication requirement does not apply.",
++      "evidence": [],
++      "from_steps": [
++        7,
++        8
++      ]
++    },
++    {
++      "kind": "standard",
++      "text": "If the related party disclosures in the financial report do not satisfy the requirements of the framework, the auditor modifies the opinion in accordance with ASA 705 (ASA 550 para Aus 27.2).",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-Aus27.2",
++          "locator": "para Aus 27.2",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "The declaration omits Victoria Property Agency Pty Ltd, so more evidence is needed: the follow-up under para 22 and the written representations in FIN-07; para 27 does not apply, and the opinion is to be modified under para Aus 27.2 if the disclosures do not include VPA.",
++      "evidence": [],
++      "from_steps": [
++        4,
++        5,
++        6,
++        9,
++        10
++      ]
++    }
++  ],
++  "evidence": [
++    {
++      "type": "voucher",
++      "source_type": "client_profile",
++      "source_id": "CLIENT-XERO-3C1332BB-Q1",
++      "locator": "related_parties",
++      "page": null,
++      "reliability": "internal_copy"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P13",
++      "locator": "para 13",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-c15d981bf4f9",
++      "locator": "shareholders[0]",
++      "page": 2,
++      "reliability": "external_original"
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-d7305364b2ae",
++      "locator": "officeholders[1]",
++      "page": 1,
++      "reliability": "external_original"
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-d7305364b2ae",
++      "locator": "shareholders[1]",
++      "page": 2,
++      "reliability": "external_original"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P22",
++      "locator": "para 22",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P26",
++      "locator": "para 26",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "voucher",
++      "source_type": "client_profile",
++      "source_id": "CLIENT-XERO-3C1332BB-Q1",
++      "locator": "governance",
++      "page": null,
++      "reliability": "internal_copy"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P27",
++      "locator": "para 27",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-Aus27.2",
++      "locator": "para Aus 27.2",
++      "page": null,
++      "reliability": null
++    }
++  ],
++  "counter_argument": "A declaration by management that already lists Victoria Property Agency Pty Ltd (for example an updated declaration not yet recorded in the client profile) would make the declaration complete, leaving only the transactions identified in GEN-03 to follow up.",
++  "proposed_action": "more_evidence",
++  "misstatement_draft": null,
++  "self_confidence": 0.8
++}
+diff --git a/data/xero_demo/20261017-q1/manifest.json b/data/xero_demo/20261017-q1/manifest.json
+index cba5117..78696be 100644
+--- a/data/xero_demo/20261017-q1/manifest.json
++++ b/data/xero_demo/20261017-q1/manifest.json
+@@ -739,6 +739,13 @@
+       "generator": "data/generate_xero_demo.py",
+       "xero_refs": []
+     },
++    {
++      "path": "llm/GEN-01/CLIENT-XERO-3C1332BB-Q1.json",
++      "sha256": "43ef65eae13f1de6792f40ed167d30f4239eef89dc838972b0b04bc76644be0d",
++      "synthetic": true,
++      "generator": "data/generate_xero_demo.py",
++      "xero_refs": []
++    },
+     {
+       "path": "llm/GEN-02/XJ-397.json",
+       "sha256": "3d6881ac40ae3b31f0628df83e4b2ae90513565807c4fc6973f708ae841d077b",
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index 8bd2f6c..6ef29ae 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -2641,13 +2641,13 @@ class ProcedureAgent[F](ABC):          # F：execute 产出的原始发现类型
+ | A3 | `IngestAgent` | DOC-04、DOC-06 | documents、confirmations、review_tasks；合同经 `save_contract` 写入 |
+ | A4 | `RiskAssessorAgent` | PLN-07、PLN-01；PLN-15（功能 planning，需求 R204；未启用时注册表不映射，A4 只负责前两条；按程序编号分派到 `agents/audit_plan`，见下文 PLN-15 段） | analytics、materiality_candidates、audit_objectives、risk_register、exceptions；PLN-15：audit_plans |
+ | A5 | `EvidenceAgent` | CSH-04、GEN-07（功能 going_concern）、GEN-08（功能 related_parties） | CSH-04：confirmations、documents；GEN-07：exceptions（需求 R177，见下文 GEN-07 段）；GEN-08：ownership_graph、exceptions、documents（需求 R137，见下文 GEN-08 段）；另可写 representation_letter（FIN-07，需求 R215 登记，程序由 R228 加） |
+-| A6 | `FieldworkAgent` | REV-08、REV-03、REV-02、CSH-05、CSH-02、GEN-05、GEN-02（后两条属功能 journals）、GEN-03（功能 related_parties，需求 R139）、GEN-06（功能 going_concern，需求 R179；取对象在 `agents/going_concern.py`；凭证号自然序与分录行、规则行转 JSON 形式的写法在 `agents/journals.py`，A8 同用） | exceptions、judgments、review_tasks、confirmations |
++| A6 | `FieldworkAgent` | REV-08、REV-03、REV-02、CSH-05、CSH-02、GEN-05、GEN-02（后两条属功能 journals）、GEN-03、GEN-01（功能 related_parties，需求 R139、R141）、GEN-06（功能 going_concern，需求 R179；取对象在 `agents/going_concern.py`；凭证号自然序与分录行、规则行转 JSON 形式的写法在 `agents/journals.py`，A8 同用） | exceptions、judgments、review_tasks、confirmations |
+ | A7 | `ReviewAgent` | GEN-09（不单独派发，由 A6 同步调用） | 无；结果写在 A6 的判断上 |
+ | A8 | `WorkpaperAgent`（需求 R158） | FIN-03（功能 misstatement，见下文 FIN-03 段）；FIN-09（同，见下文 FIN-09 段，需求 R165）；人工程序 FIN-08 的模板 owner（manual_procedures，见下文 FIN-08 段，需求 R161） | FIN-03、FIN-09：judgments、review_tasks（判断带分类或验证载荷 misstatement_update；不建任务而自动确认（L3 及以上）时另有按载荷写出的错报新版本 misstatements，需求 R159；没有判断对象时只有 procedure_runs）；FIN-09 另有 V02 exceptions（分录与错报对不上时）；写入范围另有 misstatements（分类、沟通结果与验证结果，第 2.5 节迁移表） |
+ | A9 | `QCAgent` | FIN-04 | uncorrected_schedule；另可写 compliance_checks、exceptions、review_tasks（FIN-10、FIN-18，需求 R215 登记，程序由 R229、R230 加；FIN-12 随 Issue #46 取消） |
+ | A10 | `ConciergeAgent` | RPT-03；人工程序的派发（engine manual 且不是闸门，需求 R93） | report_versions、review_tasks；另可写 governance_communications（RPT-07）、independence_declaration（RPT-08）（需求 R215 登记，程序由 R234、R233 加）；对话入口另见第 6.1 节 |
+ 
+-关联方的另一条程序（GEN-01，功能 related_parties，见 Demo需求文档第 2 节）还没有实现，不在上表；其判断对象与 data 由需求 R141 落地时在本节补写。GEN-03 见下文 GEN-03 段（需求 R139）。
++GEN-03、GEN-01 见下文各自的段（需求 R139、R141）。
+ 
+ A6 的 GEN-05 全量分录扫描（需求 R131、R132，功能 journals，P2 固定集）与 REV-08、CSH-05 一样是纯规则程序：调规则引擎，例外原样返回，不作判断，不建复核任务，由 GEN-02 引用归因；执行前检查命中而没有执行的规则记进执行记录终态的 rule_outcomes。规则与口径写在 GEN-05.yaml 的注释里：初始实例只取 posting_date 在审计期间内的分录；每条规则每笔凭证至多一条例外（R12 按发票），source_id 取该凭证命中行中金额最大的行（并列取 ID 小的），例外按（posting_date，凭证号自然序，凭证号原文）编号（自然序的数字段以 10 位为限）；录入时间按参数 timezone（Australia/Sydney）换算；作废对（冲回凭证与原凭证，按数据集声明的 reversal_reference_pattern、reversal_entry_no_template 识别，不看 is_adjustment）的 WITH 段写在 "作废对共用段" 起止标记之间，与 CSH-02 的 D03、D04 逐字相同（`tests/test_knowledge.py` 守住）；新规则 R09 至 R12 只出金额超过明显微小的例外；往来名称比较用 SQL 函数 party_name_key（第 9 节），前缀取数据集声明的 counterparty_prefixes，公司后缀为参数 entity_suffixes。贷项凭证（R10、R12 共用的口径）：同一凭证借记 revenue 分类且贷记 receivables 分类，不涉 cash 分类，不是作废对；应收净贷方 credited_cents 为其 receivables 分类行的贷方减借方之和。增量实例由 JR-6c 补。
+ 
+@@ -2673,7 +2673,7 @@ A2 的 ACC-04 按项目采用的画像查 ABN 与 ASIC（`RegistrySource`），
+ 
+ 新建的客户（项目没有数据集，需求 R290）有四项：ABN 两项同上；company_registered 与 directors_match 用 ABN 登记的 ACN 取上传的 ASIC 摘录（`RegistrySource.asic_extract`，最新一版抽取结果），不写读摘录的留痕（上传、分类与抽取已由 A3 留痕），检查的证据指向摘录文件（source_type document，locator 为所依据的字段，页码取抽取时该字段的指针，可靠性取文件现在的登记：上传缺省 external_copy，补登记可改）。company_registered：摘录状态为 Registered，且名称与画像法定名称规范化后相同（同 name_match 的规范化），指针在状态不对或都对时指向 status，名称不同时指向 name；directors_match：画像 directors 与摘录中 role 为 director 的姓名集合规范化后相同（秘书不比），不一致时 detail 列出两边各多出的姓名，指针指向 officeholders。不通过的同样各出一条例外（rule_id 为检查名）。ABN 查不到或登记没有 ACN（不是公司，不要求摘录）时两项待人工确认，指针指向那次 ABN 查询（locator acn）；没有对得上的可用摘录，而一份可用的都没有（标了客户无此类资料，或抽取没成）或另有已上传而没能读出的（对得上的那份可能正是没读出的；RegistryUnavailable no_extract）时写一条 "没有查询" 的摘录留痕（摘要 "ASIC extract {acn}: no_extract, manual confirmation"），两项待人工确认，不出例外，detail 写明没能读出的份数（"n uploaded ASIC extract(s) could not be read"）；摘录都读出了而 ACN 都对不上时 company_registered 不通过，directors_match 待人工确认。ABN 查不了时四项都待人工确认。数据集客户（Numbat、Xero）仍是三项，不变。新客户是公司而还没有摘录时，主图在 ACC-04 之前等摘录（p0_inputs，见第 3 节）。
+ 
+-A6 的判断程序（REV-03、REV-02、CSH-02、GEN-02、GEN-03、GEN-06）共用一套流程，各程序只负责选出判断对象（对象 ID、提示词要的 data、该对象的规则例外当前版本，可另带本项目采用版本的客户画像 `Subject.client_profile`，进 JudgmentContext.client_profile，推理链可引用它，需求 R128；GEN-03 带，其余不带；FIN-09 另带 `Subject.expected_residual_cents`、`entry_account_codes`，原样进 JudgmentContext，需求 R165）：rerun_subject_ids 非空时只留其中的对象；本程序仍有待决复核任务的对象（带 subject_id 的 unattributed 任务，或以其判断为目标的 normal 任务）已交人处理，不再重判（重判会让其例外升版，旧任务过期，整次结果被合并校验拒绝）；JudgmentContext.task 为 {params: Run 的参数快照, risks: Procedure.objective_ids 下的 RiskItem}（均为 JSON 形式，日期为字符串），fixture_key 取 `Subject.fixture_key`，缺省为对象 ID（FIN-03 取来源判断的对象，需求 R158），autonomy_level 为 Procedure 的运行时级别；各对象并发调 `JudgmentEngine.judge`，performed_by 为 Engagement.owner_id。流程在 `agents/judging.py`（A6 与 A8 的 FIN-03、FIN-09 共用，需求 R158、R165：Subject、Judged、subjects_awaiting_review、in_scope、open_findings、earlier_findings、JudgingSteps、judge_all、judgments_patch；fieldwork 再导出前几个名字。open_findings 取当前结果中给定程序尚未归因的例外，按 ID 排序，REV-02、GEN-03、CSH-02、GEN-02（判断对象）、GEN-06 取前置程序的例外与 earlier_findings 都经它，不另写这一过滤），插入点顺序固定：judge →（可选）程序自己补字段（`judge_all` 的 annotate：只对成功的判断调用，收 JudgmentOutcome 返回补了字段的 Judgment，不能改 ID、版本、autonomy_level、downgrade_reasons 与 critic 字段，调用后断言；FIN-03 写分类载荷，见 FIN-03 段）→ A7 `ReviewAgent.review` 独立复核（见下）→ 判断级降级（`JudgingSteps.downgrade`，规格书第 7.4 节，在 A7 之后）→ `ReviewQueue.classify` → `make_task`。降级收到的判断已带 critic 字段，另收该对象的规则例外（同 A7 收到的）；步骤由 `judging_steps(deps)` 按功能选：功能 autonomy 关闭时为 DEFAULT_STEPS（原样返回），打开时为 `judging.downgrade`（需求 R170，按 `autonomy_policy.judgment_level` 改写判断第 1 版的 autonomy_level 与 downgrade_reasons，取数见第 5 节“自主度降级”的接入一条），A7 读的仍是程序的运行时级别；classify 的关键证据缺失一项由 `judging.checks_key_evidence(deps)` 定（功能 autonomy 打开时为真，judgments_patch 传给 classify 的 key_evidence，不随步骤传）；判断失败的对象（failed、unattributed）不经复核与降级；规则程序（REV-08、CSH-05）不进本流程。按 classify 处理：normal 或 dispute 时判断待复核，以判断 v1 为目标建该类任务；不需要人时判断第 1 版即 confirmed，其 exception_ids 中的例外经 `attribute_exceptions` 出 attributed 新版本，带 misstatement_update 的（FIN-03）另按载荷写出所指错报的新版本（`review_queue.misstatement_updates`，错报取状态中的，片段另有 misstatements，只在有时带；需求 R159）；unattributed 时第一条规则例外出 unattributed 新版本，以新版本为目标建带 subject_id 的任务（这两处本次执行刚建、还没写入的例外不另出新版本，直接写在第 1 版上，见下文 CSH-02）；failed 时以本次 Run 为目标建带 subject_id 的任务。本次刚建的例外（`judgments_patch` 的 created：CSH-02 的 D01、D04，FIN-09 的 V02）依次排在片段 exceptions 前面，已归因或标为未归因的换成写好的那一版，再接其余例外的新版本。个别对象失败不算整次失败，Run 为 succeeded。各程序的判断对象：REV-03 为 `FinancialDataStore.contracts` 中的全部合同（按合同编号排序），data 为 {contract, document}，document 取该合同的文件登记（以存储的当前登记为准，同上）（不在状态中时报错），无规则例外。REV-02 为规则 S01 选中的发票加前置程序（REV-08）尚未归因的例外所指的发票（R01、R02、R03 都算），去重后按发票 ID 排序（只看当前结果，过期重跑取代的执行的例外不算，第 3 节）；data 为 invoice 与 delivery_notes（`FinancialDataStore.sales_invoices`、`delivery_notes`，带 source_type，发运单按 ID 排序）、journal_lines（需求 R100：该发票过账分录的全部行，invoice.journal_entry_id 经 `record(journal_entry, id)` 得凭证号，再 `journal_entries(entry_nos=...)` 一次取齐，按行 ID 排序；每行为 source_type journal_entry 加分录行各列，另带 `accounts(codes)` 的 account_name 与 account_category，科目表里没有的为 null；journal_entry_id 为空时为 []，指向的行查不到报错；提示词的错报金额取其中 account_category 为 revenue 的行，不含 GST，被引用的行金额由 supported_amounts 计入）、contract（`FinancialDataStore.contracts`）、document（该合同的文件登记，以 `FinancialDataStore.documents` 的当前登记为准，见下）与 contract_judgment（状态中当前结果（第 3 节）里该合同未被推翻的 REV-03 判断中 created_at 最新的一条，取 id、conclusion、review_status），发票没有合同时后三项为 null；发票、发票指向的分录行、合同或合同文件查不到时报错；规则例外为该发票上 REV-08 尚未归因的例外（按 ID 排序）。CSH-02 先做规则部分（D01、D04，在代码中做，见 CSH-02.yaml 注释）：逐个当前的函证（同 DOC-06，`evidence.current_confirmations`；按银行账户 ID 排序）比较回函余额与本期试算表中该账户总账科目的余额，函证出新版本写 book_balance_cents、difference_cents（回函减账面）与 result（相等为 agreed，否则 difference）；不等时建 D01 例外 X-CSH-02-{run_no}-D01-{n}（n 按账户 ID 排序编号，severity medium，金额为回函减账面，证据为函证中回函余额所在页的指针（按回函当前的文件登记经 `judgment_engine.document_pointer` 改写种类与可靠性，不沿用 DOC-06 当时写进函证的值；页码不在登记页数内的照原样，需求 R90）与试算表科目指针）；回函写明的应计利息（Confirmation.accrued_interest_cents，需求 R104）不为空、绝对值超过 clearly_trivial_cents（等于不算），而规则 D04 的行（窗口 [期末 - lookback_days, 期末] 内全部科目的分录行，同 D03 剔除作废对）中没有借方或贷方等于其绝对值的行时，建 D04 例外 X-CSH-02-{run_no}-D04-{n}（n 在 D04 内按账户 ID 排序编号，severity medium，金额为应计利息（带符号），detail 为 accrued_interest_cents、search_from、search_to 与 matched_line_ids（建例外时恒为空），证据为函证中应计利息所在页的指针，改写同 D01 的回函页），函证结果不变（余额相符的仍为 agreed）；函证还没有回函余额时报错；账户的筛选同判断对象（rerun_subject_ids 与已交人处理的对象）。D03、D04 剔除作废对：冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证，原凭证号为 reversal_entry_no_template 填入第一个捕获组，两者的行都不要；pattern 为空（数据集没有声明）时不剔除；pattern 由 DatasetTraits 按 Python re 校验，在规则 SQL 里按 PostgreSQL 正则执行，须写成两边通用的写法。再对有例外的账户判断：判断对象为有 D01 或 D04 的账户（按账户 ID，每个账户一次），data 为 bank_account（带 source_type）、confirmation（本次的新版本）、reply_document（回函的文件登记，以存储的当前登记为准，同上）、book_balance_cents、difference_cents、subsequent_transactions 与 period_end_entries（规则 D02、D03 返回的行按 bank_account_id 切给该账户，JSON 形式）；规则例外为前置程序（depends_on，即 CSH-05）在该账户上尚未归因的例外（当前结果，按 ID 排序）再加本次在该账户上的 D01、D04（依次）。CSH-02 的模板 always_review 为真，判断一律建 normal 任务。D01、D04 是本次刚建的（`judgments_patch` 的 created）：判断失败时 unattributed、自动关闭时 attributed 都直接写在它们的第 1 版上，不另出新版本，任务以 v1 为目标，片段里同一例外只有一个版本（需求 R322）。当前结果里该账户已有本程序尚未归因的 D01、D04 时沿用，不再新建（需求 R347，审核 R347-02、R347-11）：比对照做（函证照样出新版本），沿用的是此前执行本程序在该账户上出的 D01、D04 中尚未归因的（第 1 版 open 或判断失败时置的 unattributed 版本；已归因的不带回，按规则、ID 排序，`judging.earlier_findings`，与 FIN-09 的 V02 共用），作规则例外交判断；它们不是 created，判断确认时给同一 ID 出 attributed 新版本，再失败时第一条出 unattributed 新版本。若照常新建（ID 带 run_no），此前判断失败时已置 unattributed 的那条就没有任务再指向它（重跑不取代旧执行，两条都在当前结果里；部分重跑那次整次失败、接着整条重跑时也是）。首次执行与过期重跑（当前结果不含被取代的执行）没有此前的，照常按本次比对新建。两轮之间数据变了、函证差额与沿用的例外金额对不上的情形不另处理。例：Xero BA-091 第 1 次判断失败，X-CSH-02-1-D04-1 v1 unattributed；对其任务 rerun，第 2 次执行沿用它，不建 X-CSH-02-2-D04-1，复核认定错报时它出 v2 attributed。GEN-02（需求 R134，功能 journals，P2 固定集，没有规则 SQL，不经规则引擎）的判断对象是前置程序（GEN-05）当前结果中尚未归因的例外，按 detail 的 entry_no 分组，每笔凭证一个对象，按凭证号自然序（数字段按数值比较，相等时按原文）；GEN-05 的例外 detail 缺 entry_no 时报错（R12 只对挂了分录的发票出例外，GEN-05 的例外都有 entry_no）；先按 rerun_subject_ids 与已交人处理的对象筛选再取数据；规则例外为该凭证上尚未归因的例外（按 ID 排序），fixture_key 为凭证号；固定集的 objective_ids 为空，JudgmentContext.task.risks 为 []。data（GEN-02.md.j2 头注释，均为 JSON 形式，行带 source_type）：entry_lines 为 `journal_entries(entry_nos=[本凭证])` 的全部行；account_balances 为本凭证各科目的 code、name、category（`accounts(codes)`，科目表里没有的为 null）与本期、上期试算表余额 current_cents、prior_cents（没有该科目的行为 null），source_type trial_balance；bank 在本凭证涉及 cash 分类科目时为 {accounts, lines}，否则为 null：accounts 为总账科目在其中的 bank_account 行（按 ID），lines 为这些账户 `bank_transactions` 中交易日期在凭证日（分录行的 posting_date）前后 bank_window_days 天内（含两端）的行，加各账户本期（项目期间）的第一行，去重后按（账户，日期，ID）排序；related_entries 为相关凭证的全部行（不含本凭证，按凭证号自然序与行 ID）：本凭证例外 detail 所指的凭证（original_entry_no、reversal_entry_no、full_credits，paired_invoices 的 journal_entry_id 经 `record(journal_entry, id)` 得到的凭证），以及 detail 指向本凭证的其他 GEN-05 例外所在的凭证；related_invoices 为本凭证例外 detail 所指的发票（matched_invoices、invoice_id、paired_invoices 的 invoice_id，按 ID），每张为 {invoice, delivery_notes}；contracts 为这些发票所挂的合同，每项为 {contract, document}，按文件 ID 去重（同一份合同只送一次，发票以 contract_id 引用），按合同编号排序；发票、发运单、合同与合同文件登记与 REV-02 的同名项同一取法（`FieldworkAgent.invoice_records`）；related_findings 为 detail 指向本凭证的其他 GEN-05 例外（按 ID，已归因的也列）；documents 为 `documents(related_id=本凭证号)` 的文件，每项为 {document, pages}，pages 取 `EvidenceStore.pages`（整份送出，暂不设页数上限；超限的处理另立需求，规格书第 8.5 节）；fraud_risks 为风险清单中 fraud_related 为真的全部风险。"detail 所指的凭证" 按 detail 的键取，不按规则编号分支；matched_invoices 是发票，进 related_invoices，不算指向凭证。本凭证、相关凭证或 detail 所指的分录行查不到时报错，发票与合同同 REV-02。提示词的分录行只有本凭证与 related_entries 所列凭证（规格书第 8.5 节），不带出生日期。
++A6 的判断程序（REV-03、REV-02、CSH-02、GEN-02、GEN-03、GEN-06、GEN-01）共用一套流程，各程序只负责选出判断对象（对象 ID、提示词要的 data、该对象的规则例外当前版本，可另带本项目采用版本的客户画像 `Subject.client_profile`，进 JudgmentContext.client_profile，推理链可引用它，需求 R128；GEN-03、GEN-01 带，其余不带；FIN-09 另带 `Subject.expected_residual_cents`、`entry_account_codes`，原样进 JudgmentContext，需求 R165）：rerun_subject_ids 非空时只留其中的对象；本程序仍有待决复核任务的对象（带 subject_id 的 unattributed 任务，或以其判断为目标的 normal 任务）已交人处理，不再重判（重判会让其例外升版，旧任务过期，整次结果被合并校验拒绝）；JudgmentContext.task 为 {params: Run 的参数快照, risks: Procedure.objective_ids 下的 RiskItem}（均为 JSON 形式，日期为字符串），fixture_key 取 `Subject.fixture_key`，缺省为对象 ID（FIN-03 取来源判断的对象，需求 R158），autonomy_level 为 Procedure 的运行时级别；各对象并发调 `JudgmentEngine.judge`，performed_by 为 Engagement.owner_id。流程在 `agents/judging.py`（A6 与 A8 的 FIN-03、FIN-09 共用，需求 R158、R165：Subject、Judged、subjects_awaiting_review、in_scope、open_findings、earlier_findings、JudgingSteps、judge_all、judgments_patch；fieldwork 再导出前几个名字。open_findings 取当前结果中给定程序尚未归因的例外，按 ID 排序，REV-02、GEN-03、CSH-02、GEN-02（判断对象）、GEN-06 取前置程序的例外与 earlier_findings 都经它，不另写这一过滤），插入点顺序固定：judge →（可选）程序自己补字段（`judge_all` 的 annotate：只对成功的判断调用，收 JudgmentOutcome 返回补了字段的 Judgment，不能改 ID、版本、autonomy_level、downgrade_reasons 与 critic 字段，调用后断言；FIN-03 写分类载荷，见 FIN-03 段）→ A7 `ReviewAgent.review` 独立复核（见下）→ 判断级降级（`JudgingSteps.downgrade`，规格书第 7.4 节，在 A7 之后）→ `ReviewQueue.classify` → `make_task`。降级收到的判断已带 critic 字段，另收该对象的规则例外（同 A7 收到的）；步骤由 `judging_steps(deps)` 按功能选：功能 autonomy 关闭时为 DEFAULT_STEPS（原样返回），打开时为 `judging.downgrade`（需求 R170，按 `autonomy_policy.judgment_level` 改写判断第 1 版的 autonomy_level 与 downgrade_reasons，取数见第 5 节“自主度降级”的接入一条），A7 读的仍是程序的运行时级别；classify 的关键证据缺失一项由 `judging.checks_key_evidence(deps)` 定（功能 autonomy 打开时为真，judgments_patch 传给 classify 的 key_evidence，不随步骤传）；判断失败的对象（failed、unattributed）不经复核与降级；规则程序（REV-08、CSH-05）不进本流程。按 classify 处理：normal 或 dispute 时判断待复核，以判断 v1 为目标建该类任务；不需要人时判断第 1 版即 confirmed，其 exception_ids 中的例外经 `attribute_exceptions` 出 attributed 新版本，带 misstatement_update 的（FIN-03）另按载荷写出所指错报的新版本（`review_queue.misstatement_updates`，错报取状态中的，片段另有 misstatements，只在有时带；需求 R159）；unattributed 时第一条规则例外出 unattributed 新版本，以新版本为目标建带 subject_id 的任务（这两处本次执行刚建、还没写入的例外不另出新版本，直接写在第 1 版上，见下文 CSH-02）；failed 时以本次 Run 为目标建带 subject_id 的任务。本次刚建的例外（`judgments_patch` 的 created：CSH-02 的 D01、D04，FIN-09 的 V02）依次排在片段 exceptions 前面，已归因或标为未归因的换成写好的那一版，再接其余例外的新版本。个别对象失败不算整次失败，Run 为 succeeded。各程序的判断对象：REV-03 为 `FinancialDataStore.contracts` 中的全部合同（按合同编号排序），data 为 {contract, document}，document 取该合同的文件登记（以存储的当前登记为准，同上）（不在状态中时报错），无规则例外。REV-02 为规则 S01 选中的发票加前置程序（REV-08）尚未归因的例外所指的发票（R01、R02、R03 都算），去重后按发票 ID 排序（只看当前结果，过期重跑取代的执行的例外不算，第 3 节）；data 为 invoice 与 delivery_notes（`FinancialDataStore.sales_invoices`、`delivery_notes`，带 source_type，发运单按 ID 排序）、journal_lines（需求 R100：该发票过账分录的全部行，invoice.journal_entry_id 经 `record(journal_entry, id)` 得凭证号，再 `journal_entries(entry_nos=...)` 一次取齐，按行 ID 排序；每行为 source_type journal_entry 加分录行各列，另带 `accounts(codes)` 的 account_name 与 account_category，科目表里没有的为 null；journal_entry_id 为空时为 []，指向的行查不到报错；提示词的错报金额取其中 account_category 为 revenue 的行，不含 GST，被引用的行金额由 supported_amounts 计入）、contract（`FinancialDataStore.contracts`）、document（该合同的文件登记，以 `FinancialDataStore.documents` 的当前登记为准，见下）与 contract_judgment（状态中当前结果（第 3 节）里该合同未被推翻的 REV-03 判断中 created_at 最新的一条，取 id、conclusion、review_status），发票没有合同时后三项为 null；发票、发票指向的分录行、合同或合同文件查不到时报错；规则例外为该发票上 REV-08 尚未归因的例外（按 ID 排序）。CSH-02 先做规则部分（D01、D04，在代码中做，见 CSH-02.yaml 注释）：逐个当前的函证（同 DOC-06，`evidence.current_confirmations`；按银行账户 ID 排序）比较回函余额与本期试算表中该账户总账科目的余额，函证出新版本写 book_balance_cents、difference_cents（回函减账面）与 result（相等为 agreed，否则 difference）；不等时建 D01 例外 X-CSH-02-{run_no}-D01-{n}（n 按账户 ID 排序编号，severity medium，金额为回函减账面，证据为函证中回函余额所在页的指针（按回函当前的文件登记经 `judgment_engine.document_pointer` 改写种类与可靠性，不沿用 DOC-06 当时写进函证的值；页码不在登记页数内的照原样，需求 R90）与试算表科目指针）；回函写明的应计利息（Confirmation.accrued_interest_cents，需求 R104）不为空、绝对值超过 clearly_trivial_cents（等于不算），而规则 D04 的行（窗口 [期末 - lookback_days, 期末] 内全部科目的分录行，同 D03 剔除作废对）中没有借方或贷方等于其绝对值的行时，建 D04 例外 X-CSH-02-{run_no}-D04-{n}（n 在 D04 内按账户 ID 排序编号，severity medium，金额为应计利息（带符号），detail 为 accrued_interest_cents、search_from、search_to 与 matched_line_ids（建例外时恒为空），证据为函证中应计利息所在页的指针，改写同 D01 的回函页），函证结果不变（余额相符的仍为 agreed）；函证还没有回函余额时报错；账户的筛选同判断对象（rerun_subject_ids 与已交人处理的对象）。D03、D04 剔除作废对：冲回凭证为任一行 description 匹配 reversal_reference_pattern 的凭证，原凭证号为 reversal_entry_no_template 填入第一个捕获组，两者的行都不要；pattern 为空（数据集没有声明）时不剔除；pattern 由 DatasetTraits 按 Python re 校验，在规则 SQL 里按 PostgreSQL 正则执行，须写成两边通用的写法。再对有例外的账户判断：判断对象为有 D01 或 D04 的账户（按账户 ID，每个账户一次），data 为 bank_account（带 source_type）、confirmation（本次的新版本）、reply_document（回函的文件登记，以存储的当前登记为准，同上）、book_balance_cents、difference_cents、subsequent_transactions 与 period_end_entries（规则 D02、D03 返回的行按 bank_account_id 切给该账户，JSON 形式）；规则例外为前置程序（depends_on，即 CSH-05）在该账户上尚未归因的例外（当前结果，按 ID 排序）再加本次在该账户上的 D01、D04（依次）。CSH-02 的模板 always_review 为真，判断一律建 normal 任务。D01、D04 是本次刚建的（`judgments_patch` 的 created）：判断失败时 unattributed、自动关闭时 attributed 都直接写在它们的第 1 版上，不另出新版本，任务以 v1 为目标，片段里同一例外只有一个版本（需求 R322）。当前结果里该账户已有本程序尚未归因的 D01、D04 时沿用，不再新建（需求 R347，审核 R347-02、R347-11）：比对照做（函证照样出新版本），沿用的是此前执行本程序在该账户上出的 D01、D04 中尚未归因的（第 1 版 open 或判断失败时置的 unattributed 版本；已归因的不带回，按规则、ID 排序，`judging.earlier_findings`，与 FIN-09 的 V02 共用），作规则例外交判断；它们不是 created，判断确认时给同一 ID 出 attributed 新版本，再失败时第一条出 unattributed 新版本。若照常新建（ID 带 run_no），此前判断失败时已置 unattributed 的那条就没有任务再指向它（重跑不取代旧执行，两条都在当前结果里；部分重跑那次整次失败、接着整条重跑时也是）。首次执行与过期重跑（当前结果不含被取代的执行）没有此前的，照常按本次比对新建。两轮之间数据变了、函证差额与沿用的例外金额对不上的情形不另处理。例：Xero BA-091 第 1 次判断失败，X-CSH-02-1-D04-1 v1 unattributed；对其任务 rerun，第 2 次执行沿用它，不建 X-CSH-02-2-D04-1，复核认定错报时它出 v2 attributed。GEN-02（需求 R134，功能 journals，P2 固定集，没有规则 SQL，不经规则引擎）的判断对象是前置程序（GEN-05）当前结果中尚未归因的例外，按 detail 的 entry_no 分组，每笔凭证一个对象，按凭证号自然序（数字段按数值比较，相等时按原文）；GEN-05 的例外 detail 缺 entry_no 时报错（R12 只对挂了分录的发票出例外，GEN-05 的例外都有 entry_no）；先按 rerun_subject_ids 与已交人处理的对象筛选再取数据；规则例外为该凭证上尚未归因的例外（按 ID 排序），fixture_key 为凭证号；固定集的 objective_ids 为空，JudgmentContext.task.risks 为 []。data（GEN-02.md.j2 头注释，均为 JSON 形式，行带 source_type）：entry_lines 为 `journal_entries(entry_nos=[本凭证])` 的全部行；account_balances 为本凭证各科目的 code、name、category（`accounts(codes)`，科目表里没有的为 null）与本期、上期试算表余额 current_cents、prior_cents（没有该科目的行为 null），source_type trial_balance；bank 在本凭证涉及 cash 分类科目时为 {accounts, lines}，否则为 null：accounts 为总账科目在其中的 bank_account 行（按 ID），lines 为这些账户 `bank_transactions` 中交易日期在凭证日（分录行的 posting_date）前后 bank_window_days 天内（含两端）的行，加各账户本期（项目期间）的第一行，去重后按（账户，日期，ID）排序；related_entries 为相关凭证的全部行（不含本凭证，按凭证号自然序与行 ID）：本凭证例外 detail 所指的凭证（original_entry_no、reversal_entry_no、full_credits，paired_invoices 的 journal_entry_id 经 `record(journal_entry, id)` 得到的凭证），以及 detail 指向本凭证的其他 GEN-05 例外所在的凭证；related_invoices 为本凭证例外 detail 所指的发票（matched_invoices、invoice_id、paired_invoices 的 invoice_id，按 ID），每张为 {invoice, delivery_notes}；contracts 为这些发票所挂的合同，每项为 {contract, document}，按文件 ID 去重（同一份合同只送一次，发票以 contract_id 引用），按合同编号排序；发票、发运单、合同与合同文件登记与 REV-02 的同名项同一取法（`FieldworkAgent.invoice_records`）；related_findings 为 detail 指向本凭证的其他 GEN-05 例外（按 ID，已归因的也列）；documents 为 `documents(related_id=本凭证号)` 的文件，每项为 {document, pages}，pages 取 `EvidenceStore.pages`（整份送出，暂不设页数上限；超限的处理另立需求，规格书第 8.5 节）；fraud_risks 为风险清单中 fraud_related 为真的全部风险。"detail 所指的凭证" 按 detail 的键取，不按规则编号分支；matched_invoices 是发票，进 related_invoices，不算指向凭证。本凭证、相关凭证或 detail 所指的分录行查不到时报错，发票与合同同 REV-02。提示词的分录行只有本凭证与 related_entries 所列凭证（规格书第 8.5 节），不带出生日期。
+ 
+ A9 的 FIN-04 错报累计（`agents/qc.py`，需求 R23、R166；规格书 12.3 子状态机注）：按状态中当前结果的错报（第 3 节）编未更正错报汇总表 SCHEDULE（已有时出下一版）。按状态累计：uncorrected 取错报金额，partially_corrected 取剩余额 residual_cents；累计额高于明显微小门槛（clearly_trivial_cents）的进 items（带 direction 与 origin，origin 为空的按本期），其余的 ID 进 excluded_trivial_ids；corrected 的 ID 进 corrected_ids。还有其他状态的错报（identified、communicated、verifying 未结清；本版不写的 evaluated、closed 同样不能累计）时抛 ValueError，不出汇总表，由 A1 记执行失败并建 failed 任务，FIN-04 等人（兜底：正常拓扑下完成阶段认定的错报都经回流结清）。total_cents 为 items 之和，不按方向抵销；候选意见取 `services.opinion.allowed_opinions(total_cents=合计, materiality_cents=整体重要性, going_concern=None).candidate`，先算候选再一次构造汇总表（需求 R184，与 FIN-01 的校验同一函数），即不低于整体重要性为候选保留意见。A9 只走金额路径（FIN-04 早于 gate_fin 的 FIN-02 步，拿不到已批准的结论），综合候选由 FIN-01 闸门材料调本函数给出（GC-09，R187 验收 4），签字前提的参数由 SG-16 加。功能 misstatement 关闭时错报一律为 uncorrected，结果同 R23，corrected_ids 为空。FIN-04 的 depends_on 为 [FIN-03, FIN-09]（都属功能 misstatement，关闭时程序库丢弃这两条依赖，有效依赖为 []；FIN-09 由需求 R164 加入）。
+ 
+@@ -2795,6 +2795,14 @@ A10 的 RPT-03 起草报告下一修订 REPORT-{revision}（revision 为状态
+ - 提示词：期后窗口、执行重要性与明显微小写进说明；Standards 段列 7 个片段（ASA560-P06、P08，AASB110-P03、P08、P09、P10，AASB15-P88）原文；不送别的判断对象的行与例外。Xero 的固定输出由需求 R180 加。
+ - 过期：reads [journal_entries, accounts, sales_invoices, delivery_notes, bank_accounts, bank_transactions, trial_balance, documents]；关联文件类型不定，document_reads 同 GEN-02 列全部可作证据的类型（DOCUMENT_EVIDENCE 的键）。
+ 
++**GEN-01 关联方完整性终审**（需求 R141，`FieldworkAgent.gen01_subjects`；功能 related_parties，P2 固定集，engine llm，L1，always_review，manual_result_allowed，depends_on [GEN-03, GEN-08]，底稿 G-7）。规格书第 6.1.2 节 GEN-01、第 7.5 节（设计选择：作第 1 级复核任务，不新增闸门，GateDecision.gate 没有 GEN-01）。口径写在 GEN-01.yaml 的注释里，走上文的判断公共流程：
++- 调度：GEN-03 有待决复核任务（awaiting_human）时 `scheduler.ready_procedures` 不含 GEN-01；其任务都决定、GEN-03 置 completed 之后才派发（按 depends_on，不另写规则）。
++- 判断对象：只有一个，subject_id 与 fixture_key 为项目的 client_id（即画像 ID；Xero 演示为 CLIENT-XERO-3C1332BB-Q1）；已交人处理（有待决任务）时为空；状态没有关系图抛 LookupError（执行失败）。带本项目采用版本的画像（`Subject.client_profile`）。规则例外为前置程序尚未归因的例外（`judging.open_findings(state, depends_on)`；GEN-03 只出行，实为 GEN-08 的），判断的 exception_ids 即它们，确认后置 attributed；提示词要求逐条回应。
++- data（JSON 形式，见 GEN-01.md.j2 头注释）：declared（画像中管理层申报的 related_parties、key_personnel、ownership、governance，即 ASA 550 第 13 段询问的结果）；applicable_framework（画像的适用框架）；identified（GEN-03 各对象当前有效的判断，按对象 ID，每项 id、subject_id、conclusion、proposed_action、review_status；取法为 `judging.current_judgments`：当前结果中该对象未被推翻的判断里最新的一条（created_at 与 ID），被 override 时即人工判断 -H{n}，REV-02 取合同的 REV-03 判断（contract_judgment）同一取法）；open_exceptions（即规则例外）；graph {reporting_entity_id, nodes（PartyNode 去掉 birth_date）, links（PartyLink，带登记摘录那一行的 evidence 指针，同 GEN-03 的 links）}。
++- 提示词：人员节点 ID 由 `call_llm` 在渲染前遮蔽（第 0 节）；是否关联方以 GEN-03 的判断为准，不重判，不引会计准则段号；申报按 ACN（申报项有时）或名称（去公司后缀）比对，列出漏申报的关联方与查不实的申报项，引关系的 evidence；第 22 段的后续（要求管理层列明与之的全部交易，询问控制为何没有识别或披露，重新考虑其他未申报关联方的风险），交易本身以 GEN-03 为准；第 26 段书面声明交 FIN-07；第 27 段按画像 governance（all_in_management 与各成员的 also_management）判断 "Unless all of those charged with governance are involved in managing the entity" 是否成立，成立则沟通要求不适用，画像没有 governance 时写 limitation 并按适用处理；第 25 段的评价在形成意见时做，财报的关联方披露漏列时依 Aus 27.2 段修改意见；建议动作只用 accept 与 more_evidence。
++- 复核：L1，不经 A7（critic_verdict skipped）；always_review，不论置信度、建议动作与运行时自主度都建 normal 任务 `T-J-GEN-01-{run_no}-{client_id}-v1`（允许 confirm、override、misstatement）。
++- 过期：没有 reads（只读编排状态与画像，不读账表与文件登记）；摘录的登记变动让 GEN-08 过期，再经依赖传播到这里，GEN-03 重跑同样。
++
+ **A7 独立复核（GEN-09，`agents/review.py`）**。规格书 5.2、5.3、5.5、6.3 GEN-09。A6 每生成一条模型类判断即同步调用 `review(ctx, judgment, findings)`（受控子图，不经编排状态；findings 为该判断对象的规则例外，即 A6 判断时的同一组，含本次执行刚建的，只用来核对复核方错报草稿的金额），返回写好 critic 字段的同一版本：
+ 
+ - 跳过（skipped，critic_reason 写原因，critic_reason_code 为其代码）：功能开关 critic 关闭（`AgentDeps.features` 不含 critic，理由 "功能开关 critic 关闭, 不做独立复核"，critic_off）；`AgentDeps.review_llm` 为空（只在测试，no_review_model）；程序运行时自主度（ctx.procedure.autonomy_level）为 L1、L2（审计师逐条复核，"L2: 审计师逐条复核, 不经独立复核 (GEN-09 跳过规则)"，level_l1、level_l2，`review.LEVEL_CODES`）；未命中触发规则（not_triggered）。
+@@ -3469,7 +3477,7 @@ depends_on: [ACC-04]
+ 
+ **底稿配置**（`knowledge/workpapers.yaml`，模型 `contracts/knowledge.WorkpaperConfig`，需求 R329，Issue #50）。一个程序一份底稿：索引号与区写在程序 YAML 的 workpaper 一行（`workpaper: {ref: D-3, area: D}`），配置文件写区、不对应程序的系统底稿、各类底稿的必填项与准则文档要求对照；其中的名称与说明都是 LocalizedText（zh、en 都须给出，去掉首尾空白后不能为空，同 R324 的范围说明），模型见上方代码块。依据 ASA 230 第 8、9 段与附录 1，段号按 docs/参考资料 中各准则现行文本；版式见 docs/云端开发/design/底稿示例/。ProcedureLibrary 构造时读它（`library.workpapers`），与程序模板一起校验（`procedure_library.workpaper_problems`，含未启用的模板；不过时抛 ValueError，消息含程序编号或索引号；字段写错时抛 ValueError，消息带文件名）。
+ - 区（areas，按档案顺序）：A 计划、B 承接、C 现金、D 收入、G 一般、X 错报、Z 完成与报告，各有名称（zh、en）与序号写法 numbering。程序底稿的索引号为区字母本身或 `{区}-{序号}`：digits 为 1 起的数字，letters 为 A 起的大写字母；错报区 X 为 letters（X 为 FIN-04 的错报汇总，程序从 X-A 起，X-数字留给错报汇总表中的错报编号）。规则按配置的 numbering 判断，不按程序编号分支。
+-- 程序的索引号：A-1 PLN-15、A-2 PLN-01、A-3 PLN-03、A-4 PLN-07；B-1 ACC-01、B-2 ACC-04、B-3 ACC-08；C-1 CSH-04、C-2 DOC-06、C-3 CSH-05、C-4 CSH-02；D-1 DOC-04、D-2 REV-03、D-3 REV-08、D-4 REV-02；G-1 GEN-05、G-2 GEN-02、G-3 GEN-08、G-4 GEN-03、G-5 GEN-07、G-6 GEN-06（需求 R179）；X FIN-04、X-A FIN-03、X-B FIN-08、X-C FIN-09（按错报流程：分类、沟通、更正验证）；Z-1 FIN-01、Z-2 RPT-03、Z-3 RPT-01。GEN-09 不出底稿（复核结果写进被复核判断所在的底稿）。新程序一律写 workpaper。
++- 程序的索引号：A-1 PLN-15、A-2 PLN-01、A-3 PLN-03、A-4 PLN-07；B-1 ACC-01、B-2 ACC-04、B-3 ACC-08；C-1 CSH-04、C-2 DOC-06、C-3 CSH-05、C-4 CSH-02；D-1 DOC-04、D-2 REV-03、D-3 REV-08、D-4 REV-02；G-1 GEN-05、G-2 GEN-02、G-3 GEN-08、G-4 GEN-03、G-5 GEN-07、G-6 GEN-06（需求 R179）、G-7 GEN-01（需求 R141）；X FIN-04、X-A FIN-03、X-B FIN-08、X-C FIN-09（按错报流程：分类、沟通、更正验证）；Z-1 FIN-01、Z-2 RPT-03、Z-3 RPT-01。GEN-09 不出底稿（复核结果写进被复核判断所在的底稿）。新程序一律写 workpaper。
+ - 系统底稿（system，不对应程序）：00 审计档案索引、C 现金导引表（categories [cash]）、D 收入导引表（[revenue, other_income]）、S 准则文档要求对照。有 categories 的为导引表，取试算表中这些标准分类的科目，须属一个区（索引号即区字母）；不属区的（00、S）索引号不能归到某区（区字母本身或以 {区}- 开头，与准则对照按前缀归区的口径相同）；只给有审计程序的现金、收入两区各一张（Q29），其余报表项目列在索引的 "本期未执行专门程序的报表项目" 一节。
+ - 加载校验：区、必填项代号、准则对照的准则各不重复；程序与导引表的区在 areas 中，索引号合上面的写法；不属区的系统底稿的索引号不归到某区；程序之间、程序与系统底稿之间索引号不重复；必填项与准则对照所引的索引号与区都在。
+ - 必填项（required）：每项有代号 id、名称（zh、en）、出处（standard、paragraph，现行段号）、是否可由审计师的补充说明补齐（supplementable：理由、考虑因素与结论可以，编制、复核与事实不行；补充说明见 R330）与适用范围（kinds 为程序类别、refs 为索引号，都不写即全部底稿，否则为其并集）。全部底稿：ASA 230 第 9(b) 段编制人（preparer）与完成日期（completed_on），第 9(c) 段复核人（reviewer）、复核日期（reviewed_on）与范围（review_scope），第 8(a) 段程序的性质、时间与范围（procedures），第 8(b) 段结果（results），第 8(c) 段结论（conclusions，可补齐）。规则与判断类（kinds [rule, judgment]，`procedure_library.workpaper_kind`：engine rule 为 rule，判断程序 `judging_program` 为 judgment，人工程序、抽取与起草没有类别）另加第 9(a) 段被测项目的识别特征（tested_items）。A-2 另加 ASA 320 第 14 段的金额（materiality_amounts）与考虑因素（materiality_factors，含选择基准与比例的理由，可补齐）；X 另加 ASA 450 第 15(a)、(b)、(c) 段（clearly_trivial、misstatements_accumulated、uncorrected_conclusion，后者可补齐）；A-1 另加 ASA 300 第 12(a)、(b)、(c) 段（audit_strategy、audit_plan、plan_changes，后者可补齐）。`ProcedureLibrary.required_items(ref)` 按配置顺序给出某份底稿的必填项（索引号不存在抛 KeyError）。
+diff --git a/src/backend/agents/fieldwork.py b/src/backend/agents/fieldwork.py
+index 374c313..f5a6119 100644
+--- a/src/backend/agents/fieldwork.py
++++ b/src/backend/agents/fieldwork.py
+@@ -1,4 +1,4 @@
+-"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02, GEN-03, GEN-06.
++"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02, GEN-03, GEN-06, GEN-01.
+ 
+ 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
+ """
+@@ -20,6 +20,7 @@ from backend.agents.judging import (
+     JudgingSteps,
+     Subject,
+     Subjects,
++    current_judgments,
+     earlier_findings,
+     in_scope,
+     judge_all,
+@@ -44,7 +45,6 @@ from backend.contracts.models import (
+     OwnershipGraph,
+     PartyNode,
+     Reliability,
+-    ReviewStatus,
+     RuleOutcome,
+ )
+ from backend.contracts.records import BankAccount, JournalEntry, SalesInvoice
+@@ -108,19 +108,19 @@ __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "i
+ 
+ 
+ class FieldworkAgent(ProcedureAgent[Findings]):
+-    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02), 关联方图谱研判 (GEN-03) 与
+-    期后事项研判 (GEN-06), 产出例外与判断.
++    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02), 关联方图谱研判 (GEN-03),
++    期后事项研判 (GEN-06) 与关联方完整性终审 (GEN-01), 产出例外与判断.
+ 
+-    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03, GEN-06) 共用判断公共流程
+-    (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources; GEN-06 的在 agents/going_concern.py);
++    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03, GEN-06, GEN-01) 共用判断公共
++    流程 (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources; GEN-06 的在 agents/going_concern.py);
+     尚未登记的执行时报未实现.
+     """
+ 
+     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
+-    # 负责的程序 (GEN-05, GEN-02 属功能 journals, GEN-03 属 related_parties, GEN-06 属 going_concern, 未启用时注册表
+-    # 不映射)
++    # 负责的程序 (GEN-05, GEN-02 属功能 journals, GEN-03, GEN-01 属 related_parties, GEN-06 属 going_concern, 未启用时
++    # 注册表不映射)
+     procedures: ClassVar[frozenset[str]] = frozenset(
+-        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02", "GEN-03", "GEN-06"}
++        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02", "GEN-03", "GEN-06", "GEN-01"}
+     )
+ 
+     def __init__(self, deps: AgentDeps) -> None:
+@@ -133,6 +133,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
+             "GEN-02": self.gen02_subjects,
+             "GEN-03": self.gen03_subjects,
+             "GEN-06": self.gen06_subjects,
++            "GEN-01": self.gen01_subjects,
+         }
+ 
+     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
+@@ -391,6 +392,48 @@ class FieldworkAgent(ProcedureAgent[Findings]):
+             "documents": related,
+         }
+ 
++    async def gen01_subjects(self, ctx: RunContext) -> Subjects:
++        """GEN-01 的判断对象 (需求 R141): 只有报告主体一个, subject_id 与 fixture_key 为项目的 client_id (即画像 ID);
++        已交人处理 (不在 in_scope) 时为空. 状态中没有关系图抛 LookupError. 规则例外为前置程序尚未归因的例外
++        (open_findings; GEN-03 只出行, 实为 GEN-08 的), 判断逐条回应, 确认后置 attributed. 对象带本项目采用的那版
++        客户画像 (需求 R128, 查不到抛 LookupError), 推理链可引用它.
++
++        data 的字段按 GEN-01.md.j2 头注释 (均为 JSON 形式):
++        - declared: 画像中管理层申报的 related_parties, key_personnel, ownership 与 governance.
++        - applicable_framework: 画像的适用框架.
++        - identified: GEN-03 各对象当前有效的判断 (judging.current_judgments, 被推翻时为人工判断) 的 id, subject_id,
++          conclusion, proposed_action, review_status, 按对象 ID.
++        - open_exceptions: 即规则例外.
++        - graph: 关系图的 reporting_entity_id, nodes (去掉 birth_date) 与 links (带登记摘录那一行的证据指针, 同 GEN-03
++          的 links); 人员节点 ID 的出生日期在渲染前由判断引擎遮蔽.
++        """
++        graph = ctx.state["ownership_graph"]
++        if graph is None:
++            raise LookupError("GEN-01: 状态中没有关系图 (GEN-08 未执行)")
++        client = ctx.engagement.client_id
++        if not in_scope(ctx, client):
++            return Subjects()
++        profile = await client_profile(self.deps, ctx.engagement, ctx.state["client_profile_version"])
++        declared = profile.model_dump(
++            mode="json", include={"related_parties", "key_personnel", "ownership", "governance", "applicable_framework"}
++        )
++        findings = open_findings(ctx.state, ctx.template.depends_on)
++        identified = {"id", "subject_id", "conclusion", "proposed_action", "review_status"}
++        data = {
++            "declared": {k: declared[k] for k in ("related_parties", "key_personnel", "ownership", "governance")},
++            "applicable_framework": declared["applicable_framework"],
++            "identified": [
++                j.model_dump(mode="json", include=identified) for j in current_judgments(ctx.state, "GEN-03").values()
++            ],
++            "open_exceptions": [x.model_dump(mode="json") for x in findings],
++            "graph": {
++                "reporting_entity_id": graph.reporting_entity_id,
++                "nodes": [n.model_dump(mode="json", exclude={"birth_date"}) for n in graph.nodes],
++                "links": [x.model_dump(mode="json") for x in graph.links],
++            },
++        }
++        return Subjects([Subject(client, data, findings, client_profile=profile)])
++
+     async def invoice_journal_lines(
+         self, eid: str, invoices: Sequence[SalesInvoice]
+     ) -> dict[str, list[dict[str, Any]]]:
+@@ -428,19 +471,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
+ 
+     @staticmethod
+     def contract_judgment(ctx: RunContext, contract_id: str) -> dict[str, Any] | None:
+-        """该合同当前有效的 REV-03 判断 (id, conclusion, review_status): 状态中该合同未被推翻的 REV-03 判断里最新的一条
+-        (被 override 时即人工判断; 只看当前结果, 过期重跑取代的执行的不算); 没有为 None."""
+-        candidates = [
+-            j
+-            for j in current_results(ctx.state).judgments
+-            if j.procedure_id == "REV-03"
+-            and j.subject_id == contract_id
+-            and j.review_status is not ReviewStatus.overridden
+-        ]
+-        if not candidates:
+-            return None
+-        latest = max(candidates, key=lambda j: (j.created_at, j.id))
+-        return latest.model_dump(mode="json", include={"id", "conclusion", "review_status"})
++        """该合同当前有效的 REV-03 判断 (id, conclusion, review_status; 取法见 judging.current_judgments), 没有为
++        None."""
++        judgment = current_judgments(ctx.state, "REV-03").get(contract_id)
++        return judgment.model_dump(mode="json", include={"id", "conclusion", "review_status"}) if judgment else None
+ 
+     async def gen02_subjects(self, ctx: RunContext) -> Subjects:
+         """GEN-02 的判断对象: 前置程序 (GEN-05) 尚未归因的例外按 detail 的 entry_no 分组, 每笔凭证一个对象, 按凭证号
+diff --git a/src/backend/agents/judging.py b/src/backend/agents/judging.py
+index 54a5779..b871e44 100644
+--- a/src/backend/agents/judging.py
++++ b/src/backend/agents/judging.py
+@@ -191,6 +191,20 @@ def open_findings(state: EngagementState, procedure_ids: Collection[str]) -> lis
+     )
+ 
+ 
++def current_judgments(state: EngagementState, procedure_id: str) -> dict[str, Judgment]:
++    """程序 procedure_id 各判断对象当前有效的判断, 按对象 ID 排序: 当前结果 (services.staleness, 过期重跑取代的执行
++    不算) 中该对象未被推翻的判断里最新的一条 (按 created_at 与 ID; 被 override 时即人工判断 -H{n}). REV-02 取合同的
++    REV-03 判断与 GEN-01 取 GEN-03 各对象的判断共用. 纯函数."""
++    found: dict[str, Judgment] = {}
++    for j in current_results(state).judgments:
++        if j.procedure_id != procedure_id or j.review_status is ReviewStatus.overridden:
++            continue
++        kept = found.get(j.subject_id)
++        if kept is None or (j.created_at, j.id) > (kept.created_at, kept.id):
++            found[j.subject_id] = j
++    return dict(sorted(found.items()))
++
++
+ def earlier_findings(
+     state: EngagementState,
+     procedure_id: str,
+diff --git a/src/backend/knowledge/procedures/GEN-01.yaml b/src/backend/knowledge/procedures/GEN-01.yaml
+new file mode 100644
+index 0000000..bc81858
+--- /dev/null
++++ b/src/backend/knowledge/procedures/GEN-01.yaml
+@@ -0,0 +1,32 @@
++id: GEN-01
++name: 关联方完整性终审
++workpaper: {ref: G-7, area: G}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
++# 规格书 6.1.2 GEN-01 (← GEN-03, GEN-08), 7.5 节 (设计选择: 第 1 级复核任务, 不新增闸门, 12.2 节 GateDecision.gate 没有
++# GEN-01); ASA 550 第 13, 22, 25, 26, 27 段与 Aus 27.2 段. GEN-03 结清后 (其复核任务都已决定, 调度按 depends_on 等它
++# completed), 把管理层的申报清单 (画像 related_parties, key_personnel, ownership, governance, 第 13 段询问的结果) 与已复核
++# 的识别结果 (GEN-03 各对象当前有效的判断, 关系图) 比对, 对报告主体出一条 L1 建议判断, 一律由审计师决定 (需求 R141).
++# 判断对象与 data 见接口文档第 6 节与 GEN-01.md.j2 头注释. 第 27 段是否适用看画像 governance.all_in_management.
++#
++# 无 SQL: 只读编排状态 (关系图, GEN-03 的判断, GEN-08 的例外) 与本项目采用的画像 (同 GEN-03), 不读账表与文件登记,
++# 所以没有 reads; 摘录的登记变动让 GEN-08 过期, 再经 depends_on 传到这里.
++phase: P2_Executing
++cycle: Pervasive
++owner: A6
++feature: related_parties          # 功能开关 (services/features.py): 关联方
++fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
++outputs: [judgments, exceptions, review_tasks]
++engine: llm
++autonomy_level: L1
++always_review: true               # 关联方完整性的结论一律由审计师决定 (不论自主度与建议动作)
++manual_result_allowed: true
++assertions: [Completeness]
++params:
++  period_start: {ref: period_start}
++  period_end: {ref: period_end}
++depends_on: [GEN-03, GEN-08]
++standards: [ASA550-P13, ASA550-P22, ASA550-P25, ASA550-P26, ASA550-P27, ASA550-Aus27.2]
++evidence_required: [external]
++llm:
++  prompt: GEN-01.md.j2
++  output_model: JudgmentDraft
++  context_budget: 8000
+diff --git a/src/backend/knowledge/prompts/GEN-01.md.j2 b/src/backend/knowledge/prompts/GEN-01.md.j2
+new file mode 100644
+index 0000000..2d47694
+--- /dev/null
++++ b/src/backend/knowledge/prompts/GEN-01.md.j2
+@@ -0,0 +1,109 @@
++{#
++GEN-01 关联方完整性终审 → JudgmentDraft，每次执行对报告主体调用一次（需求 R141）。
++渲染：trim_blocks、lstrip_blocks；对象均为 model_dump(mode="json")。人员节点 ID 在渲染前已去掉出生日期一段
++（JudgmentEngine.call_llm 经 mask_person_node_ids），节点不带出生日期字段。
++变量：
++  subject_id              项目的 client_id，即客户画像 ID（client_profile 指针的 source_id）
++  task.params             period_start、period_end（GEN-01.yaml）
++  task.risks              本程序覆盖的 RiskItem（固定集程序不关联审计目标，通常为空列表）
++  data.declared           画像中管理层申报的部分（ASA 550 第 13 段询问的结果）：related_parties（DeclaredParty：name、
++                          kind、relationship、abn、acn、notes）、key_personnel（KeyPerson：name、role、since）、
++                          ownership（DeclaredHolding：holder、kind、shares、pct）、governance（Governance：body、
++                          members（name、also_management）、all_in_management；没有申报为 null）
++  data.applicable_framework 画像的适用框架（tier1_gpfs、tier2_gpfs、spfr），没有为 null
++  data.identified         GEN-03 各对象当前有效的判断（被推翻时为人工判断），按对象 ID：id、subject_id（公司节点 ID）、
++                          conclusion、proposed_action、review_status
++  data.open_exceptions    GEN-08 尚未归因的 AuditException：id、rule_id、severity、source_ids、detail 等（即 rule_findings，
++                          判断确认后置 attributed；模板只渲染这一份）
++  data.graph              关系图（GEN-08）：reporting_entity_id；nodes（PartyNode：id、kind、name、acn、abn、searched，不带
++                          birth_date）；links（PartyLink：from_id、to_id、relation、shares、pct、appointed、ceased、
++                          evidence（登记摘录中那一行的 document 指针））
++  rule_findings           同 data.open_exceptions
++  standards               StandardFragment 列表：id、standard、paragraph、text
++#}
++{% set p = task.params %}
++{% set graph = data.graph %}
++{% set entity = graph.nodes | selectattr("id", "equalto", graph.reporting_entity_id) | first %}
++{% set framework = data.applicable_framework %}
++You assist a registered company auditor with the audit of an Australian financial report for the period {{ p.period_start }} to {{ p.period_end }} of {{ entity.name }} (the reporting entity, node {{ graph.reporting_entity_id }}; client profile {{ subject_id }}).
++
++## Task
++
++Conclude on the completeness of management's identification of the entity's related parties. Compare management's declaration with the related parties identified in the audit, and state the follow-up required for any related party that management did not declare, the written representations to obtain, whether the matters are to be communicated with those charged with governance, and the consequence for the auditor's report.
++
++## Inputs
++
++Applicable financial reporting framework (client profile `applicable_framework`): {{ framework if framework else "not recorded" }}.
++
++Management's declaration, the result of the enquiry under ASA550-P13 (client profile fields `related_parties`, `key_personnel`, `ownership` and `governance`):
++```json
++{{ data.declared | tojson(indent=2) }}
++```
++
++Companies assessed in GEN-03 (related party assessment of each company in the ownership graph), the current judgment on each after the auditor's review; a judgment the auditor overrode is replaced by the auditor's own:
++{% if data.identified %}
++```json
++{{ data.identified | tojson(indent=2) }}
++```
++{% else %}
++None: the ownership graph has no company other than the reporting entity.
++{% endif %}
++
++Ownership graph built from the registry extracts (GEN-08); each link has the registry extract line as `evidence` (person IDs are shown without dates of birth; two people with the same name may show the same ID, so tell them apart by their links and evidence):
++```json
++{{ graph | tojson(indent=2) }}
++```
++
++Open findings of GEN-08 not yet explained by a judgment:
++{% for x in data.open_exceptions %}
++- {{ x.id }}: rule {{ x.rule_id }}, severity {{ x.severity }}, source_ids {{ x.source_ids | tojson }}, detail {{ x.detail | tojson }}
++{% else %}
++None.
++{% endfor %}
++
++Standards (cite only these IDs):
++{% for f in standards %}
++- {{ f.id }} ({{ f.standard }} para {{ f.paragraph }}): {{ f.text | trim }}
++{% endfor %}
++
++## Criteria
++
++1. Identified related parties: take whether each company is a related party from its GEN-03 judgment, and the people who control the reporting entity or are its key management personnel from the links to the reporting entity. Whether a company is a related party was decided in GEN-03 under the framework above: do not reassess it and do not cite accounting standard paragraphs.
++2. Comparison: a party is declared when it appears in `related_parties`, or in `ownership` as a holder, by ACN where the declaration gives one and otherwise by name (ignoring company suffixes such as Pty Ltd). Name every identified related party that the declaration omits, and every declared party that the graph and the GEN-03 judgments do not confirm. Cite the registry extract lines (each link's `evidence`) that establish each omitted relationship.
++3. Undeclared related parties: state the follow-up under ASA550-P22 that remains: request management to identify all transactions with them, enquire why the entity's controls failed to identify or disclose them, and reconsider the risk that other related parties exist that management has not identified or disclosed. Rely on the GEN-03 judgments for the transactions already found; do not repeat their analysis.
++4. Written representations: ASA550-P26 requires written representations from management and, where appropriate, those charged with governance; they are obtained in FIN-07 (the management representation letter). State that the representation on related parties is to be obtained there.
++5. Communication with those charged with governance: ASA550-P27 applies "Unless all of those charged with governance are involved in managing the entity". Decide from the client profile field `governance` (`all_in_management`, and each member's `also_management`): where all of them are involved in managing the entity, state that this condition holds and that the communication requirement of ASA550-P27 does not apply; otherwise state the significant matters to communicate. If `governance` is not recorded, record a `limitation` and treat ASA550-P27 as applicable.
++6. Report: whether the related party relationships are appropriately accounted for and disclosed is evaluated when forming the opinion (ASA550-P25). State that if the related party disclosures in the financial report omit a related party identified here, ASA550-Aus27.2 requires the opinion to be modified in accordance with ASA 705; do not conclude on the opinion here.
++7. Address every open finding in the reasoning chain. If you conclude `accept` despite a finding, state why it does not call for further work.
++
++## proposed_action
++
++- `accept`: every identified related party is in management's declaration, the declaration has no party the audit could not confirm, and no open finding calls for further work.
++- `more_evidence`: the declaration omits an identified related party, a declared party cannot be confirmed from the inputs, or an open finding calls for further work.
++- Do not use `misstatement` or `close`: the accounting for and disclosure of related parties are evaluated when forming the opinion.
++
++## Output (JudgmentDraft)
++
++- `conclusion`: two to five sentences: whether the declaration is complete and which related parties it omits, the follow-up under ASA550-P22, the written representations, whether ASA550-P27 applies and why, and the consequence under ASA550-Aus27.2.
++- `reasoning_chain`: ordered steps, indexed from 0.
++  - `fact`: one fact taken from the inputs; `evidence` holds at least one pointer to where it appears.
++  - `standard`: the requirement applied; `evidence` holds one pointer to a fragment ID listed under Standards.
++  - `inference`: a conclusion drawn only from earlier steps; `from_steps` lists their indices, all lower than this step's own; `evidence` is empty.
++  - `assumption`: a premise the inputs do not establish. `limitation`: a gap in the inputs that affects the conclusion.
++  - Leave `status` unset. The last step is an inference that states the conclusion.
++- `evidence`: every pointer used in reasoning_chain, without duplicates.
++- `counter_argument`: the specific fact or document that, if it existed, would overturn the conclusion.
++- `proposed_action`: as above.
++- `misstatement_draft`: null.
++- `self_confidence`: 0 to 1, your confidence in the conclusion given the inputs.
++
++Evidence pointers. Every pointer must include `source_type`.
++
++| Source | type | source_type | source_id | locator | page | reliability |
++|---|---|---|---|---|---|---|
++| Registry extract line (the `evidence` of a link) | external | document | as given | as given | as given | as given |
++| Management's declaration or another client profile field | voucher | client_profile | {{ subject_id }} | profile field, e.g. related_parties or governance | null | internal_copy |
++| Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
++
++{% from "_output_language.md.j2" import narrative_language with context %}
++{{ narrative_language() }}
+diff --git a/src/backend/knowledge/workpapers.yaml b/src/backend/knowledge/workpapers.yaml
+index 2b4fa85..6503c11 100644
+--- a/src/backend/knowledge/workpapers.yaml
++++ b/src/backend/knowledge/workpapers.yaml
+@@ -237,7 +237,7 @@ standards:
+     content:
+       zh: "识别的关联方名称及关联方关系的性质"
+       en: "Names of the identified related parties and the nature of the relationships"
+-    refs: [G-3, G-4]
++    refs: [G-3, G-4, G-7]
+   - standard: ASA 600
+     paragraphs: "59"
+     content:
+diff --git a/src/frontend/src/locales/en.ts b/src/frontend/src/locales/en.ts
+index 7e69f24..de6434d 100644
+--- a/src/frontend/src/locales/en.ts
++++ b/src/frontend/src/locales/en.ts
+@@ -147,6 +147,7 @@ export const en = {
+     'GEN-05': 'Full journal entry scan',
+     'GEN-02': 'Journal entry exception attribution',
+     'GEN-03': 'Related party analysis',
++    'GEN-01': 'Related party completeness review',
+     'GEN-06': 'Subsequent events evaluation',
+     'GEN-07': 'Subsequent events monitoring',
+     'GEN-08': 'Ownership and related party map',
+diff --git a/src/frontend/src/locales/zh.ts b/src/frontend/src/locales/zh.ts
+index 2ba49bb..ec18183 100644
+--- a/src/frontend/src/locales/zh.ts
++++ b/src/frontend/src/locales/zh.ts
+@@ -138,6 +138,7 @@ export const zh: Messages = {
+     'GEN-05': '全量分录扫描',
+     'GEN-02': '分录例外归因',
+     'GEN-03': '关联方图谱研判',
++    'GEN-01': '关联方完整性终审',
+     'GEN-06': '期后事项研判',
+     'GEN-07': '期后监控',
+     'GEN-08': '股权穿透与关联方关系图',
+diff --git a/tests/fixtures/llm_xero/GEN-01/CLIENT-XERO-3C1332BB-Q1.json b/tests/fixtures/llm_xero/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+new file mode 100644
+index 0000000..70f0a01
+--- /dev/null
++++ b/tests/fixtures/llm_xero/GEN-01/CLIENT-XERO-3C1332BB-Q1.json
+@@ -0,0 +1,266 @@
++{
++  "conclusion": "Management's declaration of related parties lists Alex Morgan and Morgan Advisory Pty Ltd but omits Victoria Property Agency Pty Ltd (VPA), which GEN-03 identified as a related party through Alex Morgan's directorship and 50% shareholding, so the declaration is incomplete. Under ASA 550 para 22, management is to be requested to identify all transactions with VPA, the auditor is to enquire why the entity's controls failed to identify or disclose the relationship, and the risk that other undisclosed related parties exist is to be reconsidered; the written representations on related parties required by para 26 are to be obtained in FIN-07. Para 27 applies \"Unless all of those charged with governance are involved in managing the entity\": the sole director, Alex Morgan, is also management, so that condition holds and the communication requirement of para 27 does not apply. If management does not add VPA to the related party disclosures, the opinion is to be modified under para Aus 27.2.",
++  "reasoning_chain": [
++    {
++      "kind": "fact",
++      "text": "Management's declaration of related parties lists Alex Morgan (sole director and 85% shareholder) and Morgan Advisory Pty Ltd (company controlled by the director); Victoria Property Agency Pty Ltd is not in it.",
++      "evidence": [
++        {
++          "type": "voucher",
++          "source_type": "client_profile",
++          "source_id": "CLIENT-XERO-3C1332BB-Q1",
++          "locator": "related_parties",
++          "page": null,
++          "reliability": "internal_copy"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "The auditor enquires of management the identity of the entity's related parties and the nature of the relationships (ASA 550 para 13); the declaration is the result of that enquiry.",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P13",
++          "locator": "para 13",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "Alex Morgan holds 85 of the 100 shares of Demo Company (AU) Pty Ltd (85%).",
++      "evidence": [
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-c15d981bf4f9",
++          "locator": "shareholders[0]",
++          "page": 2,
++          "reliability": "external_original"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "Alex Morgan is a director of Victoria Property Agency Pty Ltd and holds 50% of its shares.",
++      "evidence": [
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-d7305364b2ae",
++          "locator": "officeholders[1]",
++          "page": 1,
++          "reliability": "external_original"
++        },
++        {
++          "type": "external",
++          "source_type": "document",
++          "source_id": "DOC-d7305364b2ae",
++          "locator": "shareholders[1]",
++          "page": 2,
++          "reliability": "external_original"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "Victoria Property Agency Pty Ltd is a related party identified in the audit (the confirmed GEN-03 judgment J-GEN-03-1-ACN-900043030) that the declaration omits; Morgan Advisory Pty Ltd, the other company in the ownership graph, is declared. The declaration is therefore incomplete.",
++      "evidence": [],
++      "from_steps": [
++        0,
++        1,
++        2,
++        3
++      ]
++    },
++    {
++      "kind": "standard",
++      "text": "For related parties that management has not identified or disclosed, the auditor requests management to identify all transactions with them, enquires why the entity's controls failed to identify or disclose them, and reconsiders the risk that other undisclosed related parties exist (ASA 550 para 22(b) and (d)).",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P22",
++          "locator": "para 22",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "The auditor obtains written representations from management that they have disclosed the identity of the entity's related parties and all the relationships and transactions of which they are aware (ASA 550 para 26); these are obtained in FIN-07.",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P26",
++          "locator": "para 26",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "fact",
++      "text": "The client profile records the board as the governing body, with one member, Alex Morgan, who is also involved in management, and records that all of those charged with governance are involved in managing the entity.",
++      "evidence": [
++        {
++          "type": "voucher",
++          "source_type": "client_profile",
++          "source_id": "CLIENT-XERO-3C1332BB-Q1",
++          "locator": "governance",
++          "page": null,
++          "reliability": "internal_copy"
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "standard",
++      "text": "ASA 550 para 27: \"Unless all of those charged with governance are involved in managing the entity, the auditor shall communicate with those charged with governance significant matters arising during the audit in connection with the entity's related parties.\"",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-P27",
++          "locator": "para 27",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "All of those charged with governance are involved in managing the entity, so the condition in para 27 holds and its communication requirement does not apply.",
++      "evidence": [],
++      "from_steps": [
++        7,
++        8
++      ]
++    },
++    {
++      "kind": "standard",
++      "text": "If the related party disclosures in the financial report do not satisfy the requirements of the framework, the auditor modifies the opinion in accordance with ASA 705 (ASA 550 para Aus 27.2).",
++      "evidence": [
++        {
++          "type": "standard",
++          "source_type": "standard",
++          "source_id": "ASA550-Aus27.2",
++          "locator": "para Aus 27.2",
++          "page": null,
++          "reliability": null
++        }
++      ],
++      "from_steps": []
++    },
++    {
++      "kind": "inference",
++      "text": "The declaration omits Victoria Property Agency Pty Ltd, so more evidence is needed: the follow-up under para 22 and the written representations in FIN-07; para 27 does not apply, and the opinion is to be modified under para Aus 27.2 if the disclosures do not include VPA.",
++      "evidence": [],
++      "from_steps": [
++        4,
++        5,
++        6,
++        9,
++        10
++      ]
++    }
++  ],
++  "evidence": [
++    {
++      "type": "voucher",
++      "source_type": "client_profile",
++      "source_id": "CLIENT-XERO-3C1332BB-Q1",
++      "locator": "related_parties",
++      "page": null,
++      "reliability": "internal_copy"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P13",
++      "locator": "para 13",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-c15d981bf4f9",
++      "locator": "shareholders[0]",
++      "page": 2,
++      "reliability": "external_original"
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-d7305364b2ae",
++      "locator": "officeholders[1]",
++      "page": 1,
++      "reliability": "external_original"
++    },
++    {
++      "type": "external",
++      "source_type": "document",
++      "source_id": "DOC-d7305364b2ae",
++      "locator": "shareholders[1]",
++      "page": 2,
++      "reliability": "external_original"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P22",
++      "locator": "para 22",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P26",
++      "locator": "para 26",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "voucher",
++      "source_type": "client_profile",
++      "source_id": "CLIENT-XERO-3C1332BB-Q1",
++      "locator": "governance",
++      "page": null,
++      "reliability": "internal_copy"
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-P27",
++      "locator": "para 27",
++      "page": null,
++      "reliability": null
++    },
++    {
++      "type": "standard",
++      "source_type": "standard",
++      "source_id": "ASA550-Aus27.2",
++      "locator": "para Aus 27.2",
++      "page": null,
++      "reliability": null
++    }
++  ],
++  "counter_argument": "A declaration by management that already lists Victoria Property Agency Pty Ltd (for example an updated declaration not yet recorded in the client profile) would make the declaration complete, leaving only the transactions identified in GEN-03 to follow up.",
++  "proposed_action": "more_evidence",
++  "misstatement_draft": null,
++  "self_confidence": 0.8
++}
+diff --git a/tests/test_autonomy_policy.py b/tests/test_autonomy_policy.py
+index 3eabec1..8546c28 100644
+--- a/tests/test_autonomy_policy.py
++++ b/tests/test_autonomy_policy.py
+@@ -64,7 +64,7 @@ XERO_OBJECTIVES = [
+ 
+ 
+ def template_of(procedure_id: str) -> ProcedureTemplate:
+-    """程序的模板; 本版还没有模板的程序 (GEN-06, GEN-04, GEN-01, FIN-09, FIN-15) 用一份不覆盖降级表的模板代替,
++    """程序的模板; 本版还没有模板的程序 (GEN-06, GEN-04, FIN-09, FIN-15) 用一份不覆盖降级表的模板代替,
+     函数只看模板的 downgrade_rules."""
+     try:
+         return LIBRARY.load(procedure_id)
+diff --git a/tests/test_fieldwork_gen01.py b/tests/test_fieldwork_gen01.py
+new file mode 100644
+index 0000000..a589d48
+--- /dev/null
++++ b/tests/test_fieldwork_gen01.py
+@@ -0,0 +1,477 @@
++"""需求 R141: A6 GEN-01 关联方完整性终审 (功能 related_parties).
++
++状态为 Xero 进入 P2 的状态并入 GEN-08 在补造登记上的结果 (tests/test_evidence_gen08.run_gen08) 与 GEN-03 的结果:
++GEN-03 用真实判断引擎读 Xero 的 fixture 正本 (需求 R140), 两条判断再经审计师决定 (decided: decisions.confirm_effects
++或 override_effects, VPA 的 R01-1 随之归因). 其余为 Xero 演示的假存储 (make_xero_deps). 取对象与上下文的用例判断引擎
++为 FakeJudgmentEngine; fixture 的用例用真实判断引擎读 tests/fixtures/llm_xero/GEN-01.
++"""
++
++import asyncio
++import json
++from collections.abc import Mapping
++from dataclasses import dataclass, replace
++from typing import Any
++
++import pytest
++
++from backend.adapters.llm import MockLLMClient
++from backend.agents.base import AgentDeps, RunContext
++from backend.agents.fieldwork import FieldworkAgent
++from backend.agents.registry import build_agents
++from backend.contracts.models import (
++    AgentId,
++    AuditException,
++    AutonomyLevel,
++    CriticVerdict,
++    Decision,
++    DocumentRef,
++    DocumentType,
++    ExceptionDisposition,
++    Judgment,
++    Phase,
++    Procedure,
++    ProcedureStatus,
++    ProposedAction,
++    ReviewRecord,
++    ReviewStatus,
++    RunStatus,
++    StepStatus,
++    TaskKind,
++    TrailEntry,
++    TrailKind,
++)
++from backend.contracts.services import JudgmentContext, JudgmentOutcome
++from backend.contracts.state import EngagementState, StatePatch
++from backend.orchestration.decisions import confirm_effects, override_effects, recompute_procedure
++from backend.orchestration.merge import check_patch
++from backend.orchestration.nodes import apply_patch
++from backend.orchestration.scheduler import ready_procedures
++from tests.external import needs
++from tests.fakes import (
++    NOW,
++    FakeJudgmentEngine,
++    FakeRegistry,
++    FakeRuleEngine,
++    FakeTrail,
++    judgment,
++    make_deps,
++    make_run,
++    passed,
++)
++from tests.fixture_sets import XERO
++from tests.test_evidence_gen08 import ADVISORY, ALEX, DEMO, VPA, run_gen08
++from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context
++from tests.xero_fakes import XERO_RULES, make_xero_deps, manifest_documents, xero_profile, xero_registry, xero_state
++
++FEATURES = frozenset({"critic", "related_parties"})
++CLIENT = "CLIENT-XERO-3C1332BB-Q1"  # 项目的 client_id: 判断对象与 fixture_key
++TASK = f"T-J-GEN-01-1-{CLIENT}-v1"
++DECLARED = ("related_parties", "key_personnel", "ownership", "governance")  # data.declared 取的画像字段
++
++
++@dataclass(frozen=True)
++class Gen03:
++    state: EngagementState  # 并入 GEN-08 与 GEN-03 片段之后, 审计师决定之前
++    patch: StatePatch  # GEN-03 的片段 (两条判断, 两条 normal 任务)
++
++
++def extracts(state: EngagementState) -> list[DocumentRef]:
++    """GEN-08 存档的登记 PDF: 记进财务存储的文件登记 (同真实的 EvidenceStore.save), 判断引用摘录页时按登记解析."""
++    return [d for d in state["documents"] if d.type is DocumentType.registry_extract]
++
++
++async def run_gen03() -> Gen03:
++    """GEN-08 之后用真实判断引擎执行一次 GEN-03 (规则结果取 XERO_RULES), 主模型与复核模型都读 Xero 的 fixture 正本."""
++    client = MockLLMClient(XERO.fixtures)
++    rules = FakeRuleEngine({"GEN-03": XERO_RULES["GEN-03"]})
++    deps = make_xero_deps(rules=rules, features=FEATURES, llm=client, review_llm=client)
++    gen08, _, _, _ = await run_gen08(xero_registry(), xero_profile(), xero=True)
++    state: EngagementState = apply_patch(xero_state(), gen08)  # type: ignore[arg-type]
++    deps.financial_store.document_refs += extracts(state)
++    patch = await FieldworkAgent(deps).run(xero_context(deps, state, "GEN-03", []))
++    return Gen03(apply_patch(state, patch), patch)  # type: ignore[arg-type]
++
++
++@pytest.fixture(scope="module")
++def gen03() -> Gen03:
++    return asyncio.run(run_gen03())
++
++
++def decided(gen03: Gen03, overrides: Mapping[str, str] | None = None) -> EngagementState:
++    """GEN-03 两条任务都经审计师决定之后的状态: overrides 中的节点 (节点 ID → 新结论) 为 override, 其余为 confirm;
++    决定的效果 (判断新版本, 人工判断, 例外归因) 并入状态."""
++    state = gen03.state
++    for task in gen03.patch["review_tasks"]:
++        target = next(j for j in state["judgments"] if j.id == task.target_id)
++        current = {x.id: x for x in state["exceptions"]}
++        explained = [current[i] for i in target.exception_ids]
++        conclusion = (overrides or {}).get(target.subject_id)
++        if conclusion is None:
++            effects = confirm_effects(target, explained)
++        else:
++            record = ReviewRecord(
++                id=f"D-{task.id}",
++                task_id=task.id,
++                target_version=target.version,
++                decision=Decision.override,
++                reason="审计师改写结论",
++                override_conclusion=conclusion,
++                reviewed_by="U-1",
++                decided_at=NOW,
++            )
++            effects = override_effects(record, task, target, explained, {j.id for j in state["judgments"]})
++        patch = {
++            "judgments": [e for e in effects if isinstance(e, Judgment)],
++            "exceptions": [e for e in effects if isinstance(e, AuditException)],
++        }
++        state = apply_patch(state, patch)  # type: ignore[arg-type]
++    return state
++
++
++def gen01_deps(real: bool = False, **kwargs: Any) -> tuple[AgentDeps, FakeJudgmentEngine]:
++    """功能 related_parties 打开的 Xero 依赖: 判断引擎缺省为假引擎 (报告主体通过), real 为真时为真实引擎 (主模型与
++    复核模型都读 fixture 正本), 返回的假引擎不被调用."""
++    client = MockLLMClient(XERO.fixtures)
++    deps = make_xero_deps(features=FEATURES, llm=client, review_llm=client, **kwargs)
++    engine = FakeJudgmentEngine({CLIENT: passed()})
++    if not real:
++        deps = replace(deps, judgments=engine, review_llm=None)
++    return deps, engine
++
++
++async def run_gen01(deps: AgentDeps, state: EngagementState) -> tuple[RunContext, StatePatch]:
++    """在给定状态上执行一次 GEN-01."""
++    deps.financial_store.document_refs += extracts(state)
++    ctx = xero_context(deps, state, "GEN-01", [])
++    return ctx, await FieldworkAgent(deps).run(ctx)
++
++
++def gen03_fixture(subject: str) -> dict[str, Any]:
++    return json.loads((XERO.fixtures / "GEN-03" / f"{subject}.json").read_text(encoding="utf-8"))
++
++
++# ── 程序定义与分派 ──
++
++
++def test_gen01_template_and_dispatch() -> None:
++    """验收 1: GEN-01.yaml 的各项; 只在功能 related_parties 打开时启用, 映射到 FieldworkAgent; 基线不启用."""
++    deps = make_deps(FakeRegistry(), FakeTrail(), features=FEATURES)
++    t = deps.library.load("GEN-01")
++    assert (t.owner, t.engine, t.autonomy_level, t.always_review, t.manual_result_allowed) == (
++        AgentId.A6,
++        "llm",
++        "L1",
++        True,
++        True,
++    )
++    assert (t.cycle, t.fixed, t.feature) == ("Pervasive", True, "related_parties")
++    assert (t.outputs, t.depends_on) == (["judgments", "exceptions", "review_tasks"], ["GEN-03", "GEN-08"])
++    assert t.standards == [
++        "ASA550-P13",
++        "ASA550-P22",
++        "ASA550-P25",
++        "ASA550-P26",
++        "ASA550-P27",
++        "ASA550-Aus27.2",
++    ]
++    assert t.evidence_required == ["external"] and t.rules == []
++    assert t.llm is not None and (t.llm.prompt, t.llm.output_model) == ("GEN-01.md.j2", "JudgmentDraft")
++    assert "GEN-01" in FieldworkAgent.procedures and isinstance(build_agents(deps)["GEN-01"], FieldworkAgent)
++    baseline = make_deps(FakeRegistry(), FakeTrail())
++    assert not baseline.library.enabled("GEN-01") and "GEN-01" not in build_agents(baseline)
++
++
++# ── 判断对象与上下文 ──
++
++
++@needs("q1_snapshot", "q1_supplements")
++async def test_subject_and_context(gen03: Gen03) -> None:
++    """验收 2: 判断对象只有报告主体一个 (client_id, fixture_key 同), 带本项目采用的画像. data: declared 为画像的申报
++    部分, applicable_framework; identified 为 GEN-03 两条已确认的判断 (五项); R01-1 已随 VPA 的判断确认而归因, 没有
++    未归因的例外; graph 的节点不带出生日期, 关系带登记摘录那一行的指针 (同 GEN-03 的 links)."""
++    deps, engine = gen01_deps()
++    state = decided(gen03)
++    ctx, patch = await run_gen01(deps, state)
++    check_patch(
++        patch,
++        writer=AgentId.A6,
++        procedure_id="GEN-01",
++        run_id=ctx.run.id,
++        state=ctx.state,
++        outputs=ctx.template.outputs,
++    )
++    [(_, jctx, _)] = engine.calls
++    assert (jctx.subject_id, jctx.fixture_key, jctx.client_profile) == (CLIENT, CLIENT, xero_profile())
++    data = jctx.data
++    assert set(data) == {"declared", "applicable_framework", "identified", "open_exceptions", "graph"}
++    profile = xero_profile().model_dump(mode="json")
++    assert data["declared"] == {field: profile[field] for field in DECLARED}
++    assert [p["name"] for p in data["declared"]["related_parties"]] == ["Alex Morgan", "Morgan Advisory Pty Ltd"]
++    assert data["declared"]["governance"]["all_in_management"] is True
++    assert data["applicable_framework"] == "tier2_gpfs"
++    assert data["identified"] == [
++        {
++            "id": f"J-GEN-03-1-{node}",
++            "subject_id": node,
++            "conclusion": gen03_fixture(node)["conclusion"],
++            "proposed_action": action,
++            "review_status": "confirmed",
++        }
++        for node, action in ((VPA, "more_evidence"), (ADVISORY, "accept"))
++    ]
++    assert data["open_exceptions"] == [] and jctx.rule_findings == []
++    graph = state["ownership_graph"]
++    assert graph is not None
++    assert data["graph"]["reporting_entity_id"] == DEMO
++    assert [n["id"] for n in data["graph"]["nodes"]] == [n.id for n in graph.nodes]
++    assert all("birth_date" not in n for n in data["graph"]["nodes"])
++    assert data["graph"]["links"] == [x.model_dump(mode="json") for x in graph.links]
++    alex_vpa = [x for x in data["graph"]["links"] if (x["from_id"], x["to_id"]) == (ALEX, VPA)]
++    assert [(x["relation"], x["evidence"]["locator"], x["evidence"]["page"]) for x in alex_vpa] == [
++        ("director", "officeholders[1]", 1),
++        ("shareholder", "shareholders[1]", 2),
++    ]
++    assert [(t.id, t.kind) for t in patch["review_tasks"]] == [(TASK, TaskKind.normal)]
++
++
++@needs("q1_snapshot", "q1_supplements")
++async def test_identified_takes_the_auditors_judgment_when_overridden(gen03: Gen03) -> None:
++    """验收 2 的 "被推翻时取人工判断": 审计师 override 了 VPA 的 GEN-03 判断时, identified 中 VPA 一项为人工判断 -H1
++    (结论为审计师写的, confirmed), 被推翻的原判断不在其中; Morgan Advisory 照旧."""
++    deps, engine = gen01_deps()
++    await run_gen01(deps, decided(gen03, {VPA: "VPA is a related party; the declaration omits it."}))
++    [(_, jctx, _)] = engine.calls
++    assert [(j["id"], j["conclusion"], j["review_status"]) for j in jctx.data["identified"]] == [
++        (f"J-GEN-03-1-{VPA}-H1", "VPA is a related party; the declaration omits it.", "confirmed"),
++        (f"J-GEN-03-1-{ADVISORY}", gen03_fixture(ADVISORY)["conclusion"], "confirmed"),
++    ]
++
++
++@needs("q1_snapshot", "q1_supplements")
++async def test_open_gen08_findings_are_rule_findings(gen03: Gen03) -> None:
++    """Q3 的结论: GEN-08 尚未归因的例外 (合成的报告主体 R02) 既在 data.open_exceptions, 也是本对象的规则例外; 已归因
++    的 R01-1 不在其中. 判断解释它 (exception_ids), 确认后它置 attributed."""
++    state = decided(gen03)
++    [r01] = [x for x in gen03.state["exceptions"] if x.id == "X-GEN-08-1-R01-1"]  # 审计师决定之前的 open 版本
++    r02 = r01.model_copy(
++        update={"id": "X-GEN-08-1-R02-1", "rule_id": "R02", "source_ids": [DEMO], "detail": {"reason": "没有 ACN"}}
++    )
++    state = apply_patch(state, {"exceptions": [r02]})  # type: ignore[arg-type]
++    deps, engine = gen01_deps()
++    _, patch = await run_gen01(deps, state)
++    [(_, jctx, _)] = engine.calls
++    assert [x.id for x in jctx.rule_findings] == [r["id"] for r in jctx.data["open_exceptions"]] == [r02.id]
++    [made] = patch["judgments"]
++    assert made.exception_ids == [r02.id]
++    [*_, settled] = confirm_effects(made, [r02])
++    assert isinstance(settled, AuditException) and settled.disposition is ExceptionDisposition.attributed
++
++
++@needs("q1_snapshot", "q1_supplements")
++async def test_no_ownership_graph_raises(gen03: Gen03) -> None:
++    """状态没有关系图 (GEN-08 未执行) 时抛 LookupError, 不调判断引擎."""
++    deps, engine = gen01_deps()
++    with pytest.raises(LookupError, match="关系图"):
++        await run_gen01(deps, decided(gen03) | {"ownership_graph": None})  # type: ignore[arg-type]
++    assert engine.calls == []
++
++
++@needs("q1_snapshot", "q1_supplements")
++async def test_subject_awaiting_review_is_not_rejudged(gen03: Gen03) -> None:
++    """报告主体已有待决的 GEN-01 任务 (已交人处理) 时整条重跑不再重判它, 不调判断引擎."""
++    deps, engine = gen01_deps()
++    _, first = await run_gen01(deps, decided(gen03))
++    state = apply_patch(decided(gen03), first)  # type: ignore[arg-type]
++    await run_gen01(deps, state)
++    assert [jctx.subject_id for _, jctx, _ in engine.calls] == [CLIENT]
++
++
++# ── 调度: 等 GEN-03 的任务都决定 (验收 3) ──
++
++
++@needs("q1_snapshot", "q1_supplements")
++def test_gen01_waits_for_both_gen03_tasks(gen03: Gen03) -> None:
++    """验收 3: GEN-03 有待决任务 (awaiting_human) 时 ready_procedures 不含 GEN-01; 两条任务决定了一条, 重算后 GEN-03
++    仍为 awaiting_human (recompute_procedure 不出新版本), GEN-01 仍不派发; 两条都决定后 GEN-03 置 completed, GEN-01
++    才可派发."""
++    library = gen01_deps()[0].library
++
++    def procedure(pid: str, status: ProcedureStatus) -> Procedure:
++        level = library.load(pid).autonomy_level
++        return Procedure(id=pid, phase=Phase.P2_Executing, template_commit="t", autonomy_level=level, status=status)
++
++    gen08, waiting, gen01 = (
++        procedure("GEN-08", ProcedureStatus.completed),
++        procedure("GEN-03", ProcedureStatus.awaiting_human),
++        procedure("GEN-01", ProcedureStatus.planned),
++    )
++    _, second = gen03.patch["review_tasks"]
++    assert ready_procedures([gen08, waiting, gen01], library) == []
++    assert recompute_procedure(waiting, [second]) is None
++    done = recompute_procedure(waiting, [])
++    assert done is not None and done.status is ProcedureStatus.completed
++    assert ready_procedures([gen08, done, gen01], library) == ["GEN-01"]
++
++
++@pytest.mark.parametrize(
++    ("action", "confidence", "level"),
++    [(ProposedAction.accept, 0.99, AutonomyLevel.L4), (ProposedAction.more_evidence, 0.3, AutonomyLevel.L1)],
++    ids=["accept-high", "more-evidence-low"],
++)
++def test_always_a_normal_task(action: ProposedAction, confidence: float, level: AutonomyLevel) -> None:
++    """验收 5: 不论置信度, 建议动作与 (运行时) 自主度, GEN-01 的判断都建 normal 任务 (always_review), 允许 confirm,
++    override, misstatement."""
++    deps = make_deps(FakeRegistry(), FakeTrail(), features=FEATURES)
++    template = deps.library.load("GEN-01")
++    jctx = JudgmentContext(subject_id=CLIENT, task={}, data={}, fixture_key=CLIENT)
++    made = judgment(
++        jctx,
++        make_run("GEN-01"),
++        proposed_action=action,
++        confidence=confidence,
++        autonomy_level=level,
++        critic_verdict=CriticVerdict.consistent,
++    )
++    outcome = JudgmentOutcome(judgment=made, failure=None, attempts=1, trail_ids=["TR-1"])
++    assert deps.queue.classify(template, outcome, []) is TaskKind.normal
++    task = deps.queue.make_task(TaskKind.normal, made, "GEN-01", made.run_id, NOW)
++    assert (task.id, deps.queue.allowed(task)) == (TASK, {Decision.confirm, Decision.override, Decision.misstatement})
++
++
++# ── fixture (验收 4, 5): 真实判断引擎, mock 大模型读 Xero 的 fixture 正本 ──
++
++
++@dataclass(frozen=True)
++class Fixed:
++    deps: AgentDeps
++    patch: StatePatch  # GEN-01 的状态片段
++    calls: list[TrailEntry]  # 大模型调用的留痕
++    context: JudgmentContext  # 送给判断引擎的上下文
++    judgment: Judgment
++
++
++async def run_fixed(gen03: Gen03) -> Fixed:
++    trail = FakeTrail()
++    deps, _ = gen01_deps(real=True, trail=trail)
++    recording = RecordingJudgments(deps.judgments)
++    deps = replace(deps, judgments=recording)
++    _, patch = await run_gen01(deps, decided(gen03))
++    [context] = recording.contexts
++    [made] = patch["judgments"]
++    return Fixed(deps, patch, [e for e in trail.entries if e.kind is TrailKind.llm_call], context, made)
++
++
++@pytest.fixture(scope="module")
++def fixed(gen03: Gen03) -> Fixed:
++    return asyncio.run(run_fixed(gen03))
++
++
++def fixture() -> dict[str, Any]:
++    """GEN-01 的 fixture 正本."""
++    return json.loads((XERO.fixtures / "GEN-01" / f"{CLIENT}.json").read_text(encoding="utf-8"))
++
++
++def context_problems(value: dict[str, Any], jctx: JudgmentContext, standards: list[str]) -> list[str]:
++    """fixture 中引了上下文以外来源的指针: 允许的为关系图各关系的证据所指的摘录页 (文件与页都须相同), 本项目画像的
++    顶层字段, 以及模板 standards 的片段. 防 fixture 引到没有关系指向的页或别的画像而照样通过."""
++    allowed: dict[str, set[Any]] = {
++        "document": {(x["evidence"]["source_id"], x["evidence"]["page"]) for x in jctx.data["graph"]["links"]},
++        "client_profile": {(jctx.subject_id, field) for field in type(xero_profile()).model_fields},
++        "standard": set(standards),
++    }
++    problems = []
++    for p in [*value["evidence"], *(q for s in value["reasoning_chain"] for q in s["evidence"])]:
++        key: Any = p["source_id"]
++        if p["source_type"] == "document":
++            key = (p["source_id"], p.get("page"))
++        elif p["source_type"] == "client_profile":
++            key = (p["source_id"], p.get("locator"))
++        if key not in allowed.get(p["source_type"], set()):
++            problems.append(f"{p['source_type']} {p['source_id']} {p.get('locator')} 不在上下文中")
++    return sorted(set(problems))
++
++
++def manifest_id(path: str) -> str:
++    [found] = [i for i, d in manifest_documents().items() if d["path"] == path]
++    return found
++
++
++@needs("q1_snapshot", "q1_supplements")
++def test_fixture_passes_the_real_engine(fixed: Fixed) -> None:
++    """验收 4, 5: 调一次大模型, 第 1 次就通过 (attempts 1, 没有失败级别与错误), 推理链每步都受支持; 判断 L1, 要更多
++    证据, 没有错报草稿, 不经 A7 (skipped), 没有规则例外; 置信度 {evidence 1.0 (外部原件), llm 0.8}, 没有 rule 分项,
++    按 0.3 / 0.2 加权为 0.92. 建 normal 任务 T-J-GEN-01-1-CLIENT-XERO-3C1332BB-Q1-v1, 执行成功. 指针都在上下文内
++    (context_problems)."""
++    assert [(e.payload["fixture_key"], e.payload["attempt"], e.payload["level_failed"]) for e in fixed.calls] == [
++        (CLIENT, 1, None)
++    ]
++    assert fixed.calls[0].payload["errors"] == []
++    j = fixed.judgment
++    assert {s.status for s in j.reasoning_chain} == {StepStatus.supported}
++    assert (j.id, j.autonomy_level, j.proposed_action, j.misstatement_draft, j.critic_verdict, j.exception_ids) == (
++        f"J-GEN-01-1-{CLIENT}",
++        AutonomyLevel.L1,
++        ProposedAction.more_evidence,
++        None,
++        CriticVerdict.skipped,
++        [],
++    )
++    assert (j.review_status, j.confidence_parts, j.confidence) == (
++        ReviewStatus.pending,
++        {"evidence": 1.0, "llm": 0.8},
++        0.92,
++    )
++    [task] = fixed.patch["review_tasks"]
++    assert (task.id, task.kind) == (TASK, TaskKind.normal)
++    assert fixed.deps.queue.allowed(task) == {Decision.confirm, Decision.override, Decision.misstatement}
++    assert fixed.patch["exceptions"] == [] and fixed.patch["procedure_runs"][0].status is RunStatus.succeeded
++    assert context_problems(fixture(), fixed.context, LIBRARY.load("GEN-01").standards) == []
++
++
++@needs("q1_snapshot", "q1_supplements")
++@pytest.mark.parametrize(
++    "pointer",
++    [
++        {"source_type": "document", "source_id": "DOC-d7305364b2ae", "locator": "officeholders[1]", "page": 3},
++        {"source_type": "client_profile", "source_id": "CLIENT-OTHER", "locator": "related_parties"},
++        {"source_type": "standard", "source_id": "ASA550-P10", "locator": "para 10"},  # 模板 standards 以外
++    ],
++    ids=["page-not-linked", "other-profile", "other-standard"],
++)
++def test_context_guard_reports_pointers_outside_the_context(fixed: Fixed, pointer: dict[str, Any]) -> None:
++    """自测: fixture 副本另引一个上下文以外的来源 (VPA 摘录没有关系指向的页, 别的画像, 模板以外的准则), 守卫报且只报
++    这一条."""
++    value = fixture()
++    value["evidence"].append({"type": "voucher", "page": None, "reliability": None, **pointer})
++    problems = context_problems(value, fixed.context, LIBRARY.load("GEN-01").standards)
++    assert problems == [f"{pointer['source_type']} {pointer['source_id']} {pointer['locator']} 不在上下文中"]
++
++
++@needs("q1_snapshot", "q1_supplements")
++def test_declaration_omits_vpa(fixed: Fixed) -> None:
++    """验收 4: 结论含设计稿第 6.3 节 GEN-01 的要点 (只查关键词): 申报清单 (Alex Morgan, Morgan Advisory) 漏列 VPA, 第
++    22 段的三项后续, 第 26 段书面声明交 FIN-07, 唯一董事兼任管理层使第 27 段 "除非" 条件成立而沟通要求不适用, 不补
++    披露时依 Aus 27.2 段修改意见. 证据含画像的 related_parties 与 governance, VPA 摘录第 1, 2 页, Demo 摘录第 2 页,
++    ASA550-P22, P26, P27, Aus27.2."""
++    j = fixed.judgment
++    for text in (
++        "lists Alex Morgan and Morgan Advisory Pty Ltd but omits Victoria Property Agency Pty Ltd",
++        "identify all transactions with VPA",
++        "why the entity's controls failed to identify or disclose the relationship",
++        "the risk that other undisclosed related parties exist is to be reconsidered",
++        "required by para 26 are to be obtained in FIN-07",
++        '"Unless all of those charged with governance are involved in managing the entity"',
++        "the sole director, Alex Morgan, is also management, so that condition holds",
++        "the communication requirement of para 27 does not apply",
++        "the opinion is to be modified under para Aus 27.2",
++    ):
++        assert text in j.conclusion, text
++    demo, vpa = (manifest_id(f"registry/extracts/{acn}.pdf") for acn in ("900043021", "900043030"))
++    assert {
++        ("client_profile", CLIENT, "related_parties", None),
++        ("client_profile", CLIENT, "governance", None),
++        *(("document", vpa, locator, page) for locator, page in (("officeholders[1]", 1), ("shareholders[1]", 2))),
++        ("document", demo, "shareholders[0]", 2),
++        *(("standard", f, f"para {p}", None) for f, p in (("ASA550-P22", "22"), ("ASA550-P26", "26"))),
++        *(("standard", f, f"para {p}", None) for f, p in (("ASA550-P27", "27"), ("ASA550-Aus27.2", "Aus 27.2"))),
++    } <= {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence}
+diff --git a/tests/test_knowledge.py b/tests/test_knowledge.py
+index 936e001..cdf0ce0 100644
+--- a/tests/test_knowledge.py
++++ b/tests/test_knowledge.py
+@@ -140,12 +140,12 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
+ 
+ @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
+ def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
+-    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131), GEN-03, GEN-08
+-    (功能 related_parties, 需求 R139, R137) 与 GEN-07, GEN-06 (功能 going_concern, 需求 R177, R179), 基线下都不启用;
+-    非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时,
++    """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131), GEN-03, GEN-08,
++    GEN-01 (功能 related_parties, 需求 R139, R137, R141) 与 GEN-07, GEN-06 (功能 going_concern, 需求 R177, R179), 基线下
++    都不启用; 非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时,
+     ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
+     assert ProcedureLibrary(ROOT).fixed() == []
+-    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-06", "GEN-07", "GEN-08"} <= {
++    assert {"GEN-01", "GEN-02", "GEN-03", "GEN-05", "GEN-06", "GEN-07", "GEN-08"} <= {
+         t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed
+     }  # 集合包含
+     root = tmp_path / "knowledge"
+@@ -3562,6 +3562,7 @@ WORKPAPERS = {  # 程序 → 底稿索引号 (验收 1); GEN-09 不出底稿
+     "GEN-03": "G-4",
+     "GEN-07": "G-5",
+     "GEN-06": "G-6",
++    "GEN-01": "G-7",
+     "FIN-04": "X",
+     "FIN-03": "X-A",
+     "FIN-08": "X-B",
+@@ -3813,10 +3814,11 @@ STANDARD_REFS = {
+         "G-4",
+         "G-5",
+         "G-6",
++        "G-7",
+     ],
+     "ASA 450": ["X", "X-A", "X-B", "X-C", "Z-1"],
+     "ASA 540": [],
+-    "ASA 550": ["G-3", "G-4"],
++    "ASA 550": ["G-3", "G-4", "G-7"],
+     "ASA 600": [],
+     "ASA 610": [],
+     "ASA 720": [],
+-- 
+2.43.0
+

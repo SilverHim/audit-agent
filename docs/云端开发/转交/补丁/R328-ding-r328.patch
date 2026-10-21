@@ -1,0 +1,2428 @@
+From 9d7307742c7c001a08d26c0a2ceabb06ca140442 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 20 Oct 2026 21:15:05 +0000
+Subject: [PATCH 1/2] =?UTF-8?q?feat:=20GEN-05=20=E5=A2=9E=E9=87=8F?=
+ =?UTF-8?q?=E6=89=AB=E6=8F=8F:=20verify=5Fcorrection=20=E5=85=88=E5=8F=AA?=
+ =?UTF-8?q?=E6=89=AB=E6=9B=B4=E6=AD=A3=E9=80=9A=E7=9F=A5=E8=BD=BD=E5=85=A5?=
+ =?UTF-8?q?=E7=9A=84=E5=87=AD=E8=AF=81,=20=E5=86=8D=E6=89=A7=E8=A1=8C=20FI?=
+ =?UTF-8?q?N-09?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- 契约: RunTrigger 加 incremental; ProcedureTemplate.incremental. GEN-05.yaml 标 incremental, 各规则 (R06 除外)
+  最后一步按 entry_nos 筛, audit_adjustment_start 改为派生引用 first_misstatement_communicated_at.
+- 节点: build_run 收 trigger 与参数覆盖; scan_increment 建增量执行, 执行记录, 例外与被测总体同一事务写入, 程序不出
+  新版本; verify_correction 的程序为 (GEN-05, FIN-09), 增量实例只扫各份更正通知载入而还没扫过的凭证.
+- FIN-09: 增量执行在匹配凭证上的未归因例外接在 V02 之后作规则例外; depends_on 加 GEN-05.
+- 文档: 接口文档第 2.1, 3, 6, 7, 8.1 节; 需求清单 R194 加注; 重新生成前端类型 (RunTrigger); R194 确认材料.
+---
+ .../R194.md"                                  |  43 ++++
+ ...00\346\261\202\346\270\205\345\215\225.md" |   1 +
+ ...45\345\217\243\346\226\207\346\241\243.md" |  16 +-
+ src/backend/agents/workpaper.py               |  25 +-
+ src/backend/contracts/knowledge.py            |   3 +
+ src/backend/contracts/models.py               |   1 +
+ src/backend/knowledge/procedures/FIN-09.yaml  |   7 +-
+ src/backend/knowledge/procedures/GEN-05.yaml  |  25 +-
+ src/backend/orchestration/nodes.py            | 162 +++++++++---
+ src/frontend/openapi.json                     |   3 +-
+ src/frontend/src/client/types.gen.ts          |   2 +-
+ tests/misstatement_fakes.py                   |   9 +-
+ tests/test_correction_verification.py         |  28 +-
+ tests/test_gen05_incremental.py               | 243 ++++++++++++++++++
+ tests/test_gen05_sql.py                       | 145 +++++++++++
+ tests/test_knowledge.py                       |   4 +-
+ 16 files changed, 660 insertions(+), 57 deletions(-)
+ create mode 100644 "docs/\344\272\221\347\253\257\345\274\200\345\217\221/\347\241\256\350\256\244\346\235\220\346\226\231/R194.md"
+ create mode 100644 tests/test_gen05_incremental.py
+
+diff --git "a/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\347\241\256\350\256\244\346\235\220\346\226\231/R194.md" "b/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\347\241\256\350\256\244\346\235\220\346\226\231/R194.md"
+new file mode 100644
+index 0000000..75cbf1e
+--- /dev/null
++++ "b/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\347\241\256\350\256\244\346\235\220\346\226\231/R194.md"
+@@ -0,0 +1,43 @@
++# R194 确认材料: GEN-05 增量扫描 (verify_correction 节点)
++
++来由: 草稿 JR-6c. 规模 M, 档位 xhigh. 分支 ding-r194, 叠在开发分支 f236cd4 上 (含 R165 合入的 f8a80c4, R324, R339). 不需迁移; 接口模型 RunTrigger 加一值, 已重新生成前端类型 (tsc, biome 通过).
++
++## 改动摘要
++
++- 契约: `RunTrigger.incremental`; `ProcedureTemplate.incremental: bool = False`. 接口文档第 2.1, 3, 6, 7, 8.1 节同步.
++- `GEN-05.yaml`: `incremental: true`; R06 以外各规则最后一步按 entry_nos 筛 (中间步骤照全期算); `audit_adjustment_start` 改为 `{ref: first_misstatement_communicated_at}`. `FIN-09.yaml`: depends_on 加 GEN-05.
++- `orchestration/nodes.py`: `next_run`, `build_run` 收 trigger 与参数覆盖; perform 建执行记录的一段抽成 `new_run` (与增量共用); `scan_increment` (建 incremental 执行, 调 A6, 校验片段, 执行记录, 例外与被测总体一个事务写入, 重放取回); `increment_entry_nos` (纯函数); `run_node` 对 incremental 模板走 `increment`; `MISSTATEMENT_NODES["verify_correction"] = (GEN-05, FIN-09)`.
++- `agents/workpaper.py` (本条认领, 协调者 10-20): `increment_findings` 把增量执行在匹配凭证上的未归因例外接在 V02 (沿用或新建的) 之后作 FIN-09 判断的规则例外.
++- 测试: test_gen05_incremental (新, 13 个), test_gen05_sql (slow 增量 9 个), test_correction_verification (增量例外并入), test_knowledge (FIN-09 依赖); misstatement_fakes.fin09_deps 加 results (别的程序的规则结果).
++
++## 方案取舍
++
++- **要扫的凭证:** 状态中全部 adjustments_posted 通知载入的凭证减去已有增量执行 (trigger incremental) 扫过的, 不只看 "本轮" 通知: 每轮都扫完时两者相同, 上一轮没扫成时下一轮补上. 通知的凭证号为空 (载入全部未载入的) 时取数据集可载入的全部更正分录 (协调者 10-20 裁定), 减去扫过的即本次新载入的. 改参数的重跑 (trigger rerun) 带 entry_nos 也不算扫过.
++- **出错为节点错误:** Agent 出错或片段校验不过时不代写失败的执行与 failed 任务 (程序不出新版本, 没有任务可挂), 照常抛出记入 run_error, 恢复时重做 (已写的执行按重放取回).
++- **复用:** 执行记录与 perform 共用 `new_run` (参数, 画像, 数据版本, R339 的语言); 写入用 `save_outputs`, 被测总体用 `run_population` (R324, 同 perform); 重放用 `stored_outputs`. recovery.py 不用改: 读回顺序取 node_table, GEN-05 不建任务.
++- **R06 不按 entry_nos 筛 (需求原文):** 每次增量执行都按首次沟通时间重查, 第 2 轮会对同一笔分录再出一条例外 (ID 带 run_no); R06 剔除审计更正分录, 这些例外不进 FIN-09.
++- **过期判定:** 增量执行算 GEN-05 最近的执行, 更正分录载入后 GEN-05 不过期, GEN-02 照旧过期 (接口文档第 7 节写明, 未改代码).
++- **增量例外并入 FIN-09:** 按例外 detail.entry_no 与匹配行所在凭证对上, 只取当前结果中增量执行引出且未归因的, 按 ID 接在 V02 之后.
++
++## 验收对照
++
++1. `test_scan_increment_writes_run_and_exceptions_only` (RUN-GEN-05-2, trigger, 排序后的 entry_nos, audit_adjustment_start, 一个事务, 不出 Procedure 版本, 重放不调规则引擎), `test_scan_increment_needs_incremental_template_and_entries`; 另有 `test_scan_increment_errors_propagate_without_writes` (规则出错, 合并校验不过).
++2. `test_increment_entry_nos` (5 例), `test_round2_scans_only_new_entries`; 程序包没有 GEN-05 时跳过由 journals 关闭的既有 FIN-09 主图用例覆盖.
++3. `test_round1_scans_notice_entries_before_fin09`, `test_round2_scans_only_new_entries[listed]`; 空凭证号的通知: `[empty]` (协调者要求的用例).
++4. slow `test_xero_increment_finds_nothing[round1, round2]`. 5. slow `test_increment_limits_rules_to_entry_nos`. 6. slow `test_numbat_r06_runs_after_first_communication`.
++7. `test_increment_exception_stays_open_and_joins_fin09`, `test_increment_exceptions_join_rule_findings`; 接口文档第 7 节写明.
++8. 默认全套与连库用例全部通过 (见下).
++- 另有 slow `test_numbat_entry_nos_limits_rules`, `test_xero_entry_nos_limits_rules`: R01, R03, R04, R05, R07, R08, R13 在参数覆盖下命中, entry_nos 为命中凭证时不变, 为不相干凭证时不命中.
++
++变异核对 (LANGGRAPH_DEFAULT_RECURSION_LIMIT=1000): 自施加 40 个 (节点与纯函数 18, FIN-09 并入 5, 模板 3, SQL 筛选 13, 被测总体 1), 39 个被杀. 首轮存活的 "扫过的不限增量执行" 补改参数重跑一例, "增量例外不按当前结果" 补被取代的增量执行一例, 7 条规则的筛选补上面两条连库用例后被杀; "扫过的不限本程序" 等价 (只有 GEN-05 有增量实例).
++
++## 审核结论
++
++(待审核)
++
++## 检查结果与环境限制
++
++- ruff check 与 format --check 通过 (315 files); mypy src/backend 通过 (132 files).
++- 默认全套 `-n auto` (变基到 f236cd4 后): 3894 通过, 1 跳过 (CUAD).
++- 连库 (audit_ding, 先 alembic upgrade head 到 0023, 串行): test_gen05_sql, test_rules_fin09, test_correction_notice_db, test_xero_rules_db, test_graph, test_e2e_mock, test_rule_engine 的 slow 用例 36 个通过.
++- 前端: 重新导出 openapi.json 并生成 client (RunTrigger 加 incremental), tsc -b 与 biome 通过 (借主检出的 node_modules 软链, 用完删去).
+diff --git "a/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\351\234\200\346\261\202\346\270\205\345\215\225.md" "b/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\351\234\200\346\261\202\346\270\205\345\215\225.md"
+index 0e2e38b..54ec78e 100644
+--- "a/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\351\234\200\346\261\202\346\270\205\345\215\225.md"
++++ "b/docs/\344\272\221\347\253\257\345\274\200\345\217\221/\351\234\200\346\261\202\346\270\205\345\215\225.md"
+@@ -4431,6 +4431,7 @@ R01-R32 为 M2 编排 (测试用 tests/fakes.py 的脚本 Agent), R33-R53 为 M3
+   8. 功能 journals 或错报闭环开关关闭时现有测试全部不变; Numbat 回归不变.
+ - 规模: M
+ - 档位: xhigh
++- 注 (10-20 协调者, R194 开发时): 范围另含 FIN-09 一处, 由本条认领: A8 执行 FIN-09 时把 GEN-05 增量执行在匹配凭证上的未归因例外接在 V02 之后作该错报判断的 rule_findings (agents/workpaper.py, 代码与接口文档第 6, 7 节同一提交); 通知的 adjustment_entry_nos 为空时, 增量扫描的凭证号取数据集可载入的全部更正分录减去已扫过的.
+ - 状态: 进行中 (丁)
+ 
+ ## R195 接入: Xero 全部更正主路径 (第 1 轮)
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index 5a241ba..7cf8785 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -80,7 +80,7 @@ class AutonomyLevel(StrEnum):    L1, L2, L3, L4
+ class DowngradeCondition(StrEnum):   significant_risk, high_risk, amount_over_pm, low_confidence, unsupported_steps, fraud_flag
+                                  # 自主度动态降级的条件（规格书 7.4，需求 R168，功能 autonomy）：前两条在装配时看，其余在判断时看，见第 5 节“自主度降级”；首次服务该客户、财报层次风险、GEN-17 与按人机一致率的降级本版不做，不在其中
+ class ProcedureStatus(StrEnum):  planned, executing, awaiting_human, in_dispute, completed, awaiting_data, no_data   # in_dispute: 有待决的争议任务（功能 collab 打开时，见第 3 节 fan_in 与第 7 节决定后重算；关闭时这种程序仍记 awaiting_human）；后两种见第 3 节程序等数据（需求 R272）
+-class RunTrigger(StrEnum):       initial, rerun
++class RunTrigger(StrEnum):       initial, rerun, incremental   # incremental：GEN-05 的增量实例（需求 R194），程序不出新版本
+ class RunStatus(StrEnum):        running, succeeded, failed
+ class PlanStatus(StrEnum):       draft, approved, superseded   # 总体审计计划一个修订的状态（需求 R203）：待 PLN-15 批准、已批准、已被下一修订取代
+ class EvidenceType(StrEnum):     voucher, invoice, delivery, bank, contract, external, standard   # invoice 为本版新增
+@@ -405,7 +405,7 @@ class ProcedureRun(Versioned):
+     run_no: int
+     trigger: RunTrigger
+     instance: str | None = None     # fieldwork 实例名，P2 以外为空
+-    params_snapshot: dict[str, Any]   # 模板参数经 resolve_params 解析，再叠加 Procedure.params
++    params_snapshot: dict[str, Any]   # 模板参数经 resolve_params 解析，再叠加 Procedure.params；增量实例另以排序后的 entry_nos 覆盖（需求 R194）
+     started_at: datetime
+     ended_at: datetime | None = None
+     status: RunStatus
+@@ -1732,7 +1732,7 @@ misstatements 的 reducer 由需求 R156 从 append_unique 改为 upsert_by_id
+ | misstatement_triage | FIN-03（A8，分类） | `after_triage`：有未分类的 identified 错报（复核人在 FIN-03 任务上认定的）回自身，FIN-03 下一次执行只判它们，程序包里没有 FIN-03 时抛 ScheduleStuck（不在分诊上空转）；否则 communicate |
+ | communicate | FIN-08（沟通，人工程序，R161 加入） | `after_communicate`：有 communicated 的错报 → await_correction，否则 → verify_correction |
+ | await_correction | —（节点内 `interrupt()` 等更正通知，需求 R162：载荷 `{awaiting: "correction", misstatement_ids, records}` 列当前结果中 communicated 且不须重新沟通的错报（`nodes.awaiting_correction`，按 ID 排序）；读回通知后 `nodes.apply_notice` 生效，见第 7 节更正通知；一次执行只收一份，部分通知后由 after_verify 再回来；只在有 communicated 错报时进入） | → verify_correction |
+-| verify_correction | FIN-09（更正验证，R165 加入；分录段的 GEN-05 增量扫描由 R194 加在前面） | `after_verify`：依次看有未分类的 identified 错报 → misstatement_triage，有 needs_recommunication → communicate，有 communicated → await_correction，否则 → p3_reassess；仍有 verifying 的错报抛 ScheduleStuck |
++| verify_correction | GEN-05（增量实例，需求 R194：只扫更正通知载入而还没扫过的凭证，不经 execute，见第 7 节）、FIN-09（更正验证，R165） | `after_verify`：依次看有未分类的 identified 错报 → misstatement_triage，有 needs_recommunication → communicate，有 communicated → await_correction，否则 → p3_reassess；仍有 verifying 的错报抛 ScheduleStuck |
+ | p3_reassess | PLN-19（完成阶段重评，计划段加入） | → summarize（计划段改为经 PLN-19 闸门） |
+ | summarize | FIN-04（A9，每轮回流一次，FIN-01 驳回回到这里重做） | → final_review |
+ | final_review | FIN-15（签字前段加入） | `after_final_review`：有未分类的 identified 错报 → misstatement_triage，否则 completion（Issue #46 起没有 fs_check 与 FIN-12：报表以账套为准） |
+@@ -2631,7 +2631,7 @@ class ProcedureAgent[F](ABC):          # F：execute 产出的原始发现类型
+ 
+ 关联方的另一条程序（GEN-01，功能 related_parties，见 Demo需求文档第 2 节）还没有实现，不在上表；其判断对象与 data 由需求 R141 落地时在本节补写。GEN-03 见下文 GEN-03 段（需求 R139）。
+ 
+-A6 的 GEN-05 全量分录扫描（需求 R131、R132，功能 journals，P2 固定集）与 REV-08、CSH-05 一样是纯规则程序：调规则引擎，例外原样返回，不作判断，不建复核任务，由 GEN-02 引用归因；执行前检查命中而没有执行的规则记进执行记录终态的 rule_outcomes。规则与口径写在 GEN-05.yaml 的注释里：初始实例只取 posting_date 在审计期间内的分录；每条规则每笔凭证至多一条例外（R12 按发票），source_id 取该凭证命中行中金额最大的行（并列取 ID 小的），例外按（posting_date，凭证号自然序，凭证号原文）编号（自然序的数字段以 10 位为限）；录入时间按参数 timezone（Australia/Sydney）换算；作废对（冲回凭证与原凭证，按数据集声明的 reversal_reference_pattern、reversal_entry_no_template 识别，不看 is_adjustment）的 WITH 段写在 "作废对共用段" 起止标记之间，与 CSH-02 的 D03、D04 逐字相同（`tests/test_knowledge.py` 守住）；新规则 R09 至 R12 只出金额超过明显微小的例外；往来名称比较用 SQL 函数 party_name_key（第 9 节），前缀取数据集声明的 counterparty_prefixes，公司后缀为参数 entity_suffixes。贷项凭证（R10、R12 共用的口径）：同一凭证借记 revenue 分类且贷记 receivables 分类，不涉 cash 分类，不是作废对；应收净贷方 credited_cents 为其 receivables 分类行的贷方减借方之和。增量实例由 JR-6c 补。
++A6 的 GEN-05 全量分录扫描（需求 R131、R132，功能 journals，P2 固定集）与 REV-08、CSH-05 一样是纯规则程序：调规则引擎，例外原样返回，不作判断，不建复核任务，由 GEN-02 引用归因；执行前检查命中而没有执行的规则记进执行记录终态的 rule_outcomes。规则与口径写在 GEN-05.yaml 的注释里：初始实例只取 posting_date 在审计期间内的分录；每条规则每笔凭证至多一条例外（R12 按发票），source_id 取该凭证命中行中金额最大的行（并列取 ID 小的），例外按（posting_date，凭证号自然序，凭证号原文）编号（自然序的数字段以 10 位为限）；录入时间按参数 timezone（Australia/Sydney）换算；作废对（冲回凭证与原凭证，按数据集声明的 reversal_reference_pattern、reversal_entry_no_template 识别，不看 is_adjustment）的 WITH 段写在 "作废对共用段" 起止标记之间，与 CSH-02 的 D03、D04 逐字相同（`tests/test_knowledge.py` 守住）；新规则 R09 至 R12 只出金额超过明显微小的例外；往来名称比较用 SQL 函数 party_name_key（第 9 节），前缀取数据集声明的 counterparty_prefixes，公司后缀为参数 entity_suffixes。贷项凭证（R10、R12 共用的口径）：同一凭证借记 revenue 分类且贷记 receivables 分类，不涉 cash 分类，不是作废对；应收净贷方 credited_cents 为其 receivables 分类行的贷方减借方之和。增量实例（需求 R194，模板 incremental，见第 7 节）：参数 entry_nos 非空时各规则最后一步只留凭证号在其中的例外，中间步骤照全期算（R07 的录入人计数，R10、R12 的贷项凭证，R11 的原凭证与重记）；R12 即只取 journal_entry_id 落在这些凭证上的发票；R06 不受 entry_nos 限制；audit_adjustment_start 为派生引用 first_misstatement_communicated_at（第 8.1 节），P2 首次执行时为空，R06 不执行。增量命中的例外为 open，不派 GEN-02（P3 没有调度）；FIN-09 把匹配凭证上的这些例外作错报更正验证判断的规则例外（第 6 节 FIN-09 段）。
+ 
+ | 规则 | 严重度 | 口径 | 不执行的情形（执行记录） |
+ |---|---|---|---|
+@@ -2746,7 +2746,7 @@ A10 的 RPT-03 起草报告下一修订 REPORT-{revision}（revision 为状态
+ - 判断对象：当前结果中（同 FIN-04）status 为 verifying 的错报，按状态中的顺序，先按 rerun_subject_ids 与已交人处理的对象筛选；没有时不执行规则、不调大模型，执行成功，片段只有 procedure_runs。判断 ID 为 J-FIN-09-{run_no}-{错报 ID}；fixture_key 为来源判断（错报的 judgment_id，状态中的当前版本，不在状态中抛 LookupError）的对象，即来源对象。
+ - 匹配（`workpaper.matched_lines`）：候选行为 V01 中 source_doc 等于来源对象的行。错报有 account_code 时匹配行为候选中科目相同的各行；没有时为借方或贷方等于错报金额的第一行（按行 ID），部分更正因此只在有 account_code 时识别得出。
+ - 已更正额（`workpaper.corrected_cents`）：有 account_code 时按匹配行的科目类型定更正方向：资产、费用高估以贷方为更正、低估以借方；负债、权益、收入相反；已更正额为更正方向的金额合计减反方向的合计（匹配行的科目不在科目表时抛 LookupError）。没有 account_code 时匹配到即为错报金额，否则为 0。剩余额 = 错报金额 − 已更正额。
+-- 验证载荷（`workpaper.verification_update`，kind verification，base_version 为判断时的错报版本）：有匹配行且 0 < 已更正额 ≤ 金额时，等于金额为 corrected、小于为 partially_corrected，带 adjustment_entry_nos（匹配行所在凭证号，去重排序）、corrected_cents、residual_cents；否则对不上（没有匹配行、方向相反或超额）：status communicated，needs_recommunication 真，并建 V02 例外 X-FIN-09-{run_no}-V02-{n}（n 在本次新建 V02 的错报中按判断对象的顺序从 1 编号，沿用的不计，severity medium，source_ids 为匹配行 ID，没有时为来源对象，amount_cents 为错报金额，detail {misstatement_id, expected_cents, corrected_cents, matched_line_ids}，证据为匹配行的指针），作该对象的规则例外（判断的 exception_ids 即它）；V02 是本次刚建的，判断失败时置 unattributed 写在第 1 版上（同 CSH-02 的 D01、D04）。当前结果里该错报已有本程序尚未归因的 V02（rule_id V02、detail.misstatement_id 为该错报，第 1 版 open 或判断失败时置的 unattributed 版本；已归因的不带回）时沿用，不看本次比对，不再新建（`judging.earlier_findings`，与 CSH-02 共用，审核 R165-07）：对 unattributed 任务 rerun 后旧 V02 才有任务指向；本次对得上也沿用（同 CSH-02 两轮之间数据变了不另处理），载荷照本次比对。沿用的不是 created，判断确认时出 attributed 新版本，再失败时出 unattributed 新版本。
++- 验证载荷（`workpaper.verification_update`，kind verification，base_version 为判断时的错报版本）：有匹配行且 0 < 已更正额 ≤ 金额时，等于金额为 corrected、小于为 partially_corrected，带 adjustment_entry_nos（匹配行所在凭证号，去重排序）、corrected_cents、residual_cents；否则对不上（没有匹配行、方向相反或超额）：status communicated，needs_recommunication 真，并建 V02 例外 X-FIN-09-{run_no}-V02-{n}（n 在本次新建 V02 的错报中按判断对象的顺序从 1 编号，沿用的不计，severity medium，source_ids 为匹配行 ID，没有时为来源对象，amount_cents 为错报金额，detail {misstatement_id, expected_cents, corrected_cents, matched_line_ids}，证据为匹配行的指针），作该对象的规则例外（判断的 exception_ids 即它）；V02 是本次刚建的，判断失败时置 unattributed 写在第 1 版上（同 CSH-02 的 D01、D04）。当前结果里该错报已有本程序尚未归因的 V02（rule_id V02、detail.misstatement_id 为该错报，第 1 版 open 或判断失败时置的 unattributed 版本；已归因的不带回）时沿用，不看本次比对，不再新建（`judging.earlier_findings`，与 CSH-02 共用，审核 R165-07）：对 unattributed 任务 rerun 后旧 V02 才有任务指向；本次对得上也沿用（同 CSH-02 两轮之间数据变了不另处理），载荷照本次比对。沿用的不是 created，判断确认时出 attributed 新版本，再失败时出 unattributed 新版本。V02（沿用或新建的）之后另接 GEN-05 增量扫描在匹配凭证上的例外（`workpaper.increment_findings`，需求 R194 认领：当前结果中增量执行（trigger incremental）引出而未归因的例外里 detail.entry_no 为匹配行所在凭证的，按 ID；没有匹配行时没有），判断确认时一并归因。
+ - data（JSON 形式，见 FIN-09.md.j2 头注释）：misstatement、source_judgment（结论，不带证据）、matched_line_ids、entry_lines（匹配行所在凭证的全部 V01 行，按行 ID）、corrected_cents、residual_cents；校验上下文另给 expected_residual_cents（剩余额）与 entry_account_codes（entry_lines 的科目中错报科目以外的，去重排序；错报没有 account_code 时为全部）。
+ - 产出：judgments、review_tasks、exceptions（V02，A8 的写入范围加 exceptions），自动确认（L3 及以上）时另有按载荷写出的错报新版本；确认判断时按载荷写出错报新版本（第 2.5 节迁移表，第 7 节）。
+ - 失败：同 FIN-03（结构失败重试 2 次，引用或语义失败只调 1 次）；有 V02 时为 unattributed 任务（V02 v1 unattributed），否则为带对象的 failed 任务，允许 rerun 与 manual_result（须由人给验证载荷，第 7 节字段规则）。
+@@ -3127,6 +3127,7 @@ collab 关闭时两条都不查。校验之后存下的咨询记录按 `decision
+ - 复核在节点内 `interrupt()`。写入后 `ainvoke(Command(resume=record_id), config)`，节点确认该 ReviewRecord 在 Store 中后，读回本项目复核决定、任务、判断、例外、错报、函证与程序的最新版本整体并入状态（函证也读回，`nodes.confirmations_from_store`：审计师在图停着时可修改回函抽取结果，只写 Store，见第 10 节，之后写函证的 DOC-06 重跑与 CSH-02 须在库中最新版本之上出新版本，DOC-06 对审计师改过且原件没换的沿用该版，见第 6 节；过期重跑写检查点与其恢复补做同样带上它）（DecisionSubmit 写入的对象与重算后的程序版本都在其中）。record_id 在 Store 中不存在时抛 LookupError，写明原因与恢复办法：恢复值一经交给 `interrupt()`，节点出错后再恢复仍取回同一个值，须先以 fan_in 身份重写检查点（`aupdate_state(config, {}, as_node="fan_in")`），再让图继续执行（`ainvoke(None, config)`），图重新停到等复核后再提交决定。节点停在第二次及以后的 `interrupt()`（P2 以外节点等人：失败或有待复核任务）时，检查点快照的 next 为空，等待体现在待执行任务的 interrupts 上。
+ - P2 以外的程序（ACC-04、DOC-04、PLN-07、PLN-01、FIN-04、RPT-03 等）执行后本程序仍有待决任务时（失败的 Run 与 failed 任务，或判断与例外的 normal、unattributed、dispute 任务），所在节点在一个事务内写入片段与该 Procedure 的 awaiting_human 新版本（功能 collab 打开且有待决 dispute 任务时为 in_dispute，同 fan_in；下文的 "在等" 与 "对不上" 两处同样把 in_dispute 当作等人处理），然后在节点内 `interrupt()`，载荷为 `{awaiting: "human", procedure_id, run_id, records}`，records 为本次图节点已读回的决定 ID（同一节点先执行的程序读回的，如 p1_analytics 中 PLN-07 重跑用过的，加上本程序读回的；图节点返回前它们不在检查点里）。等待规则（`nodes.still_waiting`）：每次 `interrupt()` 之前（每轮执行之后的第一次，以及每读回一个决定之后）都只按 Store 判断，只要本程序仍有待决任务，或有针对本程序任务的决定尚未读回（如本轮的可重跑任务已被一个尚未送到的 rerun 决定关闭），就再 `interrupt()`；"已读回"包括检查点里已有的决定（之前进入本节点时读回的，如 FIN-01 驳回后再进完成节点）、同一图节点先执行的程序读回的与本次读回的。不看重放取回的程序版本当时是不是 awaiting_human：节点于是按决定数逐个经过等待，等待次数与决定交回的顺序无关，在线、重放与恢复补做的结果相同（rerun 仍须按轮次交回）。节点读回的决定去重后按 ID 排列。interrupt() 返回 record_id 后，节点从 Store 读回该决定：rerun（针对可重跑任务：failed、unattributed，需求 R347）与针对 failed 任务的其余决定走下述重跑（后者报错），复核队列允许的 failed 任务的 manual_result 除外（带对象且模板 manual_result_allowed，需求 R158：DecisionSubmit 已建人工判断 -H{n} 并关闭该任务，同其余决定整体读回）；其余（confirm、override、misstatement、仲裁等，任务须属于本程序）从 Store 整体读回本程序的任务、判断、本程序的例外与判断引用或任务指向的例外、由这些判断与例外认定的错报、针对这些任务的决定（各按 ID 排序，与提交顺序无关），按上述等待规则再等或结束。读回的一切 rerun 以外的决定（failed 任务的 manual_result，unattributed 任务的推翻与认定错报等）都把所针对的任务移出本轮的组，同轮其余可重跑任务的 rerun 只重跑组内其余对象，同 DecisionSubmit 关闭整组时只取待决的（例：同轮 S1、S2 都 unattributed，先推翻 S1 再对 S2 rerun，下一轮只重判 S2；恢复补做按 rerun 以外的决定排在 rerun 之前，不必另排）。结束时这一轮的程序版本当时就不等人则用它，当时在等则取 Store 最新版本（DecisionSubmit 已重算：没有待决任务为 completed，闸门程序为 planned，等闸门 approve，Q5）；那一版仍为 awaiting_human 或 executing 说明 Store 中本程序的状态与任务、决定对不上（如任务已 decided 而没有针对它的决定），节点报错（RuntimeError，由 runner 记入 run_error），不静默前进。P2 以外的程序开 manual_result_allowed 时（需求 R158 起不再按阶段拒绝，只许判断程序开，见第 8.1 节；现有 FIN-03），带对象的 failed 任务另收 manual_result，按上文整体读回；整次失败的任务（没有对象）仍只收 rerun。rerun 决定读回时须针对正在等待的这一次执行建的任务，节点同时读回它写出的 Procedure 版本（awaiting_human 版本号 + 1，status 为 executing，含合并后的 params 与 rerun_subject_ids，后者须覆盖这一次执行的可重跑任务（failed、unattributed；已由 rerun 以外的决定关闭的除外）；不取最新版本，因为节点重放时会依次经过多次等待，最新版本可能来自之后的决定），以失败 Run 的 run_no + 1 建 trigger = rerun 的新 Run，在同一次节点执行内重跑；再失败则重复这一步。每次执行后的 Procedure 新版本 rerun_subject_ids 清空。一次执行留下多个可重跑任务（如 DOC-04 两份合同失败，或一个对象 failed、另一个带规则例外的对象 unattributed）时算一组：对其中任一个 rerun 即整组关闭，下一次执行一起重跑这组仍待决的全部对象；于是待决的可重跑任务总来自最近一次执行，第 k 次等待只接受针对第 k 次执行的决定。恢复时节点从头执行，已是终态的 Run（含 failed）按第 3 节重放规则取 Store，各次 interrupt() 依次取回已提交的 record_id。节点结束时返回历次执行写入的对象（含失败的 Run 与已决定的任务）与读回的决定。
+ - 人工程序（engine manual 且不是闸门，需求 R92、R93）在所在节点内执行：A10 派发（第 6 节），本次执行记录 succeeded，manual 任务待决，程序为 awaiting_human，节点按上一条等待。人对 manual 任务提交 manual_result：DecisionSubmit 先做通用核对（校验表 manual 行），再调模板 owner 的 ManualHandler.check；通过后一个事务写决定、任务 decided 与程序新版本（completed），不建人工 Judgment。节点读回该决定后（整体读回之后）调 owner 的 collect，片段按写入者 owner 与模板 outputs 校验（`nodes.check_collected`：不能带派发片段的字段 procedure_runs 与 review_tasks，`check_patch` 的 run_id 为 None，另按派发的那次执行查 `check_own_run`；写入时 Store 已有内容不同的同版本，即图停着时 Store 里被改出了这一版（如等待时审计师改了回函抽取结果），抛 VersionConflict 整体回滚，不静默丢掉整理结果；不过为节点错误，记入 run_error，什么都不写），以 owner 为写入者在一个事务内写入 Store 并并入节点返回的片段；程序取决定写出的 completed 版本，不再执行一次。重放时派发的执行已是终态，从 Store 取回，不再调 prepare；collect 重算得同一对象，再写 Store 不新增。恢复补做同其他 P2 以外程序，manual 任务的决定按所属执行排在触发它的 rerun 之后（见下一条）。collect 看到的 ctx.state 为本次执行前的状态只并入派发片段的执行记录与任务，不并入重放按模板 outputs 取回的对象（在线与重放相同：写 Store 后被杀再重放时，取回的对象里已有 collect 自己上次写的）。
++- 增量实例（需求 R194，模板 incremental，只有 GEN-05）在 verify_correction 内、FIN-09 之前执行，不经 execute（`GraphNodes.increment`）：要扫的凭证为状态中各份 adjustments_posted 更正通知载入的凭证（通知的凭证号为空即载入了全部未载入的，取数据集可载入的全部更正分录 `DatasetLoader.adjustment_entry_nos`），去掉本程序已有增量执行（trigger incremental）参数快照里 entry_nos 扫过的（`nodes.increment_entry_nos`），排序；没有要扫的、或程序包没有 GEN-05（功能 journals 关闭）时跳过。`scan_increment(state, engagement, procedure_id, entry_nos)` 建下一次执行 RUN-{程序}-{n}（trigger incremental，参数为模板参数的解析结果，entry_nos 换成这些凭证号，audit_adjustment_start 按派生引用解析），调 Agent，片段经合并校验后与执行记录、被测总体（`run_population`，需求 R324）在一个事务内写入 Store；程序不出新版本（仍 completed），不建任务；返回片段由节点并入状态。增量命中的例外为 open，不派 GEN-02 归因：随后的 FIN-09 把匹配凭证上（detail.entry_no 为匹配行所在的凭证）未归因的增量例外接在 V02 之后，作该错报更正验证判断的规则例外（rule_findings，`workpaper.increment_findings`，第 6 节 FIN-09 段）。重放时这次执行已在 Store 中且为终态则按重放规则取回，不调 Agent 与规则引擎。Agent 出错与片段校验不过为节点错误（不代写失败的执行与 failed 任务：程序不出新版本，没有地方等人），记入 run_error，恢复时重做。模板 incremental 为假时 scan_increment 抛 ValueError；entry_nos 为空时不执行。增量执行算作 GEN-05 最近的执行（过期判定，第 3 节）：更正分录载入后 GEN-05 不因此过期，依赖它的 GEN-02 照旧标过期。
+ - recover 补做时（`orchestration/recovery.py`），闸门效果从 Store 与该决定重建，不重算、不写 Store（项目可能已锁定）：程序包、风险清单、审计目标按检查点中的顺序换成 Store 最新版，阶段取 engagements 表，RPT-01 通过时报告取 Store 中的签字版，PLN-15 通过时计划取 Store 中的批准版，材料取决定绑定的 (target_id, target_version)（PLN-15 驳回与信息不足只补决定与绑定的计划，驳回补做后由路由回 plan_draft 起草下一修订，需求 R206）；只在图状态中的重要性三项按 GateDecision.materiality 与该版 MaterialityCandidates 重算，opinion_route 取 disposition。检查点中没有的闸门决定按 decided_at 逐个补，决定不是检查点当前停着的闸门的，不补做并报错（记入 run_error）。每个决定先按 find_success 补写缺失的 decision 留痕与 transition 留痕（同键跳过），再以该闸门节点身份 `aupdate_state`：留痕写失败时决定仍不在检查点里，下次恢复照样补做。客户画像：项目采用的版本高于检查点的，先补写留痕，再以 gate_acc01 身份写入 client_profile_version，路由回 p0_inputs 重跑；补写的留痕键为 `{client_id}-v{version}`，画像不记更新人，actor 记 A1。复核决定：检查点（含等待载荷 records）中没有的 ReviewRecord，补写其留痕后按节点读回的顺序逐个以 `Command(resume=record_id)` 交给节点（每交一个停在下一次等待）。顺序不靠时间：键为（程序在该图节点内的执行次序（`nodes.node_table`，按项目的功能集，功能 misstatement 打开时含完成阶段的错报闭环节点；节点也按它执行，只取程序包中有的，见 `nodes.node_procedures`），0，任务 ID）排 rerun 以外的决定（节点每次等待前按 Store 判断，读回后从 Store 整体并入，交回顺序不影响等待次数与结果），（次序，1，决定所针对任务所属 Run 的 run_no）排 rerun 决定（同一程序每次失败只对应一个 rerun 决定，一轮失败算一组，下一轮由它触发）；同一程序同一轮有两个 rerun 决定时报错。manual 任务（人工程序，需求 R93）的决定按（次序，1，任务所属 Run 的 run_no，任务 ID）排：节点读回它时即调 owner 的 collect，要看到它所属的那次派发，故排在触发该次派发的 rerun（上一轮的 run_no）之后（派发失败再 rerun 后提交的结果，先交它会落到上一轮的等待上）。P2 的等复核（await_events）每次只交一个决定：读回后节点从 Store 整体读回，与交哪个无关。等待中的节点带着错误（读回某个决定后出错）时，检查点留着那次运行的错误与恢复值，节点再停下等待时错误仍在，DecisionSubmit 会按卡住的等待拒绝后续决定：此时先以 `aupdate_state(config, None, as_node="__copy__")` 复制检查点丢掉这些待写记录，节点从头执行，本节点已读回的决定也一并按上述顺序重新交回。补写的 decision 留痕与提交时一致：rerun 一并关闭的同组任务从 Store 推回（同程序、同一次执行、已 decided 而没有自己的复核决定的可重跑任务：failed、unattributed）。顺序每次从 Store 重算，复制后或只交回一部分时中断，下次补做接着交。图停在闸门，或既不在等待也没有待执行的节点时报错。过期重跑请求（`recovery.catch_up_rerun`）：检查点中没有的 RerunRequest 按 requested_at 逐个补，图须停在可重跑的位置（同提交时，`runner.at_rerun_point`），否则报错；先按 find_success 补写缺失的 decision 留痕（`decisions.rerun_trail`）与 transition 留痕（阶段键的重跑次数计入这个请求），再以 fan_in 身份写入提交时的同样字段：请求、程序包（Store 最新版）、请求关闭的任务（Store 最新版，缺任何一个报错）、Store 中函证的最新版本与阶段（engagements 表），之后由 after_fan_in 派发。依次补闸门决定、画像、过期重跑请求、复核决定、更正通知（见上文更正通知）；再补做一次不改检查点与 Store。
+ - 节点读回决定后出错（下一次等待还没登记），LangGraph 在之后的每次运行里都会把那次的恢复值再交给一个 `interrupt()`：重放时第一次等待取到它，下一次等待又取到它。P2 以外程序的节点内等待因此跳过已读回过的决定 ID（等待载荷 records 中的），接着再等；再次以同一决定补做也不会被当成新决定。
+ 
+@@ -3213,6 +3214,7 @@ class ProcedureTemplate(BaseModel):
+     assertions: list[Assertion] = []
+     triggers: list[Trigger] = []     # 为空时：P2 以外的程序为固定集，项目启动即实例化；P2 程序只经依赖闭包加入（如 DOC-06），标 fixed 的除外
+     fixed: bool = False              # P2 固定集：装配时不论审计目标一律加入（所属功能未启用时不加入），见下
++    incremental: bool = False        # 有增量实例（需求 R194，GEN-05）：verify_correction 以参数 entry_nos 只扫更正通知载入的凭证，写新的执行记录（trigger incremental）与例外，程序不出新版本（第 7 节）
+     params: dict[str, Any] = {}      # 字面量、{by_risk: {low: …}} 或 {ref: 名称}；选科目用 *_categories（标准分类列表），不写科目代码
+     depends_on: list[str] = []
+     inputs: ProcedureInputs = ProcedureInputs()   # 执行前必须有的客户资料：tables（TableKind）、documents（DocumentType），见下
+@@ -3233,7 +3235,7 @@ class ProcedureTemplate(BaseModel):
+ |---|---|---|
+ | `period_start`、`period_end` | Engagement 的审计期间 | — |
+ | `materiality_cents`、`performance_materiality_cents`、`clearly_trivial_cents` | 图状态（PLN-01/03 闸门确定） | 抛 ValueError，不以 None 执行 |
+-| `first_misstatement_communicated_at`（派生引用，需求 R161） | 由图状态算出（DERIVED_REFS：名字 → 状态的纯函数，只收纯函数，值经 to_jsonable_python 转成 JSON 兼容的值，同 profile. 命名空间，参数快照中为 ISO 文本）：首次发出错报沟通的时间，即状态中 FIN-08 各次登记（manual 任务的 manual_result 决定，review_records）的 communicated_at 的最早值；决定只追加，被过期重跑取代的执行的登记也算；不看错报上的 communicated_at（重新沟通会覆盖它，第 1 轮审核 R161-02） | 以 None 执行（还没有登记过沟通，如 P2 中 GEN-05 首次执行时）；None 的语义由引用它的程序处理（分录段 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行） |
++| `first_misstatement_communicated_at`（派生引用，需求 R161） | 由图状态算出（DERIVED_REFS：名字 → 状态的纯函数，只收纯函数，值经 to_jsonable_python 转成 JSON 兼容的值，同 profile. 命名空间，参数快照中为 ISO 文本）：首次发出错报沟通的时间，即状态中 FIN-08 各次登记（manual 任务的 manual_result 决定，review_records）的 communicated_at 的最早值；决定只追加，被过期重跑取代的执行的登记也算；不看错报上的 communicated_at（重新沟通会覆盖它，第 1 轮审核 R161-02）；GEN-05 的 audit_adjustment_start 引用它（需求 R194） | 以 None 执行（还没有登记过沟通，如 P2 中 GEN-05 首次执行时）；None 的语义由引用它的程序处理（分录段 GEN-05 的 R06 在 audit_adjustment_start 为空时不执行） |
+ | `verified_adjustment_entry_nos`（派生引用，需求 R174） | 由图状态算出（同上，`services/adjusted_tb.verified_entry_nos`）：已验证更正分录的凭证号，即状态 misstatements 中 status 为 corrected 或 partially_corrected 且 verified_by_judgment_id 非空的错报的 adjustment_entry_nos 并集，去重后按凭证号排序（第 2.5 节，`models.verified_adjustment_entries`）；Xero 第 1 轮为 [AJE-X01, AJE-X05]，第 2 轮为 AJE-X01 至 X05。规则 SQL 把它传给 `adjusted_trial_balance(:eid, :它)`（第 5 节 RuleEngine 约定） | 不会为 None：没有已验证的更正（只有 verifying、uncorrected 的错报，功能 misstatement 关闭，Numbat）时为 []，函数即返回本期试算表 |
+ | `dataset.<字段>`、`dataset.<字段>.<子字段>` | 项目数据集的声明 DatasetTraits（第 2.7 节），字段路径逐层须是模型的字段，子字段只用于嵌套模型或可为空的嵌套模型（如 `dataset.payroll_accounts.wages_expense`），列表、字典等容器字段只能整个取；取整个嵌套模型时为字典 | 以 None 执行（如 Numbat 没有声明时 `dataset.prior_period_start` 为 None） |
+ | `profile.<字段>`、`profile.<字段>.<子字段>` | 本项目采用版本的客户画像 ClientProfile（第 2.3 节；GraphNodes.perform 按 state 的 client_profile_version 取，execute 与 fieldwork 共用，同客户的其他项目改出新版本不影响本项目），路径规则同 `dataset.`（如 `profile.fees.audit_fee_cents`）。取值一律是 JSON 兼容的新对象（JSON_NAMESPACES；模型及列表、字典中的模型都成字典，日期成 ISO 文本，枚举成值），参数快照经检查点与 Store 读回后与首次执行相等 | 抛 ValueError（消息为 "程序编号.参数名: <字段路径> 尚未确定"，路径中途为 None 同样）；参数写 `{ref: profile.<字段>, optional: true}` 时以 None 执行（如 GEN-05 的审批限额，RPT-03 的上期是否经审计） |
+@@ -3387,7 +3389,7 @@ depends_on: [ACC-04]
+ 
+ **PLN-15**（`knowledge/procedures/PLN-15.yaml`，需求 R203）。总体审计计划：owner A4，engine llm，L1，phase P1_Planning，cycle Planning，gate PLN-15，feature planning（关闭时不在程序库启用集与固定集中）；depends_on [PLN-01, PLN-03]（PLN-09 不可预见性候选由 assemble_pack 承担，PLN-16 总体应对未实现，都不列；约定书核对结果 TERMS 来自 ACC-08，不是程序依赖，功能 acceptance 关闭时没有 TERMS）；params 为 period_start、period_end 两个 ref；standards [ASA300-P07, ASA300-P09, ASA300-P13, ASA510-P06, ASA710-P14, ASA240-P32, ASA240-P33, ASA570-P10, ASQM1-P34f, CA2001-S293, CA2001-S315-4, CA2001-S323D-2A]（ASQM 1 第 34 段只摘 (f) 项，ID 按子项规则用小写 f）；llm 为 PLN-15.md.j2 → AuditPlanDraft。提示词头注释列出变量 entity、period_start、period_end、period_months、terms（可空）、analytics、materiality（choice 与三项）、objectives、risks、items、trial_balance（本期科目名、分类与余额）、revision、revision_reason（可空）、standards，第 2 修订起有 "## Revision {n}" 段与修订理由（tests/test_knowledge.py 守头注释与模板用到的变量一致）。执行（A4 组装骨架、调模型、校验）见第 6 节 PLN-15 段（需求 R204）。
+ 
+-**FIN-09**（`knowledge/procedures/FIN-09.yaml`，需求 R164）。更正验证：owner A8，engine hybrid，L2，phase P3_Completion，cycle Completion，feature misstatement（关闭时不在程序库启用集与固定集中）；params 为 adjustment_prefix（`{ref: dataset.audit_adjustment_entry_prefix}`，数据集未声明时 "AJE-"）；standards [ASA450-P07]；evidence_required [voucher]；规则 V01（emit rows）取凭证号以 adjustment_prefix 开头的审计更正分录的全部行，带科目名称、类型与分类（LEFT JOIN accounts），按凭证号与行 ID 排序；按前缀比较（`left(entry_no, length(前缀)) = 前缀`），不用 LIKE，前缀中的 % 与 _ 不作通配符；不看 is_adjustment（Xero 的手工分录也为真）。YAML 与提示词不写科目代码（tests/test_knowledge.py 守着）。llm 为 FIN-09.md.j2 → CorrectionVerificationDraft，头注释列出变量 subject_id、task.params（adjustment_prefix）、data（misstatement、source_judgment、matched_line_ids、entry_lines、corrected_cents、residual_cents）、rule_findings、standards，是 A8 执行（需求 R165）的数据契约；mock 的 fixture_key 取错报来源判断的 subject_id（同 FIN-03），Xero fixture 为 XJ-499、BA-091、826、804、805。depends_on 为 [FIN-08]（R161 补上；GEN-05 增量就绪后再加 GEN-05，需求 R164 验收 1 的差异，协调者 10-20 裁定）；R165 起 manual_result_allowed 为真、misstatement_update_kind 为 verification、outputs 为 [judgments, exceptions, review_tasks, misstatements]（V02 例外，A8 的写入范围同步加 exceptions）。
++**FIN-09**（`knowledge/procedures/FIN-09.yaml`，需求 R164）。更正验证：owner A8，engine hybrid，L2，phase P3_Completion，cycle Completion，feature misstatement（关闭时不在程序库启用集与固定集中）；params 为 adjustment_prefix（`{ref: dataset.audit_adjustment_entry_prefix}`，数据集未声明时 "AJE-"）；standards [ASA450-P07]；evidence_required [voucher]；规则 V01（emit rows）取凭证号以 adjustment_prefix 开头的审计更正分录的全部行，带科目名称、类型与分类（LEFT JOIN accounts），按凭证号与行 ID 排序；按前缀比较（`left(entry_no, length(前缀)) = 前缀`），不用 LIKE，前缀中的 % 与 _ 不作通配符；不看 is_adjustment（Xero 的手工分录也为真）。YAML 与提示词不写科目代码（tests/test_knowledge.py 守着）。llm 为 FIN-09.md.j2 → CorrectionVerificationDraft，头注释列出变量 subject_id、task.params（adjustment_prefix）、data（misstatement、source_judgment、matched_line_ids、entry_lines、corrected_cents、residual_cents）、rule_findings、standards，是 A8 执行（需求 R165）的数据契约；mock 的 fixture_key 取错报来源判断的 subject_id（同 FIN-03），Xero fixture 为 XJ-499、BA-091、826、804、805。depends_on 为 [FIN-08, GEN-05]（FIN-08 由 R161 补上，GEN-05 为分录段的增量扫描，需求 R194；功能 journals 关闭时程序库丢弃 GEN-05 这条）；R165 起 manual_result_allowed 为真、misstatement_update_kind 为 verification、outputs 为 [judgments, exceptions, review_tasks, misstatements]（V02 例外，A8 的写入范围同步加 exceptions）。
+ 
+ **GEN-09**（`knowledge/procedures/GEN-09.yaml`）。owner A7，engine llm，L4，phase P2_Executing，cycle Pervasive，triggers 为空且无程序依赖它，所以不进程序包、不进固定集；复核的触发与跳过规则写在 `agents/review.trigger`（判定顺序见第 6 节 A7 段），YAML 注释同步；params.sample_rate 为抽样比例；llm 为第一轮（GEN-09.md.j2，CriticIndependent），第二轮的提示词与输出模型见 `review.VERDICT_SPEC`。mock 固定输出在 `tests/fixtures/llm/GEN-09/{subject}-r1.json`、`-r2.json`（演示数据为 data/demo/llm/GEN-09）；测试用的争议变体在 `tests/fixtures/llm_variants/`。
+ 
+diff --git a/src/backend/agents/workpaper.py b/src/backend/agents/workpaper.py
+index 40197f8..30dbd01 100644
+--- a/src/backend/agents/workpaper.py
++++ b/src/backend/agents/workpaper.py
+@@ -36,6 +36,7 @@ from backend.contracts.models import (
+     Direction,
+     EvidencePointer,
+     EvidenceType,
++    ExceptionDisposition,
+     Judgment,
+     ManagementResponse,
+     Misstatement,
+@@ -45,6 +46,7 @@ from backend.contracts.models import (
+     Reliability,
+     ReviewRecord,
+     ReviewTask,
++    RunTrigger,
+     SourceType,
+ )
+ from backend.contracts.services import JudgmentOutcome
+@@ -305,6 +307,23 @@ def mismatch_exception(
+     )
+ 
+ 
++def increment_findings(state: Any, lines: Sequence[dict[str, Any]]) -> list[AuditException]:
++    """增量扫描 (GEN-05 的增量实例, 需求 R194) 在匹配凭证上的例外: 当前结果中增量执行 (trigger incremental) 引出而
++    未归因的例外里, detail.entry_no 为匹配行所在凭证的, 按 ID. 接在 V02 之后作该错报判断的规则例外. 纯函数."""
++    incremental = {r.id for r in state["procedure_runs"] if r.trigger is RunTrigger.incremental}
++    entries = {r["entry_no"] for r in lines}
++    return sorted(
++        (
++            x
++            for x in current_results(state).exceptions
++            if x.run_id in incremental
++            and x.disposition is not ExceptionDisposition.attributed
++            and x.detail.get("entry_no") in entries
++        ),
++        key=lambda x: x.id,
++    )
++
++
+ def verification_subject(
+     misstatement: Misstatement,
+     source: Judgment,
+@@ -405,8 +424,9 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
+         更正分录的全部行; 逐条错报在代码中匹配 (matched_lines), 算已更正额 (corrected_cents) 与验证载荷
+         (verification_update), 对不上时建 V02 例外 (mismatch_exception) 作该对象的规则例外; 当前结果里该错报已有本程序
+         尚未归因的 V02 (judging.earlier_findings, 同 CSH-02 的 D01, D04, 需求 R347) 时沿用, 不看本次比对, 不再新建 (对
+-        unattributed 任务 rerun 后旧 V02 才有任务指向; 本次对得上也沿用, 同 CSH-02 数据变了不另处理). 再交判断公共流程,
+-        成功的判断经 annotate 写上验证载荷. 来源判断不在状态中抛 LookupError."""
++        unattributed 任务 rerun 后旧 V02 才有任务指向; 本次对得上也沿用, 同 CSH-02 数据变了不另处理). 其后接增量扫描在
++        匹配凭证上的例外 (increment_findings, 需求 R194). 再交判断公共流程, 成功的判断经 annotate 写上验证载荷. 来源
++        判断不在状态中抛 LookupError."""
+         targets = [m for m in to_verify(ctx.state) if in_scope(ctx, m.id)]
+         if not targets:
+             return VerifiedRun([])
+@@ -428,6 +448,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
+             if not findings and updates[m.id].status is MisstatementStatus.communicated:
+                 exceptions.append(mismatch_exception(ctx, m, source.subject_id, lines, corrected, len(exceptions) + 1))
+                 findings.append(exceptions[-1])
++            findings += increment_findings(ctx.state, lines)
+             subjects.append(verification_subject(m, source, lines, rows, corrected, findings))
+         judged = await judge_all(
+             self.deps,
+diff --git a/src/backend/contracts/knowledge.py b/src/backend/contracts/knowledge.py
+index da12808..e7890b0 100644
+--- a/src/backend/contracts/knowledge.py
++++ b/src/backend/contracts/knowledge.py
+@@ -175,6 +175,9 @@ class ProcedureTemplate(Model):
+     # P2 固定集: PLN-01/03 通过后不论审计目标一律装配 (所属功能未启用时不装配) 并补齐依赖, objective_ids 为空,
+     # 不计入审计目标覆盖; 只用于 P2 程序, 参数不能按风险等级取值
+     fixed: bool = False
++    # 有增量实例 (需求 R194, GEN-05): 更正分录接入后, verify_correction 节点以参数 entry_nos 只扫这些凭证, 写新的执行
++    # 记录与例外, 程序不出新版本 (GraphNodes.scan_increment)
++    incremental: bool = False
+     params: dict[str, Any] = {}  # 参数: 字面量, {by_risk: ...} 或 {ref: 名称}
+     depends_on: list[str] = []  # 前置程序
+     inputs: ProcedureInputs = ProcedureInputs()  # 执行前必须有的客户资料, 缺了等数据 (需求 R272)
+diff --git a/src/backend/contracts/models.py b/src/backend/contracts/models.py
+index 731cd85..42db90a 100644
+--- a/src/backend/contracts/models.py
++++ b/src/backend/contracts/models.py
+@@ -116,6 +116,7 @@ class RunTrigger(StrEnum):
+ 
+     initial = "initial"  # 首次执行
+     rerun = "rerun"  # 按复核决定重跑
++    incremental = "incremental"  # 增量实例: 只扫更正通知载入的更正分录 (GEN-05, 需求 R194), 程序不出新版本
+ 
+ 
+ class RunStatus(StrEnum):
+diff --git a/src/backend/knowledge/procedures/FIN-09.yaml b/src/backend/knowledge/procedures/FIN-09.yaml
+index cc4116d..8313d03 100644
+--- a/src/backend/knowledge/procedures/FIN-09.yaml
++++ b/src/backend/knowledge/procedures/FIN-09.yaml
+@@ -12,8 +12,9 @@ name: 更正验证
+ #   severity medium, source_ids 为匹配行 ID (没有时为来源对象), amount_cents 为错报金额, detail {misstatement_id,
+ #   expected_cents, corrected_cents, matched_line_ids}; 作该错报判断的规则例外, 验证载荷为 communicated 且须重新沟通.
+ #   该错报已有本程序尚未归因的 V02 时沿用, 不看本次比对, 不再新建 (同 CSH-02 的 D01, D04; 审核 R165-07).
+-# depends_on 只有 FIN-08 (R161 加 FIN-08.yaml 时补上); 分录段的 GEN-05 增量就绪后再加 GEN-05 (需求 R164 验收 1 的差异,
+-# 协调者 10-20 裁定).
++# depends_on: FIN-08 (R161 加 FIN-08.yaml 时补上) 与 GEN-05 (分录段的增量扫描, 需求 R194; 功能 journals 关闭时程序库丢弃
++# 这条依赖). verify_correction 先对更正通知载入的凭证做 GEN-05 增量扫描, 再执行本程序; 增量实例在匹配凭证上的未归因例外
++# 接在 V02 之后作该错报判断的规则例外 (需求 R194).
+ phase: P3_Completion
+ cycle: Completion
+ owner: A8
+@@ -25,7 +26,7 @@ autonomy_level: L2
+ manual_result_allowed: true          # 判断失败的错报可由审计师给出验证结果 (须带人给的验证载荷)
+ misstatement_update_kind: verification   # 判断带验证载荷, 确认后写错报新版本; 推翻与手工结果须由人给载荷 (需求 R159);
+                                          # 带它的程序自主度不能高于 L2 (仲裁不收载荷)
+-depends_on: [FIN-08]
++depends_on: [FIN-08, GEN-05]
+ params:
+   adjustment_prefix: {ref: dataset.audit_adjustment_entry_prefix}   # 审计更正分录的凭证号前缀
+ standards: [ASA450-P07]
+diff --git a/src/backend/knowledge/procedures/GEN-05.yaml b/src/backend/knowledge/procedures/GEN-05.yaml
+index 04d887b..01a5aeb 100644
+--- a/src/backend/knowledge/procedures/GEN-05.yaml
++++ b/src/backend/knowledge/procedures/GEN-05.yaml
+@@ -3,10 +3,14 @@ name: 全量分录扫描
+ # 规格书 6.3 GEN-05; ASA 240 第 32, 33(a) 段, A44 段. 对本期全部分录按规则取例外, 原样返回, 不作判断, 不建复核
+ # 任务; 例外由 GEN-02 (分录例外归因) 引用. 本文件为原有规则 R01-R08, 期末后补记 R13 (需求 R131) 与不看录入时间的新规则
+ # R09-R12 (需求 R132; 设计稿第 5.3 节, R09 依 ASA 240 A44 段的 nonstandard journal entries, R10-R12 是据此自定的口径);
+-# 更正分录接入后的增量实例由 JR-6c 改 (entry_nos, audit_adjustment_start).
++# 更正分录接入后的增量实例 (需求 R194): verify_correction 节点以 entry_nos 只扫更正通知载入的凭证 (GraphNodes.scan_increment),
++# 写新的执行记录 (trigger incremental) 与例外, 程序不出新版本.
+ #
+ # 通用口径 (各规则的 SQL 都这样写):
+-# - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行.
++# - 范围: 初始实例只取 posting_date 在 [period_start, period_end] 内的分录行. 增量实例 (entry_nos 非空) 另只出凭证号在
++#   entry_nos 中的例外 (各规则最后一步按 entry_no 筛, 中间步骤照全期算: R07 的录入人计数, R10, R12 的贷项凭证, R11 的
++#   原凭证与重记都按全期; R12 即只取 journal_entry_id 落在这些凭证上的发票); R06 不受 entry_nos 限制 (它查的是审计
++#   调整期间录入的其他分录, 不是更正分录).
+ # - 每条规则每笔凭证 (entry_no) 至多一条例外: source_id 取该凭证命中行中金额 (借贷两侧绝对值之和) 最大的行, 并列取
+ #   ID 最小的行 (按字节序); amount_cents 取这一行的金额. 例外按 (posting_date, entry_no 自然序, entry_no) 编号: 自然序
+ #   把凭证号中的每段数字补足到 10 位再按字节序比较 (XJ-9 在 XJ-10 之前), 数字段以 10 位为限 (更长的段不保证按数值排);
+@@ -41,6 +45,7 @@ cycle: Pervasive
+ owner: A6
+ feature: journals                 # 功能开关 (services/features.py): 分录测试
+ fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
++incremental: true                 # 增量实例 (需求 R194): 更正分录接入后在 verify_correction 只扫这些凭证
+ outputs: [exceptions]
+ reads: [journal_entries, accounts, sales_invoices, delivery_notes]   # 后两者: R10, R12 的发票与发运或服务完成记录
+ engine: rule
+@@ -66,8 +71,8 @@ params:
+   revenue_categories: [revenue]
+   receivables_categories: [receivables]
+   cash_categories: [cash]
+-  entry_nos: null                 # 增量实例的凭证号 (JR-6c); 初始实例为空, 本文件的 SQL 不用
+-  audit_adjustment_start: null    # 首次发出错报沟通的时间 (JR-6c 改为派生引用); 为空时 R06 不执行
++  entry_nos: null                 # 增量实例的凭证号 (排序后, 由 scan_increment 覆盖); 初始实例为空, 各规则不按它筛
++  audit_adjustment_start: {ref: first_misstatement_communicated_at}   # 首次发出错报沟通的时间; 为空时 R06 不执行
+ standards: [ASA240-P32, ASA240-P33]
+ rules:
+   - id: R01
+@@ -92,6 +97,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              created_at_local
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -127,6 +133,7 @@ rules:
+       )
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -160,6 +167,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              CAST(:approval_limit_cents AS bigint) AS approval_limit_cents
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -188,6 +196,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              created_by, approved_by
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -211,6 +220,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              description, source_doc
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -277,6 +287,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              created_by, preparer_entries
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -304,6 +315,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              created_at_local
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -341,6 +353,7 @@ rules:
+              description, source_doc
+       FROM picked
+       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
++        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -396,6 +409,7 @@ rules:
+              credited_cents, matched_invoices
+       FROM picked
+       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
++        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -460,6 +474,7 @@ rules:
+              original_entry_no, reversal_entry_no, original_name, repost_name
+       FROM picked
+       WHERE line_cents>CAST(:clearly_trivial_cents AS bigint)
++        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -537,6 +552,7 @@ rules:
+       )
+       SELECT * FROM hits
+       WHERE paired_invoices IS NOT NULL AND amount_cents>CAST(:clearly_trivial_cents AS bigint)
++        AND (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+@@ -564,6 +580,7 @@ rules:
+       SELECT 'journal_entry' AS source_type, id AS source_id, line_cents AS amount_cents, entry_no, posting_date,
+              created_at_local
+       FROM picked
++      WHERE (CAST(:entry_nos AS text[]) IS NULL OR entry_no=ANY(CAST(:entry_nos AS text[])))
+       ORDER BY posting_date,
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+diff --git a/src/backend/orchestration/nodes.py b/src/backend/orchestration/nodes.py
+index 6a192e8..7e339cb 100644
+--- a/src/backend/orchestration/nodes.py
++++ b/src/backend/orchestration/nodes.py
+@@ -122,14 +122,21 @@ def run_population(
+     return RunPopulation(id=population_id(run.id), run_id=run.id, procedure_id=run.procedure_id, rules=populations)
+ 
+ 
+-def next_run(procedure_id: str, runs: list[ProcedureRun], params: dict[str, Any], started_at: datetime) -> ProcedureRun:
+-    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no."""
++def next_run(
++    procedure_id: str,
++    runs: list[ProcedureRun],
++    params: dict[str, Any],
++    started_at: datetime,
++    trigger: RunTrigger | None = None,
++) -> ProcedureRun:
++    """生成某条程序的下一次执行记录, 状态为 running. run_no 见 next_run_no; trigger 为空时第 1 次为 initial, 其后为
++    rerun (增量实例给 incremental)."""
+     run_no = next_run_no(procedure_id, runs)
+     return ProcedureRun(
+         run_no=run_no,
+         id=run_id_of(procedure_id, run_no),
+         procedure_id=procedure_id,
+-        trigger=RunTrigger.initial if run_no == 1 else RunTrigger.rerun,
++        trigger=trigger or (RunTrigger.initial if run_no == 1 else RunTrigger.rerun),
+         params_snapshot=params,
+         started_at=started_at,
+         status=RunStatus.running,
+@@ -146,16 +153,20 @@ def build_run(
+     *,
+     traits: DatasetTraits,
+     profile: ClientProfile | None,
++    trigger: RunTrigger | None = None,
++    overrides: Mapping[str, Any] | None = None,
+ ) -> ProcedureRun:
+-    """建某条程序的下一次执行记录, execute 与 fieldwork 共用.
++    """建某条程序的下一次执行记录, execute, fieldwork 与增量实例 (scan_increment) 共用.
+ 
+     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
+-    为准). 解析用的风险等级取程序关联审计目标的最高等级, dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取
+-    本项目采用版本的客户画像 profile. 参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行
+-    记录. language 取项目当时的工作语言 (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
++    为准), 最后叠加 overrides (增量实例的 entry_nos, 需求 R194). 解析用的风险等级取程序关联审计目标的最高等级,
++    dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目采用版本的客户画像 profile. trigger 见 next_run.
++    参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录. language 取项目当时的工作语言
++    (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
+     """
+     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
+-    run = next_run(procedure.id, state["procedure_runs"], params, started_at)
++    params |= overrides or {}
++    run = next_run(procedure.id, state["procedure_runs"], params, started_at, trigger)
+     return run.model_copy(update={"language": engagement.working_language})
+ 
+ 
+@@ -255,7 +266,7 @@ NODE_PROCEDURES: dict[str, tuple[str, ...]] = {
+ MISSTATEMENT_NODES: dict[str, tuple[str, ...]] = {
+     "misstatement_triage": ("FIN-03",),
+     "communicate": ("FIN-08",),
+-    "verify_correction": ("FIN-09",),
++    "verify_correction": ("GEN-05", "FIN-09"),  # 先对更正分录做 GEN-05 增量扫描 (需求 R194)
+     "p3_reassess": ("PLN-19",),
+     "summarize": ("FIN-04",),
+     "final_review": ("FIN-15",),
+@@ -543,6 +554,21 @@ def awaiting_correction(state: EngagementState) -> list[str]:
+     )
+ 
+ 
++def increment_entry_nos(state: EngagementState, procedure_id: str, available: Sequence[str]) -> list[str]:
++    """增量实例要扫的凭证号 (需求 R194): 状态中各份 adjustments_posted 更正通知载入的凭证 (通知的凭证号为空即载入了全部
++    未载入的, 取 available: 数据集可载入的全部更正分录), 去掉本程序已有的增量执行 (trigger incremental) 参数快照里
++    entry_nos 扫过的, 排序. 纯函数."""
++    posted = [n for n in state["correction_notices"] if n.kind == "adjustments_posted"]
++    loaded = {no for n in posted for no in (n.adjustment_entry_nos or available)}
++    scanned = {
++        no
++        for r in state["procedure_runs"]
++        if r.procedure_id == procedure_id and r.trigger is RunTrigger.incremental
++        for no in r.params_snapshot.get("entry_nos") or []
++    }
++    return sorted(loaded - scanned)
++
++
+ def after_notice(misstatement: Misstatement, notice: CorrectionNotice) -> Misstatement:
+     """按更正通知写出的错报新版本 (接口文档第 2.5 节迁移表): adjustments_posted 转 verifying, stop_waiting 记
+     uncorrected (stopped_waiting); 都记 correction_notice_id, needs_recommunication 置假. 经 model_validate 重建.
+@@ -646,26 +672,8 @@ class GraphNodes:
+         """
+         procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
+         template = self.deps.library.load(procedure_id)
+-        dataset = engagement.dataset  # 没有数据集的项目 (新建的客户) 取缺省声明
+-        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
+-        # 画像按本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用
+-        version = state["client_profile_version"]
+-        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
+-        procedure_run = build_run(
+-            self.deps.library,
+-            template,
+-            procedure,
+-            engagement,
+-            state,
+-            datetime.now(UTC),
+-            traits=traits,
+-            profile=profile,
+-        )
+-        # 执行时的数据版本, 总览据此标过期 (需求 R16); 承接阶段只看客户资料, 不读财务数据, 不记
+-        data_version = None
+-        if template.phase is not Phase.P0_Acceptance:
+-            data_version = (await self.deps.data.readiness(engagement.id)).data_version
+-        procedure_run = procedure_run.model_copy(update={"instance": instance, "data_version": data_version})
++        procedure_run = await self.new_run(state, engagement, template, procedure)
++        procedure_run = procedure_run.model_copy(update={"instance": instance})
+         agent = self.agents[procedure_id]
+         stored_run = await self.deps.output_store.get(engagement.id, ProcedureRun, procedure_run.id)
+         population = None
+@@ -688,6 +696,78 @@ class GraphNodes:
+             staged["population"] = population
+         return staged
+ 
++    async def new_run(
++        self,
++        state: EngagementState,
++        engagement: Engagement,
++        template: ProcedureTemplate,
++        procedure: Procedure,
++        trigger: RunTrigger | None = None,
++        overrides: Mapping[str, Any] | None = None,
++    ) -> ProcedureRun:
++        """本程序的下一次执行记录 (build_run): 数据集声明取项目的 (没有数据集的项目, 即新建的客户, 取缺省声明), 画像按
++        本项目采用的版本取 (同客户的其他项目改出新版本不影响本项目), 供 profile. 参数引用; 记执行时的数据版本, 总览
++        据此标过期 (需求 R16; 承接阶段只看客户资料, 不读财务数据, 不记). perform 与 scan_increment 共用."""
++        dataset = engagement.dataset
++        traits = self.deps.datasets.dataset_traits(dataset) if dataset is not None else DatasetTraits()
++        version = state["client_profile_version"]
++        profile = await self.deps.engagement_store.client_profile(engagement.client_id, version)
++        run = build_run(
++            self.deps.library,
++            template,
++            procedure,
++            engagement,
++            state,
++            datetime.now(UTC),
++            traits=traits,
++            profile=profile,
++            trigger=trigger,
++            overrides=overrides,
++        )
++        data_version = None
++        if template.phase is not Phase.P0_Acceptance:
++            data_version = (await self.deps.data.readiness(engagement.id)).data_version
++        return run.model_copy(update={"data_version": data_version})
++
++    async def scan_increment(
++        self, state: EngagementState, engagement: Engagement, procedure_id: str, entry_nos: Sequence[str]
++    ) -> StatePatch:
++        """程序的增量实例 (需求 R194; 模板 incremental, 即 GEN-05): 只扫 entry_nos 这些凭证. 建下一次执行记录 (new_run:
++        trigger incremental, 参数为模板参数的解析结果, entry_nos 换成排序后的这些凭证号), 调 Agent, 片段经合并校验后
++        与执行记录, 被测总体 (run_population, 需求 R324) 在一个事务内写入 Store; 程序不出新版本 (仍 completed), 不建
++        任务. 返回写入后的片段, 由节点并入状态.
++        重放: 这次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (同 perform). 模板 incremental 为假抛
++        ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过为节点错误, 照常抛出
++        (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error, 恢复时重做."""
++        template = self.deps.library.load(procedure_id)
++        if not template.incremental:
++            raise ValueError(f"{procedure_id} 没有增量实例 (模板 incremental 为假)")
++        if not entry_nos:
++            return {}
++        eid = engagement.id
++        procedure = next(p for p in state["procedure_pack"] if p.id == procedure_id)
++        overrides = {"entry_nos": sorted(entry_nos)}
++        run = await self.new_run(state, engagement, template, procedure, RunTrigger.incremental, overrides)
++        stored = await self.deps.output_store.get(eid, ProcedureRun, run.id)
++        if stored is not None and stored.status is not RunStatus.running:
++            return await stored_outputs(self.deps, eid, template, stored)
++        agent = self.agents[procedure_id]
++        writer = writer_of(template, agent)
++        output = await agent.outcome(
++            RunContext(engagement=engagement, procedure=procedure, template=template, run=run, state=state)
++        )
++        patch = output.patch
++        check_patch(
++            patch, writer=writer, procedure_id=procedure_id, run_id=run.id, state=state, outputs=template.outputs
++        )
++        ended = next(r for r in patch["procedure_runs"] if r.id == run.id)
++        population = run_population(template, ended, output.populations)
++        async with self.deps.output_store.transaction(eid):
++            saved = await save_outputs(self.deps.output_store, eid, patch, actor=writer)
++            if population is not None:
++                await self.deps.output_store.put(eid, [population], actor=writer)
++            return saved
++
+     async def attempt(
+         self,
+         state: EngagementState,
+@@ -994,15 +1074,30 @@ class GraphNodes:
+         合并规则并入). 返回各次的片段合并, 程序包为最终的. phase 见 execute, 每条都带 (同值不重复留痕).
+         先执行的程序读回的决定传给后面的 (execute 的 earlier).
+         模板 inputs 的资料还缺的程序不执行, 记 awaiting_data 或 no_data (execute 每次执行前查, 需求 R272, R280), 节点
+-        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门)."""
++        照常往下 (P1 的 DOC-04 缺合同时, P1 照常到 PLN-01/03 闸门).
++        有增量实例的程序 (模板 incremental, 只在 verify_correction 的 GEN-05) 不经 execute, 走 increment."""
+         result: StatePatch = {}
+         for procedure_id in node_procedures(node, state["procedure_pack"], self.deps.library):
+-            earlier = [r.id for r in result.get("review_records", [])]
+-            patch = await self.execute(state, procedure_id, phase, earlier)
++            if self.deps.library.load(procedure_id).incremental:
++                patch = await self.increment(state, procedure_id)
++            else:
++                earlier = [r.id for r in result.get("review_records", [])]
++                patch = await self.execute(state, procedure_id, phase, earlier)
+             merge_patch(result, patch)
+             state = apply_patch(state, patch)
+         return result
+ 
++    async def increment(self, state: EngagementState, procedure_id: str) -> StatePatch:
++        """对更正通知载入而还没扫过的凭证 (increment_entry_nos; 数据集可载入的更正分录取 DatasetLoader) 做本程序的增量
++        实例 (scan_increment, 需求 R194); 没有要扫的返回 {}."""
++        engagement = await self.deps.engagement_store.get(state["engagement_id"])
++        if engagement is None:
++            raise LookupError(f"Engagement {state['engagement_id']} not found")
++        dataset = engagement.dataset
++        available = self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
++        entry_nos = increment_entry_nos(state, procedure_id, available)
++        return await self.scan_increment(state, engagement, procedure_id, entry_nos)
++
+     async def inputs_before_run(self, state: EngagementState, procedure_id: str) -> StatePatch:
+         """执行一条 P2 以外的程序前查它要的资料 (需求 R272), 首次执行与 rerun 都经过这里 (execute): 按现有资料重定
+         状态 (refresh_inputs; 要求重跑的 executing 同样查), 返回片段, 没有变化为 {}.
+@@ -1391,7 +1486,8 @@ class GraphNodes:
+         return {"misstatements": written, "correction_notices": [notice]}
+ 
+     async def verify_correction(self, state: EngagementState) -> StatePatch:
+-        """验证更正 (FIN-09, 由 R165 加入; 分录段的 GEN-05 增量扫描由 R194 加在前面)."""
++        """验证更正: 先对更正通知载入而还没扫过的更正分录做 GEN-05 的增量实例 (需求 R194, 程序包没有 GEN-05 时跳过),
++        再由 A8 执行 FIN-09 (需求 R165)."""
+         return await self.run_node(state, "verify_correction")
+ 
+     async def p3_reassess(self, state: EngagementState) -> StatePatch:
+diff --git a/src/frontend/openapi.json b/src/frontend/openapi.json
+index d4c8f4a..9606f3c 100644
+--- a/src/frontend/openapi.json
++++ b/src/frontend/openapi.json
+@@ -14163,7 +14163,8 @@
+         "type": "string",
+         "enum": [
+           "initial",
+-          "rerun"
++          "rerun",
++          "incremental"
+         ],
+         "title": "RunTrigger",
+         "description": "一次执行的起因."
+diff --git a/src/frontend/src/client/types.gen.ts b/src/frontend/src/client/types.gen.ts
+index 5b59166..ea05a0c 100644
+--- a/src/frontend/src/client/types.gen.ts
++++ b/src/frontend/src/client/types.gen.ts
+@@ -5046,7 +5046,7 @@ export type RunStatus = 'running' | 'succeeded' | 'failed';
+  *
+  * 一次执行的起因.
+  */
+-export type RunTrigger = 'initial' | 'rerun';
++export type RunTrigger = 'initial' | 'rerun' | 'incremental';
+ 
+ /**
+  * ServiceOrganisation
+diff --git a/tests/misstatement_fakes.py b/tests/misstatement_fakes.py
+index d4c49b1..968e92b 100644
+--- a/tests/misstatement_fakes.py
++++ b/tests/misstatement_fakes.py
+@@ -6,7 +6,7 @@ manual/fin08_round{n}.json (xero_fakes.round_file). 模块常量不读快照与
+ 第 2 轮的 SECOND, round2_communicated, round2_sources 现由 FIN-09 第 2 轮的用例用, 也是给 R167 两轮闭环预留的.
+ """
+ 
+-from collections.abc import Sequence
++from collections.abc import Callable, Mapping, Sequence
+ from datetime import UTC, datetime
+ from typing import Any
+ 
+@@ -23,6 +23,7 @@ from backend.contracts.models import (
+     MisstatementStatus,
+     MisstatementType,
+     Phase,
++    ProcedureRun,
+     ProposedAction,
+     RerunRequest,
+     TrailEntry,
+@@ -70,12 +71,14 @@ def fin09_deps(
+     llm: Any = None,
+     rows: Sequence[dict[str, Any]] | None = None,
+     entries: Sequence[str] = FIRST,
++    results: Mapping[str, Callable[[ProcedureRun], RuleResult]] | None = None,
+     **kwargs: Any,
+ ) -> AgentDeps:
+     """fin03_deps (kwargs 原样转交, 如 features) 加 FIN-09 的数据: 财务存储另记 entries 的更正分录; 规则引擎的 V01
+-    为这些分录的行 (xero_v01_rows), rows 给了时换成它."""
++    为这些分录的行 (xero_v01_rows), rows 给了时换成它; results 为别的程序的规则结果 (同 FakeRuleEngine)."""
+     v01 = list(rows) if rows is not None else xero_v01_rows(entries)
+-    rules = FakeRuleEngine({FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": v01})})
++    fin09 = {FIN09: lambda run: RuleResult(exceptions=[], rows={"V01": v01})}
++    rules = FakeRuleEngine({**fin09, **(results or {})})
+     deps = fin03_deps(trail, llm, rules=rules, **kwargs)
+     with_adjustments(deps.financial_store, entries)  # type: ignore[arg-type]
+     return deps
+diff --git a/tests/test_correction_verification.py b/tests/test_correction_verification.py
+index 541233e..8e39851 100644
+--- a/tests/test_correction_verification.py
++++ b/tests/test_correction_verification.py
+@@ -28,6 +28,7 @@ from backend.contracts.models import (
+     Reliability,
+     ReviewStatus,
+     RunStatus,
++    RunTrigger,
+     TaskKind,
+     TaskStatus,
+ )
+@@ -36,7 +37,7 @@ from backend.orchestration.decisions import review_effects
+ from backend.orchestration.merge import check_patch
+ from backend.orchestration.nodes import after_notice, apply_patch
+ from backend.services.review_queue import RERUNNABLE
+-from tests.fakes import FakeTrail, ScriptedLLM, finished, make_run
++from tests.fakes import FakeTrail, ScriptedLLM, finished, gen05_exception, make_run
+ from tests.fixture_sets import XERO
+ from tests.misstatement_fakes import (
+     CSH02,
+@@ -539,3 +540,28 @@ def test_entry_numbers_deduplicated() -> None:
+     xj499 = round1_verifying()[0]
+     lines = [line("AJE-X01-2", "asset", credit=50000), line("AJE-X01-4", "asset", credit=25000)]
+     assert verification_update(xj499, lines, corrected_cents(xj499, lines)) == verified(XJ499, 4, "AJE-X01", 75000)
++
++
++async def test_increment_exceptions_join_rule_findings() -> None:
++    """需求 R194 认领: GEN-05 增量执行在匹配凭证 (AJE-X01) 上未归因的例外接在 XJ499 判断的规则例外中; 别的凭证上的,
++    初始执行引出的, 被过期重跑取代的增量执行引出的与已归因的不进; CSH02 的匹配凭证 (AJE-X05) 上没有."""
++    increment, superseded = (
++        finished(make_run("GEN-05", n).model_copy(update={"trigger": RunTrigger.incremental})) for n in (2, 3)
++    )
++    initial = finished(make_run("GEN-05"))
++    on_entry = gen05_exception(increment, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
++    attributed = gen05_exception(increment, "R09", "high", "AJE-X01-1", 82500, {"entry_no": "AJE-X01"})
++    attributed = attributed.model_copy(update={"disposition": ExceptionDisposition.attributed, "attributed_by": "J-1"})
++    elsewhere = gen05_exception(increment, "R02", "medium", "AJE-X02-1", 426120, {"entry_no": "AJE-X02"}, number=2)
++    earlier = gen05_exception(initial, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
++    stale = gen05_exception(superseded, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})
++    rerun = SUPERSEDED.model_copy(update={"procedure_ids": ["GEN-05"], "superseded_run_ids": [superseded.id]})
++    state = fin03_state(
++        misstatements=round1_verifying(),
++        procedure_runs=[initial, increment, superseded],
++        exceptions=[on_entry, attributed, elsewhere, earlier, stale],
++        rerun_requests=[rerun],
++    )
++    patch, _ = await run_fin09(fin09_deps(FakeTrail()), state)
++
++    assert [j.exception_ids for j in patch["judgments"]] == [[on_entry.id], []]
+diff --git a/tests/test_gen05_incremental.py b/tests/test_gen05_incremental.py
+new file mode 100644
+index 0000000..94ab86d
+--- /dev/null
++++ b/tests/test_gen05_incremental.py
+@@ -0,0 +1,243 @@
++"""需求 R194: GEN-05 的增量实例 (verify_correction 节点).
++
++Xero 演示上沿用错报闭环的装配 (misstatement_fakes.fin09_deps: 规则引擎预置 FIN-09 的 V01 行, 财务存储另记
++更正分录), 功能另开 journals: 程序包有 P2 已完成的 GEN-05 (第 1 次执行) 与 FIN-09. 规则引擎对 GEN-05 不出例外, 只记
++调用 (程序编号, 执行, 参数). 节点层的用例直接调 GraphNodes; 主图的用例检查点以 fan_in 身份写入, 分诊与沟通空执行,
++停在 await_correction 等更正通知, 提交后 verify_correction 先做增量扫描再执行 FIN-09 (FIN-09 等复核).
++"""
++
++from typing import Any
++
++import pytest
++
++from backend.contracts.errors import RuleError
++from backend.contracts.models import (
++    AuditException,
++    CorrectionNotice,
++    ExceptionDisposition,
++    Judgment,
++    Procedure,
++    ProcedureRun,
++    ProcedureStatus,
++    RunPopulation,
++    RunStatus,
++    RunTrigger,
++)
++from backend.contracts.services import RuleResult
++from backend.contracts.state import EngagementState
++from backend.orchestration.merge import MergeRejected
++from backend.orchestration.nodes import GraphNodes, increment_entry_nos
++from backend.orchestration.runner import GraphRunner, waiting_payloads
++from backend.services.features import BASELINE, MISSTATEMENT
++from tests.fakes import (
++    ENGAGEMENT,
++    FakeTrail,
++    fin08_registered,
++    finished,
++    gen05_exception,
++    latest,
++    make_ctx,
++    make_run,
++    start_at_fan_in,
++    submit_and_wait,
++)
++from tests.misstatement_fakes import (
++    FIN09,
++    FIRST,
++    SECOND,
++    fin03_state,
++    fin09_deps,
++    notice,
++    round1_communicated,
++    round1_misstatements,
++    round2_communicated,
++    round2_sources,
++)
++from tests.test_decisions import Started
++from tests.xero_fakes import registration, xero_engagement
++
++pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-09 的 Xero fixture
++
++GEN05 = "GEN-05"
++FEATURES = BASELINE | {MISSTATEMENT, "journals"}
++ALL = sorted(FIRST + SECOND)
++CONFIG = GraphRunner.config(ENGAGEMENT.id)  # 同 xero_engagement().id; 收集阶段不读快照
++
++
++def incremental(run_no: int, entry_nos: list[str]) -> ProcedureRun:
++    """GEN-05 第 run_no 次执行: 扫过 entry_nos 的增量实例 (已结束)."""
++    run = make_run(GEN05, run_no, params={"entry_nos": entry_nos})
++    return finished(run.model_copy(update={"trigger": RunTrigger.incremental}))
++
++
++def posted(oid: str, entry_nos: list[str]) -> CorrectionNotice:
++    return notice(oid, adjustment_entry_nos=entry_nos)
++
++
++@pytest.mark.parametrize(
++    ("notices", "runs", "expected"),
++    [
++        ([posted("D-CN1", FIRST)], [], FIRST),
++        ([posted("D-CN1", FIRST), posted("D-CN2", SECOND)], [incremental(2, FIRST)], SECOND),
++        ([posted("D-CN1", FIRST), posted("D-CN2", [])], [incremental(2, FIRST)], SECOND),  # 空即载入全部未载入的
++        ([posted("D-CN1", ["AJE-X05", "AJE-X01"])], [finished(make_run(GEN05, 2, {"entry_nos": FIRST}))], FIRST),
++        ([notice("D-STOP", kind="stop_waiting", adjustment_entry_nos=[], reason="r")], [], []),
++    ],
++    ids=["first", "second", "empty_notice", "rerun", "stop_waiting"],
++)
++def test_increment_entry_nos(notices: list[CorrectionNotice], runs: list[ProcedureRun], expected: list[str]) -> None:
++    """要扫的凭证: 各份 adjustments_posted 通知载入的 (为空取数据集可载入的全部), 去掉增量执行扫过的, 排序. 改参数的
++    重跑 (trigger rerun) 带 entry_nos 也不算扫过."""
++    state = fin03_state(correction_notices=notices, procedure_runs=runs)
++    assert increment_entry_nos(state, GEN05, ALL) == expected
++
++
++def gen05_pack(deps: Any) -> list[Procedure]:
++    """程序包: P2 已完成的 GEN-05, 加错报闭环的 FIN-03, FIN-08, FIN-09 (第 1 版)."""
++    first = [make_ctx(deps, pid, engagement=xero_engagement()).procedure for pid in (GEN05, "FIN-03", "FIN-08", FIN09)]
++    return [first[0].model_copy(update={"status": ProcedureStatus.completed}), *first[1:]]
++
++
++def scanning_deps(exceptions: Any = None, entries: list[str] = FIRST) -> Any:
++    """fin09_deps 加 GEN-05 的规则结果 (缺省不出例外; exceptions 为按执行生成例外的函数), 功能另开 journals."""
++    gen05 = {GEN05: lambda run: RuleResult(exceptions=exceptions(run) if exceptions else [], rows={})}
++    return fin09_deps(FakeTrail(), entries=entries, results=gen05, features=FEATURES)
++
++
++def node_state(deps: Any, **changes: Any) -> EngagementState:
++    """verify_correction 之前的状态: GEN-05 第 1 次执行已结束; FIN-08 第 1 轮已登记 (首次沟通时间)."""
++    first = fin08_registered(1, registration(1, round1_misstatements()))
++    base = fin03_state(procedure_runs=[finished(make_run(GEN05))], procedure_pack=gen05_pack(deps), **first)
++    return base | changes  # type: ignore[return-value]
++
++
++def rule_calls(deps: Any, procedure_id: str = GEN05) -> list[tuple[str, list[str] | None]]:
++    """规则引擎对该程序的调用: (执行, 参数 entry_nos)."""
++    return [(run_id, params.get("entry_nos")) for pid, run_id, params in deps.rules.calls if pid == procedure_id]
++
++
++def x01_hit(run: ProcedureRun) -> list[AuditException]:
++    """R02 命中 AJE-X01 的一条例外."""
++    return [gen05_exception(run, "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})]
++
++
++async def test_scan_increment_writes_run_and_exceptions_only() -> None:
++    """验收 1: 建 RUN-GEN-05-2 (trigger incremental, 参数 entry_nos 排序后的凭证号, audit_adjustment_start 为首次沟通
++    时间), 调 A6, 执行记录, 例外与被测总体 (POP-RUN-GEN-05-2, 需求 R324) 在一个事务内写入; GEN-05 不出新版本; 返回
++    片段即写入的. 再执行一次 (重放) 不调规则引擎, 取回同一片段."""
++    deps = scanning_deps(x01_hit)
++    nodes = GraphNodes(deps, 2)
++    state = node_state(deps)
++    engagement = xero_engagement()
++
++    patch = await nodes.scan_increment(state, engagement, GEN05, ["AJE-X05", "AJE-X01"])
++
++    [run] = patch["procedure_runs"]
++    assert (run.id, run.trigger, run.status, run.params_snapshot["entry_nos"]) == (
++        "RUN-GEN-05-2",
++        RunTrigger.incremental,
++        RunStatus.succeeded,
++        FIRST,
++    )
++    first_communicated = registration(1, round1_misstatements())[0]["communicated_at"]
++    assert run.params_snapshot["audit_adjustment_start"] == first_communicated
++    assert [x.id for x in patch["exceptions"]] == ["X-GEN-05-2-R02-1"]
++    [commit] = [c for c in deps.output_store.commits if any(getattr(o, "id", None) == run.id for o in c)]
++    assert {type(o).__name__ for o in commit} == {"ProcedureRun", "AuditException", "RunPopulation"}
++    [population] = [o for o in commit if isinstance(o, RunPopulation)]
++    assert (population.id, population.run_id) == ("POP-RUN-GEN-05-2", run.id)
++    assert not any(isinstance(o, Procedure) for o in deps.output_store.rows)
++    assert rule_calls(deps) == [("RUN-GEN-05-2", FIRST)]
++
++    assert await nodes.scan_increment(state, engagement, GEN05, FIRST) == patch
++    assert rule_calls(deps) == [("RUN-GEN-05-2", FIRST)]
++
++
++async def test_scan_increment_needs_incremental_template_and_entries() -> None:
++    """验收 1: 模板 incremental 为假抛 ValueError; 没有要扫的凭证时不执行, 返回 {}."""
++    deps = scanning_deps()
++    nodes = GraphNodes(deps, 2)
++    state = node_state(deps)
++    with pytest.raises(ValueError, match="FIN-09 没有增量实例"):
++        await nodes.scan_increment(state, xero_engagement(), FIN09, FIRST)
++    assert await nodes.scan_increment(state, xero_engagement(), GEN05, []) == {}
++    assert rule_calls(deps) == []
++
++
++def rule_error(run: ProcedureRun) -> list[AuditException]:
++    raise RuleError("GEN-05/R02: timeout")
++
++
++def unknown_run_exception(run: ProcedureRun) -> list[AuditException]:
++    """引用不存在的执行 (RUN-GEN-05-9) 的例外, 外键校验不过."""
++    return [gen05_exception(make_run(GEN05, 9), "R02", "medium", "AJE-X01-2", 75000, {"entry_no": "AJE-X01"})]
++
++
++@pytest.mark.parametrize(
++    ("exceptions", "error"), [(rule_error, RuleError), (unknown_run_exception, MergeRejected)], ids=["rule", "merge"]
++)
++async def test_scan_increment_errors_propagate_without_writes(exceptions: Any, error: type[Exception]) -> None:
++    """Agent 出错或片段校验不过时照常抛出 (节点错误, 由 runner 记入 run_error), 不写执行记录与例外."""
++    deps = scanning_deps(exceptions)
++    with pytest.raises(error):
++        await GraphNodes(deps, 2).scan_increment(node_state(deps), xero_engagement(), GEN05, FIRST)
++    assert [o for o in deps.output_store.rows if isinstance(o, (ProcedureRun, AuditException))] == []
++
++
++async def at_correction(deps: Any, misstatements: list[Any], **changes: Any) -> Started:
++    """主图停在 await_correction 等更正通知 (见模块 docstring); 闸门之外另在 p3_reassess 之前停下."""
++    pack = gen05_pack(deps)
++    state = node_state(deps, misstatements=misstatements, **changes)
++    versions = [m.model_copy(update={"version": v}) for m in misstatements for v in range(1, m.version + 1)]
++    stored = [*state["procedure_runs"], *versions]
++    runner = await start_at_fan_in(deps, state, pack, ["p3_reassess"], stored)
++    return Started(runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
++
++
++async def test_round1_scans_notice_entries_before_fin09() -> None:
++    """验收 2, 3: D-CN1 (AJE-X01, AJE-X05) 生效后 verify_correction 先做 RUN-GEN-05-2 (entry_nos 为这两笔, 0 条例外),
++    再执行 FIN-09 (等复核); GEN-05 仍是第 1 版 completed."""
++    deps = scanning_deps()
++    s = await at_correction(deps, round1_communicated())
++    await submit_and_wait(s, notice())
++
++    assert rule_calls(deps) == [("RUN-GEN-05-2", FIRST)]
++    assert rule_calls(deps, FIN09) == [("RUN-FIN-09-1", None)]
++    run = latest(s, ProcedureRun, "RUN-GEN-05-2")
++    assert (run.trigger, run.status) == (RunTrigger.incremental, RunStatus.succeeded)
++    assert [x for x in s.output_store.rows if isinstance(x, AuditException)] == []
++    gen05 = latest(s, Procedure, GEN05)
++    assert (gen05.version, gen05.status) == (1, ProcedureStatus.completed)
++    snapshot = await s.runner.app.aget_state(CONFIG)
++    assert [w["procedure_id"] for w in waiting_payloads(snapshot)] == [FIN09]
++
++
++async def test_increment_exception_stays_open_and_joins_fin09() -> None:
++    """验收 7: 第 1 轮增量命中 AJE-X01 的例外为 open, 只有第 1 版 (不经 GEN-02 归因); FIN-09 把它放进匹配该凭证的
++    错报 (第 1 条) 判断的规则例外, 第 2 条 (匹配 AJE-X05) 没有."""
++    deps = scanning_deps(x01_hit)
++    s = await at_correction(deps, round1_communicated())
++    await submit_and_wait(s, notice())
++
++    stored = [x for x in s.output_store.rows if isinstance(x, AuditException)]
++    assert [(x.id, x.version, x.disposition) for x in stored] == [("X-GEN-05-2-R02-1", 1, ExceptionDisposition.open)]
++    judgments = [x for x in s.output_store.rows if isinstance(x, Judgment) and x.procedure_id == FIN09]
++    assert [j.exception_ids for j in judgments] == [["X-GEN-05-2-R02-1"], []]
++
++
++@pytest.mark.parametrize("entry_nos", [SECOND, []], ids=["listed", "empty"])
++async def test_round2_scans_only_new_entries(entry_nos: list[str]) -> None:
++    """验收 3: 第 1 轮已扫过 AJE-X01, AJE-X05 (RUN-GEN-05-2): 第 2 轮通知 D-CN2 生效后 RUN-GEN-05-3 只扫 AJE-X02 至
++    X04; 通知的凭证号为空 (载入全部未载入的) 时同样只扫这三笔 (可载入的全部减去已扫过的), 之后执行 FIN-09."""
++    deps = scanning_deps(entries=ALL)
++    history = {
++        "procedure_runs": [finished(make_run(GEN05)), incremental(2, FIRST), finished(make_run(FIN09))],
++        "correction_notices": [notice()],
++        "judgments": [*fin03_state()["judgments"], *round2_sources()],
++    }
++    s = await at_correction(deps, round2_communicated(), **history)
++    ids = [m.id for m in round2_communicated()]
++    await submit_and_wait(s, notice("D-CN2", misstatement_ids=ids, adjustment_entry_nos=entry_nos))
++
++    assert rule_calls(deps) == [("RUN-GEN-05-3", SECOND)]
++    assert rule_calls(deps, FIN09) == [("RUN-FIN-09-2", None)]
+diff --git a/tests/test_gen05_sql.py b/tests/test_gen05_sql.py
+index 8a0ac37..70b4087 100644
+--- a/tests/test_gen05_sql.py
++++ b/tests/test_gen05_sql.py
+@@ -286,3 +286,148 @@ async def test_xero_overrides_make_rules_hit(
+     result = await gen05(xero, **overrides)
+     assert hits(result, rule_id) == expected
+     assert next((o.status for o in result.outcomes if o.rule_id == rule_id), None) == outcome
++
++
++# ── 需求 R194: 增量实例 (entry_nos 只取更正通知载入的凭证) ──
++
++
++@asynccontextmanager
++async def with_rows(project: Gen05Project, table_name: str, rows: list[dict[str, object]]) -> AsyncIterator[None]:
++    """在测试库的项目中暂时插入账表的行 (测试库是副本, 原文件不改), 退出时按 ID 删去, 共用项目的其余用例不受影响."""
++    engine = project.deps.data.engine  # type: ignore[attr-defined]
++    table = m.FINANCIAL[table_name]
++    ids = [row["id"] for row in rows]
++    async with engine.begin() as conn:
++        await bind_engagement(conn, project.eid)
++        await conn.execute(insert(table), [{"engagement_id": project.eid, **row} for row in rows])
++    try:
++        yield
++    finally:
++        async with engine.begin() as conn:
++            await bind_engagement(conn, project.eid)
++            await conn.execute(delete(table).where((table.c.engagement_id == project.eid) & table.c.id.in_(ids)))
++
++
++@pytest_asyncio.fixture(scope="module", loop_scope="module")
++async def xero_corrected(tmp_path_factory: pytest.TempPathFactory) -> Gen05Project:
++    """另建一个 Xero 项目, 载入补造的全部更正分录 (AJE-X01 至 X05, 11 行; DatasetLoader.load_adjustments)."""
++    project = await build_xero_project(
++        database_url(), snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME), tmp_path_factory.mktemp("xero")
++    )
++    eid = project.engagement.id
++    loaded = await project.deps.datasets.load_adjustments(eid, project.engagement.dataset, None, actor=project.owner)  # type: ignore[arg-type]
++    assert len(loaded) == 11
++    run = gen05_run(project.deps, project.engagement, project.state, project.traits, project.profile)
++    return Gen05Project(project.deps, eid, run)
++
++
++FIRST_ROUND, SECOND_ROUND = ["AJE-X01", "AJE-X05"], ["AJE-X02", "AJE-X03", "AJE-X04"]
++NOT_RUN = {  # Xero 上不执行的规则 (录入时间不可靠, 没有审批人, 录入人不足 2 个)
++    ("R01", "skipped"),
++    ("R06", "skipped"),
++    ("R08", "skipped"),
++    ("R13", "skipped"),
++    ("R04", "not_executable"),
++    ("R07", "not_executable"),
++}
++
++
++@pytest.mark.external
++@pytest.mark.parametrize("entry_nos", [FIRST_ROUND, SECOND_ROUND], ids=["round1", "round2"])
++async def test_xero_increment_finds_nothing(xero_corrected: Gen05Project, entry_nos: list[str]) -> None:
++    """验收 4: 两轮更正通知的增量实例各 0 条例外 (R09 剔除 AJE- 前缀, R02 不是 10,000 的整数倍, R03 不是付款, R05
++    说明不含 revers); 不执行的规则同初始实例, R11 照常执行."""
++    result = await gen05(xero_corrected, entry_nos=entry_nos)
++    assert result.exceptions == []
++    assert {(o.rule_id, o.status) for o in result.outcomes} == NOT_RUN
++
++
++def adjustment_line(lid: str, entry_no: str, account: str, debit: int, credit: int) -> dict[str, object]:
++    """一行手工调整分录 (09-30, is_adjustment 真, 录入人与审批人为空, 录入时间为空)."""
++    return {
++        "id": lid,
++        "entry_no": entry_no,
++        "posting_date": date(2026, 9, 30),
++        "account_code": account,
++        "debit_cents": debit,
++        "credit_cents": credit,
++        "description": f"Manual journal {entry_no}",
++        "source_doc": entry_no,
++        "is_adjustment": True,
++    }
++
++
++EXTRA = [  # 验收 5: 同额同科目的两笔, 一笔是审计更正分录 (前缀 AJE-)
++    adjustment_line("XJ-9001-1", "XJ-9001", "477", 1000000, 0),
++    adjustment_line("XJ-9001-2", "XJ-9001", "804", 0, 1000000),
++    adjustment_line("AJE-X09-1", "AJE-X09", "477", 1000000, 0),
++    adjustment_line("AJE-X09-2", "AJE-X09", "804", 0, 1000000),
++]
++
++
++@pytest.mark.external
++async def test_increment_limits_rules_to_entry_nos(xero_corrected: Gen05Project) -> None:
++    """验收 5: 插入 XJ-9001 与 AJE-X09 (借 477 / 贷 804 10,000.00): entry_nos 含两者时 R09 只命中 XJ-9001 (剔除审计
++    更正分录), R02 两笔都命中; entry_nos 不含它们时两条规则都不命中."""
++    async with with_rows(xero_corrected, "journal_entries", EXTRA):
++        both = await gen05(xero_corrected, entry_nos=["AJE-X01", "AJE-X09", "XJ-9001"])
++        others = await gen05(xero_corrected, entry_nos=FIRST_ROUND)
++    assert (hits(both, "R09"), hits(both, "R02")) == (["XJ-9001-1"], ["AJE-X09-1", "XJ-9001-1"])
++    assert (hits(others, "R09"), hits(others, "R02")) == ([], [])
++
++
++async def assert_limited(project: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]) -> None:
++    """参数覆盖下这些规则命中; entry_nos 为命中的全部凭证时命中不变, 为不相干的凭证号时都不命中."""
++    full = await gen05(project, **overrides)
++    entries = sorted({x.detail["entry_no"] for x in full.exceptions if x.rule_id in rule_ids})
++    assert {x.rule_id for x in full.exceptions} >= set(rule_ids)
++    same = await gen05(project, entry_nos=entries, **overrides)
++    others = await gen05(project, entry_nos=["NOT-AN-ENTRY"], **overrides)
++    for rule_id in rule_ids:
++        assert (hits(same, rule_id), hits(others, rule_id)) == (hits(full, rule_id), [])
++
++
++@pytest.mark.parametrize(
++    ("overrides", "rule_ids"),
++    [
++        ({}, ("R01", "R04", "R08")),  # SJ-2026-0612
++        ({"approval_limit_cents": 1555001}, ("R03",)),
++        ({"rare_user_max": 78}, ("R07",)),  # 录入人计数按全期, 只在最后一步筛
++    ],
++    ids=["R01-R04-R08", "R03", "R07"],
++)
++async def test_numbat_entry_nos_limits_rules(
++    numbat: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]
++) -> None:
++    """R06 以外各规则的 entry_nos 筛选 (R02, R09 至 R12 见上面两条用例), Numbat 上命中的规则 (同
++    test_numbat_gen05_on_postgres, test_numbat_overrides_make_rules_hit): 见 assert_limited."""
++    await assert_limited(numbat, overrides, rule_ids)
++
++
++@pytest.mark.external
++@pytest.mark.parametrize(
++    ("overrides", "rule_ids"),
++    [({"period_end": "2026-07-17"}, ("R05",)), ({"entry_timestamps_reliable": True}, ("R13",))],
++    ids=["R05", "R13"],
++)
++async def test_xero_entry_nos_limits_rules(
++    xero: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]
++) -> None:
++    """同上, Xero 上以参数覆盖命中的 R05, R13 (同 test_xero_overrides_make_rules_hit, test_xero_gen05_on_postgres)."""
++    await assert_limited(xero, overrides, rule_ids)
++
++
++async def test_numbat_r06_runs_after_first_communication(numbat: Gen05Project) -> None:
++    """验收 6: 录入时间可信的 Numbat 上, R06 在首次错报沟通时间为空时 skipped; 为 2026-10-18T23:00:00Z 时执行, 插入
++    一笔其后录入的非更正分录即命中这一笔 (R06 不受 entry_nos 限制)."""
++    unset = await gen05(numbat)
++    assert next(o.status for o in unset.outcomes if o.rule_id == "R06") == "skipped"
++    late = [
++        adjustment_line("GJ-LATE-1", "GJ-LATE", "1100", 50000, 0) | {"posting_date": date(2026, 6, 30)},
++        adjustment_line("GJ-LATE-2", "GJ-LATE", "4100", 0, 50000) | {"posting_date": date(2026, 6, 30)},
++    ]
++    late = [row | {"created_at": datetime(2026, 10, 19, tzinfo=UTC)} for row in late]
++    async with with_rows(numbat, "journal_entries", late):
++        result = await gen05(numbat, audit_adjustment_start="2026-10-18T23:00:00Z", entry_nos=["AJE-2026-001"])
++    assert "R06" not in {o.rule_id for o in result.outcomes}
++    assert hits(result, "R06") == ["GJ-LATE-1"]
+diff --git a/tests/test_knowledge.py b/tests/test_knowledge.py
+index cf5d66c..7304664 100644
+--- a/tests/test_knowledge.py
++++ b/tests/test_knowledge.py
+@@ -2338,7 +2338,7 @@ def test_fin03_prompt_renders_with_its_header_variables() -> None:
+ def test_fin09_template_loads_only_with_misstatement() -> None:
+     """R164 验收 1, 8: FIN-09 为完成阶段 A8 的混合程序 (L2), 挂功能 misstatement, 读分录与科目表; 参数 adjustment_prefix
+     取数据集声明 (没有数据集时为 "AJE-"), 规则只有 V01 (emit rows), 准则片段 ASA450-P07 (其 procedures 列了 FIN-09),
+-    输出模型为更正验证草稿. depends_on 只有 FIN-08 (R161 补上, GEN-05 增量就绪后再加, 协调者裁定见 FIN-09.yaml 注释);
++    输出模型为更正验证草稿. depends_on 为 FIN-08 (R161 补上) 与 GEN-05 (增量扫描, R194; 功能 journals 关闭时丢弃);
+     R165 起 manual_result_allowed 为真, 载荷类别 verification, outputs 含 V02 的 exceptions. 规则 SQL, 参数与提示词里
+     没有 3 到 4 位的数字 (不写死科目代码). 基线下不启用, 打开 misstatement 时进 P2 以外的固定集."""
+     base = ProcedureLibrary(ROOT)
+@@ -2353,7 +2353,7 @@ def test_fin09_template_loads_only_with_misstatement() -> None:
+         "misstatement",
+         None,
+     )
+-    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08"], [], False, True)
++    assert (t.depends_on, t.triggers, t.fixed, t.manual_result_allowed) == (["FIN-08", "GEN-05"], [], False, True)
+     assert t.misstatement_update_kind == "verification"
+     assert (t.outputs, t.reads) == (
+         ["judgments", "exceptions", "review_tasks", "misstatements"],
+-- 
+2.43.0
+
+
+From b22630d494b876d8bb794414c644f057f590d005 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 21 Oct 2026 01:58:49 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?feat:=20=E5=88=86=E5=BD=95=E4=B8=8E?=
+ =?UTF-8?q?=E6=9C=9F=E5=90=8E=E7=A8=8B=E5=BA=8F=E7=9A=84=E8=A2=AB=E6=B5=8B?=
+ =?UTF-8?q?=E6=80=BB=E4=BD=93:=20GEN-05=20R01-R13,=20GEN-07=20S01-S03=20?=
+ =?UTF-8?q?=E5=86=99=20population=20=E4=B8=8E=20check,=20GEN=20=E7=A8=8B?=
+ =?UTF-8?q?=E5=BA=8F=E5=86=99=20scope?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ ...45\345\217\243\346\226\207\346\241\243.md" |   6 +-
+ src/backend/knowledge/procedures/GEN-02.yaml  |   4 +
+ src/backend/knowledge/procedures/GEN-03.yaml  |   8 +
+ src/backend/knowledge/procedures/GEN-05.yaml  | 164 ++++++++++++++++
+ src/backend/knowledge/procedures/GEN-07.yaml  |  68 +++++++
+ src/backend/knowledge/procedures/GEN-08.yaml  |   6 +
+ tests/fakes.py                                | 184 ++++++++++++++++--
+ tests/test_evidence_gen07.py                  |  20 ++
+ tests/test_fieldwork_gen05.py                 |  33 +++-
+ tests/test_gen05_sql.py                       |  80 +++++++-
+ tests/test_knowledge.py                       | 122 +++++++++++-
+ tests/test_no_birth_dates.py                  |   3 +-
+ tests/test_rule_sql_gen07.py                  |  44 ++++-
+ tests/xero_fakes.py                           |  28 ++-
+ 14 files changed, 726 insertions(+), 44 deletions(-)
+
+diff --git "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md" "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+index 7cf8785..5cf77ee 100644
+--- "a/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
++++ "b/docs/\345\274\200\345\217\221\346\216\245\345\217\243\346\226\207\346\241\243.md"
+@@ -2631,7 +2631,7 @@ class ProcedureAgent[F](ABC):          # F：execute 产出的原始发现类型
+ 
+ 关联方的另一条程序（GEN-01，功能 related_parties，见 Demo需求文档第 2 节）还没有实现，不在上表；其判断对象与 data 由需求 R141 落地时在本节补写。GEN-03 见下文 GEN-03 段（需求 R139）。
+ 
+-A6 的 GEN-05 全量分录扫描（需求 R131、R132，功能 journals，P2 固定集）与 REV-08、CSH-05 一样是纯规则程序：调规则引擎，例外原样返回，不作判断，不建复核任务，由 GEN-02 引用归因；执行前检查命中而没有执行的规则记进执行记录终态的 rule_outcomes。规则与口径写在 GEN-05.yaml 的注释里：初始实例只取 posting_date 在审计期间内的分录；每条规则每笔凭证至多一条例外（R12 按发票），source_id 取该凭证命中行中金额最大的行（并列取 ID 小的），例外按（posting_date，凭证号自然序，凭证号原文）编号（自然序的数字段以 10 位为限）；录入时间按参数 timezone（Australia/Sydney）换算；作废对（冲回凭证与原凭证，按数据集声明的 reversal_reference_pattern、reversal_entry_no_template 识别，不看 is_adjustment）的 WITH 段写在 "作废对共用段" 起止标记之间，与 CSH-02 的 D03、D04 逐字相同（`tests/test_knowledge.py` 守住）；新规则 R09 至 R12 只出金额超过明显微小的例外；往来名称比较用 SQL 函数 party_name_key（第 9 节），前缀取数据集声明的 counterparty_prefixes，公司后缀为参数 entity_suffixes。贷项凭证（R10、R12 共用的口径）：同一凭证借记 revenue 分类且贷记 receivables 分类，不涉 cash 分类，不是作废对；应收净贷方 credited_cents 为其 receivables 分类行的贷方减借方之和。增量实例（需求 R194，模板 incremental，见第 7 节）：参数 entry_nos 非空时各规则最后一步只留凭证号在其中的例外，中间步骤照全期算（R07 的录入人计数，R10、R12 的贷项凭证，R11 的原凭证与重记）；R12 即只取 journal_entry_id 落在这些凭证上的发票；R06 不受 entry_nos 限制；audit_adjustment_start 为派生引用 first_misstatement_communicated_at（第 8.1 节），P2 首次执行时为空，R06 不执行。增量命中的例外为 open，不派 GEN-02（P3 没有调度）；FIN-09 把匹配凭证上的这些例外作错报更正验证判断的规则例外（第 6 节 FIN-09 段）。
++A6 的 GEN-05 全量分录扫描（需求 R131、R132，功能 journals，P2 固定集）与 REV-08、CSH-05 一样是纯规则程序：调规则引擎，例外原样返回，不作判断，不建复核任务，由 GEN-02 引用归因；执行前检查命中而没有执行的规则记进执行记录终态的 rule_outcomes。规则与口径写在 GEN-05.yaml 的注释里：初始实例只取 posting_date 在审计期间内的分录；每条规则每笔凭证至多一条例外（R12 按发票），source_id 取该凭证命中行中金额最大的行（并列取 ID 小的），例外按（posting_date，凭证号自然序，凭证号原文）编号（自然序的数字段以 10 位为限）；录入时间按参数 timezone（Australia/Sydney）换算；作废对（冲回凭证与原凭证，按数据集声明的 reversal_reference_pattern、reversal_entry_no_template 识别，不看 is_adjustment）的 WITH 段写在 "作废对共用段" 起止标记之间，与 CSH-02 的 D03、D04 逐字相同（`tests/test_knowledge.py` 守住）；新规则 R09 至 R12 只出金额超过明显微小的例外；往来名称比较用 SQL 函数 party_name_key（第 9 节），前缀取数据集声明的 counterparty_prefixes，公司后缀为参数 entity_suffixes。贷项凭证（R10、R12 共用的口径）：同一凭证借记 revenue 分类且贷记 receivables 分类，不涉 cash 分类，不是作废对；应收净贷方 credited_cents 为其 receivables 分类行的贷方减借方之和。增量实例（需求 R194，模板 incremental，见第 7 节）：参数 entry_nos 非空时各规则最后一步只留凭证号在其中的例外，中间步骤照全期算（R07 的录入人计数，R10、R12 的贷项凭证，R11 的原凭证与重记）；R12 即只取 journal_entry_id 落在这些凭证上的发票；R06 不受 entry_nos 限制；audit_adjustment_start 为派生引用 first_misstatement_communicated_at（第 8.1 节），P2 首次执行时为空，R06 不执行。增量命中的例外为 open，不派 GEN-02（P3 没有调度）；FIN-09 把匹配凭证上的这些例外作错报更正验证判断的规则例外（第 6 节 FIN-09 段）。被测总体（需求 R328，写法见第 8.1 节“范围说明与被测总体”）：各规则为本期分录行，一行一项（行 ID 同例外的 source_id，金额为借贷两侧绝对值之和，识别字段为凭证号、业务日期、科目、借贷金额、摘要与单据号，按（业务日期，行 ID）），剔除作废对与审计更正分录的口径同各规则 SQL：R01、R03 至 R05、R07、R08 为全部，R02、R10、R11 剔除作废对，R06、R13 剔除审计更正分录，R09 两者都剔除；R12 为本期（按开票日）销售发票，一张一项，服务完成记录为 records 数组。规则的命中条件是检验，不算范围。增量实例的总体同样只含 entry_nos 中的凭证（R12 为分录落在其上的发票），R06 的总体同其规则不受限制。执行前检查命中的规则不记总体。Xero 演示：全部为 582 行（215 笔），剔除作废对为 424 行（149 笔），R12 为 26 张发票。
+ 
+ | 规则 | 严重度 | 口径 | 不执行的情形（执行记录） |
+ |---|---|---|---|
+@@ -2720,7 +2720,7 @@ A10 的 RPT-03 起草报告下一修订 REPORT-{revision}（revision 为状态
+ - 片段：audit_plans 与执行记录的成功终态；程序本身不改（仍 planned，由 PLN-15 闸门批准时完成，Q5，需求 R205）。重放按 by_procedure 取回本程序写出的计划，PLN-07、PLN-01 的重放不带回（第 3 节重放规则）。
+ - Xero 演示的固定输出为 `tests/fixtures/llm_xero/PLN-15/r1.json` 与 `r2.json`（运行副本由 `data/generate_xero_demo.py` 同步）：r1 的程序说明覆盖演示配置可能装配的 P2 程序（含功能 journals 的 GEN-05、GEN-02，`tests/test_risk_assessor.py::test_plan_fixtures_cover_the_demo_procedures` 守卫）；r2 回应演示的驳回理由 "Add the planned timing of bank confirmations"，timing 段与时间表写明两份银行询证函于外勤首日 2026-10-19 发出、外勤结束 2026-10-22 前收回，其余同 r1（需求 R316）；第 3 修订起 mock 下没有固定输出。时间表的外勤与报告日、超级年金应付 826 不在提示词的输入里（项目没有计划日期，试算表只列有余额的科目），固定输出按设计稿 v2.1 第 2.3、2.7 节写。
+ 
+-**GEN-07 期后监控**（需求 R177；功能 going_concern）。EvidenceAgent 按程序编号分派（`EvidenceAgent.handler`：CSH-04 函证、GEN-07 规则、GEN-08 股权穿透），没有登记的程序抛 NotImplementedError。GEN-07 为规则程序（P2 固定集，L4，cycle Pervasive），经 RuleEngine 执行 GEN-07.yaml 的 S01-S03（执行与解读用 `agents/base.run_rules`、`rule_patch`，与 A6 的纯规则程序共用），参数取参数快照，例外原样返回作期后事项候选（v1，open），执行记录置成功终态，不作判断，不建复核任务，不调大模型，没有外部调用；RuleError 原样上抛，由 A1 写失败的执行与 failed 任务（只能 rerun）。期后窗口为 (period_end, window_end]，window_end = min(period_end + subsequent_days（31）, data_as_of)，data_as_of 取数据集声明（为空不设上限）；各行 detail 带 window_end。三条规则都剔除作废对（同 GEN-05 的通用约定，SQL 与 GEN-05、CSH-02 共用一段）：S01 期后未入账的大额流水（medium：窗口内对账单行，|金额| 超过整体重要性，该账户的银行科目 gl_account_code 在流水日 ±match_days（10）天内没有借减贷等于流水金额的非作废对分录行；source_type bank_transaction，金额带符号，按 (txn_date, id)）；S02 期后非常规分录（high：窗口内的分录按凭证，剔除涉银行科目的、常规赊销（借 receivables 分类且贷收入类）、赊购（贷 payables 分类）与各科目净额都为 0 的；每笔取资产或负债类科目中绝对值最大的行，金额取绝对值，超过明显微小）；S03 期后资本性支出（medium：窗口内借记 property_plant_equipment 分类的行，单行借方超过整体重要性）。口径与输出列见 GEN-07.yaml 的注释。S04（期末应收到截止日仍未收回）本版不做：要收款与发票的对应表（Demo需求文档第 6 节）。Xero 演示 9 条（S01 六条，S02 XJ-720-2，S03 XJ-626-2、XJ-676-2，设计稿第 5.4 节）。
++**GEN-07 期后监控**（需求 R177；功能 going_concern）。EvidenceAgent 按程序编号分派（`EvidenceAgent.handler`：CSH-04 函证、GEN-07 规则、GEN-08 股权穿透），没有登记的程序抛 NotImplementedError。GEN-07 为规则程序（P2 固定集，L4，cycle Pervasive），经 RuleEngine 执行 GEN-07.yaml 的 S01-S03（执行与解读用 `agents/base.run_rules`、`rule_patch`，与 A6 的纯规则程序共用），参数取参数快照，例外原样返回作期后事项候选（v1，open），执行记录置成功终态，不作判断，不建复核任务，不调大模型，没有外部调用；RuleError 原样上抛，由 A1 写失败的执行与 failed 任务（只能 rerun）。期后窗口为 (period_end, window_end]，window_end = min(period_end + subsequent_days（31）, data_as_of)，data_as_of 取数据集声明（为空不设上限）；各行 detail 带 window_end。三条规则都剔除作废对（同 GEN-05 的通用约定，SQL 与 GEN-05、CSH-02 共用一段）：S01 期后未入账的大额流水（medium：窗口内对账单行，|金额| 超过整体重要性，该账户的银行科目 gl_account_code 在流水日 ±match_days（10）天内没有借减贷等于流水金额的非作废对分录行；source_type bank_transaction，金额带符号，按 (txn_date, id)）；S02 期后非常规分录（high：窗口内的分录按凭证，剔除涉银行科目的、常规赊销（借 receivables 分类且贷收入类）、赊购（贷 payables 分类）与各科目净额都为 0 的；每笔取资产或负债类科目中绝对值最大的行，金额取绝对值，超过明显微小）；S03 期后资本性支出（medium：窗口内借记 property_plant_equipment 分类的行，单行借方超过整体重要性）。口径与输出列见 GEN-07.yaml 的注释。S04（期末应收到截止日仍未收回）本版不做：要收款与发票的对应表（Demo需求文档第 6 节）。Xero 演示 9 条（S01 六条，S02 XJ-720-2，S03 XJ-626-2、XJ-676-2，设计稿第 5.4 节）。被测总体（需求 R328）：S01 为窗口内银行账户表里有的账户的流水，一笔一项（金额同例外，带符号）；S02、S03 为窗口内剔除作废对的分录行，一行一项（同 GEN-05 的列）；Xero 演示为 73 笔流水与 228 行分录。
+ 
+ **GEN-08 股权穿透与关系图**（需求 R137、R138，`agents/ownership.py`，EvidenceAgent 按程序编号分派；功能 related_parties）。不调大模型，口径写在 GEN-08.yaml 的注释里：
+ - 查询顺序：ABN Lookup 画像（本项目采用的那一版，`ingest.client_profile`）的 ABN 取 ACN（查不到或没有 ACN 时写完那行留痕后抛 LookupError，执行失败）→ 报告主体的公司摘录 → 沿母公司链逐层取摘录，至多 max_depth 层 → 人员检索报告主体及母公司链上的高管（director、secretary），出生日期须已知 → 取检索结果里其任职或持股的其他公司的摘录；后两步为 person_hops 轮。RegistrySource 各方法以 eid 为首参。
+@@ -3285,7 +3285,7 @@ rules:
+   # 10261、21026 不算；SI-2026-0612 这类带连字符的只按包含发票号）
+ ```
+ 
+-**范围说明与被测总体**（需求 R324；ASA 230 第 8(a)(b)、9(a) 段，ASA 330 第 28 段；执行见第 5 节 RuleEngine 约定）。程序可写 `scope`（范围说明），规则可写 `check`（检查项名称）与 `population`（被测总体）：emit exception 的规则例外只是没通过的项目，`population.sql` 另取该规则核对的全部项目（每项一行：source_type、source_id、amount_cents 与识别字段，绑定参数同规则 SQL），`population.description` 为筛选说明；emit rows 的规则以返回行为总体，不写 population。scope 与 description 可用 Jinja2 写参数占位（环境同提示词，`procedure_library.prompt_env`；只多一个过滤器 `days_before`），按一次执行的参数快照渲染（`procedure_library.render_text`，纯函数），如 `{{ period_end | days_before(window_days) }}`；check 不渲染。加载校验（含未启用的模板，违反时 ProcedureLibrary 构造即抛 ValueError，消息含程序与规则编号）：zh 与 en 须同时给出，去掉首尾空白后不为空（字段校验）；`population_problems`：emit rows 的规则不能写 population，总体 SQL 的绑定参数（写法同 SQLAlchemy `text()`，`::` 类型转换不算）只能用 params 中的与 eid；`text_problems`：占位语法写对，过滤器与检验（`is` 后的名字）只能用环境里已有的（条件块里的也查），变量（`jinja2.meta`）只能用 params 中的参数，check 不能有任何 Jinja 标记（`{{ }}`、`{% %}`、`{# #}`，按 Jinja 的词法判断）；总体 SQL 读的账表须在 reads 中（同上 `read_problems`）。不加派生参数：窗口起始日由过滤器从参数算。现有只有 REV-08 写了（三条规则各写一段，见下例）。
++**范围说明与被测总体**（需求 R324；ASA 230 第 8(a)(b)、9(a) 段，ASA 330 第 28 段；执行见第 5 节 RuleEngine 约定）。程序可写 `scope`（范围说明），规则可写 `check`（检查项名称）与 `population`（被测总体）：emit exception 的规则例外只是没通过的项目，`population.sql` 另取该规则核对的全部项目（每项一行：source_type、source_id、amount_cents 与识别字段，绑定参数同规则 SQL），`population.description` 为筛选说明；emit rows 的规则以返回行为总体，不写 population。scope 与 description 可用 Jinja2 写参数占位（环境同提示词，`procedure_library.prompt_env`；只多一个过滤器 `days_before`），按一次执行的参数快照渲染（`procedure_library.render_text`，纯函数），如 `{{ period_end | days_before(window_days) }}`；check 不渲染。加载校验（含未启用的模板，违反时 ProcedureLibrary 构造即抛 ValueError，消息含程序与规则编号）：zh 与 en 须同时给出，去掉首尾空白后不为空（字段校验）；`population_problems`：emit rows 的规则不能写 population，总体 SQL 的绑定参数（写法同 SQLAlchemy `text()`，`::` 类型转换不算）只能用 params 中的与 eid；`text_problems`：占位语法写对，过滤器与检验（`is` 后的名字）只能用环境里已有的（条件块里的也查），变量（`jinja2.meta`）只能用 params 中的参数，check 不能有任何 Jinja 标记（`{{ }}`、`{% %}`、`{# #}`，按 Jinja 的词法判断）；总体 SQL 读的账表须在 reads 中（同上 `read_problems`）。不加派生参数：窗口起始日由过滤器从参数算。现有 REV-08 写了（三条规则各写一段，见下例）；GEN-05、GEN-07 的各规则与 GEN-08、GEN-03、GEN-02 的 scope 由需求 R328 加（总体见第 6 节两程序段），口径相同的总体用 YAML 锚点（`&name` 与 `*name`）复用整段（description 与 sql 一起，不在锚点里拼参数片段），加载时程序库读到的是展开后的模板，上面的校验逐条规则照做。
+ 
+ ```yaml
+ # knowledge/procedures/REV-08.yaml（节选）
+diff --git a/src/backend/knowledge/procedures/GEN-02.yaml b/src/backend/knowledge/procedures/GEN-02.yaml
+index 318c368..50711ab 100644
+--- a/src/backend/knowledge/procedures/GEN-02.yaml
++++ b/src/backend/knowledge/procedures/GEN-02.yaml
+@@ -5,6 +5,10 @@ name: 分录例外归因
+ # 每笔凭证一个对象 (按凭证号自然序), 由 agents/fieldwork.py 的 gen02_subjects 组装上下文 (data 字段见
+ # GEN-02.md.j2 头注释), 走 A6 判断公共流程. 固定集的 objective_ids 为空, 任务说明的 risks 为空, 舞弊风险另放进
+ # data.fraud_risks (风险清单中 fraud_related 为真的全部风险). 建议动作不受限制 (同一笔可能被本程序与科目程序各建议一次).
++# 范围说明 (需求 R328)
++scope:
++  zh: GEN-05 尚未归因的分录例外, 每笔凭证一个判断对象
++  en: Unattributed GEN-05 journal exceptions, one judgment subject per entry
+ phase: P2_Executing
+ cycle: Pervasive
+ owner: A6
+diff --git a/src/backend/knowledge/procedures/GEN-03.yaml b/src/backend/knowledge/procedures/GEN-03.yaml
+index 712fe88..c108c59 100644
+--- a/src/backend/knowledge/procedures/GEN-03.yaml
++++ b/src/backend/knowledge/procedures/GEN-03.yaml
+@@ -21,6 +21,14 @@ name: 关联方图谱研判
+ #   报告主体股份的节点.
+ # - 作废对 (C01 的分录与 C02 剔除): 同 CSH-02 的注释; WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02,
+ #   GEN-05 逐字相同 (tests/test_knowledge.py 守住), 改口径时几处一起改.
++# 范围说明 (需求 R328)
++scope:
++  zh: >-
++    关系图中的关联方, 及其在 {{ period_start }} 至 {{ period_end }} 与期后 {{ subsequent_days }} 天内的分录,
++    流水与发票往来
++  en: >-
++    Related parties in the ownership graph and their journal entries, bank transactions and invoices from
++    {{ period_start }} to {{ period_end }} and in the {{ subsequent_days }} days after
+ phase: P2_Executing
+ cycle: Pervasive
+ owner: A6
+diff --git a/src/backend/knowledge/procedures/GEN-05.yaml b/src/backend/knowledge/procedures/GEN-05.yaml
+index 01a5aeb..89891da 100644
+--- a/src/backend/knowledge/procedures/GEN-05.yaml
++++ b/src/backend/knowledge/procedures/GEN-05.yaml
+@@ -40,6 +40,18 @@ name: 全量分录扫描
+ #   少于 2 个时 not_executable (无从比较谁不常录入).
+ # - R11 在数据集没有声明作废冲回格式 (reversal_reference_pattern 为空, 如 Numbat) 时 skipped; R12 在本期销售发票都没有
+ #   发运或服务完成记录 (delivery_notes) 时 not_executable (无从区分哪张缺记录).
++# 范围与各规则总体的说明 (需求 R328, 写法同 REV-08): 各规则的总体为本期分录行, 一行一项 (行 ID 同例外的 source_id),
++# 剔除作废对与审计更正分录的口径同各规则 SQL; R12 为本期销售发票, 一张一项, 服务完成记录为 records 数组 (按记录 ID).
++# 规则的命中条件 (周末, 整数金额, 调整分录等) 是检验, 不算范围. 同口径的总体用 YAML 锚点复用整段 (period_lines 为全部
++# 分录行, unvoided_lines 为剔除作废对的). 增量实例 (entry_nos 非空) 的总体同样只含这些凭证 (R12 为分录落在其上的
++# 发票); R06 的总体同其规则不受 entry_nos 限制, 每次增量执行重复记一份.
++scope:
++  zh: >-
++    {% if entry_nos %}更正通知载入的凭证 {{ entry_nos | join(", ") }}{% else %}{{ period_start }} 至 {{ period_end }}
++    入账的全部分录{% endif %}
++  en: >-
++    {% if entry_nos %}Entries {{ entry_nos | join(", ") }} loaded with the correction notice{% else %}All journal
++    entries posted from {{ period_start }} to {{ period_end }}{% endif %}
+ phase: P2_Executing
+ cycle: Pervasive
+ owner: A6
+@@ -102,6 +114,23 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 重大收入不在周末录入, en: Significant revenue not recorded at weekends}
++    population: &period_lines
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 入账的全部分录行{% if entry_nos %}, 只含凭证
++          {{ entry_nos | join(", ") }}{% endif %}
++        en: >-
++          All journal lines posted from {{ period_start }} to {{ period_end }}{% if entry_nos %}, limited to entries
++          {{ entry_nos | join(", ") }}{% endif %}
++      sql: |
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        WHERE j.engagement_id=:eid
++          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND (CAST(:entry_nos AS text[]) IS NULL OR j.entry_no=ANY(CAST(:entry_nos AS text[])))
++        ORDER BY j.posting_date, j.id COLLATE "C"
+   - id: R02
+     name: 整数金额的调整分录
+     severity: medium
+@@ -138,6 +167,36 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 调整分录没有大额整数金额, en: No large round-amount adjustments}
++    population: &unvoided_lines
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 入账的分录行, 剔除作废对{% if entry_nos %}, 只含凭证
++          {{ entry_nos | join(", ") }}{% endif %}
++        en: >-
++          Journal lines posted from {{ period_start }} to {{ period_end }}, excluding voided pairs{% if entry_nos %},
++          limited to entries {{ entry_nos | join(", ") }}{% endif %}
++      sql: |
++        -- 作废对共用段 起
++        WITH reversal AS (
++          SELECT DISTINCT r.entry_no,
++                 replace(CAST(:reversal_entry_no_template AS text), '{1}',
++                         substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
++          FROM journal_entries r
++          WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
++            AND r.description ~ CAST(:reversal_reference_pattern AS text)
++        ), voided AS (
++          SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
++        -- 作废对共用段 止
++        )
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        WHERE j.engagement_id=:eid
++          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
++          AND (CAST(:entry_nos AS text[]) IS NULL OR j.entry_no=ANY(CAST(:entry_nos AS text[])))
++        ORDER BY j.posting_date, j.id COLLATE "C"
+   - id: R03
+     name: 恰低于审批限额的付款
+     severity: high
+@@ -172,6 +231,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 付款不恰低于审批限额, en: Payments not just below the approval limit}
++    population: *period_lines
+   - id: R04
+     name: 审批缺失或自审自批
+     severity: high
+@@ -201,6 +262,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 分录经录入人以外的人审批, en: Approved by someone other than the preparer}
++    population: *period_lines
+   - id: R05
+     name: 期末前三日冲销
+     severity: high
+@@ -225,6 +288,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 期末前三日没有冲销, en: No reversals in the last three days of the period}
++    population: *period_lines
+   - id: R06
+     name: 审计调整期间的其他分录
+     severity: high
+@@ -255,6 +320,22 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 审计调整期间没有其他分录, en: No other entries recorded during the audit adjustment period}
++    population:
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 入账的分录行, 剔除审计更正分录
++        en: >-
++          Journal lines posted from {{ period_start }} to {{ period_end }}, excluding audit adjustments
++      sql: |
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        WHERE j.engagement_id=:eid
++          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
++              <>CAST(:audit_adjustment_entry_prefix AS text)
++        ORDER BY j.posting_date, j.id COLLATE "C"
+   - id: R07
+     name: 非常规录入人
+     severity: medium
+@@ -292,6 +373,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 由常规录入人录入, en: Prepared by a regular preparer}
++    population: *period_lines
+   - id: R08
+     name: 非工作时间录入
+     severity: medium
+@@ -320,6 +403,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 在工作时间录入, en: Recorded within business hours}
++    population: *period_lines
+   - id: R09
+     name: 非标准分录
+     severity: high
+@@ -358,6 +443,38 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 不是非标准分录, en: Not a non-standard entry}
++    population:
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 入账的分录行, 剔除作废对与审计更正分录{% if entry_nos %}, 只含凭证
++          {{ entry_nos | join(", ") }}{% endif %}
++        en: >-
++          Journal lines posted from {{ period_start }} to {{ period_end }}, excluding voided pairs and audit
++          adjustments{% if entry_nos %}, limited to entries {{ entry_nos | join(", ") }}{% endif %}
++      sql: |
++        -- 作废对共用段 起
++        WITH reversal AS (
++          SELECT DISTINCT r.entry_no,
++                 replace(CAST(:reversal_entry_no_template AS text), '{1}',
++                         substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
++          FROM journal_entries r
++          WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
++            AND r.description ~ CAST(:reversal_reference_pattern AS text)
++        ), voided AS (
++          SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
++        -- 作废对共用段 止
++        )
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        WHERE j.engagement_id=:eid
++          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
++          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
++              <>CAST(:audit_adjustment_entry_prefix AS text)
++          AND (CAST(:entry_nos AS text[]) IS NULL OR j.entry_no=ANY(CAST(:entry_nos AS text[])))
++        ORDER BY j.posting_date, j.id COLLATE "C"
+   - id: R10
+     name: 收入全额冲减
+     severity: medium
+@@ -414,6 +531,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 贷项凭证不全额冲减发票, en: Credit notes do not reverse an invoice in full}
++    population: *unvoided_lines
+   - id: R11
+     name: 作废后重记且对方名称改变
+     severity: medium
+@@ -479,6 +598,8 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 作废重记的对方名称不变, en: Reposted entries keep the counterparty name}
++    population: *unvoided_lines
+   - id: R12
+     name: 疑似重复开票
+     severity: high
+@@ -557,6 +678,30 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C", invoice_id COLLATE "C"
++    check: {zh: 没有疑似重复开票, en: No suspected duplicate invoices}
++    population:
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 开具的销售发票{% if entry_nos %}, 只含凭证
++          {{ entry_nos | join(", ") }}{% endif %}
++        en: >-
++          Sales invoices issued from {{ period_start }} to {{ period_end }}{% if entry_nos %}, limited to entries
++          {{ entry_nos | join(", ") }}{% endif %}
++      sql: |
++        SELECT 'sales_invoice' AS source_type, i.id AS source_id, i.amount_cents,
++               i.invoice_no, i.customer, i.invoice_date, i.posting_date, i.journal_entry_id,
++               jsonb_agg(jsonb_build_object('delivery_no', d.delivery_no, 'signed_date', d.signed_date,
++                                            'signed_by', d.signed_by) ORDER BY d.id)
++                 FILTER (WHERE d.id IS NOT NULL) AS records
++        FROM sales_invoices i LEFT JOIN delivery_notes d ON d.engagement_id=i.engagement_id AND d.invoice_id=i.id
++        WHERE i.engagement_id=:eid
++          AND i.invoice_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND (CAST(:entry_nos AS text[]) IS NULL
++               OR EXISTS (SELECT 1 FROM journal_entries j
++                          WHERE j.engagement_id=i.engagement_id AND j.id=i.journal_entry_id
++                            AND j.entry_no=ANY(CAST(:entry_nos AS text[]))))
++        GROUP BY i.id, i.amount_cents, i.invoice_no, i.customer, i.invoice_date, i.posting_date, i.journal_entry_id
++        ORDER BY i.id COLLATE "C"
+   - id: R13
+     name: 期末后补记
+     severity: medium
+@@ -585,3 +730,22 @@ rules:
+                regexp_replace(regexp_replace(entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                entry_no COLLATE "C"
++    check: {zh: 不是期末后补记, en: Not recorded after period end}
++    population:
++      description:
++        zh: >-
++          {{ period_start }} 至 {{ period_end }} 入账的分录行, 剔除审计更正分录{% if entry_nos %}, 只含凭证
++          {{ entry_nos | join(", ") }}{% endif %}
++        en: >-
++          Journal lines posted from {{ period_start }} to {{ period_end }}, excluding audit
++          adjustments{% if entry_nos %}, limited to entries {{ entry_nos | join(", ") }}{% endif %}
++      sql: |
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        WHERE j.engagement_id=:eid
++          AND j.posting_date BETWEEN CAST(:period_start AS date) AND CAST(:period_end AS date)
++          AND left(j.entry_no, length(CAST(:audit_adjustment_entry_prefix AS text)))
++              <>CAST(:audit_adjustment_entry_prefix AS text)
++          AND (CAST(:entry_nos AS text[]) IS NULL OR j.entry_no=ANY(CAST(:entry_nos AS text[])))
++        ORDER BY j.posting_date, j.id COLLATE "C"
+diff --git a/src/backend/knowledge/procedures/GEN-07.yaml b/src/backend/knowledge/procedures/GEN-07.yaml
+index 38980e5..b057ff7 100644
+--- a/src/backend/knowledge/procedures/GEN-07.yaml
++++ b/src/backend/knowledge/procedures/GEN-07.yaml
+@@ -21,6 +21,15 @@ name: 期后监控
+ #
+ # S04 期末应收到截止日仍未收回: 本版不做 (Demo需求文档第 6 节). 要收款与发票的对应关系, 现有表没有 (收款分录的
+ # source_doc 只写客户名, 不带发票号); 待载入器提供收款对应表 (设计稿第 9.3 节第 14 项) 后再加.
++# 范围与各规则总体的说明 (需求 R328, 写法同 REV-08): 窗口同通用口径. S01 的总体为窗口内的银行流水 (银行账户表里有
++# 的账户), 一笔一项; S02, S03 为窗口内剔除作废对的分录行, 一行一项, 用 YAML 锚点 window_lines 复用整段. 规则的命中
++# 条件 (金额门槛, 未入账, 资本性科目等) 是检验, 不算范围.
++scope:
++  zh: >-
++    期末 {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至 {{ data_as_of }}){% endif %}的银行流水与分录
++  en: >-
++    Bank transactions and journal entries in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %}
++    (data up to {{ data_as_of }}){% endif %}
+ phase: P2_Executing
+ cycle: Pervasive
+ owner: A5
+@@ -80,6 +89,29 @@ rules:
+             AND j.debit_cents-j.credit_cents=t.amount_cents
+             AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no))
+       ORDER BY t.txn_date, t.id COLLATE "C"
++    check: {zh: 大额流水已入账, en: Significant bank transactions are recorded}
++    population:
++      description:
++        zh: >-
++          {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至
++          {{ data_as_of }}){% endif %}的银行流水
++        en: >-
++          Bank transactions in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %} (data up to
++          {{ data_as_of }}){% endif %}
++      sql: |
++        WITH bounds AS (
++          SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
++                       COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
++                   AS window_end
++        )
++        SELECT 'bank_transaction' AS source_type, t.id AS source_id, t.amount_cents, t.bank_account_id, t.txn_date,
++               t.description, t.reference
++        FROM bank_transactions t
++        JOIN bank_accounts b ON b.engagement_id=t.engagement_id AND b.id=t.bank_account_id
++        CROSS JOIN bounds w
++        WHERE t.engagement_id=:eid
++          AND t.txn_date>CAST(:period_end AS date) AND t.txn_date<=w.window_end
++        ORDER BY t.txn_date, t.id COLLATE "C"
+   - id: S02
+     name: 期后非常规分录
+     severity: high
+@@ -138,6 +170,40 @@ rules:
+                regexp_replace(regexp_replace(p.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                p.entry_no COLLATE "C"
++    check: {zh: 没有期后非常规分录, en: No unusual subsequent journal entries}
++    population: &window_lines
++      description:
++        zh: >-
++          {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至
++          {{ data_as_of }}){% endif %}的分录行, 剔除作废对
++        en: >-
++          Journal lines in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %} (data up to
++          {{ data_as_of }}){% endif %}, excluding voided pairs
++      sql: |
++        -- 作废对共用段 起
++        WITH reversal AS (
++          SELECT DISTINCT r.entry_no,
++                 replace(CAST(:reversal_entry_no_template AS text), '{1}',
++                         substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
++          FROM journal_entries r
++          WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
++            AND r.description ~ CAST(:reversal_reference_pattern AS text)
++        ), voided AS (
++          SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
++        -- 作废对共用段 止
++        ), bounds AS (
++          SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
++                       COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
++                   AS window_end
++        )
++        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
++               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
++        FROM journal_entries j
++        CROSS JOIN bounds w
++        WHERE j.engagement_id=:eid
++          AND j.posting_date>CAST(:period_end AS date) AND j.posting_date<=w.window_end
++          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
++        ORDER BY j.posting_date, j.id COLLATE "C"
+   - id: S03
+     name: 期后资本性支出
+     severity: medium
+@@ -174,3 +240,5 @@ rules:
+                regexp_replace(regexp_replace(j.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                  COLLATE "C",
+                j.entry_no COLLATE "C", j.id COLLATE "C"
++    check: {zh: 没有重大期后资本性支出, en: No significant subsequent capital expenditure}
++    population: *window_lines
+diff --git a/src/backend/knowledge/procedures/GEN-08.yaml b/src/backend/knowledge/procedures/GEN-08.yaml
+index cfce4c9..4e981b4 100644
+--- a/src/backend/knowledge/procedures/GEN-08.yaml
++++ b/src/backend/knowledge/procedures/GEN-08.yaml
+@@ -27,6 +27,12 @@ name: 股权穿透与关联方关系图
+ # - R02 穿透中断 (medium): 发现的公司 (含报告主体) 摘录查不到, 没有 ACN, 或在母公司链上超过 max_depth (detail.reason
+ #   依次为 查不到摘录, 没有 ACN, 达到 max_depth); 或有高管因没有人员检索来源而未检索 (没有人员检索来源, 高管未检索).
+ #   这些公司照样建节点 (searched 为假) 与关系, 不再往下穿透. 持股低于 significant_pct 的法人股东不在链上, 不出 R02.
++# 范围说明 (需求 R328)
++scope:
++  zh: 客户的股权结构, 向上穿透 {{ max_depth }} 层法人股东, 关联人员检索 {{ person_hops }} 轮
++  en: >-
++    The client's ownership structure, traced up {{ max_depth }} levels of corporate shareholders, with
++    {{ person_hops }} round(s) of related-person searches
+ phase: P2_Executing
+ cycle: Pervasive
+ owner: A5
+diff --git a/tests/fakes.py b/tests/fakes.py
+index 85b0f76..0b2c363 100644
+--- a/tests/fakes.py
++++ b/tests/fakes.py
+@@ -156,6 +156,7 @@ from backend.contracts.models import (
+     RunStatus,
+     RunTrigger,
+     ShareholderDirection,
++    SourceType,
+     StepKind,
+     TargetType,
+     TaskKind,
+@@ -1754,15 +1755,7 @@ def rev08_populations(
+         return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
+ 
+     def with_notes(invoice: SalesInvoice) -> PopulationItem:
+-        records = [
+-            {
+-                "delivery_no": n.delivery_no,
+-                "signed_date": n.signed_date.isoformat() if n.signed_date else None,
+-                "signed_by": n.signed_by,
+-            }
+-            for n in recorded.get(invoice.id, [])
+-        ]
+-        return item(invoice, records=records or None)
++        return item(invoice, records=delivery_records(recorded.get(invoice.id, [])))
+ 
+     r03 = []
+     for invoice in window:
+@@ -1784,18 +1777,161 @@ def rev08_populations(
+         "R02": [with_notes(i) for i in window],
+         "R03": r03,
+     }
+-    return [
+-        RulePopulation(
+-            rule_id=rule_id,
+-            source_type="sales_invoice" if found else None,
+-            items=found,
+-            count=len(found),
+-            amount_cents=total_cents(i.amount_cents for i in found),
++    return [population_of(rule_id, "sales_invoice", found) for rule_id, found in items.items()]
++
++
++def delivery_records(notes: Sequence[DeliveryNote]) -> list[dict[str, Any]] | None:
++    """一张发票的服务完成记录数组 (REV-08 R01, R02 与 GEN-05 R12 的总体 SQL 同写法, jsonb_agg 按记录 ID): 每条
++    {delivery_no, signed_date, signed_by}, 没签收的为 None; 没有记录为 None. notes 须已按记录 ID 排序."""
++    records = [
++        {
++            "delivery_no": n.delivery_no,
++            "signed_date": n.signed_date.isoformat() if n.signed_date else None,
++            "signed_by": n.signed_by,
++        }
++        for n in notes
++    ]
++    return records or None
++
++
++def population_of(rule_id: str, source_type: SourceType, items: Sequence[PopulationItem]) -> RulePopulation:
++    """一条规则的被测总体: 项目数与金额合计按项目算 (同 rule_engine.rule_population); 没有项目时对象类型为空."""
++    return RulePopulation(
++        rule_id=rule_id,
++        source_type=source_type if items else None,
++        items=list(items),
++        count=len(items),
++        amount_cents=total_cents(i.amount_cents for i in items),
++    )
++
++
++def line_item(line: JournalEntry) -> PopulationItem:
++    """总体中的一行分录 (GEN-05, GEN-07 的总体 SQL 同列, 需求 R328): 行 ID, 金额为借贷两侧绝对值之和 (同例外),
++    识别字段为凭证号, 业务日期, 科目, 借贷金额, 摘要与单据号."""
++    fields = {
++        "entry_no": line.entry_no,
++        "posting_date": line.posting_date.isoformat(),
++        "account_code": line.account_code,
++        "debit_cents": line.debit_cents,
++        "credit_cents": line.credit_cents,
++        "description": line.description,
++        "source_doc": line.source_doc,
++    }
++    return PopulationItem(source_id=line.id, amount_cents=abs(line.debit_cents) + abs(line.credit_cents), fields=fields)
++
++
++def param_date(value: date | str) -> date:
++    """参数快照里的日期: 内存中为 date, 经 JSON 往返后为 ISO 文本."""
++    return value if isinstance(value, date) else date.fromisoformat(value)
++
++
++def gen05_populations(
++    lines: Iterable[JournalEntry],
++    invoices: Iterable[SalesInvoice],
++    notes: Iterable[DeliveryNote],
++    params: Mapping[str, Any],
++) -> list[RulePopulation]:
++    """GEN-05 R01-R13 的被测总体 (需求 R328), 按 GEN-05.yaml 总体 SQL 的口径由表独立算一遍, 参数取执行的参数快照:
++    本期 (period_start 至 period_end) 分录行, 一行一项, 按 (业务日期, 行 ID); entry_nos 非空时只含这些凭证 (R06 除外).
++    R01, R03-R05, R07, R08 为全部; R02, R10, R11 剔除作废对 (csh02_voided, 作废对按全部分录行认); R06, R13 剔除审计
++    更正分录 (凭证号前缀); R09 两者都剔除. R12 为本期 (按开票日) 销售发票, 一张一项, 按 ID, records 为服务完成记录
++    (delivery_records); entry_nos 非空时只含分录落在这些凭证上的发票. 执行前检查命中的规则由 engine_result 去掉."""
++    lines = list(lines)
++    start, end = param_date(params["period_start"]), param_date(params["period_end"])
++    entry_nos, prefix = params.get("entry_nos"), params["audit_adjustment_entry_prefix"]
++    voided = csh02_voided(lines, params["reversal_reference_pattern"], params["reversal_entry_no_template"])
++    period = sorted((j for j in lines if start <= j.posting_date <= end), key=lambda j: (j.posting_date, j.id))
++    limited = [j for j in period if entry_nos is None or j.entry_no in entry_nos]
++    unvoided = [j for j in limited if j.entry_no not in voided]
++
++    def not_audit(found: Iterable[JournalEntry]) -> list[JournalEntry]:
++        return [j for j in found if not j.entry_no.startswith(prefix)]
++
++    by_rule = dict.fromkeys(("R01", "R03", "R04", "R05", "R07", "R08"), limited)
++    by_rule |= dict.fromkeys(("R02", "R10", "R11"), unvoided)
++    by_rule |= {"R06": not_audit(period), "R09": not_audit(unvoided), "R13": not_audit(limited)}
++    populations = [population_of(r, "journal_entry", [line_item(j) for j in found]) for r, found in by_rule.items()]
++    loaded = {j.id for j in lines if entry_nos is None or j.entry_no in entry_nos}
++    recorded: dict[str, list[DeliveryNote]] = {}
++    for note in sorted(notes, key=lambda n: n.id):
++        recorded.setdefault(note.invoice_id, []).append(note)
++    r12 = [
++        PopulationItem(
++            source_id=i.id,
++            amount_cents=i.amount_cents,
++            fields={
++                "invoice_no": i.invoice_no,
++                "customer": i.customer,
++                "invoice_date": i.invoice_date.isoformat(),
++                "posting_date": i.posting_date.isoformat(),
++                "journal_entry_id": i.journal_entry_id,
++                "records": delivery_records(recorded.get(i.id, [])),
++            },
++        )
++        for i in sorted(invoices, key=lambda i: i.id)
++        if start <= i.invoice_date <= end and (entry_nos is None or i.journal_entry_id in loaded)
++    ]
++    return [*populations, population_of("R12", "sales_invoice", r12)]
++
++
++def gen07_populations(
++    lines: Iterable[JournalEntry],
++    bank_accounts: Iterable[BankAccount],
++    transactions: Iterable[BankTransaction],
++    params: Mapping[str, Any],
++) -> list[RulePopulation]:
++    """GEN-07 S01-S03 的被测总体 (需求 R328), 按 GEN-07.yaml 总体 SQL 的口径由表独立算一遍: 期后窗口 (period_end,
++    window_end], window_end 为期末加 subsequent_days 与 data_as_of 中较早的. S01 为窗口内银行账户表里有的账户的流水,
++    一笔一项, 按 (交易日, ID), 金额同例外 (带符号); S02, S03 为窗口内剔除作废对的分录行 (line_item), 按 (业务日期,
++    ID)."""
++    lines = list(lines)
++    period_end = param_date(params["period_end"])
++    window_end = period_end + timedelta(days=params["subsequent_days"])
++    if params.get("data_as_of") is not None:
++        window_end = min(window_end, param_date(params["data_as_of"]))
++    accounts = {b.id for b in bank_accounts}
++    s01 = [
++        PopulationItem(
++            source_id=t.id,
++            amount_cents=t.amount_cents,
++            fields={
++                "bank_account_id": t.bank_account_id,
++                "txn_date": t.txn_date.isoformat(),
++                "description": t.description,
++                "reference": t.reference,
++            },
+         )
+-        for rule_id, found in items.items()
++        for t in sorted(transactions, key=lambda t: (t.txn_date, t.id))
++        if t.bank_account_id in accounts and period_end < t.txn_date <= window_end
++    ]
++    voided = csh02_voided(lines, params["reversal_reference_pattern"], params["reversal_entry_no_template"])
++    window = [
++        line_item(j)
++        for j in sorted(lines, key=lambda j: (j.posting_date, j.id))
++        if period_end < j.posting_date <= window_end and j.entry_no not in voided
++    ]
++    return [
++        population_of("S01", "bank_transaction", s01),
++        population_of("S02", "journal_entry", window),
++        population_of("S03", "journal_entry", window),
+     ]
+ 
+ 
++def outside_populations(result: RuleResult) -> list[str]:
++    """所指对象不在出它的规则的被测总体里的例外 ID (需求 R328 的守卫, 应为空): 总体是分录行或流水时看例外的
++    source_ids; 总体是发票而例外指向发票的分录行时 (GEN-05 R12) 看 detail 的 invoice_id."""
++    tested = {p.rule_id: (p.source_type, {i.source_id for i in p.items}) for p in result.populations}
++    outside = []
++    for x in result.exceptions:
++        source_type, ids = tested[x.rule_id]
++        objects = set(x.source_ids)
++        if source_type == "sales_invoice" and "invoice_id" in x.detail:  # GEN-05 R12: 例外指向发票的分录行
++            objects = {x.detail["invoice_id"]}
++        if not objects <= ids:
++            outside.append(x.id)
++    return outside
++
++
+ def no_population(value: Any) -> bool:
+     """片段或状态的值里没有被测总体 RunPopulation (需求 R324, 逐层看列表与字典): 总体只在 Store, 不进片段与状态."""
+     if isinstance(value, RunPopulation):
+@@ -1819,6 +1955,16 @@ def numbat_rev08_populations() -> list[RulePopulation]:
+     )
+ 
+ 
++def numbat_gen05_populations(params: Mapping[str, Any]) -> list[RulePopulation]:
++    """Numbat GEN-05 的被测总体 (需求 R328), 由演示数据集的分录, 发票与发运单按执行的参数算出 (gen05_populations)."""
++    return gen05_populations(
++        numbat_records("journal_entries", JournalEntry),
++        numbat_records("sales_invoices", SalesInvoice),
++        numbat_records("delivery_notes", DeliveryNote),
++        params,
++    )
++
++
+ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
+     "PLN-07": lambda run: engine_result(
+         "PLN-07",
+@@ -1834,7 +1980,9 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引
+         "CSH-02",
+         RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),
+     ),
+-    "GEN-05": lambda run: engine_result("GEN-05", numbat_gen05_result(run)),  # 功能 journals 打开时才执行
++    "GEN-05": lambda run: engine_result(  # 功能 journals 打开时才执行
++        "GEN-05", numbat_gen05_result(run), numbat_gen05_populations(run.params_snapshot)
++    ),
+ }
+ 
+ 
+diff --git a/tests/test_evidence_gen07.py b/tests/test_evidence_gen07.py
+index 087caf5..0db6b22 100644
+--- a/tests/test_evidence_gen07.py
++++ b/tests/test_evidence_gen07.py
+@@ -36,6 +36,7 @@ from tests.fakes import (
+     make_ctx,
+     make_deps,
+     make_run,
++    outside_populations,
+ )
+ from tests.test_xero_fixtures import xero_context
+ from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_gen07_exceptions, xero_state
+@@ -175,6 +176,25 @@ async def test_xero_returns_the_nine_exceptions_as_is() -> None:
+     assert [e for e in trail.entries if e.kind in (TrailKind.llm_call, TrailKind.external_call)] == []
+ 
+ 
++@pytest.mark.external
++async def test_xero_populations_are_window_transactions_and_lines() -> None:
++    """需求 R328 验收 2: 期后窗口 (10-01 至 10-17) 内 S01 的总体为 73 笔流水, S02, S03 为剔除作废对的 228 行分录 (同一
++    段); 9 条例外都落在其规则的总体里."""
++    deps = make_xero_deps(rules=FakeRuleEngine(XERO_RULES), features=GOING_CONCERN)
++    ctx = xero_context(deps, xero_state(), "GEN-07", [])
++    output = await EvidenceAgent(deps).outcome(ctx)
++    populations = output.populations or []
++    assert [(p.rule_id, p.source_type, p.count) for p in populations] == [
++        ("S01", "bank_transaction", 73),
++        ("S02", "journal_entry", 228),
++        ("S03", "journal_entry", 228),
++    ]
++    dates = {i.fields.get("txn_date") or i.fields["posting_date"] for p in populations for i in p.items}
++    assert (min(dates), max(dates)) == ("2026-10-01", "2026-10-17")
++    [run] = output.patch["procedure_runs"]
++    assert outside_populations(XERO_RULES["GEN-07"](run)) == []
++
++
+ async def test_no_hits_is_a_succeeded_run_without_exceptions() -> None:
+     """验收 3: 没有命中时例外为空, 执行成功."""
+     deps = make_deps(FakeRegistry(), FakeTrail(), rules=FakeRuleEngine({}), features=GOING_CONCERN)
+diff --git a/tests/test_fieldwork_gen05.py b/tests/test_fieldwork_gen05.py
+index c858894..4d209a8 100644
+--- a/tests/test_fieldwork_gen05.py
++++ b/tests/test_fieldwork_gen05.py
+@@ -12,7 +12,7 @@ from backend.contracts.errors import RuleError
+ from backend.contracts.models import AgentId, Decision, ProcedureRun, RunStatus, TaskKind
+ from backend.contracts.services import RuleResult
+ from backend.orchestration.nodes import GraphNodes
+-from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps
++from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps, outside_populations
+ from tests.test_knowledge import design_traits
+ from tests.test_xero_fixtures import xero_context
+ from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_state
+@@ -55,6 +55,37 @@ async def test_xero_records_the_rules_not_run_in_yaml_order() -> None:
+     ) == (500000, 16216, 1622, date(2026, 9, 30), False)
+ 
+ 
++@pytest.mark.external
++async def test_xero_populations_are_period_lines() -> None:
++    """需求 R328 验收 1: Xero 上执行了的 7 条规则各记总体, 跳过的时间类规则与不可执行的 R04, R07 不记; 分录类规则一行
++    一项, 全部为本期 582 行 (215 笔, Xero演示数据集设计第 1 节), 剔除作废对的 R02, R09-R11 为 424 行 (少 33 对共 66
++    笔); R12 为本期 26 张发票, 一张一项. 例外仍为 7 条, 都落在其规则的总体里."""
++    deps = make_xero_deps(rules=FakeRuleEngine(XERO_RULES))
++    ctx = xero_context(deps, xero_state(), "GEN-05", [])
++    output = await FieldworkAgent(deps).outcome(ctx)
++    [run] = output.patch["procedure_runs"]
++    populations = output.populations or []
++    counts = {p.rule_id: (p.source_type, p.count) for p in populations}
++    lines, unvoided = ("journal_entry", 582), ("journal_entry", 424)
++    assert counts == {
++        "R02": unvoided,
++        "R03": lines,
++        "R05": lines,
++        "R09": unvoided,
++        "R10": unvoided,
++        "R11": unvoided,
++        "R12": ("sales_invoice", 26),
++    }
++    entries = {p.rule_id: len({i.fields["entry_no"] for i in p.items}) for p in populations if p.rule_id != "R12"}
++    assert entries == {"R02": 149, "R03": 215, "R05": 215, "R09": 149, "R10": 149, "R11": 149}
++    result = XERO_RULES["GEN-05"](run)
++    assert (len(result.exceptions), outside_populations(result)) == (7, [])
++    # 守卫本身: 清空 R09 的总体后, 它的两条例外都在总体之外
++    emptied = [p.model_copy(update={"items": []}) if p.rule_id == "R09" else p for p in result.populations]
++    outside = outside_populations(result.model_copy(update={"populations": emptied}))
++    assert outside == ["X-GEN-05-1-R09-1", "X-GEN-05-1-R09-2"]
++
++
+ async def test_rule_error_becomes_failed_run_and_rerun_task_by_a1() -> None:
+     """验收 6: 规则 SQL 出错时 RuleError 原样上抛; 编排节点由 A1 代写失败的执行记录与 failed 任务, 只能 rerun."""
+     error = RuleError("GEN-05/R01: statement timeout")
+diff --git a/tests/test_gen05_sql.py b/tests/test_gen05_sql.py
+index 70b4087..a04857f 100644
+--- a/tests/test_gen05_sql.py
++++ b/tests/test_gen05_sql.py
+@@ -17,17 +17,17 @@ from sqlalchemy import delete, insert, select
+ 
+ from backend.agents.base import AgentDeps
+ from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
+-from backend.contracts.records import DatasetTraits
++from backend.contracts.records import DatasetTraits, DeliveryNote, SalesInvoice
+ from backend.contracts.services import RuleResult
+ from backend.contracts.state import EngagementState, initial_state
+ from backend.orchestration.nodes import build_run
+ from backend.persistence import models as m
+ from backend.persistence.db import bind_engagement
+ from tests.external import snapshot_dir, supplements_dir
+-from tests.fakes import NUMBAT_RULES
++from tests.fakes import NUMBAT_RULES, engine_result, gen05_populations, outside_populations
+ from tests.test_knowledge import voided_cte
+ from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
+-from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
++from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES, xero_adjustments, xero_gen05_populations, xero_tables
+ 
+ pytestmark = [pytest.mark.slow, pytest.mark.asyncio(loop_scope="module")]  # 用例与 module 级项目同一个事件循环
+ NUMBAT_MATERIALITY = {
+@@ -144,9 +144,12 @@ async def test_xero_gen05_on_postgres(xero: Gen05Project) -> None:
+     守 "取凭证内金额最大的行". 删去贷项凭证 XJ-430 的 3 行后 R10 只剩 XJ-449-2 (编号变为 R10-1), R12 的 ORC1003 没有
+     全额冲减的凭证 (XJ-449 是 Bank West 的)."""
+     assert xero.run.params_snapshot["approval_limit_cents"] == 500000
+-    assert await gen05(xero) == XERO_RULES["GEN-05"](xero.run)
++    result = await gen05(xero)
++    assert result == XERO_RULES["GEN-05"](xero.run)  # 被测总体一并相等 (需求 R328)
++    assert outside_populations(result) == []
+     assert await voided_counts(xero) == {"pairs": 65, "in_period": 33, "vouchers": 66}
+     reliable = await gen05(xero, entry_timestamps_reliable=True)
++    assert outside_populations(reliable) == []
+     assert Counter(x.rule_id for x in reliable.exceptions) == {
+         "R01": 24,
+         "R08": 49,
+@@ -215,7 +218,9 @@ async def test_numbat_gen05_on_postgres(numbat: Gen05Project) -> None:
+     而 0 条; 没有作废冲回格式, R11 不执行, 也没有作废对). 时区反例: SJ-2026-0612 录入于 11:14Z
+     (悉尼周日 21:14) 而命中 R08, CP-AP-2025-07-A 录入于 06:01Z (悉尼 16:01) 而不命中; 不换算时区时两者正好相反.
+     GJ-202606-ECL-1 借 1000000 (不是付款), 供 R03 的限额覆盖 (test_numbat_overrides_make_rules_hit) 区分只取付款."""
+-    assert await gen05(numbat) == NUMBAT_RULES["GEN-05"](numbat.run)
++    result = await gen05(numbat)
++    assert result == NUMBAT_RULES["GEN-05"](numbat.run)  # 被测总体一并相等 (需求 R328)
++    assert outside_populations(result) == []
+     assert await voided_counts(numbat) == {"pairs": 0, "in_period": 0, "vouchers": 0}
+     lines = {
+         line.id: line
+@@ -336,10 +341,73 @@ NOT_RUN = {  # Xero 上不执行的规则 (录入时间不可靠, 没有审批
+ @pytest.mark.parametrize("entry_nos", [FIRST_ROUND, SECOND_ROUND], ids=["round1", "round2"])
+ async def test_xero_increment_finds_nothing(xero_corrected: Gen05Project, entry_nos: list[str]) -> None:
+     """验收 4: 两轮更正通知的增量实例各 0 条例外 (R09 剔除 AJE- 前缀, R02 不是 10,000 的整数倍, R03 不是付款, R05
+-    说明不含 revers); 不执行的规则同初始实例, R11 照常执行."""
++    说明不含 revers); 不执行的规则同初始实例, R11 照常执行. 被测总体 (需求 R328) 同离线预置, 只含本次载入的行."""
+     result = await gen05(xero_corrected, entry_nos=entry_nos)
+     assert result.exceptions == []
+     assert {(o.rule_id, o.status) for o in result.outcomes} == NOT_RUN
++    # 需求 R328 验收 3: 总体只含本次载入的更正分录行 (R09 剔除审计更正分录, R12 没有发票挂在其上, 都为空)
++    params = xero_corrected.run.params_snapshot | {"entry_nos": entry_nos}
++    assert result.populations == engine_result("GEN-05", result, xero_gen05_populations(params)).populations
++    loaded = {line.id for line in xero_adjustments(entry_nos)}
++    assert {i.source_id for p in result.populations for i in p.items} == loaded
++    assert [p.rule_id for p in result.populations if p.count == 0] == ["R09", "R12"]
++
++
++@pytest.mark.external
++async def test_increment_populations_with_reliable_timestamps(xero_corrected: Gen05Project) -> None:
++    """需求 R328 验收 3 (录入时间改为可信, 首次沟通时间已有, 时间类规则都执行): 第 1 轮增量中 R13 与 R09 剔除审计更正
++    分录, 总体为空; R06 不受 entry_nos 限制, 总体为审计更正以外的全部本期分录行 (582 行), 每轮增量重复记一份 (同其
++    例外, 见 R328 确认材料); 其余分录类规则只含载入的 5 行. 同离线预置."""
++    overrides = {"entry_timestamps_reliable": True, "audit_adjustment_start": "2026-10-19T04:00:00Z"}
++    result = await gen05(xero_corrected, entry_nos=FIRST_ROUND, **overrides)
++    params = xero_corrected.run.params_snapshot | overrides | {"entry_nos": FIRST_ROUND}
++    assert result.populations == engine_result("GEN-05", result, xero_gen05_populations(params)).populations
++    counts = {p.rule_id: p.count for p in result.populations}
++    assert (counts["R06"], counts["R09"], counts["R13"]) == (582, 0, 0)
++    assert {counts[r] for r in counts if r not in ("R06", "R09", "R12", "R13")} == {5}
++
++
++@pytest.mark.external
++async def test_r12_population_by_invoice_date_with_records_in_id_order(xero: Gen05Project) -> None:
++    """需求 R328: R12 的总体按开票日取 (同规则 SQL), 一张一项, 服务完成记录按记录 ID. 在测试库里加一张 09-30 开票,
++    10-01 入账的发票与它的两条记录 (ID 大的先插, 一条没签收): 它在总体里, records 为两条, 按 ID; 与离线口径
++    (fakes.gen05_populations, 表加上这几行) 一致."""
++    invoice = SalesInvoice(
++        id="SI-T-1",
++        invoice_no="ORC9001",
++        customer="Test Customer",
++        customer_abn=None,
++        contract_id=None,
++        invoice_date=date(2026, 9, 30),
++        posting_date=date(2026, 10, 1),
++        amount_cents=123400,
++        journal_entry_id=None,
++    )
++    notes = [
++        DeliveryNote(
++            id="DN-T-2", delivery_no="DN9002", invoice_id="SI-T-1", shipped_date=None, signed_date=None, signed_by=None
++        ),
++        DeliveryNote(
++            id="DN-T-1",
++            delivery_no="DN9001",
++            invoice_id="SI-T-1",
++            shipped_date=date(2026, 9, 30),
++            signed_date=date(2026, 10, 2),
++            signed_by="Test Signer",
++        ),
++    ]
++    async with (
++        with_rows(xero, "sales_invoices", [invoice.model_dump()]),
++        with_rows(xero, "delivery_notes", [n.model_dump() for n in notes]),
++    ):
++        result = await gen05(xero)
++    tables = xero_tables()
++    lines, invoices = tables["journal_entries"], [*tables["sales_invoices"], invoice]
++    expected = gen05_populations(lines, invoices, [*tables["delivery_notes"], *notes], xero.run.params_snapshot)
++    [r12] = [p for p in result.populations if p.rule_id == "R12"]
++    assert r12 == next(p for p in expected if p.rule_id == "R12")
++    [item] = [i for i in r12.items if i.source_id == "SI-T-1"]
++    assert [r["delivery_no"] for r in item.fields["records"]] == ["DN9001", "DN9002"]
+ 
+ 
+ def adjustment_line(lid: str, entry_no: str, account: str, debit: int, credit: int) -> dict[str, object]:
+diff --git a/tests/test_knowledge.py b/tests/test_knowledge.py
+index 7304664..c684ab9 100644
+--- a/tests/test_knowledge.py
++++ b/tests/test_knowledge.py
+@@ -2706,20 +2706,24 @@ def voided_cte(sql: str) -> str | None:
+ def test_voided_pair_cte_is_one_text_everywhere() -> None:
+     """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
+     之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139) 与 GEN-07 的 S01-S03 (需求
+-    R177)). 防只改一处使几个程序认的作废对不同."""
++    R177); 被测总体 SQL 里的同样, 需求 R328). 防只改一处使几个程序认的作废对不同."""
+     marked = {
+-        (t.id, rule.id): voided_cte(rule.sql)
++        (t.id, rule.id, kind): voided_cte(sql)
+         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
+         for rule in t.rules
+-        if "reversal AS (" in rule.sql
++        for kind, sql in (("sql", rule.sql), ("population", rule.population.sql if rule.population else ""))
++        if "reversal AS (" in sql
+     }
+     expected = {
+-        ("CSH-02", "D03"),
+-        ("CSH-02", "D04"),
+-        *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12")),
+-        ("GEN-03", "C01"),
+-        ("GEN-03", "C02"),
+-        *(("GEN-07", r) for r in ("S01", "S02", "S03")),
++        ("CSH-02", "D03", "sql"),
++        ("CSH-02", "D04", "sql"),
++        *(("GEN-05", r, "sql") for r in ("R02", "R09", "R10", "R11", "R12")),
++        ("GEN-03", "C01", "sql"),
++        ("GEN-03", "C02", "sql"),
++        *(("GEN-07", r, "sql") for r in ("S01", "S02", "S03")),
++        # 被测总体剔除作废对的 (需求 R328)
++        *(("GEN-05", r, "population") for r in ("R02", "R09", "R10", "R11")),
++        *(("GEN-07", r, "population") for r in ("S02", "S03")),
+     }
+     assert expected <= set(marked)
+     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
+@@ -3435,3 +3439,103 @@ def test_rev08_scope_checks_and_population_descriptions(period_end: date | str)
+     ]
+     with pytest.raises(UndefinedError, match="window_days"):
+         render_text(template.scope, {"period_end": period_end})
++
++
++def gen_template(pid: str) -> ProcedureTemplate:
++    """仓库里的 GEN 程序模板 (含功能未启用的)."""
++    return next(t for t in ProcedureLibrary(ROOT).all(include_disabled=True) if t.id == pid)
++
++
++XERO_GEN05_PARAMS = {"period_start": date(2026, 7, 1), "period_end": "2026-09-30"}  # 参数快照读回后日期为文本
++SHARED = {"R01": ("R03", "R04", "R05", "R07", "R08"), "R02": ("R10", "R11")}  # 复用同一段总体的规则 (锚点)
++ANCHORED = ("R01", *SHARED["R01"])  # period_lines 锚点所在的规则与复用它的
++
++
++@pytest.mark.parametrize(
++    ("entry_nos", "scope", "r01"),
++    [
++        (
++            None,
++            LocalizedText(
++                zh="2026-07-01 至 2026-09-30 入账的全部分录",
++                en="All journal entries posted from 2026-07-01 to 2026-09-30",
++            ),
++            "2026-07-01 至 2026-09-30 入账的全部分录行",
++        ),
++        (
++            ["AJE-X01", "AJE-X05"],
++            LocalizedText(
++                zh="更正通知载入的凭证 AJE-X01, AJE-X05",
++                en="Entries AJE-X01, AJE-X05 loaded with the correction notice",
++            ),
++            "2026-07-01 至 2026-09-30 入账的全部分录行, 只含凭证 AJE-X01, AJE-X05",
++        ),
++    ],
++    ids=["initial", "incremental"],
++)
++def test_gen05_scope_checks_and_populations(entry_nos: list[str] | None, scope: LocalizedText, r01: str) -> None:
++    """需求 R328: GEN-05 的 scope 与 R01 的总体说明按参数快照渲染 (增量实例写明只含哪些凭证); R01-R13 都写了 check 与
++    population; 同口径的总体是同一段 (YAML 锚点): R03-R05, R07, R08 同 R01, R10, R11 同 R02; R06 与 R13 的口径相同但
++    R06 不按 entry_nos 筛, 是两段."""
++    template = gen_template("GEN-05")
++    params = XERO_GEN05_PARAMS | {"entry_nos": entry_nos}
++    assert template.scope is not None and render_text(template.scope, params) == scope
++    rules = {r.id: r for r in template.rules}
++    assert all(r.check is not None and r.population is not None for r in rules.values())
++    populations = {rid: r.population for rid, r in rules.items() if r.population}
++    assert render_text(populations["R01"].description, params).zh == r01
++    same = {rid: populations[rid] == populations[base] for base, rids in SHARED.items() for rid in rids}
++    assert all(same.values()) and populations["R06"] != populations["R13"]
++    assert "entry_nos" in populations["R13"].sql and "entry_nos" not in populations["R06"].sql
++
++
++def test_gen07_and_related_scopes() -> None:
++    """需求 R328: GEN-07 的 scope (Xero: 期后 31 天, 数据截至 10-17) 与 S01-S03 的 check, population (S03 同 S02);
++    GEN-08, GEN-03, GEN-02 只写 scope."""
++    gen07 = gen_template("GEN-07")
++    params = {"period_end": date(2026, 9, 30), "subsequent_days": 31, "data_as_of": date(2026, 10, 17)}
++    assert gen07.scope is not None and render_text(gen07.scope, params).zh == (
++        "期末 2026-09-30 之后 31 天内 (数据截至 2026-10-17)的银行流水与分录"
++    )
++    s01, s02, s03 = gen07.rules
++    assert all(r.check is not None and r.population is not None for r in gen07.rules)
++    assert s02.population == s03.population != s01.population
++    rendered = {
++        pid: render_text(scope, params).zh
++        for pid, params in (
++            ("GEN-08", {"max_depth": 3, "person_hops": 1}),
++            ("GEN-03", {"period_start": date(2026, 7, 1), "period_end": date(2026, 9, 30), "subsequent_days": 30}),
++            ("GEN-02", {}),
++        )
++        if (scope := gen_template(pid).scope) is not None
++    }
++    assert rendered == {
++        "GEN-08": "客户的股权结构, 向上穿透 3 层法人股东, 关联人员检索 1 轮",
++        "GEN-03": "关系图中的关联方, 及其在 2026-07-01 至 2026-09-30 与期后 30 天内的分录, 流水与发票往来",
++        "GEN-02": "GEN-05 尚未归因的分录例外, 每笔凭证一个判断对象",
++    }
++
++
++@pytest.mark.parametrize(
++    ("replacement", "problem"),
++    [
++        (  # 绑定参数: 复用这段的六条规则各报一次
++            "        FROM journal_entries j\n        WHERE :no_such_param IS NULL\n",
++            "; ".join(f"GEN-05.{r} 的总体 SQL 用了 params 以外的参数 no_such_param" for r in ANCHORED),
++        ),
++        ("        FROM journal_entries j, bank_accounts b\n", "GEN-05 读 bank_accounts"),  # 读的账表 (按程序报)
++    ],
++    ids=["params", "reads"],
++)
++def test_anchored_population_checked_for_every_rule(tmp_path: Path, replacement: str, problem: str) -> None:
++    """需求 R328 (协调者 10-21): 锚点复用的总体, 加载校验 (population_problems 的参数, read_problems 的账表) 按展开后的
++    SQL 照做. 在 knowledge 副本里只改 GEN-05 period_lines 锚点处的 SQL: 构造程序库即报错."""
++    root = tmp_path / "knowledge"
++    shutil.copytree(ROOT, root)
++    path = root / "procedures" / "GEN-05.yaml"
++    text = path.read_text(encoding="utf-8")
++    anchor = text.index("population: &period_lines")
++    tail = text[anchor:].replace("        FROM journal_entries j\n", replacement, 1)
++    path.write_text(text[:anchor] + tail, encoding="utf-8")
++    with pytest.raises(ValueError, match=re.escape(problem)):
++        ProcedureLibrary(root)
+diff --git a/tests/test_no_birth_dates.py b/tests/test_no_birth_dates.py
+index c8d130d..e0a7b70 100644
+--- a/tests/test_no_birth_dates.py
++++ b/tests/test_no_birth_dates.py
+@@ -45,6 +45,7 @@ from tests.xero_fakes import (
+     XERO_RULES,
+     make_xero_deps,
+     manifest_documents,
++    xero_gen05_exceptions,
+     xero_identified_misstatements,
+     xero_profile,
+     xero_registry,
+@@ -84,7 +85,7 @@ async def graph_state(deps: Any, trail: FakeTrail, related_to_all: bool = False)
+     的凭证号 (测试里合成的补登记, 让按节点或按凭证号取文件的上下文都取得到摘录)."""
+     gen08, _, _, _ = await run_gen08(xero_registry(), xero_profile(), xero=True, trail=trail)
+     graph = gen08["ownership_graph"]
+-    entries = [str(x.detail["entry_no"]) for x in XERO_RULES["GEN-05"](make_run("GEN-05")).exceptions]
++    entries = [str(x.detail["entry_no"]) for x in xero_gen05_exceptions(make_run("GEN-05"))]
+     related = [*(n.id for n in graph.nodes), xero_profile().id, *entries] if related_to_all else []
+     extracts = [d for d in gen08["documents"] if d.type is DocumentType.registry_extract]
+     deps.financial_store.document_refs += [d.model_copy(update={"related_ids": related}) for d in extracts]
+diff --git a/tests/test_rule_sql_gen07.py b/tests/test_rule_sql_gen07.py
+index 786c2a2..07ef107 100644
+--- a/tests/test_rule_sql_gen07.py
++++ b/tests/test_rule_sql_gen07.py
+@@ -13,13 +13,15 @@ import pytest_asyncio
+ 
+ from backend.agents.base import AgentDeps
+ from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
+-from backend.contracts.records import DatasetTraits
++from backend.contracts.records import BankTransaction, DatasetTraits
+ from backend.contracts.services import RuleResult
+ from backend.contracts.state import EngagementState, initial_state
+ from backend.orchestration.nodes import build_run
+ from tests.external import snapshot_dir, supplements_dir
++from tests.fakes import gen07_populations, outside_populations
++from tests.test_gen05_sql import with_rows
+ from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
+-from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
++from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES, xero_tables
+ 
+ pytestmark = [pytest.mark.slow, pytest.mark.asyncio(loop_scope="module")]  # 用例与 module 级项目同一个事件循环
+ NUMBAT_MATERIALITY = {
+@@ -104,11 +106,12 @@ async def numbat(tmp_path_factory: pytest.TempPathFactory) -> Gen07Project:
+ async def test_xero_gen07_on_postgres(xero: Gen07Project) -> None:
+     """验收 2, 5: Xero q1 上恰好 9 条例外, 与离线预置 (xero_fakes.xero_gen07_exceptions, 各条的编号, 行与金额由离线用例
+     逐条核对) 逐字段相同 (ID, 金额, detail, 证据指针). 窗口为 10-01 至 10-17 (期末加 31 天截到数据截止日), 各行带
+-    window_end."""
++    window_end. 被测总体 (需求 R328) 同离线预置 (xero_gen07_populations), 每条例外都在其规则的总体里."""
+     assert (xero.run.id, xero.run.params_snapshot["data_as_of"]) == ("RUN-GEN-07-1", date(2026, 10, 17))
+     result = await gen07(xero)
+     assert (result.rows, result.outcomes) == ({}, [])
+-    assert result.exceptions == XERO_RULES["GEN-07"](xero.run).exceptions
++    assert result == XERO_RULES["GEN-07"](xero.run)  # 被测总体一并相等 (需求 R328)
++    assert outside_populations(result) == []
+     assert {x.detail["window_end"] for x in result.exceptions} == {"2026-10-17"}
+ 
+ 
+@@ -162,6 +165,39 @@ async def test_xero_gen07_counter_examples(xero: Gen07Project) -> None:
+     assert {x.detail["window_end"] for x in early.exceptions} == {"2026-10-14"}
+ 
+ 
++@pytest.mark.external
++async def test_s01_population_is_window_transactions_of_known_accounts(xero: Gen07Project) -> None:
++    """需求 R328: S01 的总体只取窗口 (10-01 至 10-17) 内银行账户表里有的账户的流水. 在测试库里加三笔小额流水 (期末当天,
++    窗口末日, 不在账户表的账户; 都不到门槛, 不出例外): 只有窗口末日那笔进总体; 与离线口径 (fakes.gen07_populations,
++    表加上这几笔) 一致."""
++
++    def txn(tid: str, account: str, day: date) -> BankTransaction:
++        return BankTransaction(
++            id=tid,
++            bank_account_id=account,
++            txn_date=day,
++            amount_cents=1000,
++            balance_after_cents=0,
++            description="Test deposit",
++            reference=None,
++        )
++
++    extra = [
++        txn("BT-T-1", "BA-090", date(2026, 9, 30)),
++        txn("BT-T-2", "BA-090", date(2026, 10, 17)),
++        txn("BT-T-3", "BA-999", date(2026, 10, 5)),
++    ]
++    async with with_rows(xero, "bank_transactions", [t.model_dump() for t in extra]):  # type: ignore[arg-type]
++        result = await gen07(xero)
++    tables = xero_tables()
++    transactions = [*tables["bank_transactions"], *extra]
++    expected = gen07_populations(
++        tables["journal_entries"], tables["bank_accounts"], transactions, xero.run.params_snapshot
++    )
++    assert result.populations == expected
++    assert {t.id for t in extra} & {i.source_id for i in result.populations[0].items} == {"BT-T-2"}
++
++
+ async def test_numbat_gen07_sql_runs(numbat: Gen07Project) -> None:
+     """验收 7: Numbat (没有数据集声明: data_as_of 不设上限, 没有冲回格式) 上 GEN-07 的 SQL 能执行不报错 (不断言条数);
+     窗口为期末后 31 天."""
+diff --git a/tests/xero_fakes.py b/tests/xero_fakes.py
+index cb612b1..0da9acd 100644
+--- a/tests/xero_fakes.py
++++ b/tests/xero_fakes.py
+@@ -92,6 +92,8 @@ from tests.fakes import (
+     csh02_window_rows,
+     engine_result,
+     gen05_exception,
++    gen05_populations,
++    gen07_populations,
+     make_deps,
+     rev08_populations,
+     wait_idle,
+@@ -993,6 +995,22 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
+     ]
+ 
+ 
++def xero_gen05_populations(params: Mapping[str, Any]) -> list[RulePopulation]:
++    """GEN-05 对 Xero 演示的被测总体 (需求 R328): 由演示数据导入之后的表按执行的参数算出 (fakes.gen05_populations).
++    增量实例 (entry_nos 非空) 另有这些凭证的补造更正分录 (载入之后的状态); 连库结果与它一致由 test_gen05_sql 断言."""
++    tables = xero_tables()
++    entry_nos = params.get("entry_nos")
++    lines = [*tables["journal_entries"], *(xero_adjustments(entry_nos) if entry_nos else [])]
++    return gen05_populations(lines, tables["sales_invoices"], tables["delivery_notes"], params)
++
++
++def xero_gen07_populations(params: Mapping[str, Any]) -> list[RulePopulation]:
++    """GEN-07 对 Xero 演示的被测总体 (需求 R328): 期后窗口 10-01 至 10-17 的流水与分录, 由导入之后的表按执行的参数算出
++    (fakes.gen07_populations)."""
++    tables = xero_tables()
++    return gen07_populations(tables["journal_entries"], tables["bank_accounts"], tables["bank_transactions"], params)
++
++
+ XERO_RULES: dict[
+     str, Callable[[ProcedureRun], RuleResult]
+ ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
+@@ -1008,13 +1026,19 @@ XERO_RULES: dict[
+     # 两个账户对账单的期末余额都等于试算表
+     "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={})),
+     "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
+-    "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
++    "GEN-05": lambda run: engine_result(  # 功能 journals 打开时才执行
++        "GEN-05", xero_gen05_result(run), xero_gen05_populations(run.params_snapshot)
++    ),
+     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
+     "GEN-03": lambda run: engine_result(
+         "GEN-03", RuleResult(exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []})
+     ),
+     # 功能 going_concern 打开时才执行
+-    "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
++    "GEN-07": lambda run: engine_result(
++        "GEN-07",
++        RuleResult(exceptions=xero_gen07_exceptions(run), rows={}),
++        xero_gen07_populations(run.params_snapshot),
++    ),
+ }
+ 
+ 
+-- 
+2.43.0
+
