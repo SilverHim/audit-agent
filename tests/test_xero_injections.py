@@ -264,7 +264,7 @@ async def test_t1_offline_cutoff_misstatement(xero_case: Any) -> None:
 
 # ── T2 重复开票未冲销 (需求 R252; 设计稿第 8.4 节) ──
 
-T2_FEATURES = DEMO_FEATURES  # 分录测试 (GEN-05, GEN-02) 在演示配置里; 基线一侧同样用它
+JOURNAL_FEATURES = DEMO_FEATURES  # 分录测试 (GEN-05, GEN-02) 在演示配置里; T2, T5 两侧都用它
 T2_XJ405 = "J-GEN-02-1-XJ-405"
 T2_DRAFT = MisstatementDraft(
     type="factual",
@@ -389,9 +389,11 @@ async def test_t2_offline_duplicate_invoice(xero_case: Any) -> None:
     校验: 50000 即副本中 XJ-405-1 贷方的金额); 没有 XJ-430 的判断, 其余判断同 T0 (assert_t2_judgments)."""
     t2, t0 = xero_case("T2", base="t2"), xero_case("T0", base="t0")
     base_client = LayeredMockLLMClient([t0.supplements / "llm"])
-    baseline = (await run_programs(await offline_deps(t0, llm=base_client, features=T2_FEATURES), ["GEN-02"])).state
+    baseline = (
+        await run_programs(await offline_deps(t0, llm=base_client, features=JOURNAL_FEATURES), ["GEN-02"])
+    ).state
     client = LayeredMockLLMClient([LLM_INJECTED / "T2", t2.supplements / "llm"])
-    deps = await offline_deps(t2, llm=client, rules=T2_RULES, features=T2_FEATURES)
+    deps = await offline_deps(t2, llm=client, rules=T2_RULES, features=JOURNAL_FEATURES)
     ran = await run_programs(deps, ["GEN-02"])
     assert_t2_rules(baseline, ran.state)
     assert all(f'"id": "XJ-430-{n}"' in t2_request(base_client) for n in (1, 2, 3))
@@ -490,8 +492,8 @@ async def test_t5_offline_depreciation(xero_case: Any) -> None:
     T5P_RULES, 大模型都读运行副本: 两边的对比见 assert_t5; 75000 即 T0 副本中 XJ-499-1 (710) 借方的金额; T5' 的大模型
     调用少 XJ-499 一次, 都一次通过."""
     t0, t5p = xero_case("T0", base="t0"), xero_case("T5p", base="t5p")
-    base = (await run_programs(await offline_deps(t0, features=T2_FEATURES), ["GEN-02"])).state
-    ran = await run_programs(await offline_deps(t5p, rules=T5P_RULES, features=T2_FEATURES), ["GEN-02"])
+    base = (await run_programs(await offline_deps(t0, features=JOURNAL_FEATURES), ["GEN-02"])).state
+    ran = await run_programs(await offline_deps(t5p, rules=T5P_RULES, features=JOURNAL_FEATURES), ["GEN-02"])
     assert_t5(base, ran.state)
     [line] = [r for r in imported_tables(t0.loader)[TableKind.journal_entries] if r.id == "XJ-499-1"]
     assert (line.account_code, line.debit_cents, line.credit_cents) == ("710", T5_DRAFT.amount_cents, 0)

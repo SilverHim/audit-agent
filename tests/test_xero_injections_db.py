@@ -24,10 +24,10 @@ from tests.external import live_llm_settings, snapshot_dir, supplements_dir
 from tests.fakes import rev08_populations
 from tests.test_fieldwork_csh02 import assert_d04_unattributed, flaky_ba091
 from tests.test_xero_injections import (
+    JOURNAL_FEATURES,
     LLM_INJECTED,
     T1_ORC1026,
     T1_RULES,
-    T2_FEATURES,
     T2_RULES,
     T4_TRANSIT,
     T5P_RULES,
@@ -191,7 +191,7 @@ async def test_t4_rules_on_postgres(xero_case: Any, tmp_path: Path) -> None:
 async def journals_side(case: XeroCase, roots: list[Path]) -> tuple[EngagementState, LayeredMockLLMClient]:
     """连库测试台 (演示配置的功能集) 上跑 GEN-02 的依赖闭包; 大模型先读 roots, 再读副本的运行副本."""
     client = LayeredMockLLMClient([*roots, case.supplements / "llm"])
-    ran = await run_programs(await db_deps(case, llm=client, features=T2_FEATURES), ["GEN-02"])
+    ran = await run_programs(await db_deps(case, llm=client, features=JOURNAL_FEATURES), ["GEN-02"])
     return ran.state, client
 
 
