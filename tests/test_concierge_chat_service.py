@@ -467,7 +467,7 @@ async def test_turn_cut_before_overview_records_the_project_language(
     await chat.settle()
     [entry] = entries(trail, TrailKind.conversation)
     assert (entry.payload["aborted"], entry.payload["ui_lang"], entry.payload["answer_lang"]) == (True, "en", expected)
-    assert ("查不到项目" in caplog.text) is isinstance(projects, BrokenProjects)
+    assert ("工作语言出错" in caplog.text) is isinstance(projects, BrokenProjects)
 
 
 # ── 取消与收尾 (第 1 轮审核 X02-002, 004, 005, 006 的探针) ──
