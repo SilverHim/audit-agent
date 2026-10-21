@@ -4,18 +4,16 @@
 """
 
 import functools
-import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, ClassVar, cast
 
-from pydantic import TypeAdapter
-
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, rule_patch, run_rules
 from backend.agents.evidence import current_confirmations, legacy_accounts
 from backend.agents.going_concern import gen06_subjects
 from backend.agents.ingest import client_profile
+from backend.agents.journals import JSON_ROWS, entry_order, journal_rows
 from backend.agents.judging import (
     Judged,
     JudgedRun,
@@ -27,6 +25,7 @@ from backend.agents.judging import (
     judge_all,
     judging_steps,
     judgments_patch,
+    open_findings,
     subjects_awaiting_review,
 )
 from backend.agents.ownership import declared
@@ -42,7 +41,6 @@ from backend.contracts.models import (
     DocumentType,
     EvidencePointer,
     EvidenceType,
-    ExceptionDisposition,
     OwnershipGraph,
     PartyNode,
     Reliability,
@@ -84,12 +82,6 @@ def accrued_interest_unbooked(confirmation: Confirmation, lines: Sequence[dict[s
 CASH_CATEGORY = "cash"  # 货币资金的标准分类: GEN-02 的凭证涉及它时另取银行账户与对账单行
 
 
-def entry_order(entry_no: str) -> tuple[tuple[tuple[str, int], ...], str]:
-    """凭证号的自然序: 按 "非数字段, 数字段" 依次比较, 数字段按数值 (XJ-9 在 XJ-10 之前); 自然序相等时按原文."""
-    parts = tuple((text, int(number) if number else -1) for text, number in re.findall(r"(\D*)(\d*)", entry_no))
-    return tuple(p for p in parts if p != ("", -1)), entry_no
-
-
 def detail_entries(detail: Mapping[str, Any]) -> list[str]:
     """GEN-05 例外 detail 直接写出的其他凭证号: original_entry_no, reversal_entry_no (R11) 与 full_credits (R12).
     按键取, 不按规则编号; paired_invoices 写的是分录行, 见 detail_lines."""
@@ -108,15 +100,9 @@ def detail_invoices(detail: Mapping[str, Any]) -> list[str]:
     return [str(i) for i in [*(detail.get("matched_invoices") or []), detail.get("invoice_id"), *paired] if i]
 
 
-def journal_rows(lines: Sequence[JournalEntry]) -> list[dict[str, Any]]:
-    """分录行转带 source_type 的 JSON 形式, 顺序不变."""
-    return [{"source_type": "journal_entry", **line.model_dump(mode="json")} for line in lines]
-
-
 Execute = Callable[[RunContext], Awaitable[Findings]]  # 执行一条程序, 返回原始发现
 Interpret = Callable[[RunContext, Findings], StatePatch]  # 把原始发现转成状态片段
 SubjectSource = Callable[[RunContext], Awaitable[Subjects]]  # 判断程序取全部判断对象, 带取对象时没有执行的规则
-JSON_ROWS = TypeAdapter(list[dict[str, Any]])  # 规则返回的行转 JSON 形式 (日期为字符串), 供提示词 tojson
 # 判断公共流程的名字移到 agents/judging.py, 这里再导出, 原有的导入路径照用
 __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "in_scope", "subjects_awaiting_review"]
 
@@ -234,17 +220,9 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         """
         eid = ctx.engagement.id
         rules = await run_rules(self.deps, ctx)
-        earlier = set(ctx.template.depends_on)
-        open_findings = sorted(
-            (
-                x
-                for x in current_results(ctx.state).exceptions
-                if x.procedure_id in earlier and x.disposition is not ExceptionDisposition.attributed
-            ),
-            key=lambda x: x.id,
-        )
+        earlier = open_findings(ctx.state, ctx.template.depends_on)
         selected = {row["id"] for row in rules.rows.get("S01", [])}
-        ids = sorted(i for i in selected | {i for x in open_findings for i in x.source_ids} if in_scope(ctx, i))
+        ids = sorted(i for i in selected | {i for x in earlier for i in x.source_ids} if in_scope(ctx, i))
         if not ids:
             return Subjects((), rules.outcomes)
         invoices = await self.invoice_records(ctx, ids)
@@ -254,7 +232,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             invoice, record = invoices[invoice_id]
             judgment = self.contract_judgment(ctx, invoice.contract_id) if invoice.contract_id is not None else None
             data = record | {"journal_lines": journal_lines[invoice_id], "contract_judgment": judgment}
-            subjects.append(Subject(invoice_id, data, [x for x in open_findings if invoice_id in x.source_ids]))
+            subjects.append(Subject(invoice_id, data, [x for x in earlier if invoice_id in x.source_ids]))
         return Subjects(subjects, rules.outcomes)
 
     async def invoice_records(
@@ -325,19 +303,11 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         profile = await client_profile(self.deps, ctx.engagement, ctx.state["client_profile_version"])
         contracts = sorted(await self.deps.financial_store.contracts(eid), key=lambda c: c.id)
         documents = await self.registered_documents(ctx) if contracts else {}
-        earlier = set(ctx.template.depends_on)
-        open_findings = sorted(
-            (
-                x
-                for x in current_results(ctx.state).exceptions
-                if x.procedure_id in earlier and x.disposition is not ExceptionDisposition.attributed
-            ),
-            key=lambda x: x.id,
-        )
+        earlier = open_findings(ctx.state, ctx.template.depends_on)
         subjects = []
         for node in companies:
             data = await self.gen03_data(ctx, graph, node, rules, profile, contracts, documents)
-            findings = [x for x in open_findings if node.id in x.source_ids]
+            findings = [x for x in earlier if node.id in x.source_ids]
             subjects.append(Subject(node.id, data, findings, client_profile=profile))
         return Subjects(subjects, rules.outcomes)
 
@@ -500,9 +470,10 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             if not isinstance(entry_no, str) or not entry_no:
                 raise ValueError(f"{x.id} 的 detail 没有 entry_no")
             entry_of[x.id] = entry_no
+        # 判断对象只看未归因的 (open_findings); scan 含已归因的, 供 related_findings 与相关凭证
         groups: dict[str, list[AuditException]] = {}
-        for x in scan:
-            if x.disposition is not ExceptionDisposition.attributed and in_scope(ctx, entry_of[x.id]):
+        for x in open_findings(ctx.state, ctx.template.depends_on):
+            if in_scope(ctx, entry_of[x.id]):
                 groups.setdefault(entry_of[x.id], []).append(x)
         if not groups:
             return Subjects()
@@ -771,17 +742,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
         的 D01, D04 (found, 依次: 沿用的 earlier_findings, 没有时为本次新建的). reply 为回函当前的文件登记
         (调用方按 registered_documents 取, 未登记抛 LookupError).
         """
-        earlier = set(ctx.template.depends_on)
-        findings = sorted(
-            (
-                x
-                for x in current_results(ctx.state).exceptions
-                if x.procedure_id in earlier
-                and account.id in x.source_ids
-                and x.disposition is not ExceptionDisposition.attributed
-            ),
-            key=lambda x: x.id,
-        )
+        findings = [x for x in open_findings(ctx.state, ctx.template.depends_on) if account.id in x.source_ids]
 
         def rows(rule_id: str) -> list[dict[str, Any]]:
             mine = [r for r in rules.rows.get(rule_id, []) if r.get("bank_account_id") == account.id]

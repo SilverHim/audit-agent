@@ -7,45 +7,34 @@ PostgresFinancialDataStore 与 SqlRuleEngine 跑现有规则, 结果等于设计
 没有 TEST_DATABASE_URL 时跳过.
 """
 
-import os
 import re
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import insert
-from sqlalchemy.ext.asyncio import AsyncEngine
 
-from backend.adapters.registry_mock import DatasetRegistrySource
-from backend.adapters.xero_supplements import plan
-from backend.agents.base import AgentDeps, RunContext
+from backend.agents.base import RunContext
 from backend.agents.client_intel import ClientIntelAgent
 from backend.agents.evidence import confirmation_key, reply_reliability
 from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.data import XERO_TABLES, TableKind
 from backend.contracts.models import (
-    ClientProfile,
     Confirmation,
     ConfirmationResult,
     DocumentType,
-    Engagement,
     EvidencePointer,
     EvidenceType,
-    Phase,
-    Procedure,
     ProcedureRun,
     ReceiptChannel,
     TrailKind,
 )
-from backend.contracts.records import DatasetTraits, DeliveryNote
+from backend.contracts.records import DeliveryNote
 from backend.contracts.services import RuleResult
-from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
-from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader, now
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import (
     FakeJudgmentEngine,
@@ -57,6 +46,18 @@ from tests.fakes import (
     rev08_populations,
 )
 from tests.test_data_store_postgres import table_rows
+from tests.xero_db import (
+    PERIOD_END,
+    PERIOD_START,
+    XeroProject,
+    build_xero_project,
+    database_url,
+    first_run,
+    new_owner,  # noqa: F401  test_gen05_sql 仍从本模块导入 (R328 合入后改从 tests.xero_db 导入)
+    numbat_project,
+    procedure_of,
+    rules_with,
+)
 from tests.xero_fakes import (
     SNAPSHOT_NAME,
     XERO_DATASET,
@@ -71,11 +72,6 @@ from tests.xero_injection import file_hashes
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]
 
-PERIOD_START, PERIOD_END = date(2026, 7, 1), date(2026, 9, 30)
-MATERIALITY = {"materiality_cents": 32431, "performance_materiality_cents": 16216, "clearly_trivial_cents": 1622}
-REVENUE = ["OBJ-REV-OCC", "OBJ-REV-CUT"]  # 补造计划预置的收入两条目标, significant
-CASH = ["OBJ-CASH-EXI"]  # 现金目标, high
-LINKS = {"REV-08": REVENUE, "REV-02": REVENUE, "CSH-05": CASH, "CSH-02": CASH}  # 程序关联的目标; PLN 两条没有
 RULE_PROGRAMS = ("PLN-07", "PLN-01", "REV-08", "REV-02", "CSH-05", "CSH-02")  # 有规则 SQL 的现有程序
 
 # 旧 A01 (提交 54a88ed 之前, R102 改为资产负债类对期初之前): 本期对上期, 门槛为变动额 100,000.00. Xero 演示公司规模
@@ -113,113 +109,13 @@ ORDER BY i.id
 REPLIES = {"BA-090": ("12345678", -1090044, 0), "BA-091": ("12345679", 1158123, 4853)}
 
 
-def database_url() -> str:
-    url = os.getenv("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("Set TEST_DATABASE_URL to a migrated disposable PostgreSQL database")
-    return url
-
-
-async def new_owner(engine: AsyncEngine) -> str:
-    """测试库里新建一个用户 (项目负责人), 返回其 ID."""
-    owner = "USR-" + uuid4().hex
-    async with engine.begin() as conn:
-        await conn.execute(
-            insert(m.users).values(
-                id=owner, email=owner + "@example.com", full_name="Jordan Ellis", password_hash="x", created_at=now()
-            )
-        )
-    return owner
-
-
-@dataclass
-class XeroProject:
-    """测试库中按补造清单写好账表的 Xero 项目."""
-
-    deps: AgentDeps  # 真实存储与规则引擎; 数据集与登记 mock 按给定的快照与补造目录
-    engagement: Engagement
-    profile: ClientProfile
-    traits: DatasetTraits
-    state: EngagementState  # 进入 P2 时: 计划预置的目标与风险, 闸门定的重要性
-    owner: str
-    datasets: RoutingDatasetLoader
-    supplement_tables: list[tuple[TableKind, str]]  # 补造清单的账表与来源文件, 按写入顺序
-
-
-async def build_xero_project(url: str, snapshot: Path, supplements: Path, tmp: Path) -> XeroProject:
-    """验收 1: 测试库中建 Xero 项目 (数据集 xero/<快照目录名>, 期间 2026-07-01 至 09-30), 账表按补造清单写入.
-    snapshot, supplements 为快照目录与补造目录 (基线或其副本); 依赖为组装根的真实实现, 只把数据集载入与登记 mock 换成
-    指向这两个目录的."""
-    from backend.core.config import Settings
-    from backend.main import build_deps
-
-    settings = Settings(DATABASE_URL=url, EVIDENCE_ROOT=tmp / "evidence", LLM_MODE="mock")
-    deps = build_deps(settings)
-    engine = deps.data.engine  # type: ignore[attr-defined]  # 组装根的引擎 (应用角色)
-    xero = XeroDatasetLoader(
-        snapshot.parent,
-        settings.KNOWLEDGE_ROOT / "planning",
-        engine,
-        deps.evidence_store,
-        supplements=supplements.parent,
-        allow_injected=True,  # 副本 (xero_case) 的 manifest 带 injected; 原目录没有, 照常核对
-    )
-    datasets = RoutingDatasetLoader(deps.datasets.default, {XeroDatasetLoader.PREFIX: xero})  # type: ignore[attr-defined]  # Numbat 照旧
-    dataset = f"{XeroDatasetLoader.PREFIX}{snapshot.name}"
-    deps = replace(
-        deps,
-        datasets=datasets,
-        registry=DatasetRegistrySource(deps.engagement_store, datasets.supplement_dir),  # type: ignore[arg-type]
-    )
-    owner = await new_owner(engine)
-    profile = xero.client_profile(dataset).model_copy(update={"id": "CLIENT-" + uuid4().hex})
-    engagement = await deps.engagement_store.create(  # type: ignore[attr-defined]
-        owner_id=owner, period_start=PERIOD_START, period_end=PERIOD_END, dataset=dataset, profile=profile
-    )
-    demo = plan(xero, dataset)
-    await deps.data.write_tables(engagement.id, demo.snapshot, source="xero", actor=owner)
-    for table in demo.tables:
-        await deps.data.write_tables(
-            engagement.id, {table.kind: table.rows}, source="import", actor=owner, file_name=table.file_name
-        )
-    objectives, risks = xero.planning_presets(dataset)
-    state = initial_state(engagement, [], profile.version) | {  # type: ignore[operator]
-        "audit_objectives": objectives,
-        "risk_register": risks,
-        **MATERIALITY,
-    }
-    tables = [(t.kind, t.file_name) for t in demo.tables]
-    return XeroProject(deps, engagement, profile, xero.dataset_traits(dataset), state, owner, datasets, tables)  # type: ignore[arg-type]
-
-
-def procedure_of(deps: AgentDeps, procedure_id: str) -> Procedure:
-    template = deps.library.load(procedure_id)
-    return Procedure(
-        id=procedure_id,
-        phase=Phase.P2_Executing,
-        template_commit=deps.library.commit,
-        objective_ids=LINKS.get(procedure_id, []),
-        autonomy_level=template.autonomy_level,
-    )
-
-
 async def run_rule_programs(project: XeroProject) -> dict[str, tuple[ProcedureRun, RuleResult]]:
-    """六条规则程序各跑一次 (第 1 次执行): 参数由程序库按项目, 状态, 数据集声明与关联目标的风险解析 (同
-    GraphNodes 的 build_run), 规则引擎为真实的 SqlRuleEngine."""
-    deps, found = project.deps, {}
+    """六条规则程序各跑一次 (第 1 次执行, xero_db.first_run): 参数由程序库按项目, 状态, 数据集声明与关联目标的风险
+    解析 (同 GraphNodes 的 build_run), 规则引擎为真实的 SqlRuleEngine."""
+    found = {}
     for procedure_id in RULE_PROGRAMS:
-        template = deps.library.load(procedure_id)
-        run = build_run(
-            deps.library,
-            template,
-            procedure_of(deps, procedure_id),
-            project.engagement,
-            project.state,
-            datetime.now(UTC),
-            traits=project.traits,
-            profile=project.profile,
-        )
-        found[procedure_id] = (run, await deps.rules.run(project.engagement.id, template, run, run.params_snapshot))
+        run = first_run(project, procedure_id)
+        found[procedure_id] = (run, await rules_with(project, procedure_id, run))
     return found
 
 
@@ -485,19 +381,9 @@ async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> No
     """验收 10: 同一测试库上 Numbat (data/demo, CSV 数据集载入) 的同批 SQL 结果不变: PLN-07 A01 (1100, 52500000),
     REV-08 R01 (SI-2026-0612, 14200000), CSH-05 B01 (BA-01, -5000000). 写了总体 SQL 的规则的被测总体等于离线预置
     (默认测试用的 Numbat 总体出自它): REV-08 R01-R03 (需求 R324 审核 R324-03), PLN-07 A01 与 CSH-05 B01 (需求 R327)."""
-    from backend.core.config import Settings
-    from backend.main import build_deps
-
-    url = database_url()
-    deps = build_deps(Settings(DATABASE_URL=url, EVIDENCE_ROOT=tmp_path / "evidence", LLM_MODE="mock"))
-    owner = await new_owner(deps.data.engine)  # type: ignore[attr-defined]
-    profile = deps.datasets.client_profile("demo").model_copy(update={"id": "CLIENT-" + uuid4().hex})
-    engagement = await deps.engagement_store.create(  # type: ignore[attr-defined]
-        owner_id=owner, period_start=date(2025, 7, 1), period_end=date(2026, 6, 30), dataset="demo", profile=profile
-    )
-    await deps.datasets.load(engagement.id, "demo")
-    objectives, risks = deps.datasets.planning_presets("demo")
-    state = initial_state(engagement, [], profile.version) | {"audit_objectives": objectives, "risk_register": risks}
+    project = await numbat_project(tmp_path)  # 这三条程序的参数不读重要性
+    objectives, risks = project.deps.datasets.planning_presets("demo")
+    project = replace(project, state=project.state | {"audit_objectives": objectives, "risk_register": risks})
     found = {}
     expected = {
         "PLN-07": [numbat_pln07_a01_population()],
@@ -505,18 +391,7 @@ async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> No
         "CSH-05": [numbat_csh05_population()],
     }
     for procedure_id, rule_id in (("PLN-07", "A01"), ("REV-08", "R01"), ("CSH-05", "B01")):
-        template = deps.library.load(procedure_id)
-        run = build_run(
-            deps.library,
-            template,
-            procedure_of(deps, procedure_id),
-            engagement,
-            state,  # type: ignore[arg-type]
-            datetime.now(UTC),
-            traits=DatasetTraits(),
-            profile=profile,
-        )
-        result = await deps.rules.run(engagement.id, template, run, run.params_snapshot)
+        result = await rules_with(project, procedure_id, first_run(project, procedure_id))
         found[procedure_id] = [(x.source_ids[0], x.amount_cents) for x in result.exceptions if x.rule_id == rule_id]
         written = {p.rule_id for p in expected[procedure_id]}
         assert [p for p in result.populations if p.rule_id in written] == expected[procedure_id], procedure_id

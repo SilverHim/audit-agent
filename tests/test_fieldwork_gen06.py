@@ -28,7 +28,7 @@ from backend.agents.going_concern import (
     subsequent_window,
 )
 from backend.agents.registry import build_agents
-from backend.contracts.knowledge import ProcedureTemplate
+from backend.contracts.knowledge import LocalizedText, ProcedureTemplate
 from backend.contracts.models import (
     AgentId,
     AutonomyLevel,
@@ -54,6 +54,7 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import apply_patch
 from backend.services.features import BASELINE
+from backend.services.procedure_library import render_text
 from tests.external import needs
 from tests.fakes import (
     FakeFinancialStore,
@@ -63,8 +64,9 @@ from tests.fakes import (
     FakeTrail,
     Outcome,
     ScriptedLLM,
+    contexts,
     failed,
-    gen06_rows,
+    ids,
     judgment,
     make_ctx,
     make_deps,
@@ -80,6 +82,7 @@ from tests.xero_fakes import (
     make_xero_deps,
     manifest_documents,
     xero_financial_store,
+    xero_gen06_derived,
     xero_state,
     xero_traits,
 )
@@ -218,14 +221,6 @@ async def run_gen06(
     return patch, ctx
 
 
-def contexts(engine: FakeJudgmentEngine) -> dict[str, JudgmentContext]:
-    return {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
-
-
-def ids(rows: list[dict[str, Any]]) -> list[str]:
-    return [str(r["id"]) for r in rows]
-
-
 def documents(data: dict[str, Any]) -> list[str]:
     """data.documents 的文件, 以补造目录 manifest 的文件名表示."""
     paths = {i: d["path"].rsplit("/", 1)[-1] for i, d in manifest_documents().items()}
@@ -296,10 +291,21 @@ def test_gen06_template_and_dispatch() -> None:
 @pytest.mark.external
 def test_xero_params_snapshot() -> None:
     """验收 1: Xero 项目 (执行重要性 16216, 明显微小 1622) 第 1 次执行 RUN-GEN-06-1 的参数快照, 按项目期间, 状态的
-    重要性与数据集声明解析."""
+    重要性与数据集声明解析. 范围说明 (scope, 需求 R324) 按它渲染; 没有数据截止日时不写截止."""
     deps = make_xero_deps(features=FEATURES)
     ctx = xero_context(deps, xero_state(), "GEN-06", [])
     traits = xero_traits()
+    scope = deps.library.load("GEN-06").scope
+    assert scope is not None
+    assert render_text(scope, ctx.run.params_snapshot) == LocalizedText(
+        zh="GEN-07 尚未归因的例外所指的期后银行流水与分录行: 期末 2026-09-30 之后 31 天内 (截到数据截止日 2026-10-17); "
+        "按参考号与对方名称在 2026-07-01 至窗口上限入账的总账与销售发票中找相关的凭证与发票",
+        en="Subsequent bank statement lines and journal lines flagged by GEN-07 and not yet explained: within 31 days "
+        "after period end 2026-09-30 (cut off at the data date 2026-10-17); related entries and invoices are searched "
+        "by reference number and counterparty name among those posted from 2026-07-01 to the window end",
+    )
+    uncut = render_text(scope, ctx.run.params_snapshot | {"data_as_of": None})
+    assert "截到" not in uncut.zh and "cut off" not in uncut.en
     assert (ctx.run.id, ctx.run.params_snapshot) == (
         "RUN-GEN-06-1",
         {
@@ -820,19 +826,10 @@ def store_lines(store: FakeFinancialStore) -> tuple[list[JournalEntry], list[Sal
 
 
 async def smart_agency_entries(change: Callable[[FakeFinancialStore], None]) -> list[dict[str, Any]]:
-    """改过假存储之后 BT-090-0097 的 related_entries: E01, E02 由改后的表按规则口径派生 (同 xero_gen06_rows)."""
+    """改过假存储之后 BT-090-0097 的 related_entries: E01, E02 由改后的表按规则口径派生 (xero_gen06_derived)."""
     store = xero_financial_store()
     change(store)
-    lines, invoices = store_lines(store)
-    traits = xero_traits()
-    rows = gen06_rows(
-        lines,
-        invoices,
-        date(2026, 7, 1),
-        date.fromisoformat(GEN07_WINDOW_END),
-        traits.reversal_reference_pattern,
-        traits.reversal_entry_no_template,
-    )
+    rows = xero_gen06_derived(*store_lines(store))
     deps, engine, _ = gen06_deps(
         {"BT-090-0097": concluded()}, rows=lambda run: RuleResult(exceptions=[], rows=rows), financial_store=store
     )

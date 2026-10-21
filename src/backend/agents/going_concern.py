@@ -12,11 +12,11 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 from backend.agents.base import AgentDeps, RunContext, run_rules
-from backend.agents.judging import Subject, Subjects, in_scope
-from backend.contracts.models import AuditException, ExceptionDisposition
+from backend.agents.journals import entry_order, journal_rows
+from backend.agents.judging import Subject, Subjects, in_scope, open_findings
+from backend.contracts.models import AuditException
 from backend.contracts.records import BankTransaction, JournalEntry, SalesInvoice
 from backend.services.party_names import folded, party_name_key, separated
-from backend.services.staleness import current_results
 
 # 关联对象含给定 ID 的已登记文件: (项目, 关联对象 ID) -> [{document, pages}] (FieldworkAgent.related_documents)
 DocumentsOf = Callable[[str, str], Awaitable[list[dict[str, Any]]]]
@@ -172,13 +172,9 @@ async def gen06_subjects(deps: AgentDeps, ctx: RunContext, documents_of: Documen
     - window: 期后窗口 {from, to} (subsequent_window); match_keys: {tokens, name}.
     对象行, 本凭证或相关凭证查不到抛 LookupError; 例外所指的不是流水或分录行抛 ValueError.
     """
-    from backend.agents.fieldwork import entry_order, journal_rows  # 在此导入: fieldwork 导入本模块登记取对象函数
-
-    earlier = set(ctx.template.depends_on)
     groups: dict[str, list[AuditException]] = {}
-    for x in sorted(current_results(ctx.state).exceptions, key=lambda x: x.id):
-        unattributed = x.disposition is not ExceptionDisposition.attributed
-        if x.procedure_id in earlier and unattributed and in_scope(ctx, x.source_ids[0]):
+    for x in open_findings(ctx.state, ctx.template.depends_on):
+        if in_scope(ctx, x.source_ids[0]):
             groups.setdefault(x.source_ids[0], []).append(x)
     if not groups:
         return Subjects()

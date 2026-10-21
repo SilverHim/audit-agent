@@ -41,6 +41,7 @@ from tests.fakes import (
     FakeRegistry,
     FakeRuleEngine,
     FakeTrail,
+    contexts,
     failed,
     make_ctx,
     make_deps,
@@ -124,10 +125,6 @@ def setup(
     )
     run = ctx.run.model_copy(update={"params_snapshot": params})
     return FieldworkAgent(deps), RunContext(ctx.engagement, procedure, ctx.template, run, state), engine  # type: ignore[arg-type]
-
-
-def contexts(engine: FakeJudgmentEngine) -> dict[str, Any]:
-    return {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
 
 
 def invoice_json(invoice_id: str) -> dict[str, Any]:

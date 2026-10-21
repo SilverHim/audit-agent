@@ -42,7 +42,17 @@ from backend.contracts.state import EngagementState, StatePatch
 from backend.orchestration.merge import check_patch
 from backend.orchestration.nodes import apply_patch
 from tests.external import needs
-from tests.fakes import FakeJudgmentEngine, FakeRegistry, FakeRuleEngine, FakeTrail, failed, make_deps, passed
+from tests.fakes import (
+    FakeJudgmentEngine,
+    FakeRegistry,
+    FakeRuleEngine,
+    FakeTrail,
+    contexts,
+    failed,
+    ids,
+    make_deps,
+    passed,
+)
 from tests.fixture_sets import XERO
 from tests.test_evidence_gen08 import ADVISORY, ALEX, DEMO, SMART, VPA, run_gen08
 from tests.test_xero_fixtures import LIBRARY, RecordingJudgments, xero_context
@@ -88,14 +98,6 @@ def gen03_deps(
     if not real:
         deps = replace(deps, judgments=engine, review_llm=None)
     return deps, engine, rule_engine
-
-
-def contexts(engine: FakeJudgmentEngine) -> dict[str, Any]:
-    return {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
-
-
-def ids(rows: list[dict[str, Any]]) -> list[str]:
-    return [r["id"] for r in rows]
 
 
 # ── 程序定义与分派 ──

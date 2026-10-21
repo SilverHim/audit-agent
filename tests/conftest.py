@@ -28,6 +28,27 @@ async def demo_run():
     return await record_demo()
 
 
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def xero_db(tmp_path_factory):
+    """只读的连库规则用例共用的 Xero q1 项目 (tests.xero_db.build_xero_project), 会话里只建一次 (GEN-06, GEN-07 的 SQL
+    用例共用); 用例标 loop_scope session (与它同一个事件循环), 只查询与跑规则, 不改账表. 没有测试库或快照时跳过."""
+    from tests.external import snapshot_dir, supplements_dir
+    from tests.xero_db import build_xero_project, database_url
+    from tests.xero_fakes import SNAPSHOT_NAME
+
+    url = database_url()
+    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
+    return await build_xero_project(url, snapshot, supplements, tmp_path_factory.mktemp("xero_db"))
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def numbat_db(tmp_path_factory):
+    """只读的连库规则用例共用的 Numbat 项目 (tests.xero_db.numbat_project), 会话里只建一次, 用法同 xero_db."""
+    from tests.xero_db import numbat_project
+
+    return await numbat_project(tmp_path_factory.mktemp("numbat_db"))
+
+
 @pytest.fixture(scope="session", autouse=True)
 def xero_originals_unchanged():
     """会话开始与结束各算一次 Xero 快照与补造原目录的逐文件哈希, 不同即失败 (只报文件名); 目录不存在时不核对

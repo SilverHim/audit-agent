@@ -31,18 +31,17 @@ from tests.test_xero_injections import (
     t4_rules,
 )
 from tests.test_xero_rules_db import (
-    build_xero_project,
     check_acc04,
     check_cash,
     check_csh02_fieldwork,
     check_planning,
     check_revenue,
     check_versions,
-    database_url,
     offline,
     run_rule_programs,
 )
 from tests.tools.live_budget import Budget, report
+from tests.xero_db import build_xero_project, database_url
 from tests.xero_fakes import (
     ORC1026,
     SNAPSHOT_NAME,

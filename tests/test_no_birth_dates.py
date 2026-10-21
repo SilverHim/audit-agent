@@ -274,11 +274,12 @@ GUARDED = sorted(
     for t in LIBRARY.all(include_disabled=True)
     if t.llm is not None and sees_person_data(t.id) and t.id not in PENDING
 )
-# 守卫按程序的 owner 执行: A6 的判断程序与 A8 的 FIN-03 (需求 R158)
+# 受查程序的 owner: A6 的判断程序与 A8 的 FIN-03 (需求 R158); 只用来断言受查的都由它们执行
 OWNERS = {AgentId.A6: FieldworkAgent, AgentId.A8: WorkpaperAgent}
-# 依赖闭包里先执行的程序的 owner: A6, 与 A5 的规则程序 GEN-07 (GEN-06 的前置, 需求 R179; 结果取 XERO_RULES). A5 的
-# GEN-08 已在状态里 (graph_state), 不再执行
-EARLIER = {AgentId.A6: FieldworkAgent, AgentId.A5: EvidenceAgent}
+# 执行受查程序与其依赖闭包用的 Agent, 按 owner: A5 (如 GEN-06 的前置 GEN-07, 需求 R179; 规则结果取 XERO_RULES),
+# A6, A8. 闭包里别的 owner 的程序不执行, 其产出由 Xero 假实现预置 (如 GEN-03 的前置, A3 的 DOC-04: 合同已在假财务
+# 存储里)
+AGENTS = {AgentId.A5: EvidenceAgent, AgentId.A6: FieldworkAgent, AgentId.A8: WorkpaperAgent}
 # 受查而 Xero 正本还没有 fixture 的程序 → 加 fixture 的需求: 判断全部失败, A7 没有判断可复核, 只查 owner 的消息. 加了
 # fixture 时 test_guarded_programs_are_listed 即失败, 须同一提交删去这一项
 AWAITING_FIXTURES: dict[str, str] = {"GEN-06": "R180"}
@@ -300,8 +301,9 @@ def test_guarded_programs_are_listed() -> None:
 @pytest.mark.parametrize("procedure_id", GUARDED)
 async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
     """验收 2 (守卫): 上下文可能带人员信息的每个判断程序 (GUARDED) 在 Xero 演示上执行一次, 防新程序把出生日期发给
-    模型: 先按依赖顺序执行依赖闭包里 A6 的程序与 A5 的 GEN-07 (EARLIER; GEN-08 已在状态里, 规则结果取
-    XERO_RULES), 再由程序的 owner (OWNERS) 执行它, 运行时自主度都提到 L3 (A7 按主规则复核建议 accept 的判断). 错报
+    模型: 先按依赖顺序执行依赖闭包中状态里还没有执行记录的程序 (GEN-08 已在状态里; 规则结果取 XERO_RULES), 再执行
+    它, 都按 owner 取 AGENTS 里的 Agent (别的 owner 的不执行, 见 AGENTS), 运行时自主度都提到 L3 (A7 按主规则复核建议
+    accept 的判断). 错报
     闭环的程序 (outputs 含 misstatements) 另在状态里放已认定而未分类的两条错报与其来源判断 (FIN-03 的判断对象,
     xero_identified_misstatements). 四份登记摘录补登记关联到关系图的全部节点, 客户与 GEN-05 例外所指的凭证 (合成的
     登记, 让按关联对象取文件的上下文都取得到摘录). owner 与 A7 发给模型的消息都不含出生日期 (三种写法) 与人员节点
@@ -321,19 +323,14 @@ async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
         }
     graph = state["ownership_graph"]
     assert graph is not None
-    runners = {**EARLIER, **OWNERS}
-
-    def runs_first(p: str) -> bool:
-        agent = EARLIER.get(LIBRARY.load(p).owner)
-        return p != "GEN-08" and agent is not None and p in agent.procedures
-
-    earlier = (p for p in closure(procedure_id) if runs_first(p))
+    ran = {r.procedure_id for r in state["procedure_runs"]}
+    earlier = (p for p in closure(procedure_id) if p not in ran and LIBRARY.load(p).owner in AGENTS)
     order = [*sorted(earlier, key=lambda p: len(closure(p))), procedure_id]  # 闭包小的在前, 即依赖顺序
     for pid in order:
         ctx = xero_context(deps, state, pid, [])
         procedure = ctx.procedure.model_copy(update={"autonomy_level": AutonomyLevel.L3})
         ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state | {"procedure_pack": [procedure]})
-        agent = runners[LIBRARY.load(pid).owner](deps)
+        agent = AGENTS[LIBRARY.load(pid).owner](deps)
         state = apply_patch(state, await agent.run(ctx))  # type: ignore[arg-type]
     owner, a7 = sent(trail, LIBRARY.load(procedure_id).owner), sent(trail, AgentId.A7)
     assert owner and (a7 or procedure_id in AWAITING_FIXTURES)  # 两边都发了消息, 守卫查得到东西

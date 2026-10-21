@@ -18,7 +18,7 @@ XeroFakeDatasetLoader.load 只记调用, 不登记文件, 与真实载入器只�
 
 import functools
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
@@ -64,7 +64,7 @@ from backend.contracts.models import (
     RuleOutcome,
     RulePopulation,
 )
-from backend.contracts.records import DatasetTraits, Employee, JournalEntry
+from backend.contracts.records import DatasetTraits, Employee, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.decisions import GraphDecisionSubmit
@@ -1017,12 +1017,12 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
 GEN06_SUBSEQUENT_DAYS = 31  # GEN-06 期后窗口的天数, 同 GEN-06.yaml (与 GEN-07 相同)
 
 
-def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[dict[str, Any]]]:
-    """GEN-06 E01, E02 的行 (需求 R179): 由演示数据导入之后的表 (xero_tables) 按规则的口径派生 (tests.fakes 的
-    gen06_rows), 区间为本期起 (快照的期间) 至窗口上限 (期末加 GEN06_SUBSEQUENT_DAYS 天截到数据集声明的 data_as_of,
-    即 GEN07_WINDOW_END), 作废对按数据集声明剔除. 读快照, 规则引擎取 GEN-06 时才算, 每次新建; 与连库结果整行相同由
-    tests/test_rule_sql_gen06.py 核对. 给了 loader 时取它指向的副本 (注入场景)."""
-    tables = xero_tables(loader)
+def xero_gen06_derived(
+    lines: Iterable[JournalEntry], invoices: Iterable[SalesInvoice], loader: XeroDatasetLoader | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """给定的分录行与销售发票按 GEN-06 E01, E02 的口径派生的行 (tests.fakes 的 gen06_rows): 区间为本期起 (快照的期间)
+    至窗口上限 (期末加 GEN06_SUBSEQUENT_DAYS 天截到数据集声明的 data_as_of, 即 GEN07_WINDOW_END), 作废对按数据集声明
+    剔除. 给了 loader 时期间与声明取它指向的副本 (注入场景). 改过表的用例 (如改入账日, 改流水的参考号) 用它派生."""
     traits = xero_traits(loader)
     period = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
     assert period is not None
@@ -1030,13 +1030,16 @@ def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[d
     if traits.data_as_of is not None:
         end = min(end, traits.data_as_of)
     return gen06_rows(
-        tables["journal_entries"],
-        tables["sales_invoices"],
-        period[0],
-        end,
-        traits.reversal_reference_pattern,
-        traits.reversal_entry_no_template,
+        lines, invoices, period[0], end, traits.reversal_reference_pattern, traits.reversal_entry_no_template
     )
+
+
+def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[dict[str, Any]]]:
+    """GEN-06 E01, E02 的行 (需求 R179): 演示数据导入之后的表 (xero_tables) 经 xero_gen06_derived 派生. 读快照, 规则
+    引擎取 GEN-06 时才算, 每次新建; 与连库结果整行相同由 tests/test_rule_sql_gen06.py 核对. 给了 loader 时取它指向的
+    副本 (注入场景)."""
+    tables = xero_tables(loader)
+    return xero_gen06_derived(tables["journal_entries"], tables["sales_invoices"], loader)
 
 
 XERO_RULES: dict[

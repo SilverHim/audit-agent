@@ -1988,6 +1988,16 @@ class FakeJudgmentEngine:
 Outcome = Callable[[JudgmentContext, ProcedureRun], JudgmentOutcome]  # FakeJudgmentEngine 对一个对象的预置结果
 
 
+def contexts(engine: FakeJudgmentEngine) -> dict[str, JudgmentContext]:
+    """假判断引擎收到的上下文, 按判断对象 (同一对象判过多次时取最后一次)."""
+    return {jctx.subject_id: jctx for _, jctx, _ in engine.calls}
+
+
+def ids(rows: Iterable[Mapping[str, Any]], key: str = "id") -> list[Any]:
+    """各行的 key 列 (缺省为 ID), 顺序不变."""
+    return [r[key] for r in rows]
+
+
 def judgment(ctx: JudgmentContext, run: ProcedureRun, **changes: Any) -> Judgment:
     """判断引擎会给出的判断: 缺省 accept, L2, 解释对象的全部规则例外; changes 改其中的字段."""
     base = Judgment(
@@ -2410,7 +2420,8 @@ def gen06_rows(
 ) -> dict[str, list[dict[str, Any]]]:
     """GEN-06 E01, E02 的行, 按两条规则 SQL 的口径派生 (需求 R179): E01 为入账日在 [period_start, window_end] 的分录
     行, 作废对 (csh02_voided, 同共用段) 整张凭证剔除, 按 (入账日, 凭证号自然序, 凭证号, 行 ID); E02 为入账日在同一
-    区间的销售发票 (发票表各列), 按 (入账日, ID). 列与值的类型同 SQL (日期为 date). Numbat 与 Xero 的假规则引擎共用."""
+    区间的销售发票 (发票表各列), 按 (入账日, ID). 列与值的类型同 SQL (日期为 date). Xero 的离线派生
+    (xero_fakes.xero_gen06_derived) 用它; Numbat 的假规则引擎没有 GEN-06."""
     lines = list(lines)
     voided = csh02_voided(lines, pattern, template)
     e01 = [

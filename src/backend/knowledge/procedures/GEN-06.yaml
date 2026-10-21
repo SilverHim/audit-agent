@@ -1,5 +1,6 @@
 id: GEN-06
 name: 期后事项研判
+workpaper: {ref: G-6, area: G}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
 # 规格书 6.1.2 (GEN-06 ← GEN-07), 7.2 节 (L3 混合); ASA 560 第 6, 8 段; AASB 110 第 3, 8-10 段; AASB 15 第 88 段.
 # Xero 演示数据集设计第 6.4 节 (GEN-06 上下文的通用扩展). 以前置程序 GEN-07 尚未归因的例外为判断对象 (例外所指的
 # 银行流水或分录行, 每行一个对象), 判断它是调整事项, 非调整事项还是常规的期后交易: 调整事项而期末未反映时建议错报,
@@ -22,6 +23,17 @@ name: 期后事项研判
 # 风险 (需求 R179 验收 9): 按现有置信度口径 (决定 2 保持现状), 有规则例外而建议 accept 时 c_rule 记 0, GEN-06 的
 # accept 判断置信度偏低 (A7 一致时 critic 分项计 1, 见 AC-51); 功能 autonomy (动态降级) 打开后的级别以接口文档第 6 节
 # 自主度段为准. 本条不改口径.
+# 范围说明 (需求 R324, 按参数快照渲染): 判断对象与找相关凭证, 发票的区间; 数据截止日为空时不写截止
+scope:
+  zh: >-
+    GEN-07 尚未归因的例外所指的期后银行流水与分录行: 期末 {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %}
+    (截到数据截止日 {{ data_as_of }}){% endif %};
+    按参考号与对方名称在 {{ period_start }} 至窗口上限入账的总账与销售发票中找相关的凭证与发票
+  en: >-
+    Subsequent bank statement lines and journal lines flagged by GEN-07 and not yet explained: within
+    {{ subsequent_days }} days after period end {{ period_end }}{% if data_as_of %} (cut off at the data date
+    {{ data_as_of }}){% endif %}; related entries and invoices are searched by reference number and counterparty name
+    among those posted from {{ period_start }} to the window end
 phase: P2_Executing
 cycle: Pervasive
 owner: A6

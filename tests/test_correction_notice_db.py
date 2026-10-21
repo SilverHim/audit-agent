@@ -15,7 +15,7 @@ from backend.orchestration.nodes import apply_notice
 from backend.services.trail_pages import all_of_kind
 from tests.external import snapshot_dir, supplements_dir
 from tests.misstatement_fakes import CSH02, XJ499, notice, round1_communicated
-from tests.test_xero_rules_db import XeroProject, build_xero_project, database_url
+from tests.xero_db import XeroProject, build_xero_project, database_url
 from tests.xero_fakes import SNAPSHOT_NAME
 
 pytestmark = [pytest.mark.slow, pytest.mark.external]

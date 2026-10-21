@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, cast, get_args
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, run_rules
-from backend.agents.fieldwork import JSON_ROWS, journal_rows
+from backend.agents.journals import JSON_ROWS, journal_rows
 from backend.agents.judging import (
     JudgedRun,
     Subject,
