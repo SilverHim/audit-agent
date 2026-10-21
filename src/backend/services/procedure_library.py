@@ -537,7 +537,8 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
     """底稿索引号与底稿配置的问题 (需求 R329; 含未启用的模板, 消息含程序编号或索引号): 区, 必填项代号与准则对照的
     准则各不重复; 程序 workpaper 与导引表的区须在 areas 中, 索引号为区字母本身或 {区}-{序号}, 序号按该区的
     numbering (错报区 X 为 letters: X-A 起, X-数字留给错报汇总表中的错报编号); 有 categories 的系统底稿 (导引表)
-    须属一个区; 不属区的系统底稿 (索引, 准则对照) 的索引号不能是区的写法 (区字母本身或 {区}-序号); 程序与系统底稿的
+    须属一个区; 不属区的系统底稿 (索引, 准则对照) 的索引号不能归到某区 (区字母本身或以 {区}- 开头, 与 standard_refs
+    归区的口径相同); 程序与系统底稿的
     索引号不重复; 必填项与准则对照所引的索引号与区都在."""
     templates = list(templates)
     areas = {a.id: a for a in config.areas}
@@ -558,14 +559,6 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
             return f"{owner}: 索引号 {ref} 应为 {area_id} 或 {area_id}-序号 ({area.name.zh}区的序号为 {hint})"
         return None
 
-    def area_like(ref: str) -> str | None:
-        """索引号形如某区的底稿 (区字母本身或 {区}-序号) 时为该区, 否则为 None."""
-        for area_id, area in areas.items():
-            pattern, _ = WORKPAPER_NUMBERING[area.numbering]
-            if re.fullmatch(rf"{re.escape(area_id)}(?:-(?:{pattern}))?", ref) is not None:
-                return area_id
-        return None
-
     owners: dict[str, list[str]] = {}  # 索引号 → 用它的底稿 (程序编号, 或 "系统底稿")
     for t in templates:
         if t.workpaper is not None:
@@ -577,8 +570,8 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
             problems += [p for p in [index_problem(owner, w.ref, w.area)] if p is not None]
         elif w.categories:
             problems.append(f"{owner}: 导引表 (有 categories) 须属一个区")
-        elif (like := area_like(w.ref)) is not None:
-            problems.append(f"{owner}: 不属任何区, 索引号却是 {like} 区的写法 ({like} 或 {like}-序号)")
+        elif (like := w.ref.partition("-")[0]) in areas:
+            problems.append(f"{owner}: 不属任何区, 索引号却归到 {like} 区 ({like} 或以 {like}- 开头)")
         owners.setdefault(w.ref, []).append("系统底稿")
     problems += [f"索引号 {ref} 重复: {', '.join(who)}" for ref, who in owners.items() if len(who) > 1]
     for r in config.required:

@@ -3569,9 +3569,10 @@ def test_workpaper_order_follows_config(tmp_path: Path) -> None:
         (None, lambda d: d["areas"].append(d["areas"][0]), "区 A 重复"),
         (None, lambda d: d["required"].append(d["required"][0]), "必填项代号 preparer 重复"),
         (None, lambda d: d["system"][1].pop("area"), "系统底稿 C: 导引表 (有 categories) 须属一个区"),
-        # 不属区的系统底稿 (S 准则对照, 00 索引) 的索引号不能是区的写法 (审核 R329-08)
-        (None, lambda d: d["system"][3].update(ref="B"), "系统底稿 B: 不属任何区, 索引号却是 B 区的写法 (B 或 B-序号)"),
-        (None, lambda d: d["system"][0].update(ref="A-9"), "系统底稿 A-9: 不属任何区, 索引号却是 A 区的写法"),
+        # 不属区的系统底稿 (S 准则对照, 00 索引) 的索引号不能归到某区, 按前缀归区同 standard_refs (审核 R329-08, 09)
+        (None, lambda d: d["system"][3].update(ref="B"), "系统底稿 B: 不属任何区, 索引号却归到 B 区 (B 或以 B- 开头)"),
+        (None, lambda d: d["system"][0].update(ref="A-9"), "系统底稿 A-9: 不属任何区, 索引号却归到 A 区"),
+        (None, lambda d: d["system"][0].update(ref="D-A"), "系统底稿 D-A: 不属任何区, 索引号却归到 D 区"),
     ],
     ids=[
         "duplicate",
@@ -3590,6 +3591,7 @@ def test_workpaper_order_follows_config(tmp_path: Path) -> None:
         "lead_without_area",
         "system_area_letter",
         "system_area_number",
+        "system_area_prefix",
     ],
 )
 def test_workpaper_problems_rejected_on_load(
