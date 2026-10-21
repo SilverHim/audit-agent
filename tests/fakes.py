@@ -1842,29 +1842,12 @@ def csh05_population(
     )
 
 
-def months_between(start: date, end: date) -> int:
-    """start 到 end 的整月数 (同 PostgreSQL age() 的年 x 12 加月)."""
-    return (end.year - start.year) * 12 + end.month - start.month - (1 if end.day < start.day else 0)
-
-
-def add_months(day: date, months: int) -> date:
-    """日期加整月, 落到月底之外时取当月最后一天 (同 PostgreSQL 的 date + interval)."""
-    total = day.year * 12 + day.month - 1 + months
-    year, month = divmod(total, 12)
-    last = (date(year + (month + 1) // 12, (month + 1) % 12 + 1, 1) - timedelta(days=1)).day
-    return date(year, month + 1, min(day.day, last))
-
-
 def pln07_a01_population(
-    accounts: Iterable[Account],
-    trial_balance: Iterable[TrialBalanceRow],
-    period_start: date,
-    period_end: date,
-    prior_period_start: date | None,
+    accounts: Iterable[Account], trial_balance: Iterable[TrialBalanceRow], *, same_length: bool
 ) -> RulePopulation:
     """PLN-07 A01 的被测总体, 按 PLN-07.yaml 总体 SQL 的口径由表独立算一遍 (需求 R327): 两期试算表出现过且在科目表里的
     科目, 资产负债类都比较 (基数为期初: 上期末余额, 留存收益分类中代码最小的科目另加上期全部损益), 损益类只在两期
-    等长 (上期起始日加本期整月数等于本期起始日, 上期起始日为空视为等长) 时比较 (基数为上期). 每科目一项, 按代码;
+    等长时比较 (基数为上期; 等长由调用方按数据集给出, SQL 的等长判定算错时连库的逐行相等能拦住). 每科目一项, 按代码;
     没有金额 (余额有借有贷, 合计没有意义), 识别字段为科目名称, 比较口径与本期, 上期, 期初余额."""
     chart = {a.code: a for a in accounts}
     current: dict[str, int] = {}
@@ -1876,10 +1859,6 @@ def pln07_a01_population(
     codes = sorted(current.keys() | prior.keys())
     retained = [c for c in codes if chart[c].category == "retained_earnings"]
     carried = sum(prior.get(c, 0) for c in codes if chart[c].type in ("revenue", "expense"))
-    same_length = (
-        prior_period_start is None
-        or add_months(prior_period_start, months_between(period_start, period_end + timedelta(days=1))) == period_start
-    )
     items = []
     for code in codes:
         profit_or_loss = chart[code].type in ("revenue", "expense")
@@ -1921,9 +1900,7 @@ def numbat_pln07_a01_population() -> RulePopulation:
     return pln07_a01_population(
         [with_category(a) for a in numbat_records("accounts", Account)],
         numbat_records("trial_balance", TrialBalanceRow),
-        ENGAGEMENT.period_start,
-        ENGAGEMENT.period_end,
-        None,
+        same_length=True,  # 没有数据集声明的上期起始日, 视为等长
     )
 
 

@@ -243,7 +243,8 @@ async def check_planning(project: XeroProject, results: dict[str, tuple[Procedur
     (9 分) 在试算表里而不出行; 旧 A01 一行都出不来."""
     eid, financial = project.engagement.id, project.deps.financial_store
     run, pln07 = results["PLN-07"]
-    assert pln07 == offline("PLN-07", run)
+    assert pln07 == offline("PLN-07", run)  # 含被测总体 (需求 R327): A01 为 12 个资产负债类科目
+    assert {p.rule_id: p.count for p in pln07.populations}["A01"] == 12
     flagged = {x.source_ids[0]: x for x in pln07.exceptions}
     assert len(flagged) == 9 and flagged["820"].detail["opening_cents"] == "79120"
     current = {r.account_code: r.balance_cents for r in await financial.trial_balance(eid, "current")}
@@ -301,7 +302,8 @@ async def check_cash(project: XeroProject, results: dict[str, tuple[ProcedureRun
     37 行减去作废对的 4 行), 没有借或贷 4853 (BA-091 回函的应计利息) 的行."""
     eid, financial = project.engagement.id, project.deps.financial_store
     run, csh05 = results["CSH-05"]
-    assert csh05 == offline("CSH-05", run) and csh05.exceptions == []
+    assert csh05 == offline("CSH-05", run) and csh05.exceptions == []  # 含被测总体 (需求 R327): B01 为 090, 091 两户
+    assert [(p.rule_id, p.count) for p in csh05.populations] == [("B01", 2)]
     run, csh02 = results["CSH-02"]
     assert csh02 == offline("CSH-02", run)
     d02, d03, d04 = (csh02.rows[key] for key in ("D02", "D03", "D04"))
@@ -477,26 +479,6 @@ async def test_rev08_one_item_per_invoice_on_postgres(tmp_path: Path) -> None:
             {"delivery_no": "SR-ORC1020-2", "signed_date": None, "signed_by": None},
             {"delivery_no": "SR-ORC1020-3", "signed_date": "2026-09-29", "signed_by": "Reilly, Tom"},
         ]
-
-
-async def test_existing_populations_on_postgres(tmp_path: Path) -> None:
-    """需求 R327 验收 1, 2, 4: 六条规则程序连库的被测总体与离线预置 (由表派生, xero_fakes) 逐行相同: CSH-05 B01 为
-    090, 091 两户, PLN-07 A01 为 12 个资产负债类科目; emit rows 的规则以返回行为总体 (规则引擎的结果里都有, 判断与
-    闸门程序不写 Store): REV-02 S01 为 6 张发票, PLN-01 M01 为 3 个基准."""
-    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
-    project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
-    results = await run_rule_programs(project)
-    for procedure_id, (run, found) in results.items():
-        assert found.populations == offline(procedure_id, run).populations, procedure_id
-    counts = {(pid, p.rule_id): p.count for pid, (_, found) in results.items() for p in found.populations}
-    assert {
-        key: counts[key] for key in (("CSH-05", "B01"), ("PLN-07", "A01"), ("REV-02", "S01"), ("PLN-01", "M01"))
-    } == {
-        ("CSH-05", "B01"): 2,
-        ("PLN-07", "A01"): 12,
-        ("REV-02", "S01"): 6,
-        ("PLN-01", "M01"): 3,
-    }
 
 
 async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> None:

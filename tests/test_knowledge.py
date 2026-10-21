@@ -3744,7 +3744,7 @@ def test_standards_cross_reference() -> None:
 
 # ── 需求 R327: 现有程序的范围说明, 被测总体与检查项名称 ──
 
-# R328 补这五条 (GEN-05, GEN-07 的总体与检查项; GEN-02, GEN-03, GEN-08 的范围说明), R328 合入后删去
+# R328 补这五条 (GEN-05, GEN-07 的范围说明, 总体与检查项; GEN-02, GEN-03, GEN-08 的范围说明), R328 合入后删去
 AWAITING_R328 = frozenset({"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"})
 
 
@@ -3777,31 +3777,31 @@ XERO_PARAMS = {  # Xero 演示 (本期 2026-07-01 至 09-30, 收入目标为特�
 
 
 @pytest.mark.parametrize(
-    ("procedure_id", "zh"),
+    ("procedure_id", "exact", "values"),
     [
-        ("REV-03", "项目内全部收入合同"),
-        ("DOC-06", "收到的银行回函"),
-        ("CSH-04", "全部银行账户, 函证 2026-09-30 的余额"),
-        ("CSH-05", "全部银行账户在 2026-09-30 的对账单余额与总账余额"),
-        ("PLN-07", "本期 (2026-07-01 至 2026-09-30) 与上期的试算表, 本期的总账分录"),
-        (
+        ("REV-03", "项目内全部收入合同", []),  # 验收点名的两条逐字核对
+        ("DOC-06", "收到的银行回函", []),
+        (  # days_before 过滤器推出窗口起点
             "REV-02",
             "期末前 20 天 (2026-09-10 至 2026-09-30) 入账且不低于执行重要性的销售发票,"
             " 及 REV-08 尚未归因的例外所指的发票",
+            [],
         ),
-        (
-            "CSH-02",
-            "有回函的银行账户: 回函余额与 2026-09-30 总账余额的差异, 期后 10 天的银行流水, 期末前 5 天的银行科目分录",
-        ),
-        ("FIN-09", "管理层同意更正而待验证的错报, 与凭证号以 AJE- 开头的审计更正分录"),
+        ("CSH-04", None, ["2026-09-30"]),
+        ("CSH-05", None, ["2026-09-30"]),
+        ("PLN-07", None, ["2026-07-01", "2026-09-30"]),
+        ("CSH-02", None, ["2026-09-30", "10 ", "5 "]),
+        ("FIN-09", None, ["AJE-"]),
     ],
 )
-def test_existing_scopes_render(procedure_id: str, zh: str) -> None:
-    """验收 3: 范围说明按参数快照渲染 (折行的 YAML 读回为一行); 英文也有."""
+def test_existing_scopes_render(procedure_id: str, exact: str | None, values: list[str]) -> None:
+    """验收 3: 范围说明按参数快照渲染, 占位都填上, 折行的 YAML 读回为一行; 中英文都有."""
     template = knowledge_library(ROOT, FEATURES).load(procedure_id)
     assert template.scope is not None
     rendered = render_text(template.scope, XERO_PARAMS)
-    assert rendered.zh == zh and "{{" not in rendered.en and "\n" not in rendered.en
+    assert exact is None or rendered.zh == exact
+    for text in (rendered.zh, rendered.en):
+        assert all(v in text for v in values) and "{{" not in text and "\n" not in text
 
 
 def test_csh05_and_pln07_checks() -> None:

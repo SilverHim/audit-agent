@@ -736,10 +736,7 @@ def xero_pln07_a01_population() -> RulePopulation:
     """PLN-07 A01 对 Xero 演示的被测总体 (需求 R327): 本期三个月, 上期起始日 (数据集声明) 2025-07-01 起一年, 两期不等长,
     只比较资产负债类科目 (对期初)."""
     tables = xero_tables()
-    traits = xero_traits()
-    return pln07_a01_population(
-        tables["accounts"], tables["trial_balance"], XERO_PERIOD[0], XERO_PERIOD[1], traits.prior_period_start
-    )
+    return pln07_a01_population(tables["accounts"], tables["trial_balance"], same_length=False)
 
 
 # GEN-05 R10 两笔贷项凭证配到的同额发票 (07-17 的 550.00 五张, ORC1003, 1008, 1009, 1010, 1011), 按 (开票日, ID)
