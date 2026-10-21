@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from backend.agents.ingest import build_contract
 from backend.contracts.llm_outputs import ContractExtraction, ExtractedTerm
-from backend.contracts.models import DocumentRef
+from backend.contracts.models import DocumentRef, TermType
 from backend.contracts.ports import LLMResponse
 from backend.contracts.services import ValidationContext
 from backend.core.config import get_settings
@@ -27,6 +27,7 @@ from tests.tools.cuad_eval import (
     PAGES,
     SUMS,
     GoldContract,
+    aggregate,
     fabricated,
     gold_by_alias,
     load_gold,
@@ -35,6 +36,7 @@ from tests.tools.cuad_eval import (
     normalize_party,
     parse_cuad_date,
     same_party,
+    score_contract,
     split_omitted,
     starts_on,
 )
@@ -233,3 +235,63 @@ def test_gold_aliases_unique() -> None:
     first = GoldContract.model_validate(gold_entry())
     with pytest.raises(ValueError, match="别名重复"):
         gold_by_alias([first, first])
+
+
+# CUAD-01 在 master_clauses.csv 的 Termination For Convenience 第 2 条摘录 (第 6 页 15.B), 作 termination 真值
+CANCEL = (
+    "This Agreement may be canceled at any time without cause, by either party upon ninety (90) days written notice"
+)
+
+
+def mock_contract(alias: str, **changes: Any) -> Any:
+    """离线 mock 输出经 build_contract 得到的合同, 改 changes 中的字段 (条款与证据另经 model_copy 改)."""
+    extraction = ContractExtraction.model_validate(mock_output(alias))
+    return build_contract(alias, document(alias), extraction, "RUN-DOC-04-1").model_copy(update=changes)
+
+
+def test_score_contract_against_gold() -> None:
+    """需求 R249 评分: CUAD-01 的 mock 输出对金标准, 当事方, 签订日, ABN 与金额都对, 条款都不算编造, 四类条款都对上,
+    termination 真值召回 1/1, 页码命中 8/8 (两个证据指针, 文本含真值锚点的 6 条条款; 8 节退货的开头与 5.C 末尾同文,
+    对上其中一处即可). 把 5.D 的页码改到第 4 页时少一处命中; 没有 termination 条款时召回为 0, 文字改写过的终止条款
+    起始页是真值页才算召回; 没通过校验的只记 validated 为假."""
+    gold, pages = load_gold()["CUAD-01"], load_pages("CUAD-01")["pages"]
+    truth = [(CANCEL, locate(pages, CANCEL))]
+    assert truth[0][1] == [6]
+    score = score_contract(gold, mock_contract("CUAD-01"), pages, truth)
+    assert {k: score[k] for k in ("counterparty", "sign_date", "abn_null", "amount", "fabricated")} == {
+        "counterparty": True,
+        "sign_date": True,
+        "abn_null": True,
+        "amount": True,
+        "fabricated": [],
+    }
+    assert score["found"] == {"payment": True, "control_transfer": True, "return_right": True, "rebate": True}
+    assert (score["termination"], score["page_hits"]) == ([1, 1], [8, 8])
+    terms = mock_contract("CUAD-01").terms
+    moved = [t.model_copy(update={"page": 4}) if t.id == "CUAD-01-T5" else t for t in terms]
+    assert score_contract(gold, mock_contract("CUAD-01", terms=moved), pages, truth)["page_hits"] == [7, 8]
+    kept = [t for t in terms if t.term_type is not TermType.termination]
+    assert score_contract(gold, mock_contract("CUAD-01", terms=kept), pages, truth)["termination"] == [0, 1]
+    for page, recalled in ((6, 1), (5, 0)):  # 改写了文字的终止条款: 起始页是真值页才算召回
+        reworded = [t.model_copy(update={"text": "Either party may end it.", "page": page}) for t in terms[-1:]]
+        changed = mock_contract("CUAD-01", terms=[*kept, *reworded])
+        assert score_contract(gold, changed, pages, truth)["termination"] == [recalled, 1]
+    assert score_contract(gold, None, pages, truth) == {"alias": "CUAD-01", "validated": False}
+
+
+def test_aggregate_checks() -> None:
+    """需求 R249 验收 3, 4: 10 份中 9 份通过, ABN 都为 null, 条款都不编造时硬性检查通过; 再少一份通过, 或有一份
+    ABN 不为 null 时报出. 软性: 当事方 9 份对上不告警, 只对上 8 份时告警; REV-03 结论按 (模型, 金标准) 计一致数,
+    1 份一致低于门槛告警."""
+    gold, pages = load_gold()["CUAD-01"], load_pages("CUAD-01")["pages"]
+    good = score_contract(gold, mock_contract("CUAD-01"), pages, [])
+    failed = score_contract(gold, None, pages, [])
+    rev03 = {"CUAD-01": ("accept", "accept"), "CUAD-06": (None, "more_evidence")}
+    passing = aggregate([good] * 9 + [failed], rev03)
+    assert (passing["validated"], passing["hard"], passing["rev03"]) == (9, [], 1)
+    assert [line.split(" ")[0] for line in passing["soft"]] == ["rev03"]
+    assert aggregate([good] * 8 + [failed] * 2, rev03)["hard"] == ["通过四级校验 8/10, 门槛 9"]
+    abn = score_contract(gold, mock_contract("CUAD-01", counterparty_abn="12345678901"), pages, [])
+    assert aggregate([good] * 9 + [abn], rev03)["hard"] == ["counterparty_abn 不为 null: CUAD-01"]
+    other = score_contract(gold, mock_contract("CUAD-01", counterparty="Someone Else"), pages, [])
+    assert "counterparty 8, 门槛 9" in aggregate([good] * 8 + [other] * 2, rev03)["soft"]

@@ -7,6 +7,9 @@
   正式校验).
 - contract_key, csv_rows, pdf_files, excerpts, segment_location (需求 R248): 本地 CUAD 的 CSV 行与 PDF 按文件名对应,
   CSV 摘录 (Python 列表字符串) 的读取与逐页定位; LOCATED_CATEGORIES 为定位统计的 20 类 (cuad.md 第 1 节列出的类别).
+- 评分 (需求 R249, cuad.md 第 3 节): termination_truth (CSV 三类终止摘录, 评测时生成), score_contract (一份 DOC-04
+  输出对金标准: 当事方, 签订日, 金额, ABN, 页码命中, 反编造, 终止召回, 四类条款), aggregate (汇总与硬性, 软性检查);
+  扩展集 (extended.json, 30 份, 只比 CSV 自动真值) 由 csv_truth 从 CSV 生成真值.
 - 金标准 (需求 R247): tests/fixtures/cuad/gold.json, 10 份合同 (GoldContract, load_gold), 开发者逐份读 PDF 起草, 用户
   抽查过的标 "用户抽查"; SHA256SUMS 记这 10 份 PDF 与 master_clauses.csv, CUAD_v1.json 的 sha256.
 - 逐页文本: tests/fixtures/cuad/pages/<别名>.json (PAGE_FIXTURES 三份), 由 pdf_pages 从 data/external/cuad 的 PDF
@@ -25,6 +28,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from collections.abc import Collection
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -32,13 +36,14 @@ from typing import Any, Literal, Self
 from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 from backend.contracts.llm_outputs import ExtractedTerm
-from backend.contracts.models import TermType
+from backend.contracts.models import Contract, ContractTerm, TermType
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "tests" / "fixtures" / "cuad"
 PAGES = FIXTURES / "pages"  # 逐页文本: <别名>.json
 LLM = FIXTURES / "llm"  # 离线 mock 输出: <程序>/<别名>.json (不放 tests/fixtures/llm, 免得弄红 Numbat 的守卫)
 GOLD = FIXTURES / "gold.json"  # 金标准 (需求 R247)
+EXTENDED = FIXTURES / "extended.json"  # 扩展集清单 (需求 R249 验收 6)
 SUMS = FIXTURES / "SHA256SUMS"  # 金标准 PDF 与两个标注文件的 sha256, 路径相对 CUAD_v1/ (sha256sum 的格式)
 PAGE_FIXTURES = ("CUAD-01", "CUAD-03", "CUAD-05")  # 入库逐页文本的合同
 ANNOTATIONS = ("master_clauses.csv", "CUAD_v1.json")  # SHA256SUMS 里 PDF 以外的两个文件
@@ -74,6 +79,22 @@ LOCATED_CATEGORIES = (
     "Liquidated Damages",
 )
 HARPOON = "_Option Agreement"  # Harpoon 那份 PDF 的文件名比 CSV 多出的后缀
+# termination 真值取的三类摘录 (CUAD 没有 "因违约终止" 一类, 召回只按这几类算)
+TERMINATION_CATEGORIES = (
+    "Termination For Convenience",
+    "Notice Period To Terminate Renewal",
+    "Post-Termination Services",
+)
+# 硬性 (不满足即失败) 与软性 (只告警) 的门槛 (需求 R249 验收 3, 4)
+HARD = {"validated": 9, "fabrication_free": 0.95}
+SOFT = {
+    "counterparty": 9,
+    "sign_date": 8,
+    "page_hit": 0.85,
+    "termination_recall": 0.8,
+    "control_transfer": 5,
+    "rev03": 5,
+}
 
 
 def parse_cuad_date(text: str) -> date | None:
@@ -139,7 +160,7 @@ def starts_on(pages: list[str], page: int, key: str) -> bool:
     return 0 <= found < len(text)
 
 
-def fabricated(term: ExtractedTerm, pages: list[str]) -> bool:
+def fabricated(term: ExtractedTerm | ContractTerm, pages: list[str]) -> bool:
     """反编造检查: 条款文本的锚点不从它声明的那一页开始 (页码越界, 文本没有字母数字也算)."""
     return not starts_on(pages, term.page, anchor(term.text))
 
@@ -161,7 +182,7 @@ class GoldContract(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     alias: str
-    review: Literal["开发者起草", "用户抽查"]
+    review: Literal["开发者起草", "用户抽查", "CSV 自动"]  # 最后一种为扩展集由 csv_truth 生成的真值
     csv_filename: str  # master_clauses.csv 的 Filename
     pdf: str  # CUAD_v1/full_contract_pdf 下的相对路径
     category: str  # CUAD 的合同类型 (目录名)
@@ -202,6 +223,173 @@ def gold_by_alias(contracts: list[GoldContract]) -> dict[str, GoldContract]:
 def load_gold() -> dict[str, GoldContract]:
     """入库的金标准, 按别名 (文件中的顺序)."""
     return gold_by_alias(TypeAdapter(list[GoldContract]).validate_json(GOLD.read_bytes()))
+
+
+class ExtendedContract(BaseModel):
+    """扩展集的一份合同: 七类合同中 3-15 页的 94 份去掉金标准与拆成几个文件的, 以固定种子 4595826 抽出 30 份."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    alias: str  # CUAD-Xnn
+    pdf: str  # CUAD_v1/full_contract_pdf 下的相对路径
+    csv_filename: str
+    page_count: int
+
+
+def load_extended() -> list[ExtendedContract]:
+    return TypeAdapter(list[ExtendedContract]).validate_json(EXTENDED.read_bytes())
+
+
+def answer_parties(row: dict[str, str]) -> list[str]:
+    """Parties-Answer 列出的各方 (分号分隔, 去掉括号里的定义名)."""
+    names = [re.sub(r"\s*\(.*$", "", p).strip() for p in row["Parties-Answer"].split(";")]
+    return [n for n in names if normalize_party(n)]
+
+
+def filer_party(row: dict[str, str], file_name: str) -> str:
+    """扩展集的被审计单位: Parties-Answer 中与申报公司 (文件名开头) 最像的一方. 申报公司不一定是卖方, 扩展集只看
+    趋势, 不人工定."""
+    filer = normalize_party(re.split(r"[_,]", file_name)[0])
+    return max(answer_parties(row), key=lambda p: difflib.SequenceMatcher(None, normalize_party(p), filer).ratio())
+
+
+def csv_truth(entry: ExtendedContract, row: dict[str, str], pages: list[str]) -> GoldContract:
+    """扩展集一份合同的真值, 全由 CSV 生成: 被审计单位为 filer_party, 对方为其余各方 (别名同, 页为别名定位到的页),
+    签订日为 Agreement Date 与 Effective Date 中能解析的 (都不能时不计分), 其页为两类摘录定位到的页; 金额, 条款与
+    REV-03 结论不比."""
+    client = filer_party(row, Path(entry.pdf).name)
+    others = [p for p in answer_parties(row) if not same_party(p, client)] or [client]
+    dates = sorted({d for c in ("Agreement Date", "Effective Date") if (d := parse_cuad_date(row[f"{c}-Answer"]))})
+    date_pages = {n for c in ("Agreement Date", "Effective Date") for e in excerpts(row, c) for n in locate(pages, e)}
+    return GoldContract(
+        alias=entry.alias,
+        review="CSV 自动",
+        csv_filename=entry.csv_filename,
+        pdf=entry.pdf,
+        category=Path(entry.pdf).parent.name,
+        page_count=len(pages),
+        client_name=client,
+        counterparty=others[0],
+        counterparty_aliases=others,
+        counterparty_pages=sorted({n for a in others for n in locate(pages, a)}),
+        sign_date=dates or None,
+        sign_date_pages=sorted(date_pages),
+        sign_date_note=None,
+        counterparty_abn=None,
+        amount_cents=None,
+        terms=None,
+        rev03=None,
+        rev03_note=None,
+    )
+
+
+def crosses(pages: list[str], page: int, key: str) -> bool:
+    """从第 page 页开始的锚点是否延续到下一页 (跨页的条款页码允许 ±1)."""
+    return 1 <= page <= len(pages) and key not in alnum(pages[page - 1])
+
+
+def termination_truth(row: dict[str, str], pages: list[str]) -> list[tuple[str, list[int]]]:
+    """termination 的真值 (需求 R247 验收 3, 评测时由 CSV 生成): TERMINATION_CATEGORIES 各条摘录的首段与它定位到的页
+    (找不到为空列表, 只按锚点算召回). 同一段在几类里重复出现的只记一次."""
+    found: dict[str, list[int]] = {}
+    for category in TERMINATION_CATEGORIES:
+        for excerpt in excerpts(row, category):
+            parts = split_omitted(excerpt)
+            if parts and anchor(parts[0]):
+                found.setdefault(parts[0], locate(pages, excerpt))
+    return list(found.items())
+
+
+def covers(term: ContractTerm, key: str, starts: Collection[int]) -> bool:
+    """模型的一条条款是否对上一条真值 (召回, cuad.md 第 3 节): 真值锚点 key 在条款文本里, 或条款起始页在 starts 中
+    (真值所在的页)."""
+    return key in alnum(term.text) or term.page in starts
+
+
+def score_contract(
+    gold: GoldContract, contract: Contract | None, pages: list[str], termination: list[tuple[str, list[int]]]
+) -> dict[str, Any]:
+    """一份 DOC-04 输出对金标准的评分 (cuad.md 第 3 节). contract 为通过四级校验的抽取, 没通过为 None (只记
+    validated 为假, 其余不计). found: 货物合同四类条款各有没有对上金标准 (covers). 页码命中: 当事方与签订日的证据
+    指针在接受页集合内; 文本含真值锚点 (同类的金标准条款, termination 为 CSV 真值) 的每条条款, 页码等于所含某条真值
+    的页 (跨页的允许 ±1; 同一段文字在合同里出现两次时, 对上其中一处即可). termination 为 termination_truth 的结果."""
+    if contract is None:
+        return {"alias": gold.alias, "validated": False}
+    hits: list[bool] = []
+    for pointer in contract.evidence:
+        accepted = {"counterparty": gold.counterparty_pages, "sign_date": gold.sign_date_pages}.get(pointer.locator)
+        if accepted is not None:
+            hits.append(pointer.page in accepted)
+    # 各类的真值: (锚点, 所在页); 金标准条款一页, termination 真值为定位到的页 (找不到的不评页码)
+    truths = {t: [(c.anchor, [c.page]) for c in clauses] for t, clauses in (gold.terms or {}).items()}
+    truths[TermType.termination] = [(anchor(segment), located) for segment, located in termination]
+    for term in contract.terms:
+        quoted = [(key, starts) for key, starts in truths.get(term.term_type, []) if starts and key in alnum(term.text)]
+        if quoted:
+            hits.append(any(abs(term.page - n) <= crosses(pages, n, key) for key, starts in quoted for n in starts))
+
+    def covered(term_type: TermType, key: str, starts: list[int]) -> bool:
+        return any(covers(t, key, starts) for t in contract.terms if t.term_type is term_type)
+
+    found = {t.value: any(covered(t, key, starts) for key, starts in truths[t]) for t in gold.terms or {}}
+    recalled = sum(covered(TermType.termination, key, starts) for key, starts in truths[TermType.termination])
+    sign_date = None if gold.sign_date is None else contract.sign_date in gold.sign_date
+    return {
+        "alias": gold.alias,
+        "validated": True,
+        "counterparty": any(
+            same_party(contract.counterparty, n) for n in [gold.counterparty, *gold.counterparty_aliases]
+        ),
+        "sign_date": sign_date,
+        "abn_null": contract.counterparty_abn is None,
+        "amount": contract.amount_cents == gold.amount_cents,
+        "fabricated": [t.id for t in contract.terms if fabricated(t, pages)],
+        "terms": len(contract.terms),
+        "page_hits": [sum(hits), len(hits)],
+        "termination": [recalled, len(termination)],
+        "found": found,
+    }
+
+
+def ratio(part: int, whole: int) -> float:
+    return part / whole if whole else 1.0
+
+
+def aggregate(scores: list[dict[str, Any]], rev03: dict[str, tuple[str | None, str]]) -> dict[str, Any]:
+    """各份评分的汇总与检查 (需求 R249 验收 3, 4). rev03 为货物合同 REV-03 的 (模型的 proposed_action, 金标准),
+    模型没得出结果的为 None. hard 为硬性检查的不符之处 (须为空), soft 为软性检查低于门槛的 (只告警)."""
+    passed = [s for s in scores if s["validated"]]
+    terms = sum(s["terms"] for s in passed)
+    fabricated = sum(len(s["fabricated"]) for s in passed)
+    page = [sum(s["page_hits"][0] for s in passed), sum(s["page_hits"][1] for s in passed)]
+    termination = [sum(s["termination"][0] for s in passed), sum(s["termination"][1] for s in passed)]
+    dated = [s for s in passed if s["sign_date"] is not None]
+    goods = [s for s in passed if s["found"]]
+    out: dict[str, Any] = {
+        "validated": len(passed),
+        "abn_not_null": [s["alias"] for s in passed if not s["abn_null"]],
+        "fabrication_free": ratio(terms - fabricated, terms),
+        "counterparty": sum(s["counterparty"] for s in passed),
+        "sign_date": [sum(s["sign_date"] for s in dated), len(dated)],
+        "page_hit": ratio(*page),
+        "termination_recall": ratio(*termination),
+        "control_transfer": sum(s["found"].get(TermType.control_transfer.value, False) for s in goods),
+        "rev03": sum(got == want for got, want in rev03.values()),
+        "amount": sum(s["amount"] for s in passed),
+    }
+    hard = []
+    if out["validated"] < HARD["validated"]:
+        hard.append(f"通过四级校验 {out['validated']}/{len(scores)}, 门槛 {HARD['validated']}")
+    if out["abn_not_null"]:
+        hard.append(f"counterparty_abn 不为 null: {', '.join(out['abn_not_null'])}")
+    if out["fabrication_free"] < HARD["fabrication_free"]:
+        hard.append(f"反编造检查通过率 {out['fabrication_free']:.3f}, 门槛 {HARD['fabrication_free']}")
+    soft = []
+    for name, threshold in SOFT.items():
+        value = out[name][0] if name == "sign_date" else out[name]
+        if value < threshold:
+            soft.append(f"{name} {out[name]}, 门槛 {threshold}")
+    return out | {"hard": hard, "soft": soft}
 
 
 def contract_key(name: str) -> str:

@@ -50,6 +50,7 @@ master_clauses.csv 的 Filename 为原文件的文件名部分.
 - `pages/CUAD-01.json`, `pages/CUAD-03.json`, `pages/CUAD-05.json`: 逐页文本.
 - `gold.json`: 金标准 (当事方名称, 条款锚点).
 - `SHA256SUMS`: 原文件名与校验和.
+- `extended.json`: 扩展集 30 份的原文件名 (需求 R249, 真值评测时由 CSV 生成).
 - `llm/DOC-04/CUAD-01.json`, `llm/DOC-04/CUAD-03.json`: DOC-04 的离线 mock 输出. 放在本目录, 不放 tests/fixtures/llm, 免得改动 Numbat 的 fixture 守卫.
 - `tests/test_cuad_eval.py`: 用例里引用的签订日摘录与条款开头.
 - 本 README: 当事方名称与原文件名.
