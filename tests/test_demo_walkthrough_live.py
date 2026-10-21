@@ -17,8 +17,8 @@ FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见),
 软性 (只告警): 判断的建议动作与固定输出 (演示运行副本) 不同的逐条列出. 汇总写 var/eval/demo-live-<UTC>.json.
 
 工作语言 (需求 R343): 环境变量 LIVE_WORKING_LANGUAGE 为 zh 时建中文项目 (缺省 en), 各执行记 zh, 另查判断, 计划叙述与报告
-两段都是中文 (live_walk.language_problem: 有中文, 引号外没有整段英文; 引号里的原文与名称照原文), 报告标题为中文的.
-mock 不另备中文固定输出, 中文项目的执行都记 en (不联网自测的 zh 一例).
+两段都有中文 (live_walk.language_problem, 硬性; 查了的段数须大于 0), 报告标题为中文的; 疑似整段英文与引号内含中文只
+告警 (english_run, translated_quote). mock 不另备中文固定输出, 执行都记 en; 检查本身在不联网自测里把执行改记 zh 来核.
 
 配置经 tests.external.live_llm_settings 取 (环境变量, LLM_ENV_FILE 或仓库 .env), 不写进任何文件; 没配时跳过. 不联网的
 自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有先失败再重跑的几种: 一个判断对象, 计划的两个
@@ -38,10 +38,12 @@ from backend.contracts.models import (
     AuditException,
     ExceptionDisposition,
     OpinionType,
+    ProcedureRun,
     TrailEntry,
     TrailKind,
     WorkingLanguage,
 )
+from backend.orchestration.runner import GraphRunner
 from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import LLM_KEYS, live_llm_settings
 from tests.fakes import api_client
@@ -55,11 +57,14 @@ from tests.live_walk import (
     LiveWalk,
     assert_hard,
     candidate_opinion,
+    chinese_checks,
     decision_table,
     drive,
+    english_run,
     evaluate,
     language_problem,
     review_body,
+    translated_quote,
     warn_soft,
 )
 from tests.test_e2e_mock import real_storage  # 连库装配 (R56 起多个连库用例共用, 搬它不在需求 R353)
@@ -123,7 +128,7 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
     """验收 1-4: 真实大模型下照页面走法从新建项目走到归档 (real_walk, LLM_MODE live); 硬性与软性检查见 assert_hard,
     warn_soft; 闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 留痕的模型为配置的; 汇总写
     var/eval/demo-live-<UTC>.json. LIVE_WORKING_LANGUAGE=zh 时为中文项目 (需求 R343 验收 2, 汇总为 demo-live-zh-*):
-    各执行都记 zh, 中文执行写出的文字都是中文, 报告标题为中文的 (assert_hard)."""
+    各执行都记 zh, 中文执行写出的文字都有中文 (查了的段数大于 0), 报告标题为中文的 (assert_hard)."""
     configured = live_llm_settings()  # 没配时跳过
     language = live_language()
     XERO.ready()
@@ -134,6 +139,7 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
     assert_hard(data)
     assert walk.gates == GATES
     assert (data["language"], list(data["run_languages"])) == (language, [language])  # live 照项目的工作语言记
+    assert (data["chinese_checked"] > 0) == (language == "zh")  # 中文项目确有要查的中文执行, 不空转
     assert calls and all(e.model and e.model.startswith(configured.LLM_MODEL) for e in calls)
 
 
@@ -159,13 +165,12 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
 
 
 async def offline_walk(
-    tmp_path: Path, failing: dict[tuple[str, str], int], language: WorkingLanguage = "en"
-) -> tuple[LiveWalk, dict[str, Any], list[AuditException]]:
+    tmp_path: Path, failing: dict[tuple[str, str], int]
+) -> tuple[LiveWalk, dict[str, Any], list[AuditException], GraphRunner]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
     离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
-    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 项目的工作语言为 language.
-    汇总写在临时目录.
-    返回走法记录, 汇总与走到归档时存储中各例外的最新版本."""
+    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录.
+    返回走法记录, 汇总, 走到归档时存储中各例外的最新版本与 runner (存储照常可读)."""
     XERO.ready()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
     budget = Budget(max_calls=MAX_CALLS)
@@ -173,10 +178,10 @@ async def offline_walk(
     async with demo_offline(llm) as (runner, service, client):
         install_budget(runner.deps, budget)
         unqualified = OpinionType.unqualified.value
-        await drive(client, runner, service, walk, fin=lambda material: unqualified, budget=budget, language=language)
+        await drive(client, runner, service, walk, fin=lambda material: unqualified, budget=budget)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
-    return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException)
+    return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException), runner
 
 
 def stranded(exceptions: list[AuditException]) -> list[str]:
@@ -185,14 +190,20 @@ def stranded(exceptions: list[AuditException]) -> list[str]:
 
 
 @pytest.mark.external
-@pytest.mark.parametrize("language", ["en", "zh"])
-async def test_live_driver_on_mock_outputs(tmp_path: Path, language: WorkingLanguage) -> None:
+async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
     """不联网的自测 (offline_walk): 走到归档, 硬性检查都过, 没有软性差异 (固定输出与自己比), 没有重跑与非 normal 任务;
     闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 FIXED_CALLS 次 (同 R287 的离线走法), 17 个
-    判断对象, 决定同演示决定表. 中文项目同样走通 (需求 R343): mock 的执行都记 en, 报告为英文的, 没有要查的中文执行."""
-    walk, data, exceptions = await offline_walk(tmp_path, {}, language)
+    判断对象, 决定同演示决定表. 执行都记 en, 没有要查的中文执行; 把各执行改记 zh 再查 (chinese_checks, 审核 R343-02):
+    英文的固定输出 (判断, 计划, 报告) 每段都查出 "没有中文"."""
+    walk, data, exceptions, runner = await offline_walk(tmp_path, {})
     assert_hard(data)
-    assert (data["language"], list(data["run_languages"]), data["report_language"]) == (language, ["en"], ["en"])
+    assert (data["language"], list(data["run_languages"]), data["report_language"]) == ("en", ["en"], ["en"])
+    assert data["chinese_checked"] == 0
+    store, eid = runner.deps.output_store, walk.eid or ""
+    as_zh = {r.id: r.model_copy(update={"language": "zh"}) for r in await store.latest(eid, ProcedureRun)}
+    checks = await chinese_checks(runner, eid, as_zh)
+    assert checks["chinese_checked"] > 50 and len(checks["not_in_language"]) == checks["chinese_checked"]
+    assert {line.rsplit(": ", 1)[1] for line in checks["not_in_language"]} == {"没有中文"}
     assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
     assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
@@ -232,7 +243,7 @@ async def test_live_driver_reruns_a_failed_object_once(
     第 2 次执行给出结果, 照常走到归档, 硬性检查都过 (没有缺结论的对象); 汇总记各重跑一次与这几条任务, 每个多调
     MAX_ATTEMPTS 次. 重跑出的判断与固定输出的建议动作相同; 走到归档时没有仍为 unattributed 的例外 (重跑前置的那一版
     由重跑的判断解释, 随复核决定归因)."""
-    _, data, exceptions = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
+    _, data, exceptions, _ = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
     assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in failing}
     assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in failing)
@@ -246,24 +257,65 @@ async def test_live_driver_reruns_a_failed_object_once(
     assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == D04  # 重跑不另建 D04
 
 
+APES110 = "APES 110 Code of Ethics for Professional Accountants (including Independence Standards)"  # 9 个词, 照原文
+
+
 @pytest.mark.parametrize(
-    ("text", "problem"),
+    ("text", "problem", "run"),
     [
-        ("应收账款高估 $75,000, 依 ASA 450 第 5 段累计.", None),
+        ("应收账款高估 $75,000, 依 ASA 450 第 5 段累计.", None, False),
         (
             "合同第 5.1 条写明 “title to and risk in the goods pass to the customer when it signs the delivery note”.",
             None,
+            False,
         ),
-        ("Victoria Property Agency Pty Ltd 为关联方, 科目 Interest income 少记.", None),
-        ("The accrued interest confirmed by the bank was not recorded in the general ledger.", "没有中文"),
-        ("银行确认的利息未入账: the accrued interest confirmed by the bank was not recorded at all.", "整段英文"),
+        (
+            '合同第 5.1 条写明 "title to and risk in the goods pass to the customer when it signs the delivery note".',
+            None,
+            False,
+        ),
+        ("Victoria Property Agency Pty Ltd 为关联方, 科目 Interest income 少记.", None, False),
+        ("结论: one two three four five six seven.", None, False),
+        ("结论: one two three four five six seven eight.", None, True),
+        (f"我们按照 {APES110} 的职业道德要求独立于公司.", None, True),
+        (
+            "ASA 505 第 14 段: The auditor shall investigate exceptions to determine whether or not they are "
+            "indicative of misstatements.",
+            None,
+            True,
+        ),
+        ("The accrued interest confirmed by the bank was not recorded in the general ledger.", "没有中文", True),
     ],
-    ids=["chinese", "quoted_clause", "names", "english", "english_paragraph"],
+    ids=[
+        "chinese",
+        "quoted_clause",
+        "ascii_quotes",
+        "names",
+        "seven_words",
+        "eight_words",
+        "apes110",
+        "standard",
+        "english",
+    ],
 )
-def test_language_problem(text: str, problem: str | None) -> None:
-    """需求 R343 验收 2 的检查自身: 中文正文, 引号里的英文原文, 公司名与科目名都合格; 全英文与引号外的整段英文不合格."""
-    found = language_problem(text)
-    assert (found.split(":")[0] if found else None) == problem
+def test_language_problem(text: str, problem: str | None, run: bool) -> None:
+    """需求 R343 验收 2 的检查自身 (审核 R343-01, 04): 硬性只看有没有中文 (language_problem); 引号外 8 个以上相连的
+    英文词只告警 (english_run). 中文正文, 引号 (全角或半角双引号) 里的英文原文, 公司名与科目名, 7 个词都不告警; 8 个词,
+    照原文写的 APES 110 全名与准则原文告警而不判失败; 全英文判 "没有中文"."""
+    assert (language_problem(text), english_run(text) is not None) == (problem, run)
+
+
+@pytest.mark.parametrize(
+    ("text", "translated"),
+    [
+        ("合同写明 “title passes to the customer on delivery”.", False),
+        ("合同写明 “客户签收送货单时货物所有权转移”.", True),
+    ],
+    ids=["original", "translated"],
+)
+def test_translated_quote(text: str, translated: bool) -> None:
+    """审核 R343-03: 引号里出现中文的引文告警 (Xero 的合同与回函原文都是英文, 多半是把原文译掉了)."""
+    assert (translated_quote(text) is not None) == translated
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:

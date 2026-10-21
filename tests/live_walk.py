@@ -9,7 +9,8 @@
 - evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑, 项目与
   各执行的语言, 中文执行写出的文字中不是中文的); assert_hard 与 warn_soft 为两级检查.
 - 工作语言 (需求 R343): drive 按 language 建项目 (缺省 en). 中文执行 (ProcedureRun.language zh) 写出的判断, 计划叙述与
-  报告两段须是中文 (language_problem); mock 下执行都记 en, 这一项为空.
+  报告两段须有中文 (language_problem, 硬性); 疑似整段英文与引号内含中文只告警 (english_run, translated_quote); mock
+  下执行都记 en, 这几项为空.
 - 用量: FIXED_CALLS (固定输出走一遍) 加 LIVE_MARGIN 为上限 MAX_CALLS.
 """
 
@@ -304,33 +305,46 @@ def fixture_action(procedure_id: str, subject_id: str) -> str | None:
 
 CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")  # 中日韩统一表意文字
 QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|「[^」]*」|『[^』]*』|‘[^’]*’")  # 引号里的原文
-# 整段英文正文: 引号外 8 个以上相连的英文词 (词间只有空白与常见标点); 公司名, 科目名等名称都短于此
+# 引号外 8 个以上相连的英文词 (词间只有空白与常见标点): 疑似整段英文正文, 只告警 (照原文保留的名称与准则原文
+# 也可能这样长)
 ENGLISH_RUN = re.compile(r"[A-Za-z][A-Za-z'’]*(?:[\s,;:()&/-]+[A-Za-z][A-Za-z'’]*){7,}")
 
 
 def language_problem(text: str) -> str | None:
-    """中文执行写出的一段文字不合中文工作语言之处 (需求 R343 验收 2): 没有中日韩字符, 或引号外有整段英文 (ENGLISH_RUN).
-    引号里的原文 (合同条款, 准则原文) 与名称 (公司名, 科目名) 照原文, 不算. 合格为 None."""
-    if not CJK.search(text):
-        return "没有中文"
+    """中文执行写出的一段文字的硬性问题 (需求 R343 验收 2, 审核 R343-01): 没有中日韩字符为 "没有中文", 合格为 None.
+    照原文保留的英文名称 (如 APES 110 的全名) 与准则原文不论多长都不算; 整段英文与引文被译另见 english_run,
+    translated_quote (只告警)."""
+    return None if CJK.search(text) else "没有中文"
+
+
+def english_run(text: str) -> str | None:
+    """引号外疑似整段英文正文的一段 (ENGLISH_RUN, 前 60 字), 没有为 None; 只告警. 已知漏报: 英文正文被数字, 金额或
+    句点切成不足 8 个词的几段时不报 (如 "was overstated by $75,000 because ...")."""
     found = ENGLISH_RUN.search(QUOTED.sub("", text))
-    return f"整段英文: {found.group(0)[:60]}" if found else None
+    return found.group(0)[:60] if found else None
 
 
-def chinese_problems(
+def translated_quote(text: str) -> str | None:
+    """引号里含中日韩字符的第一段引文 (前 60 字), 没有为 None; 只告警: Xero 演示的合同与回函原文都是英文, 引号里出现中文
+    多半是把原文译掉了 (R340 要求引文照原文)."""
+    found = next((q.group(0) for q in QUOTED.finditer(text) if CJK.search(q.group(0))), None)
+    return found[:60] if found else None
+
+
+def chinese_texts(
     judged: dict[tuple[str, str], Judgment],
     plans: Sequence[AuditPlan],
     reports: Sequence[AuditReportVersion],
     runs: dict[str, ProcedureRun],
-) -> list[str]:
-    """中文执行 (language zh) 写出的文字里不是中文的 (language_problem), 每条 "来源 字段: 原因": 模型的判断 (结论,
-    推理各步, 反方论证), 计划 (叙述各段, 各程序的性质时间与范围, 质量复核与专家的说明), 报告 (意见段与基础段)."""
+) -> list[tuple[str, str, str]]:
+    """中文执行 (language zh) 写出的各段文字 (来源, 字段, 文字): 模型的判断 (结论, 推理各步, 反方论证), 计划 (叙述各段,
+    各程序的性质时间与范围, 质量复核与专家的说明), 报告 (意见段与基础段)."""
 
     def in_chinese(run_id: str | None) -> bool:
         run = runs.get(run_id or "")
         return run is not None and run.language == "zh"
 
-    texts: list[tuple[str, str, str]] = []  # (来源, 字段, 文字)
+    texts: list[tuple[str, str, str]] = []
     for j in (j for j in judged.values() if in_chinese(j.run_id)):
         texts += [(j.id, "conclusion", j.conclusion), (j.id, "counter_argument", j.counter_argument)]
         texts += [(j.id, f"reasoning_chain[{n}]", step.text) for n, step in enumerate(j.reasoning_chain)]
@@ -343,13 +357,33 @@ def chinese_problems(
         texts += [
             (report.id, s.value, report.sections[s]) for s in (ReportSection.opinion, ReportSection.basis_for_opinion)
         ]
-    return [f"{source} {name}: {problem}" for source, name, text in texts if (problem := language_problem(text))]
+    return texts
+
+
+async def chinese_checks(runner: GraphRunner, eid: str, runs: dict[str, ProcedureRun]) -> dict[str, Any]:
+    """中文执行写出的文字的检查 (需求 R343): chinese_checked 为查了多少段 (chinese_texts), not_in_language 为硬性问题
+    (language_problem), english_runs 与 translated_quotes 为告警 (english_run, translated_quote); 每条 "来源 字段:
+    原因". runs 为执行 ID → 执行记录 (取其 language)."""
+    store = runner.deps.output_store
+    judged = latest_model_judgments(await store.latest(eid, Judgment))
+    signed = [r for r in await store.latest(eid, AuditReportVersion) if r.status is ReportStatus.signed]
+    texts = chinese_texts(judged, await store.latest(eid, AuditPlan), signed, runs)
+
+    def listed(check: Callable[[str], str | None]) -> list[str]:
+        return [f"{source} {name}: {found}" for source, name, text in texts if (found := check(text))]
+
+    return {
+        "chinese_checked": len(texts),
+        "not_in_language": listed(language_problem),
+        "english_runs": listed(english_run),
+        "translated_quotes": listed(translated_quote),
+    }
 
 
 async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[str, Any]:
     """汇总 (需求 R311 验收 4) 与两级检查的材料: 用量 (调用与 token 取预算, 尝试与失败级别取留痕), 各判断的建议动作与
     固定输出的对照, 签字报告的意见类型与语言, 解析不了的证据指针, 缺模型结论的判断对象, 重跑与非 normal 的任务; 项目
-    的工作语言, 各执行的语言 (语言 → 次数), 中文执行写出的文字里不是中文的 (chinese_problems, 需求 R343)."""
+    的工作语言, 各执行的语言 (语言 → 次数), 中文执行写出的文字的检查 (chinese_checks, 需求 R343)."""
     deps, eid = runner.deps, walk.eid
     out: dict[str, Any] = {"engagement_id": eid, "gates": walk.gates, "fin_disposition": walk.fin}
     out["candidate_opinion"] = walk.candidate
@@ -385,7 +419,7 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
     out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
     plans = await store.latest(eid, AuditPlan)
     out["plans"] = sorted([p.id, p.status.value] for p in plans)
-    out["not_in_language"] = chinese_problems(judged, plans, signed, runs)
+    out |= await chinese_checks(runner, eid, runs)
     out["entered_p2_by"] = entered_p2_by(await deps.trail.list(eid, TrailKind.transition, limit=10_000))
     return out
 
@@ -427,9 +461,14 @@ def assert_hard(data: dict[str, Any]) -> None:
 
 
 def warn_soft(data: dict[str, Any]) -> None:
-    """软性检查 (需求 R311 验收 3): 判断的建议动作与固定输出不同的逐条告警 (如 BA-091, XJ-499 是否为 misstatement)."""
+    """软性检查 (需求 R311 验收 3): 判断的建议动作与固定输出不同的逐条告警 (如 BA-091, XJ-499 是否为 misstatement);
+    中文执行写出的文字里疑似整段英文正文与引号内含中文 (疑似把原文译掉) 的段落逐条告警 (需求 R343, 审核 R343-01, 03)."""
     for row in data["differences"]:
         warnings.warn(
             f"{row['procedure_id']} {row['subject_id']}: 建议动作 {row['proposed_action']}, 固定输出 {row['fixture']}",
             stacklevel=1,
         )
+    for line in data["english_runs"]:
+        warnings.warn(f"疑似整段英文: {line}", stacklevel=1)
+    for line in data["translated_quotes"]:
+        warnings.warn(f"引号内含中文 (疑似原文被译): {line}", stacklevel=1)
