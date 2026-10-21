@@ -70,6 +70,7 @@ def test_basis_inappropriate_allows_nothing() -> None:
     assert (found.candidate, found.allowed) == (OpinionType.adverse, ())
     assert "本版不支持持续经营假设不恰当 (否定意见)" in found.reasons[-1]
     assert "ASA 570 para 21" in found.reasons[-1]
+    assert found.reasons[-1].endswith("较严, 候选改为 adverse, 没有可选的意见类型")
 
 
 @pytest.mark.parametrize("going_concern", [None, *GoingConcernOutcome])
@@ -84,10 +85,9 @@ def test_adverse_and_disclaimer_never_allowed(total: int, going_concern: GoingCo
     assert options(total, NUMBAT_MATERIALITY, going_concern) == found
 
 
-def test_outcome_read_back_as_text_is_matched_by_value() -> None:
-    """持续经营结论以字符串读回 (检查点退化, CLAUDE.md 的序列化白名单说明) 时按取值匹配, 不按金额路径放行; 不是
-    结论取值的输入报错 (assert_never), 不静默放行."""
-    found = options(0, XERO_MATERIALITY, "material_uncertainty_not_disclosed")  # type: ignore[arg-type]
-    assert found.allowed == (QUALIFIED,)
+@pytest.mark.parametrize("going_concern", ["no_such_outcome", OpinionType.qualified], ids=["unknown", "opinion_type"])
+def test_input_that_is_not_an_outcome_fails_closed(going_concern: object) -> None:
+    """不是持续经营结论取值的输入 (未知的值, 误传的 OpinionType) 报错 (assert_never), 不按金额路径放行. 枚举由读取
+    边界还原, 本函数不承诺接受字符串 (审核 R184-10)."""
     with pytest.raises(AssertionError):
-        options(0, XERO_MATERIALITY, "no_such_outcome")  # type: ignore[arg-type]
+        options(0, XERO_MATERIALITY, going_concern)  # type: ignore[arg-type]

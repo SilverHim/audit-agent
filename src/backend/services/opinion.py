@@ -5,7 +5,8 @@ A9 只走金额路径 (FIN-04 早于 gate_fin 的 FIN-02 步, 拿不到已批准
 金额与持续经营的综合候选由 GC-09 (需求 R187) 做, FIN-01 校验接上已批准的 FIN-02 结论由 GC-10 (需求 R188) 做.
 规格书第 10 节 P3 (五条独立路径, 金额与持续经营取较严一方), 12.5 UC-06 步骤 6. 候选可由审计师推翻 (ASA 450 第 11 段,
 需求 R24 验收 3), 可选范围之外的意见类型 FIN-01 报 INVALID_VALUE. 否定意见与无法表示意见本版都不可选 (没有这两种报告
-模板); 签字前提的检查结果 (CHECK-FIN-18) 与无法表示意见的分支由签字前提段 (SG-16) 加第三个参数. 纯函数, 不读 IO.
+模板); 签字前提的检查结果 (CHECK-FIN-18) 与无法表示意见的分支由签字前提段 (SG-16) 另加关键字参数 check_fin18.
+纯函数, 不读 IO.
 """
 
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ def allowed_opinions(
     total_cents: int,
     materiality_cents: int,
     going_concern: GoingConcernOutcome | None,
-    # 第三项 (CHECK-FIN-18 签字前提检查的结果, 含无法表示意见的分支) 由签字前提段 SG-16 加, 本条不加
+    # 签字前提检查 CHECK-FIN-18 的结果 (含无法表示意见的分支) 由签字前提段 SG-16 另加关键字参数 check_fin18, 本条不加
 ) -> OpinionOptions:
     """按未更正错报合计 total_cents, 整体重要性 materiality_cents 与持续经营结论 (FIN-02; 没有结论时为 None) 给出候选
     与可选的意见类型.
