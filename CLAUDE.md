@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ELEC5620 Group 16：基于大语言模型的多智能体审计支持系统，按 P0 承接 → P4 报告推进澳洲法定审计。后端 FastAPI + LangGraph + PostgreSQL（`src/backend/`），前端 React 19 + Vite（`src/frontend/`）。
 
-当前是 Demo 版：程序库只放 17 条程序（README 写的 161 条是完整设计），处于里程碑 M2（骨架跑通）。未实现的部分用 `NotImplementedError` 占位，`grep -rn NotImplementedError src/backend` 可看全貌。
+当前是 Demo 版：程序库放 29 条程序（README 写的 161 条是完整设计），演示配置（.env.example 的 FEATURES）启用其中 21 条，其余属本版不开的功能（Demo需求文档第 6 节）；处于第 1-3 级的收尾验证（Demo需求文档第 9 节）。未实现的部分用 `NotImplementedError` 占位，`grep -rn NotImplementedError src/backend` 可看全貌。
 
 ## 权威文档
 
