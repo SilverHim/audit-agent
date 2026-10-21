@@ -16,20 +16,32 @@ FIN-01 按汇总表的候选意见决定 (错报闭环接入前为保留意见),
 指针经存储解析通过; 签字的报告意见类型与 FIN-01 决定一致, 意见段标题与之相符.
 软性 (只告警): 判断的建议动作与固定输出 (演示运行副本) 不同的逐条列出. 汇总写 var/eval/demo-live-<UTC>.json.
 
+工作语言 (需求 R343): 环境变量 LIVE_WORKING_LANGUAGE 为 zh 时建中文项目 (缺省 en), 各执行记 zh, 另查判断, 计划叙述与报告
+两段都是中文 (live_walk.language_problem: 有中文, 引号外没有整段英文; 引号里的原文与名称照原文), 报告标题为中文的.
+mock 不另备中文固定输出, 中文项目的执行都记 en (不联网自测的 zh 一例).
+
 配置经 tests.external.live_llm_settings 取 (环境变量, LLM_ENV_FILE 或仓库 .env), 不写进任何文件; 没配时跳过. 不联网的
 自测用同一驱动与检查走演示运行副本的固定输出: 离线假存储一遍 (另有先失败再重跑的几种: 一个判断对象, 计划的两个
 修订, 报告的两稿; 与带规则例外的对象失败一种), 连库一遍 (同真实模型用例的路径, 只把大模型换成组装根的 mock);
 决定的请求体另有合成数据的单元用例.
 """
 
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast, get_args
 
 import pytest
 
 from backend.adapters.llm import SwitchableLLMClient
 from backend.api.schemas import ReviewRecordIn
-from backend.contracts.models import AuditException, ExceptionDisposition, OpinionType, TrailEntry, TrailKind
+from backend.contracts.models import (
+    AuditException,
+    ExceptionDisposition,
+    OpinionType,
+    TrailEntry,
+    TrailKind,
+    WorkingLanguage,
+)
 from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.external import LLM_KEYS, live_llm_settings
 from tests.fakes import api_client
@@ -46,6 +58,7 @@ from tests.live_walk import (
     decision_table,
     drive,
     evaluate,
+    language_problem,
     review_body,
     warn_soft,
 )
@@ -58,17 +71,26 @@ from tests.xero_harness import FlakyLLM, LayeredMockLLMClient
 GATES = ["ACC-01", "PLN-01/03", "PLN-15", "PLN-15", "FIN-01", "RPT-01", "RPT-01"]  # 依次决定的闸门
 
 
+def live_language() -> WorkingLanguage:
+    """真实模型用例的项目工作语言: 环境变量 LIVE_WORKING_LANGUAGE (zh 或 en), 缺省 en; 别的值报错."""
+    value = os.environ.get("LIVE_WORKING_LANGUAGE", "en")
+    if value not in get_args(WorkingLanguage):
+        raise ValueError(f"LIVE_WORKING_LANGUAGE 须为 zh 或 en: {value!r}")
+    return cast(WorkingLanguage, value)
+
+
 async def real_walk(
     tmp_path: Path,
     budget: Budget,
     name: str,
     fin: FinPolicy = candidate_opinion,
     root: Path = EVAL_DIR,
+    language: WorkingLanguage = "en",
     **settings: Any,
 ) -> tuple[LiveWalk, dict[str, Any], list[TrailEntry]]:
     """组装根的真实依赖 (真实 Postgres 存储与检查点, 规则 SQL, 数据集载入, 登记与函证 mock; 功能集为演示配置, 大模型按
-    settings) 上照页面走法走到归档, 外面包上预算; 汇总写 root (缺省 var/eval) 下的 <name>-<UTC>.json (中途失败也写出
-    已走到的部分).
+    settings) 上照页面走法走到归档, 项目的工作语言为 language, 外面包上预算; 汇总写 root (缺省 var/eval) 下的
+    <name>-<UTC>.json (中途失败也写出已走到的部分).
     返回走法记录, 汇总与该项目的 llm_call 留痕. 真实模型的用例与连库自测共用."""
     async with real_storage(
         tmp_path,
@@ -85,7 +107,7 @@ async def real_walk(
         walk = LiveWalk()
         try:
             async with api_client(runner, run.owner, deps=run.deps, xero=xero_link(run.deps, service)) as client:
-                await drive(client, runner, service, walk, fin=fin, budget=budget)
+                await drive(client, runner, service, walk, fin=fin, budget=budget, language=language)
         finally:
             data = await evaluate(runner, walk, budget)
             budget.reported = True
@@ -100,14 +122,18 @@ async def real_walk(
 async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> None:
     """验收 1-4: 真实大模型下照页面走法从新建项目走到归档 (real_walk, LLM_MODE live); 硬性与软性检查见 assert_hard,
     warn_soft; 闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 留痕的模型为配置的; 汇总写
-    var/eval/demo-live-<UTC>.json."""
+    var/eval/demo-live-<UTC>.json. LIVE_WORKING_LANGUAGE=zh 时为中文项目 (需求 R343 验收 2, 汇总为 demo-live-zh-*):
+    各执行都记 zh, 中文执行写出的文字都是中文, 报告标题为中文的 (assert_hard)."""
     configured = live_llm_settings()  # 没配时跳过
+    language = live_language()
     XERO.ready()
     llm = {key: getattr(configured, key) for key in LLM_KEYS}
-    walk, data, calls = await real_walk(tmp_path, live_budget, "demo-live", LLM_MODE="live", **llm)
+    name = "demo-live" if language == "en" else f"demo-live-{language}"
+    walk, data, calls = await real_walk(tmp_path, live_budget, name, language=language, LLM_MODE="live", **llm)
     warn_soft(data)
     assert_hard(data)
     assert walk.gates == GATES
+    assert (data["language"], list(data["run_languages"])) == (language, [language])  # live 照项目的工作语言记
     assert calls and all(e.model and e.model.startswith(configured.LLM_MODEL) for e in calls)
 
 
@@ -133,11 +159,12 @@ async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
 
 
 async def offline_walk(
-    tmp_path: Path, failing: dict[tuple[str, str], int]
+    tmp_path: Path, failing: dict[tuple[str, str], int], language: WorkingLanguage = "en"
 ) -> tuple[LiveWalk, dict[str, Any], list[AuditException]]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
     离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
-    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录.
+    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 项目的工作语言为 language.
+    汇总写在临时目录.
     返回走法记录, 汇总与走到归档时存储中各例外的最新版本."""
     XERO.ready()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
@@ -145,7 +172,8 @@ async def offline_walk(
     walk = LiveWalk()
     async with demo_offline(llm) as (runner, service, client):
         install_budget(runner.deps, budget)
-        await drive(client, runner, service, walk, fin=lambda material: OpinionType.unqualified.value, budget=budget)
+        unqualified = OpinionType.unqualified.value
+        await drive(client, runner, service, walk, fin=lambda material: unqualified, budget=budget, language=language)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
     return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException)
@@ -157,12 +185,14 @@ def stranded(exceptions: list[AuditException]) -> list[str]:
 
 
 @pytest.mark.external
-async def test_live_driver_on_mock_outputs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("language", ["en", "zh"])
+async def test_live_driver_on_mock_outputs(tmp_path: Path, language: WorkingLanguage) -> None:
     """不联网的自测 (offline_walk): 走到归档, 硬性检查都过, 没有软性差异 (固定输出与自己比), 没有重跑与非 normal 任务;
     闸门依次为 ACC-01, PLN-01/03, PLN-15 两次, FIN-01, RPT-01 两次; 调用 FIXED_CALLS 次 (同 R287 的离线走法), 17 个
-    判断对象, 决定同演示决定表."""
-    walk, data, exceptions = await offline_walk(tmp_path, {})
+    判断对象, 决定同演示决定表. 中文项目同样走通 (需求 R343): mock 的执行都记 en, 报告为英文的, 没有要查的中文执行."""
+    walk, data, exceptions = await offline_walk(tmp_path, {}, language)
     assert_hard(data)
+    assert (data["language"], list(data["run_languages"]), data["report_language"]) == (language, ["en"], ["en"])
     assert stranded(exceptions) == []
     assert (data["differences"], data["reruns"], data["troubled_tasks"]) == ([], {}, [])
     assert (walk.gates, walk.candidate, data["usage"]["calls"]) == (GATES, "qualified", FIXED_CALLS)
@@ -214,6 +244,26 @@ async def test_live_driver_reruns_a_failed_object_once(
         assert rows[key]["same"], rows[key]
     assert stranded(exceptions) == []
     assert sorted(x.id for x in exceptions if x.procedure_id == "CSH-02") == D04  # 重跑不另建 D04
+
+
+@pytest.mark.parametrize(
+    ("text", "problem"),
+    [
+        ("应收账款高估 $75,000, 依 ASA 450 第 5 段累计.", None),
+        (
+            "合同第 5.1 条写明 “title to and risk in the goods pass to the customer when it signs the delivery note”.",
+            None,
+        ),
+        ("Victoria Property Agency Pty Ltd 为关联方, 科目 Interest income 少记.", None),
+        ("The accrued interest confirmed by the bank was not recorded in the general ledger.", "没有中文"),
+        ("银行确认的利息未入账: the accrued interest confirmed by the bank was not recorded at all.", "整段英文"),
+    ],
+    ids=["chinese", "quoted_clause", "names", "english", "english_paragraph"],
+)
+def test_language_problem(text: str, problem: str | None) -> None:
+    """需求 R343 验收 2 的检查自身: 中文正文, 引号里的英文原文, 公司名与科目名都合格; 全英文与引号外的整段英文不合格."""
+    found = language_problem(text)
+    assert (found.split(":")[0] if found else None) == problem
 
 
 def view_of(kind: str, subject: str, **extra: Any) -> dict[str, Any]:

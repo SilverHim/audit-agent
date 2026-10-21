@@ -6,12 +6,15 @@
   报告整条失败按修订计 (REVISED_BY); unattributed 重跑后仍失败才按决定表推翻或认定错报. 一轮失败算一组: 对一条
   rerun 时同程序其余待决的可重跑任务随之重跑, 一并计数.
 - drive: 经 HTTP 照页面的做法按状态从新建项目走到归档, 进度记在 LiveWalk.
-- evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑);
-  assert_hard 与 warn_soft 为两级检查.
+- evaluate: 汇总 (用量, 各判断的建议动作与固定输出的对照, 报告意见, 解析不了的指针, 缺模型结论的对象, 重跑, 项目与
+  各执行的语言, 中文执行写出的文字中不是中文的); assert_hard 与 warn_soft 为两级检查.
+- 工作语言 (需求 R343): drive 按 language 建项目 (缺省 en). 中文执行 (ProcedureRun.language zh) 写出的判断, 计划叙述与
+  报告两段须是中文 (language_problem); mock 下执行都记 en, 这一项为空.
 - 用量: FIXED_CALLS (固定输出走一遍) 加 LIVE_MARGIN 为上限 MAX_CALLS.
 """
 
 import json
+import re
 import warnings
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -27,8 +30,11 @@ from backend.contracts.models import (
     Confirmation,
     Judgment,
     OpinionType,
+    ProcedureRun,
+    ReportSection,
     ReportStatus,
     TrailKind,
+    WorkingLanguage,
 )
 from backend.core.config import get_settings
 from backend.orchestration.runner import GraphRunner
@@ -213,16 +219,16 @@ async def drive(
     *,
     fin: FinPolicy = candidate_opinion,
     budget: Budget | None = None,
+    language: WorkingLanguage = "en",
 ) -> LiveWalk:
-    """从新建项目走到归档 (见模块说明), 进度记在 walk. 每步之后等后台作业与图都停下, 后台始终没有错误; 每次提交前查
-    预算 (已超限即失败, 不再提交重跑)."""
+    """从新建项目走到归档 (见模块说明), 项目的工作语言为 language, 进度记在 walk. 每步之后等后台作业与图都停下, 后台
+    始终没有错误; 每次提交前查预算 (已超限即失败, 不再提交重跑)."""
     walk.owner = (await client.get(f"{API}/users/me")).json()["id"]
     table = decision_table(walk.owner)
     clients = (await client.get(f"{API}/clients")).json()
     [dataset] = [d for d in clients[0]["datasets"] if d["default"]]
-    created = await client.post(
-        f"{API}/engagements", json={k: dataset[k] for k in ("dataset", "period_start", "period_end")}
-    )
+    body = {k: dataset[k] for k in ("dataset", "period_start", "period_end")}
+    created = await client.post(f"{API}/engagements", json={**body, "working_language": language})
     assert created.status_code == 201, created.text
     eid = walk.eid = created.json()["engagement"]["id"]
     base = f"{API}/engagements/{eid}"
@@ -296,9 +302,54 @@ def fixture_action(procedure_id: str, subject_id: str) -> str | None:
     return json.loads(path.read_text(encoding="utf-8"))["proposed_action"] if path.is_file() else None
 
 
+CJK = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")  # 中日韩统一表意文字
+QUOTED = re.compile(r"“[^”]*”|\"[^\"]*\"|「[^」]*」|『[^』]*』|‘[^’]*’")  # 引号里的原文
+# 整段英文正文: 引号外 8 个以上相连的英文词 (词间只有空白与常见标点); 公司名, 科目名等名称都短于此
+ENGLISH_RUN = re.compile(r"[A-Za-z][A-Za-z'’]*(?:[\s,;:()&/-]+[A-Za-z][A-Za-z'’]*){7,}")
+
+
+def language_problem(text: str) -> str | None:
+    """中文执行写出的一段文字不合中文工作语言之处 (需求 R343 验收 2): 没有中日韩字符, 或引号外有整段英文 (ENGLISH_RUN).
+    引号里的原文 (合同条款, 准则原文) 与名称 (公司名, 科目名) 照原文, 不算. 合格为 None."""
+    if not CJK.search(text):
+        return "没有中文"
+    found = ENGLISH_RUN.search(QUOTED.sub("", text))
+    return f"整段英文: {found.group(0)[:60]}" if found else None
+
+
+def chinese_problems(
+    judged: dict[tuple[str, str], Judgment],
+    plans: Sequence[AuditPlan],
+    reports: Sequence[AuditReportVersion],
+    runs: dict[str, ProcedureRun],
+) -> list[str]:
+    """中文执行 (language zh) 写出的文字里不是中文的 (language_problem), 每条 "来源 字段: 原因": 模型的判断 (结论,
+    推理各步, 反方论证), 计划 (叙述各段, 各程序的性质时间与范围, 质量复核与专家的说明), 报告 (意见段与基础段)."""
+
+    def in_chinese(run_id: str | None) -> bool:
+        run = runs.get(run_id or "")
+        return run is not None and run.language == "zh"
+
+    texts: list[tuple[str, str, str]] = []  # (来源, 字段, 文字)
+    for j in (j for j in judged.values() if in_chinese(j.run_id)):
+        texts += [(j.id, "conclusion", j.conclusion), (j.id, "counter_argument", j.counter_argument)]
+        texts += [(j.id, f"reasoning_chain[{n}]", step.text) for n, step in enumerate(j.reasoning_chain)]
+    for plan in (p for p in plans if in_chinese(p.run_id)):
+        texts += [(plan.id, f"narrative.{s.section}", s.text) for s in plan.narrative]
+        texts += [(plan.id, f"procedure_notes.{n.procedure_id}", n.nature_timing_extent) for n in plan.procedure_notes]
+        texts += [(plan.id, "eqr_recommendation", plan.eqr_recommendation.basis)]
+        texts += [(plan.id, "expert_assessment", plan.expert_assessment)]
+    for report in (r for r in reports if in_chinese(r.run_id)):
+        texts += [
+            (report.id, s.value, report.sections[s]) for s in (ReportSection.opinion, ReportSection.basis_for_opinion)
+        ]
+    return [f"{source} {name}: {problem}" for source, name, text in texts if (problem := language_problem(text))]
+
+
 async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[str, Any]:
     """汇总 (需求 R311 验收 4) 与两级检查的材料: 用量 (调用与 token 取预算, 尝试与失败级别取留痕), 各判断的建议动作与
-    固定输出的对照, 签字报告的意见类型, 解析不了的证据指针, 缺模型结论的判断对象, 重跑与非 normal 的任务."""
+    固定输出的对照, 签字报告的意见类型与语言, 解析不了的证据指针, 缺模型结论的判断对象, 重跑与非 normal 的任务; 项目
+    的工作语言, 各执行的语言 (语言 → 次数), 中文执行写出的文字里不是中文的 (chinese_problems, 需求 R343)."""
     deps, eid = runner.deps, walk.eid
     out: dict[str, Any] = {"engagement_id": eid, "gates": walk.gates, "fin_disposition": walk.fin}
     out["candidate_opinion"] = walk.candidate
@@ -320,13 +371,21 @@ async def evaluate(runner: GraphRunner, walk: LiveWalk, budget: Budget) -> dict[
     out["differences"] = [r for r in rows if r["fixture"] is not None and not r["same"]]
     expected_subjects = {(pid, p.stem) for pid in JUDGING for p in (XERO.runtime / pid).glob("*.json")}
     out["missing_subjects"] = [f"{pid} {subject}" for pid, subject in sorted(expected_subjects - set(judged))]
+    runs = {r.id: r for r in await store.latest(eid, ProcedureRun)}
+    engagement = await deps.engagement_store.get(eid)
+    out["language"] = engagement.working_language if engagement is not None else None
+    out["run_languages"] = dict(sorted(Counter(r.language for r in runs.values()).items()))
     signed = [r for r in await store.latest(eid, AuditReportVersion) if r.status is ReportStatus.signed]
     out["report_opinion"] = [r.opinion_type.value for r in signed]
+    # 报告的语言为起草它的执行记录的 (需求 R341), 没有 run_id 的旧稿为 en
+    out["report_language"] = [runs[r.run_id].language if r.run_id in runs else "en" for r in signed]
     out["report_heading"] = [r.sections["opinion"].strip().splitlines()[:1] for r in signed]
     out["contracts"] = len(await deps.financial_store.contracts(eid))
     out["confirmations"] = len(await store.latest(eid, Confirmation))
     out["pointers"], out["unresolved_pointers"] = await unresolved_pointers(runner, eid)
-    out["plans"] = sorted([p.id, p.status.value] for p in await store.latest(eid, AuditPlan))
+    plans = await store.latest(eid, AuditPlan)
+    out["plans"] = sorted([p.id, p.status.value] for p in plans)
+    out["not_in_language"] = chinese_problems(judged, plans, signed, runs)
     out["entered_p2_by"] = entered_p2_by(await deps.trail.list(eid, TrailKind.transition, limit=10_000))
     return out
 
@@ -349,16 +408,18 @@ async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[
 
 def assert_hard(data: dict[str, Any]) -> None:
     """硬性检查 (需求 R311 验收 2): 走到归档 (调用方已由驱动保证, run_error 始终为空); 每个判断对象有模型结论, 重跑至多
-    一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见的标题; 合同 3 份
-    与函证 2 户都已抽取; 总体审计计划两个修订都出了 (每个修订一次通过, 或 failed 后重跑一次), PLAN-1 已取代, PLAN-2
-    批准后由它推进到执行阶段 (需求 R317). 软性的差异只告警 (warn_soft)."""
+    一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见在报告语言
+    (起草它的执行记录的语言) 下的标题; 合同 3 份与函证 2 户都已抽取; 总体审计计划两个修订都出了 (每个修订一次通过, 或
+    failed 后重跑一次), PLAN-1 已取代, PLAN-2 批准后由它推进到执行阶段 (需求 R317); 中文执行写出的文字都是中文
+    (需求 R343, mock 下没有中文执行). 软性的差异只告警 (warn_soft)."""
     assert data["missing_subjects"] == [], data["missing_subjects"]
     assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
     assert data["pointers"] > 30
-    # 走查的项目是英文工作语言 (中文项目的真实模型走查归 R343), 标题取 report.yaml 的英文一份
-    headings = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT).report_headings("en")
-    heading = headings[OpinionType(data["fin_disposition"])][0]
-    assert (data["report_opinion"], data["report_heading"]) == ([data["fin_disposition"]], [[heading]])
+    library = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
+    opinion = OpinionType(data["fin_disposition"])
+    headings = [[library.report_headings(language)[opinion][0]] for language in data["report_language"]]
+    assert (data["report_opinion"], data["report_heading"]) == ([data["fin_disposition"]], headings)
+    assert data["not_in_language"] == [], data["not_in_language"]
     assert (data["contracts"], data["confirmations"]) == (3, 2)
     assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
     assert data["plans"] == [["PLAN-1", "superseded"], ["PLAN-2", "approved"]], data["plans"]

@@ -14,7 +14,8 @@ R146, FIN-01 仍按 R119 的决定); 总体审计计划的增量只在本模块�
 阶段推进点); 两个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
 的 RPT-03 两稿放进正本后, 运行副本随之换成全接入两稿, 本模块的报告断言 (只开现有 17 条的两稿) 在同一提交里随之改.
 不与 R119 共用一次运行: 走 HTTP, 经演示资料导入上传文件, 终态 (文件 21 份) 不同.
-读快照与补造目录, 标 external; 连库变体标 slow.
+读快照与补造目录, 标 external; 连库变体标 slow. 离线的走通按项目的工作语言 en, zh 各走一次 (需求 R343): mock 不另备
+中文固定输出, 两次的结果相同, 执行记录都记 en.
 """
 
 from collections import Counter
@@ -38,8 +39,10 @@ from backend.contracts.models import (
     GateId,
     GateVerdict,
     PlanStatus,
+    ProcedureRun,
     TrailEntry,
     TrailKind,
+    WorkingLanguage,
 )
 from backend.contracts.views import GateView
 from backend.core.config import get_settings
@@ -110,16 +113,19 @@ class Walk:
     plan_gates: list[dict[str, Any]]
     plan_pages: list[dict[str, Any]]
     final_plan: dict[str, Any]
+    language: WorkingLanguage = "en"  # 建项目时的工作语言
 
 
-async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any) -> Walk:
-    """照页面的做法从新建项目走到归档 (见模块说明); 每步之后等后台作业与图都停下, 后台始终没有错误."""
+async def walk(
+    client: httpx.AsyncClient, runner: GraphRunner, service: DataService, llm: Any, language: WorkingLanguage = "en"
+) -> Walk:
+    """照页面的做法从新建项目走到归档 (见模块说明), 项目的工作语言为 language; 每步之后等后台作业与图都停下, 后台
+    始终没有错误."""
     owner = (await client.get(f"{API}/users/me")).json()["id"]
     clients = (await client.get(f"{API}/clients")).json()
     [dataset] = [d for d in clients[0]["datasets"] if d["default"]]  # 客户下拉默认选中第一行, 期间随数据集带出
-    created = await client.post(
-        f"{API}/engagements", json={k: dataset[k] for k in ("dataset", "period_start", "period_end")}
-    )
+    body = {k: dataset[k] for k in ("dataset", "period_start", "period_end")}
+    created = await client.post(f"{API}/engagements", json={**body, "working_language": language})
     assert created.status_code == 201, created.text
     eid = created.json()["engagement"]["id"]
     base = f"{API}/engagements/{eid}"
@@ -210,7 +216,7 @@ async def walk(client: httpx.AsyncClient, runner: GraphRunner, service: DataServ
     x = Xero17(runner, eid, owner, llm, False, GateView.model_validate(pln), [], [])
     summary = (await client.get(f"{base}/data/summary")).json()
     final_plan = await plan_page()
-    return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan)
+    return Walk(x, stops, reject_id, overview, summary, clients, plan_gates, plan_pages, final_plan, language)
 
 
 def app_llm(store: Any) -> DatasetFixtureLLMClient:
@@ -221,15 +227,15 @@ def app_llm(store: Any) -> DatasetFixtureLLMClient:
     return client
 
 
-@pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def walked() -> Walk:
+@pytest_asyncio.fixture(scope="module", loop_scope="module", params=["en", "zh"])
+async def walked(request: pytest.FixtureRequest) -> Walk:
     """离线 (tests.xero_flow.demo_offline: 空的 Xero 假存储, 能建项目的假项目存储, 规则引擎 FakeRuleEngine(XERO_RULES),
     登记 mock 按数据集定位); 大模型为只读运行副本的 LayeredMockLLMClient (记下读取; 与组装根对这个项目选的目录相同,
-    见验收 4 的用例)."""
+    见验收 4 的用例). 项目的工作语言按参数为 en 或 zh (需求 R343), 本模块的用例对两次走通都成立."""
     XERO.ready()
     llm = LayeredMockLLMClient([XERO.runtime])
     async with demo_offline(llm) as (runner, service, client):
-        return await walk(client, runner, service, llm)
+        return await walk(client, runner, service, llm, request.param)
 
 
 def entries(w: Walk) -> list[TrailEntry]:
@@ -365,6 +371,18 @@ async def test_counts_and_report(walked: Walk) -> None:
     await assert_report(walked.x, walked.reject_id)
     assert (walked.overview["stale_procedure_ids"], walked.overview["run_error"]) == ([], None)
     assert sorted(walked.overview["features"]) == sorted(DEMO_FEATURES)
+
+
+@shared_loop
+async def test_mock_runs_are_generated_in_english(walked: Walk) -> None:
+    """需求 R343 验收 1: mock 不另备中文固定输出, 项目的工作语言为 zh 时也走到归档 (计数与报告同上), 各执行记录的
+    language 都是 en (组装根填 fixed_language en); 中文项目的总览 run_languages 列出全部执行, 页面据此在判断, 计划与
+    报告旁标 "以英文生成", 英文项目为空."""
+    deps, eid = walked.x.runner.deps, walked.x.eid
+    runs = await deps.output_store.latest(eid, ProcedureRun)
+    assert walked.overview["engagement"]["working_language"] == walked.language
+    assert runs and {r.language for r in runs} == {"en"}
+    assert walked.overview["run_languages"] == ({r.id: "en" for r in runs} if walked.language == "zh" else {})
 
 
 # ── R317: 计划批准在先, 退回一次再批准 ──

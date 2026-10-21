@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
@@ -218,15 +218,16 @@ class LanguageRecorder:
         return await self.inner.call_llm(eid, template, run, *args, **kwargs)
 
 
-async def test_upload_runs_take_the_project_language() -> None:
+@pytest.mark.parametrize(("fixed", "generated"), [(None, "zh"), ("en", "en")], ids=["live", "mock"])
+async def test_upload_runs_take_the_project_language(fixed: Literal["en"] | None, generated: str) -> None:
     """需求 R339 验收 3 (审核 R339-07, R339-11): 上传即处理的执行也记处理时项目的工作语言. 项目改为 zh 后, 直接上传
     (分类, 合同与回函的抽取), A3 按指定类型抽取 ASIC 摘录, 智能导入 (分类与合同抽取, 账表识别) 交给大模型的执行都是 zh;
-    在注入的判断引擎上记, 看的是交给大模型的那一次执行."""
+    mock (组装根填 fixed_language en, 需求 R343) 时照实记 en. 在注入的判断引擎上记, 看的是交给大模型的那一次执行."""
     runner, _, _, evidence, _ = setup()
     deps = upload_deps(runner)
     assert isinstance(deps.judgments, JudgmentEngine)
     recorder = LanguageRecorder(deps.judgments)
-    deps = replace(deps, judgments=recorder)
+    deps = replace(deps, judgments=recorder, fixed_language=fixed)
     service = DataService(deps, runner)
     assert await runner.deps.engagement_store.set_working_language(EID, "zh") == "en"
     engagement = await runner.deps.engagement_store.get(EID)
@@ -245,7 +246,7 @@ async def test_upload_runs_take_the_project_language() -> None:
     await drain(service)
 
     assert sorted(set(recorder.calls)) == [
-        (p, "zh") for p in ("DOC-04", "DOC-06", "DOC-CLASSIFY", "DOC-REGISTRY", "DOC-SHEET")
+        (p, generated) for p in ("DOC-04", "DOC-06", "DOC-CLASSIFY", "DOC-REGISTRY", "DOC-SHEET")
     ]
 
 

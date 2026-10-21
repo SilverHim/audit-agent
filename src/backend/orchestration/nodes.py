@@ -47,6 +47,7 @@ from backend.contracts.models import (
     TaskKind,
     TaskStatus,
     Versioned,
+    WorkingLanguage,
 )
 from backend.contracts.ports import AuditOutputStore, EvidenceStore
 from backend.contracts.records import DatasetTraits
@@ -156,19 +157,21 @@ def build_run(
     profile: ClientProfile | None,
     trigger: RunTrigger | None = None,
     overrides: Mapping[str, Any] | None = None,
+    language: WorkingLanguage | None = None,
 ) -> ProcedureRun:
     """建某条程序的下一次执行记录, execute, fieldwork 与增量实例 (scan_increment) 共用.
 
     参数见 procedure_library.run_params: 模板参数的解析结果, 再叠加 Procedure.params (rerun 决定改的参数, 同名键以它
     为准), 最后叠加 overrides (增量实例的 entry_nos, 需求 R194). 解析用的风险等级取程序关联审计目标的最高等级,
     dataset. 的 ref 取项目数据集的声明 traits, profile. 的 ref 取本项目采用版本的客户画像 profile. trigger 见 next_run.
-    参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录. language 取项目当时的工作语言
-    (需求 R339): 之后改了工作语言, 新的执行用新语言, 已有的不变.
+    参数解析不了 (如重要性尚未确定, 画像字段为空而没写 optional) 时抛错, 不建执行记录. language 为执行记录的生成语言,
+    节点按 AgentDeps.run_language 给 (mock 为 en, 需求 R343); 没给时取项目当时的工作语言 (需求 R339): 之后改了工作
+    语言, 新的执行用新语言, 已有的不变.
     """
     params = run_params(library, template, procedure, engagement, state, traits=traits, profile=profile)
     params |= overrides or {}
     run = next_run(procedure.id, state["procedure_runs"], params, started_at, trigger)
-    return run.model_copy(update={"language": engagement.working_language})
+    return run.model_copy(update={"language": language or engagement.working_language})
 
 
 def fail_run(queue: ReviewQueue, run: ProcedureRun, reason: str, ended_at: datetime) -> StatePatch:
@@ -725,6 +728,7 @@ class GraphNodes:
             profile=profile,
             trigger=trigger,
             overrides=overrides,
+            language=self.deps.run_language(engagement),
         )
         data_version = None
         if template.phase is not Phase.P0_Acceptance:

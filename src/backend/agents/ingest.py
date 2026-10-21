@@ -467,7 +467,8 @@ def upload_run(
     """上传后直接处理时记在留痕上的执行 (不写入审计产出, 不占程序的执行序号). 分类的 ID 为 UPLOAD-{文件 ID};
     抽取另带作业号 UPLOAD-{文件 ID}-{作业号}, 作业号取定下这次类型的那条 classify 留痕的 ID: 同一作业中断后补做
     沿用同一作业号 (save_new_contract 据此覆盖而不多出版本), 审计师重新指定类型是新的作业 (版本接着往后排).
-    language 为项目当时的工作语言 (需求 R339, 同 nodes.build_run): 调用处取处理这份文件时项目的 working_language."""
+    language 为执行记录的生成语言 (同 nodes.build_run): 调用处按 AgentDeps.run_language 取, 即处理这份文件时项目的
+    工作语言 (需求 R339), mock 时为 en (需求 R343)."""
     return ProcedureRun(
         id=f"UPLOAD-{document.id}" + (f"-{job}" if job else ""),
         procedure_id=procedure_id,
@@ -613,7 +614,7 @@ class DocumentIntake:
 
     async def process(self, eid: str, document: DocumentRef, engagement: Engagement) -> DocumentRef:
         """从头处理一份文件 (读首页, 大模型分类, 按类型抽取), 返回处理后的登记."""
-        decided = await self.classify(eid, document, engagement.working_language)
+        decided = await self.classify(eid, document, self.deps.run_language(engagement))
         if decided is None:
             return await self.manual(eid, document, "read")
         kind, reason = decided
@@ -676,7 +677,7 @@ class DocumentIntake:
             actor = document.uploaded_by or self.agent
             job = await self.record(eid, actor, document, kind, reason, requested.request_id)
         else:
-            decided = await self.classify(eid, document, engagement.working_language)
+            decided = await self.classify(eid, document, self.deps.run_language(engagement))
             if decided is None:
                 return Staged(None, None, None, "read")
             kind, reason = decided
@@ -692,13 +693,13 @@ class DocumentIntake:
         try:
             if kind is DocumentType.contract:
                 profile = await client_profile(self.deps, engagement, engagement.client_profile_version)
-                run = upload_run("DOC-04", typed, engagement.working_language, job)
+                run = upload_run("DOC-04", typed, self.deps.run_language(engagement), job)
                 contract = await extract_contract(self.deps, eid, self.deps.library.load("DOC-04"), run, typed, profile)
             elif kind is DocumentType.confirmation:
-                extraction = await self.extract_reply(eid, typed, engagement.working_language)
+                extraction = await self.extract_reply(eid, typed, self.deps.run_language(engagement))
                 reply = extraction.model_dump(mode="json") if extraction is not None else None
             elif kind is DocumentType.registry_extract:
-                found = await self.extract_registry(eid, typed, engagement.working_language)
+                found = await self.extract_registry(eid, typed, self.deps.run_language(engagement))
                 registry = found.model_dump(mode="json") if found is not None else None
         except Exception:
             logger.exception("抽取出错 %s %s", eid, document.id)
@@ -765,9 +766,9 @@ class DocumentIntake:
             if kind is DocumentType.contract:
                 done = await self.contract(eid, document, engagement, job, since)
             elif kind is DocumentType.confirmation:
-                done = await self.reply(eid, document, engagement.working_language)
+                done = await self.reply(eid, document, self.deps.run_language(engagement))
             elif kind is DocumentType.registry_extract:
-                done = await self.registry(eid, document, engagement.working_language, since)
+                done = await self.registry(eid, document, self.deps.run_language(engagement), since)
             else:
                 return document
         except Exception:
@@ -789,7 +790,7 @@ class DocumentIntake:
         extracted 之前, 之后可能还经审计师修改) 不重抽, 算做完; 作业开始之后被改动过 (之后的作业或审计师修改) 的也不
         重抽, 不拿旧作业覆盖: 引用的正是这份文件的算做完, 引用别的原件 (同名文件之后重新上传了) 的这份没抽成,
         转人工 (extract), 审计师可重新指定类型再抽. 其余照常抽取."""
-        run = upload_run("DOC-04", document, engagement.working_language, job)
+        run = upload_run("DOC-04", document, self.deps.run_language(engagement), job)
         if since is not None:
             found = await self.deps.financial_store.contracts(eid, [contract_id(document)])
             if found and found[0].extracted_by_run == run.id:

@@ -359,7 +359,7 @@ class BatchIntake:
             data = await self.content(eid, document.id)
             try:
                 readings = await SheetIntake(self.deps).recognize(
-                    eid, document.model_copy(update={"file_name": file.name}), data, engagement.working_language
+                    eid, document.model_copy(update={"file_name": file.name}), data, self.deps.run_language(engagement)
                 )
             except UnreadableFile:
                 readings = []

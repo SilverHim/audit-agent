@@ -18,6 +18,7 @@ from backend.contracts.models import (
     RuleOutcome,
     RulePopulation,
     RunStatus,
+    WorkingLanguage,
 )
 from backend.contracts.ports import (
     AbnLookup,
@@ -76,6 +77,14 @@ class AgentDeps:
     # 找好, 只找一次, owner 以组装好的这个 deps 构造; A10 派发, 节点整理结果与 DecisionSubmit 核对都取这同一套实例.
     # 换了 library 或端口 (dataclasses.replace) 须重新组装
     manual_owners: Mapping[str, "ManualHandler"] = field(default_factory=dict)
+    # 大模型固定输出的语言 (需求 R343): LLM_MODE=mock 时组装根填 en (固定输出都是英文, 不另备中文), 执行记录照实记它;
+    # live 为空, 记建执行时项目的工作语言 (需求 R339). 见 run_language
+    fixed_language: WorkingLanguage | None = None
+
+    def run_language(self, engagement: Engagement) -> WorkingLanguage:
+        """建执行记录时记的生成语言 (ProcedureRun.language): fixed_language, 为空时为项目当时的工作语言. 图里的执行
+        (nodes.build_run) 与上传即处理的执行 (ingest.upload_run 的调用处) 都取它."""
+        return self.fixed_language or engagement.working_language
 
 
 @dataclass(frozen=True)
