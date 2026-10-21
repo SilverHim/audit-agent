@@ -994,7 +994,7 @@ def test_rev02_confirm_attributes_the_receipt_finding(revenue: Revenue) -> None:
 
 
 # ── RPT-03 两稿: 只开现有 17 条路径的无保留意见 (需求 R117) 由 R118 的分层 mock 排在运行副本之前, 其余程序读运行副本;
-# 正本的保留意见供演示走通 (需求 R260) ──
+# 正本按意见类型各有两稿 (需求 R260): 保留意见供演示走通, 无保留意见同 only17, 供应用里只开现有程序时 ──
 
 # 正本的另一个根; manifest 等同 XERO (补造目录)
 ONLY17 = replace(XERO, name="xero_only17", fixtures=XERO.fixtures.with_name("llm_xero_only17"))
@@ -1027,13 +1027,15 @@ def test_only17_fixtures_are_valid() -> None:
     ("fs", "opinion", "sources"),
     [
         pytest.param(ONLY17, OpinionType.unqualified, [], id="only17_unqualified"),
+        pytest.param(XERO, OpinionType.unqualified, [], id="unqualified"),
         pytest.param(XERO, OpinionType.qualified, [("CSH-02", "BA-091"), ("GEN-02", "XJ-499")], id="qualified"),
     ],
 )
 @pytest.mark.external  # 单位名称与期末取补造画像与快照
 def test_xero_reports(fs: FixtureSet, opinion: OpinionType, sources: list[tuple[str, str]]) -> None:
     """Xero 的 RPT-03 两稿: xero17 走通 (FIN-01 选无保留) 读 only17 的无保留意见; 演示走通 (需求 R260: 两笔未更正
-    错报合计超过整体重要性, FIN-01 选保留) 读正本的保留意见. r1 经 report_checks (引用与语义两级) 通过: 可引用的
+    错报合计超过整体重要性, FIN-01 选保留) 读正本的保留意见; 应用里只开现有程序 (只有 BA-091 一笔错报, FIN-01 选
+    无保留) 读正本的无保留意见. r1 经 report_checks (引用与语义两级) 通过: 可引用的
     判断为两笔错报的来源判断 (第 2 版 confirmed), 引用键恰为这些; 单位名称与期末同补造画像与快照; 没有持续经营段与
     其他事项段. r2 回应 RPT-01 的退回批注 (XERO17_ANNOTATION: 基础段写明编制框架): 只在基础段的标准段落前加
     FRAMEWORK 一句, 意见段, 引用与其余文字不变 (同 Numbat r2 的写法)."""

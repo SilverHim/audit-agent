@@ -901,6 +901,20 @@
       "xero_refs": []
     },
     {
+      "path": "llm/RPT-03/unqualified-r1.json",
+      "sha256": "9d805167587463e327439ee0a743877365c44d2cfc41d8c97056904743c58181",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
+      "path": "llm/RPT-03/unqualified-r2.json",
+      "sha256": "e47813fdde54ada9f4c73753d6fb48b1ece5e542b276794ba95b64e0e95d3d97",
+      "synthetic": true,
+      "generator": "data/generate_xero_demo.py",
+      "xero_refs": []
+    },
+    {
       "path": "manual/fin08_round1.json",
       "sha256": "248260d469d31fb7a0b853760005f6bac56eabcac65be98541df96caad6fbe73",
       "synthetic": true,

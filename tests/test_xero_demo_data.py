@@ -182,10 +182,12 @@ def test_manifest_layout() -> None:
             *(f"llm/{p.relative_to(uploads).as_posix()}" for p in uploads.glob("DOC-SHEET/*.json")),
         ]
     )
-    # 正本有 RPT-03 的保留意见两稿 (演示走通, R260), 整个程序取正本: only17 的无保留两稿不补位
+    # 正本的 RPT-03 按意见类型各两稿 (R260): 保留意见供演示走通, 无保留意见供只开现有程序时
     assert [p for p in llm if p.startswith("llm/RPT-03/")] == [
         "llm/RPT-03/qualified-r1.json",
         "llm/RPT-03/qualified-r2.json",
+        "llm/RPT-03/unqualified-r1.json",
+        "llm/RPT-03/unqualified-r2.json",
     ]
     assert [p for p in paths if not p.startswith("llm/")] == [
         "README.md",  # 生成方式与合同底稿的署名, 许可 (R286)
