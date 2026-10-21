@@ -38,6 +38,7 @@ from backend.contracts.models import (
 from backend.contracts.ports import AuditOutputStore, LLMClient
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState
+from backend.services.features import BASELINE
 from tests.fakes import csh05_population, engine_result
 from tests.test_e2e_xero17 import Xero17, run_xero17
 from tests.tools.live_budget import Budget
@@ -684,11 +685,11 @@ def assert_t4_pair(base: EngagementState, injected: EngagementState) -> None:
     assert transit.misstatement_draft is None
 
 
-def offline_build(rules: Any) -> Build:
-    """自测用的装配: 离线测试台, 规则预置 rules."""
+def offline_build(rules: Any, features: frozenset[str] = BASELINE) -> Build:
+    """自测用的装配: 离线测试台, 规则预置 rules, 功能集 features (缺省为基线)."""
 
     async def build(case: XeroCase, llm: LLMClient) -> XeroHarness:
-        return await offline_deps(case, llm=llm, rules=rules)
+        return await offline_deps(case, llm=llm, rules=rules, features=features)
 
     return build
 
