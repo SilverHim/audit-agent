@@ -19,7 +19,6 @@ RPT-03 的固定输出按意见类型取 (fixture_key 为 {意见类型}-r{修�
 中文固定输出, 两次的结果相同, 执行记录都记 en.
 """
 
-import json
 from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -68,6 +67,7 @@ from tests.fakes import (
     FakeTrail,
     api_client,
     wait_idle,
+    xero_documents,
 )
 from tests.fixture_sets import XERO
 from tests.test_decisions import Started
@@ -623,7 +623,6 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
     已齐), 经接口新建项目 (real_storage 自建的项目不用): 终态, 计数与留痕同离线 (assert_end_state, 含证据指针经真实存储
     解析); document 指针与项目的全部文件都在补造 manifest 中; 签字后 AuditOutputStore.put 抛 EngagementLocked;
     大模型读取都是第 1 次通过. 没设 TEST_DATABASE_URL 时跳过."""
-    supplements = supplements_dir(SNAPSHOT_NAME)
     async with real_storage(
         tmp_path,
         dataset=XERO_DATASET,
@@ -638,8 +637,7 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         async with api_client(runner, run.owner, deps=deps, xero=xero_link(deps, service)) as client:
             w = await walk(client, runner, service, None)
         pointers = await assert_end_state(w)
-        manifest = json.loads((supplements / "manifest.json").read_text(encoding="utf-8"))
-        listed = {d["document_id"] for d in manifest["documents"]}
+        listed = {d["document_id"] for d in xero_documents().values()}
         assert {p.source_id for p in pointers if p.source_type == "document"} <= listed
         assert {d.id for d in await deps.financial_store.documents(w.x.eid)} <= listed
         judgment = (await deps.output_store.latest(w.x.eid, Judgment))[0]
