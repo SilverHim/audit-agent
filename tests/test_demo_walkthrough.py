@@ -19,6 +19,7 @@ RPT-03 的固定输出按意见类型取 (fixture_key 为 {意见类型}-r{修�
 中文固定输出, 两次的结果相同, 执行记录都记 en.
 """
 
+import json
 from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -30,7 +31,7 @@ import pytest_asyncio
 
 from backend.adapters.llm import DatasetFixtureLLMClient, SwitchableLLMClient, make_llm_client
 from backend.agents.client_intel import check_directors
-from backend.contracts.errors import DecisionRejected
+from backend.contracts.errors import DecisionRejected, EngagementLocked
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
@@ -38,9 +39,11 @@ from backend.contracts.models import (
     AuditPlan,
     CorrectionNotice,
     DocumentType,
+    EvidencePointer,
     GateDecision,
     GateId,
     GateVerdict,
+    Judgment,
     OpinionType,
     PlanStatus,
     ProcedureRun,
@@ -434,7 +437,7 @@ DEMO_TRAIL = {
 }
 
 
-async def assert_end_state(w: Walk) -> None:
+async def assert_end_state(w: Walk) -> list[EvidencePointer]:
     """需求 R260 (并入 R259, 按 Q32 改写为演示配置): 走通的终态, 计数与留痕, 离线与连库 (R261), 重启 (R262) 共用.
     - 停点同 STOPS; 后台没有错误, 走完没有过期程序, 项目冻结的功能集为演示配置.
     - 例外 18 条, 判断 18 条, 复核任务 17 条 decided, 函证两户, 错报 2 条 (未更正) 与汇总表, 重要性: R119 加 R146 的
@@ -446,7 +449,8 @@ async def assert_end_state(w: Walk) -> None:
     - 每条程序由真实 Agent 执行, 次数 DEMO_RUNS, 执行都成功.
     - 留痕各类行数同 DEMO_TRAIL (run 36 行); llm_call 按程序同 DEMO_LLM_CALLS, external_call 为 ACC-04 2, CSH-04 2.
     - 证据指针 (判断, 合同, 函证, 例外, 承接评分卡) 都能解析; 原目录哈希不变.
-    - 签字后再提交决定报 ENGAGEMENT_LOCKED."""
+    - 签字后再提交决定报 ENGAGEMENT_LOCKED.
+    返回检查过的证据指针 (连库变体另核 document 指针的来源)."""
     x = w.x
     deps = x.runner.deps
     assert w.stops == STOPS
@@ -474,12 +478,13 @@ async def assert_end_state(w: Walk) -> None:
     assert Counter((e.procedure_id, (e.run_id or "").startswith("UPLOAD-")) for e in calls) == DEMO_LLM_CALLS
     assert Counter(e.procedure_id for e in trail if e.kind is TrailKind.external_call) == {"ACC-04": 2, "CSH-04": 2}
     started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
-    await assert_pointers_resolve(started, x.eid, everything=True)
+    pointers = await assert_pointers_resolve(started, x.eid, everything=True)
     assert x.moved == []
     after = xero17_gates(x.owner)["rpt_approve"].model_copy(update={"id": "D-AFTER-SIGNING"})
     with pytest.raises(DecisionRejected) as rejected:
         await GraphDecisionSubmit(x.runner.app, deps, x.runner).submit(x.eid, after)
     assert rejected.value.code == "ENGAGEMENT_LOCKED"
+    return pointers
 
 
 @shared_loop
@@ -613,8 +618,12 @@ async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
 
 @pytest.mark.slow
 async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
-    """同一走法, 换用组装根的依赖 (真实 Postgres 存储与检查点, 规则 SQL, 数据集载入, 登记与函证 mock, mock 大模型按
-    项目数据集选运行副本), 经接口新建项目 (real_storage 自建的项目不用); 计数, 报告与停点同离线."""
+    """需求 R261 (按 Q32 改写为演示配置): 同一走法, 换用组装根的依赖 (真实 Postgres 存储与检查点, 规则 SQL, 数据集载入,
+    函证与登记 mock 读补造目录, mock 大模型按项目数据集选运行副本, 真实 DataService 做演示资料导入两个阶段与确认数据
+    已齐), 经接口新建项目 (real_storage 自建的项目不用): 终态, 计数与留痕同离线 (assert_end_state, 含证据指针经真实存储
+    解析); document 指针与项目的全部文件都在补造 manifest 中; 签字后 AuditOutputStore.put 抛 EngagementLocked;
+    大模型读取都是第 1 次通过. 没设 TEST_DATABASE_URL 时跳过."""
+    supplements = supplements_dir(SNAPSHOT_NAME)
     async with real_storage(
         tmp_path,
         dataset=XERO_DATASET,
@@ -628,11 +637,15 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         service = run.data_service()
         async with api_client(runner, run.owner, deps=deps, xero=xero_link(deps, service)) as client:
             w = await walk(client, runner, service, None)
-        assert w.stops == STOPS
-        await assert_results(w.x, journals=True)
-        await assert_materiality(w.x, journals=True)
-        await assert_report(w.x, w.reject_id, OpinionType.qualified, QUALIFIED_BY)
-        assert (w.overview["stale_procedure_ids"], sorted(w.overview["features"])) == ([], sorted(DEMO_FEATURES))
+        pointers = await assert_end_state(w)
+        manifest = json.loads((supplements / "manifest.json").read_text(encoding="utf-8"))
+        listed = {d["document_id"] for d in manifest["documents"]}
+        assert {p.source_id for p in pointers if p.source_type == "document"} <= listed
+        assert {d.id for d in await deps.financial_store.documents(w.x.eid)} <= listed
+        judgment = (await deps.output_store.latest(w.x.eid, Judgment))[0]
+        with pytest.raises(EngagementLocked):
+            await deps.output_store.put(
+                w.x.eid, [judgment.model_copy(update={"version": judgment.version + 1})], actor=run.owner
+            )
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
-        assert Counter(e.procedure_id for e in calls)["RPT-03"] == 2
         assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
