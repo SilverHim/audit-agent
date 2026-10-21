@@ -47,6 +47,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { UnrecognisedSuggestions } from '@/components/unrecognised-suggestions'
 import { useContentLanguage } from '@/components/working-language'
 import { abnProblem, normalizeAbn } from '@/lib/abn'
 import { requestTitle } from '@/lib/data-api'
@@ -285,6 +286,7 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           <dd className="m-0 font-mono">{formatAud(material.schedule.materiality_cents)}</dd>
         </dl>
         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
+        <UnrecognisedSuggestions eid={eid} items={material.schedule.unrecognised ?? []} />
         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
         <MisstatementList items={material.misstatements} />
         {material.not_executed?.length ? (

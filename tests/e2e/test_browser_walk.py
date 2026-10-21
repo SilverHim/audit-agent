@@ -97,7 +97,16 @@ LABELS = {
     "correction": {  # 总览的更正卡片
         "title": "Waiting for client correction",
         "posted": "Client has posted adjustments",
+        "stop": "Stop waiting",
         "submit": "Submit",
+    },
+    "withdraw": {
+        "action": "Withdraw this decision",
+        "redecide": "Withdraw and decide again",
+        "confirm": "Withdraw",
+        "material": "At or above overall materiality",
+        "impact": "the candidate opinion would become qualified",
+        "decided": "This item is already decided.",
     },
 }
 
@@ -115,7 +124,6 @@ def manual_config() -> dict[str, Any]:
     record = round_file(1)
     return {
         "FIN-08": {
-            "rows": len(record["misstatement_sources"]),
             "communicated_at": record["communicated_at"],
             "communicated_to": record["recipient"],
             "responded_at": record["responded_at"],
@@ -190,6 +198,7 @@ async def browser_walk(
     fin_policy: str,
     failing: dict[tuple[str, str], int] | None = None,
     activity: dict[str, Any] | None = None,
+    review_withdrawal: bool = False,
     **llm: str,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过.
@@ -218,7 +227,9 @@ async def browser_walk(
             client.reload(FlakyLLM(client.inner, failing), client.model_name)
         install_budget(app.state.deps, budget)
         async with frontend(out, api) as base:
-            results = await run_walk(walk_config(out, base, mode, fin_policy, activity), out, WALK_TIMEOUT_S[mode])
+            config = walk_config(out, base, mode, fin_policy, activity)
+            config["review_withdrawal"] = review_withdrawal
+            results = await run_walk(config, out, WALK_TIMEOUT_S[mode])
         data = await evaluate(app.state.runner, walk_of(results), budget) if results["eid"] else {}
     return results, data, write_report(out, mode, results, data)
 
@@ -260,6 +271,25 @@ async def test_browser_walk_mock_reruns_unattributed(tmp_path: Path, monkeypatch
     assert (data["reruns"], data["troubled_tasks"]) == ({f"REV-02 {ORC1026}": 1}, [["REV-02", ORC1026, "unattributed"]])
     assert data["decisions"] == DECISIONS | {"rerun": 1}, report
     assert_correction_path(results, data)
+
+
+async def test_browser_review_withdrawal_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #67: 默认同意生成两条未更正错报 (798.53); 在任务页撤回 XJ-499 后改选不是错报, FIN-01 显示 750.00 的
+    重大金额提示; 在闸门材料上撤回并重新同意后恢复 798.53, 原错报不重复累计; FIN-01 通过后撤回入口消失, 走到归档.
+    共用原驱动, 不另起一套全流程辅助函数."""
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", review_withdrawal=True
+    )
+    assert results["issues"] == [], report
+    assert results["reached_archive"] and results["gates"] == GATES, report
+    assert results["withdrawal_totals"] == [79853, 4853, 79853], report
+    assert data["schedule"] == {
+        "amounts": [4853, 75000],
+        "corrected": [],
+        "total_cents": 79853,
+        "candidate_opinion": "qualified",
+    }, report
+    assert_hard(data, expected_p2_entries=("PLN-15", "GEN-02", "GEN-02"))
 
 
 @pytest.mark.live(max_calls=MAX_CALLS)

@@ -567,12 +567,13 @@ async def unresolved_pointers(runner: GraphRunner, eid: str) -> tuple[int, list[
     return len(pointers), unresolved
 
 
-def assert_hard(data: dict[str, Any]) -> None:
+def assert_hard(data: dict[str, Any], *, expected_p2_entries: Sequence[str] = ("PLN-15",)) -> None:
     """硬性检查 (需求 R311 验收 2): 走到归档 (调用方已由驱动保证, run_error 始终为空); 每个判断对象有模型结论, 重跑至多
     一次 (驱动保证); 证据指针全部解析通过; 签字报告一份, 意见类型与 FIN-01 决定一致, 意见段首行为该意见在报告语言
     (起草它的执行记录的语言) 下的标题; 合同 3 份与函证 2 户都已抽取; 总体审计计划两个修订都出了 (每个修订一次通过, 或
     failed 后重跑一次), PLAN-1 已取代, PLAN-2 批准后由它推进到执行阶段 (需求 R317); 中文执行写出的文字都是中文
-    (需求 R343, mock 下没有中文执行). 软性的差异只告警 (warn_soft)."""
+    (需求 R343, mock 下没有中文执行). expected_p2_entries 默认仅计划批准, 撤回验收须逐项列出再次进入执行阶段的来源.
+    软性的差异只告警 (warn_soft)."""
     assert data["missing_subjects"] == [], data["missing_subjects"]
     assert data["unresolved_pointers"] == [], data["unresolved_pointers"]
     assert data["pointers"] > 30
@@ -584,7 +585,7 @@ def assert_hard(data: dict[str, Any]) -> None:
     assert (data["contracts"], data["confirmations"]) == (3, 2)
     assert all(n <= 1 for n in data["reruns"].values()), data["reruns"]
     assert data["plans"] == [["PLAN-1", "superseded"], ["PLAN-2", "approved"]], data["plans"]
-    assert data["entered_p2_by"] == ["PLN-15"], data["entered_p2_by"]
+    assert data["entered_p2_by"] == list(expected_p2_entries), data["entered_p2_by"]
 
 
 # 演示配置下的终态 (需求 R263 验收 3, 同 R287 的计数): 重要性按 PLN-01/03 闸门的决定 (收入 1%, 执行 50%, 明显微小 5%);

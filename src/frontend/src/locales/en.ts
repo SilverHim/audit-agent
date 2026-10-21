@@ -181,7 +181,7 @@ export const en = {
     no_data: 'Not performed (no data)',
   },
   decisions: {
-    confirm: 'Confirm',
+    confirm: 'Agree',
     override: 'Override',
     misstatement: 'Record misstatement',
     rerun: 'Run again',
@@ -189,7 +189,7 @@ export const en = {
     dispute_resolution: 'Resolve the disagreement',
   } as Record<string, string>,
   decisionHints: {
-    confirm: 'Accept the conclusion as stated',
+    confirm: "Adopt the AI's conclusion",
     override: 'Replace the conclusion with yours',
     misstatement: 'Record the amount as a misstatement',
     rerun: 'Run the procedure again',
@@ -225,7 +225,7 @@ export const en = {
     full_review: 'above performance materiality',
     check_evidence: 'confidence below 0.70',
     read_reasoning: 'confidence 0.70 to 0.90',
-    batch_eligible: 'confidence above 0.90 and a low amount',
+    batch_eligible: 'confidence above 0.90, a low amount, and the AI found no misstatement',
   },
   status: { pending: 'Pending auditor review', deferred: 'Deferred', decided: 'Decided', confirmed: 'Confirmed' },
   checks: {
@@ -273,6 +273,7 @@ export const en = {
     uncorrected: 'Uncorrected',
     evaluated: 'Evaluated',
     closed: 'Closed',
+    withdrawn: 'Withdrawn',
   } as Record<string, string>,
   // 工作语言 (需求 R339): 建项目与项目页的选择, 生成语言的标注, 对话流里的修改记录
   workingLanguage: {
@@ -569,6 +570,20 @@ export const en = {
       a7_upheld: "Adopt the independent review's conclusion",
       neither: 'Neither; give your own conclusion',
     } as Record<string, string>,
+    // 判断的复核选项, 按 AI 的结论给 (lib/review 的 reviewChoices, 需求 R364)
+    notMisstatementConclusion: 'On review, this is not a misstatement.',
+    choices: {
+      agree_misstatement: {
+        label: 'Agree, record the misstatement',
+        hint: "The AI's amount, account, direction and assertion are filled in; you can edit them",
+      },
+      disagree_not_misstatement: { label: 'Disagree, not a misstatement', hint: 'Give your conclusion' },
+      amend_misstatement: { label: 'Record the misstatement with changes', hint: "Change the AI's figures first" },
+      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's conclusion" },
+      disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
+      misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
+      not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
+    },
   },
   judgment: {
     subject: 'Subject',
@@ -673,6 +688,34 @@ export const en = {
     count: (n: number) => `${n} misstatement${n === 1 ? '' : 's'} recorded`,
     notExecuted: (n: number) => `${n} procedure${n === 1 ? '' : 's'} not performed (no data)`,
     via: (ids: string) => `Its prerequisite ${ids} was not performed`,
+    // AI 建议为错报但未认定 (需求 R364): FIN-01 材料的提示, 不阻塞
+    unrecognised: {
+      title: (n: number) => `AI proposed a misstatement but it was not recorded (${n})`,
+      intro:
+        'For information only; this does not block the decision. To change a decision, withdraw it and decide again.',
+      levels: {
+        trivial: 'Clearly trivial',
+        above_trivial: 'Above the clearly trivial threshold',
+        above_performance: 'Above performance materiality',
+        material: 'At or above overall materiality',
+      },
+      reviewed: (decision: string, by: string) => `Reviewed: ${decision}${by ? ` · ${by}` : ''}`,
+      wouldQualify:
+        'If this is a misstatement and stays uncorrected, uncorrected misstatements reach overall materiality and the candidate opinion would become qualified.',
+      wouldNotQualify:
+        'Even if it is counted, uncorrected misstatements stay below overall materiality and the candidate opinion would not change.',
+      open: 'View the judgment',
+      redecide: 'Withdraw and decide again',
+    },
+  },
+  // 撤回复核决定 (需求 R364): FIN-01 通过前, 理由选填
+  withdraw: {
+    action: 'Withdraw this decision',
+    intro:
+      'The judgment returns to review and you decide again. The original decision and the withdrawal both stay in the audit trail; a misstatement it recorded is withdrawn and the totals are recalculated.',
+    confirm: 'Withdraw',
+    cancel: 'Cancel',
+    done: 'Decision withdrawn; the judgment is back in review',
   },
   reportCard: {
     revision: (n: number, opinion: string) => `Revision ${n} · ${opinion}`,
@@ -698,6 +741,8 @@ export const en = {
       NOT_EDITABLE:
         'Confirmation reply fields can only be changed while the engagement waits at a stage decision or for review.',
       REQUEST_NOT_OPEN: 'This request has already been received or withdrawn.',
+      NOT_WITHDRAWABLE:
+        'A review decision can only be withdrawn while the engagement waits for review in fieldwork or at FIN-01, before FIN-01 is approved.',
       IMPORT_PARSE_ERROR: 'Some cells could not be read. Check the column matches and the date format.',
       FILE_TOO_LARGE: 'Each file must be 50 MB or smaller.',
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',

@@ -170,7 +170,7 @@ export const zh: Messages = {
     no_data: '未执行（无数据）',
   },
   decisions: {
-    confirm: '确认',
+    confirm: '同意',
     override: '推翻',
     misstatement: '认定为错报',
     rerun: '重新执行',
@@ -178,7 +178,7 @@ export const zh: Messages = {
     dispute_resolution: '裁决分歧',
   },
   decisionHints: {
-    confirm: '按原结论接受',
+    confirm: '采用 AI 的结论',
     override: '用你的结论替换',
     misstatement: '将该金额记为错报',
     rerun: '重新执行该程序',
@@ -214,7 +214,7 @@ export const zh: Messages = {
     full_review: '超过实际执行的重要性',
     check_evidence: '置信度低于 0.70',
     read_reasoning: '置信度 0.70 至 0.90',
-    batch_eligible: '置信度高于 0.90 且金额较小',
+    batch_eligible: '置信度高于 0.90、金额较小且判为不是错报',
   },
   status: { pending: '待人工处理', deferred: '稍后处理', decided: '已决定', confirmed: '已确认' },
   checks: {
@@ -258,6 +258,7 @@ export const zh: Messages = {
     uncorrected: '未更正',
     evaluated: '已评价',
     closed: '已结束',
+    withdrawn: '已撤回',
   },
   workingLanguage: {
     label: '工作语言',
@@ -518,6 +519,16 @@ export const zh: Messages = {
       a7_upheld: '采用独立复核的结论',
       neither: '都不采用，由你给出结论',
     },
+    notMisstatementConclusion: '经复核，这不是错报。',
+    choices: {
+      agree_misstatement: { label: '同意，认定为错报', hint: '金额、科目、方向与认定按 AI 的草稿带出，可以修改' },
+      disagree_not_misstatement: { label: '不同意，不是错报', hint: '写出你的结论' },
+      amend_misstatement: { label: '修改后认定为错报', hint: '先改动 AI 草稿的数据' },
+      agree_clear: { label: '同意，不是错报', hint: '采用 AI 的结论' },
+      disagree_misstatement: { label: '不同意，认定为错报', hint: '填写错报的数据' },
+      misstatement: { label: '认定为错报', hint: '填写错报的数据' },
+      not_misstatement: { label: '不是错报', hint: '写出你的结论' },
+    },
   },
   judgment: {
     subject: '对象',
@@ -606,6 +617,28 @@ export const zh: Messages = {
     count: (n) => `共记录 ${n} 项错报`,
     notExecuted: (n) => `${n} 项程序未执行（无数据）`,
     via: (ids) => `前置程序 ${ids} 未执行`,
+    unrecognised: {
+      title: (n) => `AI 建议为错报但未认定（${n}）`,
+      intro: '只作提示，不影响作出决定。要改判时先撤回该复核决定，再重新选择。',
+      levels: {
+        trivial: '明显微小',
+        above_trivial: '超过明显微小临界值',
+        above_performance: '超过实际执行的重要性',
+        material: '达到重要性水平',
+      },
+      reviewed: (decision, by) => `复核：${decision}${by ? ` · ${by}` : ''}`,
+      wouldQualify: '若确为错报且未更正，计入后未更正错报合计达到重要性水平，候选意见会变为保留意见。',
+      wouldNotQualify: '即使计入，未更正错报合计仍低于重要性水平，候选意见不变。',
+      open: '查看判断',
+      redecide: '撤回并改判',
+    },
+  },
+  withdraw: {
+    action: '撤回复核决定',
+    intro: '撤回后该判断回到待复核，由你重新选择；原决定与撤回都留痕。认定的错报随之作废，并重新累计。',
+    confirm: '撤回',
+    cancel: '取消',
+    done: '已撤回，该判断回到待复核',
   },
   reportCard: {
     revision: (n, opinion) => `第 ${n} 稿 · ${opinion}`,
@@ -630,6 +663,7 @@ export const zh: Messages = {
       NOT_AWAITING_CORRECTION: '当前不在等待更正。',
       NOT_EDITABLE: '只有在项目停在阶段决定或等待复核时，才能修改回函抽取结果。',
       REQUEST_NOT_OPEN: '这项补交请求已收到或已撤回。',
+      NOT_WITHDRAWABLE: '只有在执行阶段等待复核或停在 FIN-01、且 FIN-01 尚未通过时，才能撤回复核决定。',
       IMPORT_PARSE_ERROR: '有单元格无法解析，请核对列对应与日期格式。',
       FILE_TOO_LARGE: '单个文件不能超过 50 MB。',
       ENGAGEMENT_BUSY: '项目正在处理中，请稍后再试。',
