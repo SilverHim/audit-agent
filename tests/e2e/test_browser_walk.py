@@ -12,6 +12,7 @@ FEATURES (演示配置). 后端连测试库
 经 tests.external.live_llm_settings 取, 没配时跳过). 两个用例都标 slow, 默认测试不跑.
 """
 
+import asyncio
 import os
 from collections import Counter
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from uuid import uuid4
 
 import pytest
 
+from backend.agents.ingest import DocumentIntake
 from backend.services.judgment_engine import MAX_ATTEMPTS
 from tests.e2e.harness import backend, frontend, out_dir, require_tools, run_walk, write_report
 from tests.external import LLM_KEYS, live_llm_settings
@@ -52,6 +54,10 @@ TIMEOUTS = {
     "live": {"action_ms": 60_000, "nav_ms": 120_000, "idle_ms": 1_800_000},
 }
 WALK_TIMEOUT_S = {"mock": 1_800, "live": 7_200}
+# 系统忙时说明的核对 (需求 R362): 外勤演示资料的文件数, mock 下逐份处理前的延时 (秒; 19 份约半分钟)
+FIELDWORK_FILES = 19
+ACTIVITY_DELAY_S = 1.5
+READING = "reading the files"  # 状态条与按钮旁说明里识别文件的说法 (载入演示资料时为 "... and reading the files")
 # 驱动认的页面文字 (英文界面, src/frontend/src/locales/en.ts)
 LABELS = {
     "register": "Create account",
@@ -81,6 +87,12 @@ LABELS = {
         "performedOn": "Date performed",
         "conclusion": "Conclusion",
         "reason": "Reason (optional)",
+    },
+    "activity": {  # 系统忙时的说明 (需求 R362): 状态条, 识别文件的说明, 变灰按钮旁的原因, 补交卡片
+        "bar": "Current activity",
+        "reading": READING,
+        "busy": "You can continue when it finishes",
+        "requests": "Needed from the client",
     },
     "correction": {  # 总览的更正卡片
         "title": "Waiting for client correction",
@@ -116,9 +128,11 @@ def manual_config() -> dict[str, Any]:
     }
 
 
-def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, Any]:
+def walk_config(
+    out: Path, base: str, mode: str, fin_policy: str, activity: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """驱动的配置: 页面地址, 注册用的账号 (随机用户名与口令; 姓名同报告签字块), 决定表与各闸门的决定, 人工任务与更正
-    通知的做法, 超时."""
+    通知的做法, 超时; activity 为系统忙时说明的核对 (需求 R362, 见 test_browser_activity_mock), 不核对为 None."""
     table = {
         subject: {"decision": e.decision, "reason": e.reason, "draft": e.draft, "conclusion": e.conclusion}
         for subject, e in decision_table("").items()
@@ -150,6 +164,7 @@ def walk_config(out: Path, base: str, mode: str, fin_policy: str) -> dict[str, A
         "correction": {"entries": round_file(1)["adjustment_entry_nos"]},
         "timeouts": TIMEOUTS[mode],
         "max_steps": 200,
+        "activity": activity,
     }
 
 
@@ -174,6 +189,7 @@ async def browser_walk(
     mode: str,
     fin_policy: str,
     failing: dict[tuple[str, str], int] | None = None,
+    activity: dict[str, Any] | None = None,
     **llm: str,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过.
@@ -202,7 +218,7 @@ async def browser_walk(
             client.reload(FlakyLLM(client.inner, failing), client.model_name)
         install_budget(app.state.deps, budget)
         async with frontend(out, api) as base:
-            results = await run_walk(walk_config(out, base, mode, fin_policy), out, WALK_TIMEOUT_S[mode])
+            results = await run_walk(walk_config(out, base, mode, fin_policy, activity), out, WALK_TIMEOUT_S[mode])
         data = await evaluate(app.state.runner, walk_of(results), budget) if results["eid"] else {}
     return results, data, write_report(out, mode, results, data)
 
@@ -257,3 +273,27 @@ async def test_browser_walk_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     warn_soft(data)
     assert results["reached_archive"], report
     assert_hard(data)
+
+
+async def test_browser_activity_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """需求 R362 (Issue #63 验收 6): 新建 Xero 演示项目, 载入外勤演示资料 (19 份文件; mock 太快, 逐份处理前各等
+    ACTIVITY_DELAY_S 秒). 数据管理页的状态条写明 "数据管理智能体正在识别文件 n/19" 且 n 往前走; 工作区补交卡片的
+    "数据已齐" 变灰, 卡片里写明正在进行的活动; 不刷新页面等处理完, 状态条与说明消失, "数据已齐" 自己变为可点.
+    核对完即停, 不走完全程."""
+    resume = DocumentIntake.resume
+
+    async def slow(self: DocumentIntake, *args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(ACTIVITY_DELAY_S)
+        return await resume(self, *args, **kwargs)
+
+    monkeypatch.setattr(DocumentIntake, "resume", slow)
+    activity = {"stage": "fieldwork", "total": FIELDWORK_FILES, "only": True}
+    results, _, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", activity=activity
+    )
+    assert results["issues"] == [], report
+    checked = results["activity"]
+    assert checked is not None, report
+    assert len(checked["seen"]) >= 2 and max(checked["seen"]) <= FIELDWORK_FILES, checked
+    assert checked["disabled"] and READING in checked["note"], checked
+    assert checked["note_after"] == 0 and checked["enabled_after"], checked

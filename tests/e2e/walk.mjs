@@ -3,7 +3,8 @@
 // 网络请求; 每步有超时, 超时记 "卡住". 页面上出现驱动不认得的状态时记为问题并截图, 不硬闯.
 // 审计师的决定取 R311 的演示决定表 (由 tests/e2e/test_browser_walk.py 写进配置), 按状态走的做法同
 // tests/test_demo_walkthrough_live.py 的 drive. 错报闭环另有两步 (需求 R356): FIN-08 人工任务在人工任务页填管理层回复
-// 登记表, 等更正时在总览的更正卡片上提交更正通知 (勾选待更正的错报与配置的更正分录).
+// 登记表, 等更正时在总览的更正卡片上提交更正通知 (勾选待更正的错报与配置的更正分录). 配了 activity 时 (需求 R362)
+// 在载入那一阶段的演示资料后核对系统忙时的说明: 状态条的逐份进度, 补交卡片按钮旁的原因, 处理完不刷新即可用.
 //
 // 用法: node tests/e2e/walk.mjs <配置 JSON 的路径>; 结果写到配置的 out_dir/results.json. Playwright 取
 // E2E_NODE_MODULES (缺省 /opt/node-tools/node_modules), 浏览器取 PLAYWRIGHT_BROWSERS_PATH.
@@ -30,6 +31,7 @@ const result = {
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
   corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
+  activity: null, // 配了 activity 时的核对结果 (需求 R362), 见 checkActivity
   steps: [], // {no, name, url, shot, console, failed, ms}
   issues: [], // {step, page, symptom, shot, expected}
 }
@@ -205,7 +207,41 @@ async function importDemo(stage) {
   const label = await button.innerText()
   if (!label.includes(config.labels.demoStages[stage] ?? stage)) issue(`导入按钮写的是 "${label}"`, `按钮的阶段为 ${stage}`)
   await click(button)
+  if (config.activity?.stage === stage) await checkActivity()
   await waitFor(async () => (await summary())?.demo?.stages_done?.includes(stage), timeouts.idle_ms, `导入 ${stage}`)
+}
+
+// 系统忙时的说明 (需求 R362, Issue #63 验收 6; 走查测试给逐份处理加了延时): 数据管理页顶部的状态条写明 "数据管理
+// 智能体正在识别文件 n/总数" 且 n 往前走; 转到工作区, 补交卡片的 "数据已齐" 变灰, 卡片里写明正在进行的活动; 不刷新
+// 页面等处理完, 状态条消失, "数据已齐" 自己变为可点
+async function checkActivity() {
+  const want = config.activity
+  const labels = config.labels.activity
+  const progress = new RegExp(`(\\d+)/${want.total}(?!\\d)`)
+  const bar = page.getByRole('region', { name: labels.bar })
+  const seen = new Set()
+  const sample = async () => {
+    const text = await bar.innerText({ timeout: 1000 }).catch(() => '')
+    const match = text.includes(labels.reading) ? text.match(progress) : null
+    if (match) seen.add(Number(match[1]))
+    return seen.size
+  }
+  await waitFor(async () => (await sample()) >= 2, timeouts.idle_ms, `状态条的识别进度 x/${want.total} 往前走`)
+  await snap('data-page-bar')
+  await goto(`${base}/engagements/${result.eid}`)
+  const card = page.getByRole('region', { name: labels.requests })
+  await card.waitFor({ timeout: timeouts.nav_ms })
+  const ready = card.getByRole('button', { name: config.labels.ready })
+  const note = card.getByText(labels.busy)
+  await note.waitFor({ timeout: timeouts.action_ms })
+  const noted = { note: await note.innerText(), disabled: await ready.isDisabled() }
+  await sample()
+  await snap('workspace-busy')
+  await bar.waitFor({ state: 'detached', timeout: timeouts.idle_ms })
+  await ready.waitFor({ timeout: timeouts.action_ms })
+  await waitFor(async () => ready.isEnabled(), timeouts.action_ms, '处理完后 "数据已齐" 自己变为可点')
+  await snap('workspace-done')
+  result.activity = { seen: [...seen].sort((a, b) => a - b), ...noted, note_after: await note.count(), enabled_after: true }
 }
 
 async function confirmReady() {
@@ -541,6 +577,7 @@ async function main() {
       }))
     )
       return
+    if (config.activity?.only && result.activity) return // 只核对系统忙时的说明, 不走完
   }
   issue(`${config.max_steps} 步内未到归档`, '走到归档')
 }

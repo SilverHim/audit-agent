@@ -6,6 +6,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
 import type { DocumentRef, DocumentType, XeroSource } from '@/client/types.gen'
+import { BusyNote } from '@/components/activity-bar'
 import { OpenBatches, useBatchUpload } from '@/components/batch-upload'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
@@ -110,7 +111,10 @@ function DataPage() {
         {overview?.awaiting_data ? (
           <section className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border-[1.5px] border-primary bg-card px-5 py-4">
             <span className="font-semibold text-[15px]">{t.data.awaiting}</span>
-            <DataReadyButton eid={eid} size="lg" />
+            <div className="flex flex-col items-end gap-1">
+              <DataReadyButton eid={eid} size="lg" disabled={overview.running} />
+              <BusyNote eid={eid} className="text-right" />
+            </div>
           </section>
         ) : null}
 
@@ -219,6 +223,8 @@ function DemoCard({ eid, summary }: { eid: string; summary: DataSummary | null }
           <span id={hintId} className="text-[12.5px] text-muted-foreground">
             {button.hint}
           </span>
+        ) : summary.processing > 0 ? (
+          <BusyNote eid={eid} className="text-right" />
         ) : null}
       </div>
     </section>

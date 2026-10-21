@@ -9,6 +9,7 @@ import type { EngagementOverview, ProcedureSummary } from '@/client/types.gen'
 import { StatusPill } from '@/components/chrome'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { busyText } from '@/lib/activity'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -36,7 +37,7 @@ export function rerunBlocked(overview: EngagementOverview | undefined, t: Messag
   if (overview.engagement.locked) return t.rerun.blocked.locked
   if (procedure && procedure.phase !== 'P2_Executing') return t.rerun.blocked.planning
   if (procedure && procedure.status === 'executing') return t.rerun.blocked.queued
-  if (overview.running) return t.rerun.blocked.running
+  if (overview.running) return busyText(overview, t) ?? t.rerun.blocked.running
   if (!procedure && !overview.procedures.some((item) => item.rerunnable)) return t.rerun.blocked.none
   // 功能集与项目冻结的不同 (FEATURES_MISMATCH): 布局不给继续执行按钮, 不提示 "请先继续执行"
   if (overview.run_error?.startsWith('FEATURES_MISMATCH')) return t.rerun.blocked.featuresMismatch

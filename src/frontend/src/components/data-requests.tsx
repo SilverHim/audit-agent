@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { Database, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { BusyNote } from '@/components/activity-bar'
 import { useBatchUpload } from '@/components/batch-upload'
 import { StatusPill } from '@/components/chrome'
 import { DataReadyButton } from '@/components/data-ready'
@@ -180,6 +181,7 @@ export function DataRequestCard({
         })}
       </ul>
       <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#fafbfc] px-[18px] py-3">
+        <BusyNote eid={eid} className="basis-full" />
         <div className="flex flex-wrap gap-2">
           {!deferred && requests.some((request) => request.status === 'open') ? (
             <Button type="button" variant="outline" disabled={deferring} onClick={onDefer}>

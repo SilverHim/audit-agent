@@ -23,6 +23,7 @@ import type {
   ReviewTaskView,
   TaskPresentation,
 } from '@/client/types.gen'
+import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { ExceptionDetail } from '@/components/exception-detail'
@@ -557,12 +558,15 @@ export function OptionCard({
   )
 }
 
+// 决定卡片的框: 标题, 说明, 内容与按钮; 系统忙使按钮变灰时按钮下写明正在进行的活动 (需求 R362)
 export function DecisionFrame({
+  eid,
   title,
   note,
   children,
   footer,
 }: {
+  eid: string
   title: ReactNode
   note?: ReactNode
   children: ReactNode
@@ -578,6 +582,7 @@ export function DecisionFrame({
       </div>
       {children}
       <div className="flex flex-wrap items-center justify-between gap-2.5">{footer}</div>
+      <BusyNote eid={eid} className="self-end text-right" />
     </section>
   )
 }
@@ -755,6 +760,7 @@ export function ReviewDecisionCard({
 
   return (
     <DecisionFrame
+      eid={eid}
       title={t.card.reviewQuestion(ranked.subject)}
       note={deferred ? t.workspace.deferredNote : undefined}
       footer={

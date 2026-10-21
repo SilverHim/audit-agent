@@ -3,6 +3,7 @@ import { Link2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import type { XeroProfileCheck, XeroProfileCheckIn } from '@/client/types.gen'
+import { BusyNote } from '@/components/activity-bar'
 import { OptionCard } from '@/components/concierge'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -141,6 +142,7 @@ export function XeroProfileCard({
           {t.card.record}
         </Button>
       </div>
+      <BusyNote eid={eid} className="self-end text-right" />
     </section>
   )
 }
