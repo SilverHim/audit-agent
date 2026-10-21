@@ -685,12 +685,14 @@ async def pln15_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
 
 async def fin01_check(deps: AgentDeps, eid: str, decision: GateDecision, target: Versioned) -> None:
     """disposition 须在 services.opinion.allowed_opinions 给出的可选范围内 (与 A9 的候选同一函数, 需求 R184;
-    target 为当前汇总表; 持续经营结论本条传 None, 接上已批准的 FIN-02 结论由 GC-10 做); 不在时报 INVALID_VALUE,
-    消息列出可选的意见类型与理由."""
+    target 为当前汇总表, 传其合计与重要性; 持续经营结论本条传 None, 接上已批准的 FIN-02 结论由 GC-10 (需求 R188)
+    做); 不在时报 INVALID_VALUE, 消息列出可选的意见类型与理由."""
     if decision.disposition is None:
         return
     assert isinstance(target, UncorrectedSchedule)  # FIN-01 的材料对象 (GateSpec.material_model)
-    options = allowed_opinions(target, None)
+    options = allowed_opinions(
+        total_cents=target.total_cents, materiality_cents=target.materiality_cents, going_concern=None
+    )
     if decision.disposition not in options.allowed:
         allowed = ", ".join(o.value for o in options.allowed) or "(无)"
         raise DecisionRejected(
