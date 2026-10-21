@@ -44,7 +44,7 @@ async def test_completion_writes_schedule_and_phase_in_one_commit() -> None:
     assert (run.id, run.status, run.params_snapshot) == (
         "RUN-FIN-04-1",
         RunStatus.succeeded,
-        {"materiality_cents": 12000000, "clearly_trivial_cents": 600000},
+        {"materiality_cents": 12000000, "performance_materiality_cents": 9000000, "clearly_trivial_cents": 600000},
     )
     [schedule] = [o for o in commit if isinstance(o, UncorrectedSchedule)]
     assert (schedule.version, schedule.total_cents) == (1, 14200000)

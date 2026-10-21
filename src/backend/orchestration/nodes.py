@@ -75,6 +75,7 @@ from backend.orchestration.trail import (
     phase_transition,
     procedure_transitions,
     record_transitions,
+    rewinds,
     run_finished,
     run_started,
 )
@@ -851,9 +852,7 @@ class GraphNodes:
         entries = [await self.run_finished_entry(engagement.id, template, stored, result["run_id"])]
         entries += await procedure_transitions(self.deps.output_store, engagement.id, [saved])
         if phase is not None:
-            entries += phase_transition(
-                engagement.id, state["phase"], phase, procedure_id, reruns=len(state["rerun_requests"])
-            )
+            entries += phase_transition(engagement.id, state["phase"], phase, procedure_id, reruns=rewinds(state))
         await record_transitions(self.deps.trail, entries)
         return stored, [cast(Procedure, saved) if p.id == procedure_id else p for p in pack]
 
@@ -1590,7 +1589,7 @@ class GraphNodes:
         """终点: 项目已由 RPT-01 签字锁定, 不再写 Store. 补写进入 Archived 的阶段留痕 (只能由报告阶段进入;
         DecisionSubmit 提交后已写过, 同键跳过)."""
         eid = state["engagement_id"]
-        reruns = len(state["rerun_requests"])
+        reruns = rewinds(state)
         entries = phase_transition(eid, Phase.P4_Reporting, Phase.Archived, "RPT-01", reruns=reruns)
         await record_transitions(self.deps.trail, entries)
         return {}

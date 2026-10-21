@@ -801,7 +801,7 @@
           "reviews"
         ],
         "summary": "List Review Tasks",
-        "description": "status, kind 省略时不按它过滤 (都省略为全部), 按创建时间升序; 人工队列另见 GET /manual-tasks (需求 R94).\nallowed_decisions 取 ReviewQueue.allowed; amount_cents 与 tier 按总览的执行重要性与明显微小临界值计算, 对话与\n队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.",
+        "description": "status, kind 省略时不按它过滤 (都省略为全部), 按创建时间升序; 人工队列另见 GET /manual-tasks (需求 R94).\nallowed_decisions 取 ReviewQueue.allowed (按目标的 AI 结论, 需求 R363); amount_cents 与 tier 按总览的执行重要性与\n明显微小临界值计算, 对话与队列共用同一口径. draft_rules 按项目冻结的功能集 (总览 features) 给: 开了 collab 才有.\nwithdrawable_record_id: 总览 can_withdraw 为真时, 已决定的任务上最近一条没撤回且能撤回的决定 (需求 R363).",
         "operationId": "reviews-list_review_tasks",
         "security": [
           {
@@ -965,6 +965,73 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ReviewRecordIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/review-records/{record_id}/withdraw": {
+      "post": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "Withdraw Review Record",
+        "description": "撤回一条复核决定, 重新选择 (需求 R363); 返回撤回 ID (WD-{uuid4}). 理由选填. 只能在执行阶段等复核或 FIN-01\n闸门处 (意见决定之前; FIN-01 已通过等 409 NOT_WITHDRAWABLE); 决定不存在 404; 不能撤回的决定 (见\ndecisions.withdraw_problem) 422 INVALID_VALUE; 锁定 423, 执行中 409. 撤回后任务回到待决, 图回到等复核.",
+        "operationId": "reviews-withdraw_review_record",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "record_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Record Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewWithdrawalIn"
               }
             }
           }
@@ -9187,6 +9254,11 @@
             "title": "Can Rerun",
             "default": false
           },
+          "can_withdraw": {
+            "type": "boolean",
+            "title": "Can Withdraw",
+            "default": false
+          },
           "pending_tasks": {
             "type": "integer",
             "title": "Pending Tasks"
@@ -11880,7 +11952,8 @@
           "partially_corrected",
           "uncorrected",
           "evaluated",
-          "closed"
+          "closed",
+          "withdrawn"
         ],
         "title": "MisstatementStatus",
         "description": "错报的生命周期状态 (规格书 12.3 Misstatement 子状态机, 需求 R156; 迁移表见接口文档第 2.5 节). 功能 misstatement\n关闭时新建错报直接为 uncorrected (旧口径); evaluated 与 closed 本版不写."
@@ -14221,6 +14294,17 @@
             "type": "array",
             "title": "Update Decisions",
             "default": []
+          },
+          "withdrawable_record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawable Record Id"
           }
         },
         "additionalProperties": false,
@@ -14246,6 +14330,25 @@
         ],
         "title": "ReviewTier",
         "description": "复核档位 (规格书 9.1 节): 复核任务按金额与置信度分档, 决定审计师要看到什么程度."
+      },
+      "ReviewWithdrawalIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ReviewWithdrawalIn",
+        "description": "撤回复核决定的请求体 (需求 R363): 理由选填; 撤回 ID, 撤回人与时间由服务端填写."
       },
       "RiskItem": {
         "properties": {
@@ -15568,6 +15671,14 @@
           },
           "candidate_opinion": {
             "$ref": "#/components/schemas/OpinionType"
+          },
+          "unrecognised": {
+            "items": {
+              "$ref": "#/components/schemas/UnrecognisedSuggestion"
+            },
+            "type": "array",
+            "title": "Unrecognised",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -15582,6 +15693,131 @@
         ],
         "title": "UncorrectedSchedule",
         "description": "未更正错报汇总表: FIN-04 产出, FIN-01 闸门的呈报材料. 规格书中叫 UncorrectedMisstatementSchedule."
+      },
+      "UnrecognisedSuggestion": {
+        "properties": {
+          "judgment_id": {
+            "type": "string",
+            "title": "Judgment Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "record_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Record Id"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Decision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reviewed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed By"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "account_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Code"
+          },
+          "assertion": {
+            "$ref": "#/components/schemas/Assertion"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "trivial",
+              "above_trivial",
+              "above_performance",
+              "material"
+            ],
+            "title": "Level"
+          },
+          "would_qualify": {
+            "type": "boolean",
+            "title": "Would Qualify"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "judgment_id",
+          "procedure_id",
+          "subject_id",
+          "account",
+          "assertion",
+          "amount_cents",
+          "direction",
+          "level",
+          "would_qualify"
+        ],
+        "title": "UnrecognisedSuggestion",
+        "description": "AI 建议为错报但审计师没有认定的一条判断 (需求 R363): FIN-04 列在汇总表里, 随 FIN-01 闸门材料呈报, 只提示不\n阻塞. 当前结果中 AI 判断 (不是人工判断) 的建议动作为 misstatement, 已复核 (confirmed 或 overridden), 而它与取代\n它的人工判断都没有当前结果的错报."
       },
       "User": {
         "properties": {

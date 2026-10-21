@@ -78,6 +78,8 @@ MAX_CALLS = FIXED_CALLS + LIVE_MARGIN  # 用量上限
 MAX_STEPS = 200  # 驱动的步数上限 (固定输出走一遍约 40 步)
 RERUN_REASON = "The model output did not pass validation; rerun."
 CONFIRM_CONCLUSION = "The original conclusion stands: no misstatement is identified for this item."
+# 模型建议认定错报而决定表期望不认定时 "不同意, 不是错报" 的结论 (需求 R363: 这类判断不能确认, 只能认定或推翻)
+NOT_MISSTATEMENT_CONCLUSION = "No misstatement is identified for this item; the proposed misstatement is not supported."
 BA091_REASON = "Accrued interest of AUD 48.53 confirmed by the bank was not recorded."
 
 
@@ -157,8 +159,9 @@ def rerun_key(view: dict[str, Any], walk: LiveWalk) -> tuple[str, str]:
 def review_body(
     view: dict[str, Any], table: dict[str, Expected], walk: LiveWalk, pending: Sequence[dict[str, Any]] = ()
 ) -> dict[str, Any]:
-    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明). pending 为当时全部
-    待决任务 (复核队列各项): 下 rerun 时同程序同一次执行其余可重跑的任务随之重跑 (一轮失败算一组, 同
+    """对一条待决任务的决定 (请求体), 按演示决定表期望的结论, 不看模型的建议动作 (见模块说明); 只是期望确认而模型
+    建议认定错报 (复核队列的 allowed_decisions 没有 confirm, 需求 R363) 时改为推翻, 结论为不是错报. pending 为当时
+    全部待决任务 (复核队列各项): 下 rerun 时同程序同一次执行其余可重跑的任务随之重跑 (一轮失败算一组, 同
     decisions.rerun_group), 一并计数."""
     task = view["task"]
     kind = task["kind"]
@@ -194,6 +197,8 @@ def review_body(
                 "reason": expected.reason or conclusion,
                 "override_conclusion": conclusion,
             }
+        if "confirm" not in view["allowed_decisions"]:  # 模型建议认定错报: 不同意, 不是错报
+            return body | {"decision": "override", "override_conclusion": NOT_MISSTATEMENT_CONCLUSION}
         return body | {"decision": "confirm"}
     if kind == "dispute":
         return body | dispute_fields(view, expected)

@@ -27,6 +27,7 @@ _STATUS: dict[str, int] = {
     "NOT_AWAITING_REVIEW": 409,
     "NOT_AWAITING_CORRECTION": 409,  # 不在等待更正时提交更正通知 (需求 R162)
     "NOT_RERUNNABLE": 409,
+    "NOT_WITHDRAWABLE": 409,  # 不在执行阶段等复核或 FIN-01 闸门处 (如 FIN-01 已通过) 撤回复核决定 (需求 R363)
     "XERO_NOT_CONNECTED": 409,
     "XERO_TENANT_REQUIRED": 409,
     "XERO_RECONNECT_REQUIRED": 409,

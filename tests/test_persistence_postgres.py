@@ -865,7 +865,7 @@ async def test_new_document_types_round_trip(storage):
 
 
 @pytest.mark.parametrize("checkpoint_backend", ["memory", "postgres"])
-async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend):
+async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend, monkeypatch):
     from contextlib import AsyncExitStack
 
     from backend.contracts.models import (
@@ -874,9 +874,11 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         GateVerdict,
         Judgment,
         Misstatement,
+        MisstatementStatus,
         OpinionType,
         Phase,
         ReviewTask,
+        ReviewWithdrawal,
         TaskStatus,
     )
     from backend.core.config import Settings
@@ -933,8 +935,26 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
             await settle()
             field = "reviewed_by" if hasattr(decision, "reviewed_by") else "decided_by"
             await decisions.submit(e.id, decision.model_copy(update={field: e.owner_id}))
-            if checkpoint_backend == "postgres" and decision.id == REVIEWS[0].id:
+            if checkpoint_backend == "postgres" and decision.id == "D-REV02-0612":
                 await settle()
+
+                # 撤回已提交到真实库, 写检查点失败后重建连接与 runner; 恢复须补回撤回, 不能把旧错报再次累计.
+                async def lost_checkpoint(*args, **kwargs):
+                    raise OSError("写检查点前退出")
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(graph, "aupdate_state", lost_checkpoint)
+                    with pytest.raises(OSError, match="写检查点前退出"):
+                        await decisions.withdraw_review(e.id, "WD-1", decision.id, reason=None, withdrawn_by=e.owner_id)
+                withdrawal = await deps.output_store.get(e.id, ReviewWithdrawal, "WD-1")
+                assert (withdrawal.record_id, withdrawal.reason) == (decision.id, None)
+                assert await deps.output_store.get("ENG-OTHER", ReviewWithdrawal, "WD-1") is None
+                retired = await deps.output_store.get(e.id, Misstatement, f"M-{decision.id}")
+                assert retired.status is MisstatementStatus.withdrawn
+                assert [m.status for m in await deps.output_store.history(e.id, Misstatement, retired.id)] == [
+                    MisstatementStatus.uncorrected,
+                    MisstatementStatus.withdrawn,
+                ]
                 await runner.shutdown()
                 await deps.financial_store.engine.dispose()
                 await stack.aclose()
@@ -944,6 +964,15 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
                 runner = GraphRunner(graph, deps, {"mode": "mock", "model": "mock"})
                 decisions = GraphDecisionSubmit(graph, deps, runner)
                 await runner.resume(e.id)
+                snapshot = await settle()
+                assert snapshot.values["review_withdrawals"] == [withdrawal]
+                assert snapshot.values["misstatements"][0].status is MisstatementStatus.withdrawn
+                task = await deps.output_store.get(e.id, ReviewTask, decision.task_id)
+                assert task.status is TaskStatus.pending
+                await decisions.submit(
+                    e.id,
+                    decision.model_copy(update={"id": "D-REDECIDE", "target_version": task.target_version}),
+                )
         await settle()
         final = await deps.engagement_store.get(e.id)
         assert final.phase == Phase.Archived and final.locked
@@ -953,7 +982,11 @@ async def test_full_workflow_real_storage(storage, tmp_path, checkpoint_backend)
         assert len(await deps.output_store.latest(e.id, AuditException)) == 4
         assert len(await deps.output_store.latest(e.id, Judgment)) == 6
         assert all(t.status == TaskStatus.decided for t in await deps.output_store.latest(e.id, ReviewTask))
-        assert [m.amount_cents for m in await deps.output_store.latest(e.id, Misstatement)] == [14200000]
+        misstatements = await deps.output_store.latest(e.id, Misstatement)
+        assert [m.amount_cents for m in misstatements if m.status is not MisstatementStatus.withdrawn] == [14200000]
+        if checkpoint_backend == "postgres":
+            assert [m.id for m in misstatements if m.status is MisstatementStatus.withdrawn] == ["M-D-REV02-0612"]
+            assert values["uncorrected_schedule"].total_cents == 14200000
         assert len(await deps.output_store.latest(e.id, AuditReportVersion)) == 2
         assert len(await deps.financial_store.documents(e.id)) == 5
     finally:

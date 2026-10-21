@@ -329,7 +329,11 @@ async def test_misstatement_path_reaches_fin04(p2: P2) -> None:
     state = apply_patch(apply_patch(p2.state, effects_patch(missed)), effects_patch(kept))
     state = state | {"procedure_pack": [*state["procedure_pack"], fin04]}  # type: ignore[assignment]
     ctx = run_context(p2.deps, state, "FIN-04")
-    assert ctx.run.params_snapshot == {"materiality_cents": 32431, "clearly_trivial_cents": 1622}
+    assert ctx.run.params_snapshot == {
+        "materiality_cents": 32431,
+        "performance_materiality_cents": 16216,
+        "clearly_trivial_cents": 1622,
+    }
     patch = await build_agents(p2.deps)["FIN-04"].run(ctx)
     assert patch["uncorrected_schedule"] == UncorrectedSchedule(
         id="SCHEDULE",

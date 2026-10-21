@@ -923,9 +923,9 @@ def lifecycle_misstatement(**changes: Any) -> Misstatement:
 
 
 def test_misstatement_lifecycle_fields_default_and_old_rows_read_back() -> None:
-    """验收 1, 10: 状态恰为 8 值; 新字段恰为 LIFECYCLE_DEFAULTS 所列, 缺省 account_code None, status identified,
-    needs_recommunication 假, adjustment_entry_nos [], corrected_cents 0, 其余为 None; Store 中只有 R19 字段且 status
-    uncorrected 的旧行 (R56 真实库) 照常读回, 新字段取缺省."""
+    """验收 1, 10: 状态恰为 9 值 (需求 R363 加 withdrawn); 新字段恰为 LIFECYCLE_DEFAULTS 所列, 缺省 account_code
+    None, status identified, needs_recommunication 假, adjustment_entry_nos [], corrected_cents 0, 其余为 None; Store
+    中只有 R19 字段且 status uncorrected 的旧行 (R56 真实库) 照常读回, 新字段取缺省."""
     assert [s.value for s in MisstatementStatus] == [
         "identified",
         "communicated",
@@ -935,6 +935,7 @@ def test_misstatement_lifecycle_fields_default_and_old_rows_read_back() -> None:
         "uncorrected",
         "evaluated",
         "closed",
+        "withdrawn",
     ]
     assert set(Misstatement.model_fields) == R19_FIELDS | LIFECYCLE_DEFAULTS.keys()
     dumped = lifecycle_misstatement().model_dump()

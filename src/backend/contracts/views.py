@@ -137,6 +137,8 @@ class EngagementOverview(Model):
     progress: PhaseProgress  # 当前阶段的进度与正在运行的程序 (需求 R325)
     stale_procedure_ids: list[str] = []  # 过期的程序, 按 procedures 的顺序 (含不能重跑的)
     can_rerun: bool = False  # 现在能否重跑过期程序: 图停在等复核, FIN-01 或 RPT-01 闸门, 项目未锁定, 不在执行
+    # 现在能否撤回复核决定 (需求 R363): 图停在执行阶段的等复核或 FIN-01 闸门 (意见决定之前), 项目未锁定, 不在执行
+    can_withdraw: bool = False
     pending_tasks: int  # 待决复核任务数
     materiality_cents: int | None  # 整体重要性, 单位分
     performance_materiality_cents: int | None  # 执行重要性, 单位分

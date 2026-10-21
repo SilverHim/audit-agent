@@ -182,6 +182,12 @@ class ReviewRecordIn(Model):
     consultation_record: str | None = None  # 咨询对象与结论, consulted 为真时必填 (功能 collab 打开时校验)
 
 
+class ReviewWithdrawalIn(Model):
+    """撤回复核决定的请求体 (需求 R363): 理由选填; 撤回 ID, 撤回人与时间由服务端填写."""
+
+    reason: str | None = None
+
+
 class RerunIn(Model):
     """重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274)."""
 
@@ -334,6 +340,9 @@ class ReviewTaskView(Model):
     # allowed_decisions 中须填 misstatement_update 的决定 (orchestration.decisions.update_decisions: 推翻, 对例外认定
     # 错报, 失败任务给手工结果, 需求 R159); 模板没有载荷类别时为空. 前端只看它, 不另抄规则
     update_decisions: list[Decision] = []
+    # 现在可以撤回的决定 (需求 R363): 已决定的任务上最近一条没撤回的决定, 能撤回 (decisions.withdraw_problem) 且总览
+    # can_withdraw 为真时为它的 ID, 否则为空. 前端据此给撤回入口 (POST review-records/{id}/withdraw)
+    withdrawable_record_id: str | None = None
 
 
 class ManualTaskView(Model):

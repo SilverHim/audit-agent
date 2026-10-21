@@ -276,7 +276,14 @@ def assembled(
                 "reversal_entry_no_template": None,
             },
         ),
-        ("FIN-04", {"materiality_cents": 12_000_000, "clearly_trivial_cents": 600_000}),
+        (
+            "FIN-04",
+            {
+                "materiality_cents": 12_000_000,
+                "performance_materiality_cents": 9_000_000,
+                "clearly_trivial_cents": 600_000,
+            },
+        ),
     ],
 )
 def test_build_run_resolves_numbat_params(procedure_id: str, expected: dict[str, Any]) -> None:

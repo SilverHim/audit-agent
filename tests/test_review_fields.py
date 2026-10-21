@@ -8,8 +8,10 @@ from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     Decision,
     DisputeResolution,
+    Judgment,
     MisstatementUpdate,
     NeitherAction,
+    ProposedAction,
     ReviewRecord,
     TaskKind,
 )
@@ -73,6 +75,21 @@ def test_allowed_has_one_row_per_task_kind() -> None:
         TaskKind.dispute: {Decision.dispute_resolution},
         TaskKind.manual: {Decision.manual_result},  # 需求 R92: 人工程序的任务只能提交结果
     } == ALLOWED
+
+
+@pytest.mark.parametrize("proposed", list(ProposedAction))
+def test_normal_choices_follow_the_ai_conclusion(proposed: ProposedAction) -> None:
+    """需求 R363: normal 任务的目标是建议认定错报的判断时没有 confirm (同意即认定, 不同意即推翻), 其余建议照旧; 不给
+    目标时只按任务类型. 别的任务类型不受影响."""
+    target = Judgment.model_construct(id="J-1", version=1, proposed_action=proposed)
+    task = make_task("REV-02", TaskKind.normal, subject_id="S")
+    expected = ALLOWED[TaskKind.normal] - ({Decision.confirm} if proposed is ProposedAction.misstatement else set())
+    assert QUEUE.allowed(task, target) == expected
+    assert QUEUE.allowed(task) == ALLOWED[TaskKind.normal]
+    assert (
+        QUEUE.allowed(make_task("REV-02", TaskKind.unattributed, subject_id="S"), target)
+        == ALLOWED[TaskKind.unattributed]
+    )
 
 
 @pytest.mark.parametrize("kind", [TaskKind.manual, TaskKind.dispute])

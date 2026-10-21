@@ -364,6 +364,9 @@ class MisstatementStatus(StrEnum):
     uncorrected = "uncorrected"  # 拒绝更正, 或审计师决定停止等待
     evaluated = "evaluated"  # 已作未更正错报评价 (本版不写)
     closed = "closed"  # 已结束 (本版不写)
+    # 已作废: 认定它的复核决定在 FIN-01 通过前被撤回 (需求 R363), 任何状态都可转入, 之后不再变; 不是当前结果
+    # (services.staleness.current_misstatements), FIN-04 不累计, 错报闭环不再处理
+    withdrawn = "withdrawn"
 
 
 # 错报来源: 本期发现, 或上期未更正的结转 (ASA 450 第 13 段)
@@ -1349,6 +1352,33 @@ class UncorrectedItem(Model):
     origin: MisstatementOrigin = "current_period"  # 本期或上期未更正结转, 取错报的 origin; 没分类的 (旧口径) 为本期
 
 
+# AI 建议为错报而未认定的金额档位 (需求 R363, 按绝对值): 不超过明显微小临界值, 超过明显微小临界值, 超过执行重要性,
+# 不低于整体重要性 (单独即达到保留意见的金额路径门槛, 同 services.opinion 的口径)
+SuggestionLevel = Literal["trivial", "above_trivial", "above_performance", "material"]
+
+
+class UnrecognisedSuggestion(Model):
+    """AI 建议为错报但审计师没有认定的一条判断 (需求 R363): FIN-04 列在汇总表里, 随 FIN-01 闸门材料呈报, 只提示不
+    阻塞. 当前结果中 AI 判断 (不是人工判断) 的建议动作为 misstatement, 已复核 (confirmed 或 overridden), 而它与取代
+    它的人工判断都没有当前结果的错报."""
+
+    judgment_id: str  # AI 判断
+    procedure_id: str
+    subject_id: str  # 判断对象, 如凭证号, 银行账户
+    task_id: str | None = None  # 复核它的任务; 没有任务 (自动关闭) 为空
+    record_id: str | None = None  # 作出决定的复核决定 (FIN-01 通过前可撤回, DecisionSubmit.withdraw_review); 没有为空
+    decision: Decision | None = None  # 该决定: confirm (旧口径) 或 override (不同意, 不是错报)
+    reviewed_by: str | None = None  # 决定人
+    decided_at: datetime | None = None  # 决定时间
+    account: str  # AI 错报草稿的科目
+    account_code: str | None = None
+    assertion: Assertion
+    amount_cents: int  # 草稿金额, 单位分
+    direction: Direction
+    level: SuggestionLevel  # 金额档位
+    would_qualify: bool  # 计入后未更正错报合计不低于整体重要性 (候选意见会是保留)
+
+
 class UncorrectedSchedule(Versioned):
     """未更正错报汇总表: FIN-04 产出, FIN-01 闸门的呈报材料. 规格书中叫 UncorrectedMisstatementSchedule."""
 
@@ -1358,6 +1388,8 @@ class UncorrectedSchedule(Versioned):
     total_cents: int  # items 金额合计, 不按方向抵销
     materiality_cents: int  # 整体重要性, 单位分
     candidate_opinion: OpinionType  # 合计不低于整体重要性为保留, 否则无保留
+    # AI 建议为错报但未认定的判断 (需求 R363), 按程序与对象排序; 只提示, 不计入合计与候选意见. 旧汇总表没有, 读出为空
+    unrecognised: list[UnrecognisedSuggestion] = []
 
 
 class ObjectRef(Model):
@@ -1543,6 +1575,19 @@ class RerunRequest(Versioned):
     report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿
     requested_by: str  # 请求人的用户 ID
     requested_at: datetime  # 请求时间
+
+
+class ReviewWithdrawal(Versioned):
+    """撤回一条复核决定 (需求 R363): FIN-01 通过前, 图停在 P2 等复核或 FIN-01 闸门时, 审计师撤回执行阶段程序 normal
+    任务上的 confirm, override 或 misstatement 决定. 撤回后任务回到待决, 判断回到待复核, 该决定认定的错报作废
+    (withdrawn), 决定改的例外与人工判断恢复或作废, 程序回到等人, 图回到等复核 (DecisionSubmit.withdraw_review).
+    是 DecisionSubmit 收的第四种决定, 同在 decisions 表, 共用 ID 空间; 原决定保留, 留痕各一条."""
+
+    record_id: str  # 撤回的复核决定
+    task_id: str  # 该决定处理的任务
+    reason: str | None = None  # 理由, 选填
+    withdrawn_by: str  # 撤回人的用户 ID
+    withdrawn_at: datetime  # 撤回时间
 
 
 class CorrectionNotice(Versioned):

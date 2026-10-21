@@ -19,6 +19,7 @@ from backend.contracts.data import DataReadiness
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import AgentId, Phase, Procedure, ProcedureRun, RunStatus, TrailEntry, TrailKind
 from backend.contracts.ports import AuditOutputStore, AuditTrail
+from backend.contracts.state import EngagementState
 from backend.services.procedure_library import render_text
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,18 @@ def transition(
     )
 
 
+def rewinds(values: EngagementState) -> int:
+    """状态中让图回到执行阶段的决定数: 过期重跑请求与复核决定的撤回 (需求 R363). phase_transition 的 reruns 取它,
+    回退之后再次经过同一阶段也留痕."""
+    return len(values["rerun_requests"]) + len(values["review_withdrawals"])
+
+
 def phase_transition(
     eid: str, before: Phase, after: Phase, procedure_id: str | None = None, reruns: int = 0
 ) -> list[TrailEntry]:
     """项目阶段从 before 变为 after 的留痕; 没变时为空. procedure_id: 引起变化的程序 (如闸门决定的程序).
-    reruns: 当时状态中的过期重跑请求数 (重跑请求写出的回退计入它自己), 不为 0 时并入防重复键: 重跑后再次经过
-    同一阶段也留痕, 重放与补做时同键跳过."""
+    reruns: 当时状态中让图回退的决定数 (rewinds: 过期重跑请求与撤回; 回退的决定写出的回退计入它自己), 不为 0 时
+    并入防重复键: 回退后再次经过同一阶段也留痕, 重放与补做时同键跳过."""
     if before is after:
         return []
     suffix = after.value if reruns == 0 else f"{after.value}:{reruns}"
