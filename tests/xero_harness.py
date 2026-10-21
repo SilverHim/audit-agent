@@ -56,6 +56,7 @@ from backend.orchestration.runner import fixed_procedures
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader
 from backend.services.data_service import DataService
+from backend.services.features import BASELINE, features_text
 from backend.services.review_queue import RERUNNABLE
 from tests.fakes import FakeRuleEngine, FakeTrail, LayeredMockLLM
 from tests.tools.live_budget import Budget, BudgetedLLMClient
@@ -115,13 +116,17 @@ async def start(
 
 
 async def offline_deps(
-    case: XeroCase, *, llm: LLMClient | None = None, rules: RulePresets | None = None
+    case: XeroCase,
+    *,
+    llm: LLMClient | None = None,
+    rules: RulePresets | None = None,
+    features: frozenset[str] = BASELINE,
 ) -> XeroHarness:
     """不连库: 副本经补造清单得到的导入后状态装进假存储 (make_xero_deps(loader=case.loader), 载入器指向副本且
     allow_injected): 账表为 XeroDatasetLoader.tables 与工资册, 文件登记为 fieldwork 阶段为止上传的 21 份 (补登记字段
     取清单, 页文本取副本的 PDF), 合同按 DOC-04 的 fixture 抽取; 登记与函证 mock 读副本的补造目录. 规则引擎为
     FakeRuleEngine(rules), 缺省 XERO_RULES (原目录上的结果, 场景改了规则输入时自己给). 主模型与复核模型同为 llm,
-    缺省读副本的运行副本. 留痕为 FakeTrail."""
+    缺省读副本的运行副本. 留痕为 FakeTrail. features 为启用的功能 (缺省基线; 分录测试的场景要 journals)."""
     client = llm if llm is not None else LayeredMockLLMClient([case.supplements / "llm"])
     deps = make_xero_deps(
         trail=FakeTrail(),
@@ -129,25 +134,31 @@ async def offline_deps(
         llm=client,
         review_llm=client,
         loader=case.loader,
+        features=features,
     )
     engagement = xero_engagement(case.loader)
     return await start(case, deps, engagement, engagement.owner_id, xero_documents("fieldwork", case.loader))
 
 
-async def db_deps(case: XeroCase, *, llm: LLMClient | None = None) -> XeroHarness:
+async def db_deps(case: XeroCase, *, llm: LLMClient | None = None, features: frozenset[str] = BASELINE) -> XeroHarness:
     """连库 (TEST_DATABASE_URL, 已迁移的独立测试库; 没配时跳过): 组装根的真实实现 (SqlRuleEngine, 证据文件存于副本
     旁的 evidence/), 数据集载入换成指向副本的 XeroDatasetLoader(allow_injected), 登记与函证 mock 按数据集读副本的
     补造目录. 新建项目负责人 (Jordan Ellis) 与项目 (画像 ID 换成随机的, 同库重复建不冲突), 经真实 DataService 做演示
     数据导入的 acceptance 与 fieldwork, 再以负责人确认数据已齐 (DataStore.confirm_ready, 理由同 xero_flow, 记当时
     体检不通过的项与 ready 留痕; 不经主图, 所以不走 DataService.confirm_ready 的等数据检查). 主模型与复核模型换成
-    llm, 缺省读副本的运行副本 (上传处理的分类与合同抽取也用它)."""
+    llm, 缺省读副本的运行副本 (上传处理的分类与合同抽取也用它). features 同 offline_deps (组装根按它建程序库)."""
     url = os.getenv("TEST_DATABASE_URL")
     if not url:
         pytest.skip("Set TEST_DATABASE_URL to a migrated disposable PostgreSQL database")
     from backend.core.config import Settings
     from backend.main import build_deps
 
-    settings = Settings(DATABASE_URL=url, EVIDENCE_ROOT=case.snapshot.parents[1] / "evidence", LLM_MODE="mock")
+    settings = Settings(
+        DATABASE_URL=url,
+        EVIDENCE_ROOT=case.snapshot.parents[1] / "evidence",
+        LLM_MODE="mock",
+        FEATURES=features_text(features),
+    )
     deps = build_deps(settings)
     xero = XeroDatasetLoader(
         case.snapshot.parent,

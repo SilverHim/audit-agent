@@ -1,0 +1,258 @@
+{
+  "conclusion": "Invoice ORC1003 (XJ-405) to Hamilton Smith Pty on 17 July 2026 duplicates ORC1008 (XJ-408): CON-X02 provides for one invoice for the Monthly Fee of each calendar month, ORC1008 has the July service record SR-ORC1008 and ORC1003 has none. No credit note reverses ORC1003 before 30 September 2026, so Sales (200) is overstated by AUD 500.00 (occurrence), with Accounts Receivable (610) overstated by AUD 550.00 and GST (820) overstated by AUD 50.00.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "XJ-405 records invoice ORC1003 to Hamilton Smith Pty on 17 July 2026: Sales (200) is credited with 50000 cents (XJ-405-1), GST (820) with 5000 cents (XJ-405-3), and Accounts Receivable (610) is debited with 55000 cents (XJ-405-2).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-3",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "invoice_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "XJ-408 records invoice ORC1008 to the same customer on the same day for the same 55000 cents, crediting Sales (200) with 50000 cents (XJ-408-1).",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-408-1",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+          "locator": "invoice_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Under clause 5.1 of CON-X02 (CON-X02-T2) the supplier issues a tax invoice for the Monthly Fee of each calendar month, on or about the 17th day of that month.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-02c5c90d4ffb",
+          "locator": "CON-X02-T2",
+          "page": 2,
+          "reliability": "external_copy"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "ORC1008 has the service record SR-ORC1008 for July 2026, signed on 31 July 2026; ORC1003 has no service-completion record.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "SR-ORC1008",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+          "locator": "id",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Finding X-GEN-05-1-R12-1 flags the receivable line XJ-405-2 as a suspected duplicate invoice and lists no entry that credits the full 55000 cents back to Hamilton Smith Pty between the invoice date and 30 September 2026 (full_credits is empty); no related entry reverses XJ-405.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "XJ-405-2",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "The auditor shall test the appropriateness of journal entries recorded in the general ledger (ASA 240 para 33(a)).",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P33",
+          "locator": "para 33",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "Two July invoices for the one Monthly Fee, of which only ORC1008 has a service record, show that ORC1003 duplicates ORC1008 and no service was provided for it.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "No credit note cancels the duplicate within the period, so the revenue of ORC1003 remains recorded at 30 September 2026.",
+      "evidence": [],
+      "from_steps": [
+        4,
+        6
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Sales (200) is overstated by 50000 cents, the amount of XJ-405-1, for revenue that did not occur; Accounts Receivable (610) is overstated by 55000 cents and GST (820) by 5000 cents.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        5,
+        7
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-2",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-405-3",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "invoice_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "XJ-408-1",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",
+      "locator": "invoice_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-02c5c90d4ffb",
+      "locator": "CON-X02-T2",
+      "page": 2,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "SR-ORC1008",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-4fad1af2-b871-4ac5-a15a-3c5e32d2e2c4",
+      "locator": "id",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P33",
+      "locator": "para 33",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A second service-completion record for July, or a variation of CON-X02 providing for two Monthly Fees, would show that ORC1003 is a valid invoice.",
+  "proposed_action": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Sales (200)",
+    "assertion": "Occurrence",
+    "amount_cents": 50000,
+    "direction": "overstated",
+    "account_code": "200"
+  },
+  "self_confidence": 0.85
+}

@@ -1,15 +1,16 @@
 """注入测试的离线断言 (设计稿 v2.1 第 8 节): 在 xero_case 的副本上经测试台 (tests/xero_harness) 跑现有程序.
 - T0 基线副本 (需求 R121): 不打补丁的副本与原目录等价, 现有程序在副本上的结果即各场景的对照值. 七张表逐行相同已由
   tests/test_xero_case (R74 验收 3) 断言, 不另写.
-- T1 收入截止 (需求 R122, 设计稿第 8.3 节), T4 银行回函余额差异 (需求 R123, 第 8.6 节): 规则引擎预置该场景的例外
-  与候选行, 大模型输出叠在 tests/fixtures/llm_injected/<场景>.
+- T1 收入截止 (需求 R122, 设计稿第 8.3 节), T2 重复开票未冲销 (需求 R252, 第 8.4 节), T4 银行回函余额差异 (需求
+  R123, 第 8.6 节): 规则引擎预置该场景的例外与候选行, 大模型输出叠在 tests/fixtures/llm_injected/<场景>. T2 在演示
+  配置的功能集 (含分录测试) 上跑, 其余在基线上跑.
 - 真实大模型成对断言 (需求 R124) 的辅助 (paired_side, assert_t1_pair, assert_t4_pair) 写在这里, 连库 live 用例与
   这里不联网的自测共用.
 离线跑法只检编排与校验链路: 判断结论是预写的 fixture, 不证明系统能识别错报 (第 8.1 节). 副本要本地快照 (没有时跳过),
 标 external. 连库的见 tests/test_xero_injections_db."""
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from backend.contracts.models import (
     MisstatementDraft,
     ProcedureRun,
     ProposedAction,
+    StepStatus,
     TrailKind,
 )
 from backend.contracts.ports import AuditOutputStore, LLMClient
@@ -40,6 +42,7 @@ from tests.fakes import csh05_population, engine_result
 from tests.test_e2e_xero17 import Xero17, run_xero17
 from tests.tools.live_budget import Budget
 from tests.xero_fakes import (
+    DEMO_FEATURES,
     ORC1026,
     REPO,
     XERO_PERIOD,
@@ -47,6 +50,7 @@ from tests.xero_fakes import (
     xero_contracts,
     xero_csh02_rows,
     xero_documents,
+    xero_gen05_result,
     xero_rev08_exception,
     xero_tables,
 )
@@ -171,10 +175,11 @@ def llm_calls(ran: Ran) -> list[tuple[str, str, int, str | None]]:
     ]
 
 
-def same_judgments(left: EngagementState, right: EngagementState, ids: set[str]) -> None:
-    """两次执行中 ids 这几条判断逐字段相同 (除 RUN_FIELDS)."""
-    a = {j.id: j.model_dump(exclude=RUN_FIELDS) for j in left["judgments"] if j.id in ids}
-    b = {j.id: j.model_dump(exclude=RUN_FIELDS) for j in right["judgments"] if j.id in ids}
+def same_judgments(left: EngagementState, right: EngagementState, ids: set[str], exclude: Iterable[str] = ()) -> None:
+    """两次执行中 ids 这几条判断逐字段相同 (除 RUN_FIELDS 与 exclude)."""
+    fields = RUN_FIELDS | set(exclude)
+    a = {j.id: j.model_dump(exclude=fields) for j in left["judgments"] if j.id in ids}
+    b = {j.id: j.model_dump(exclude=fields) for j in right["judgments"] if j.id in ids}
     assert sorted(a) == sorted(ids) and a == b
 
 
@@ -254,6 +259,162 @@ async def test_t1_offline_cutoff_misstatement(xero_case: Any) -> None:
         (ORC1026, LLM_INJECTED / "T1")
     ]
     same_judgments(ran.state, baseline, {j.id for j in baseline["judgments"]} - {T1_ORC1026})
+
+
+# ── T2 重复开票未冲销 (需求 R252; 设计稿第 8.4 节) ──
+
+T2_FEATURES = DEMO_FEATURES  # 分录测试 (GEN-05, GEN-02) 在演示配置里; 基线一侧同样用它
+T2_XJ405 = "J-GEN-02-1-XJ-405"
+T2_DRAFT = MisstatementDraft(
+    type="factual",
+    account="Sales (200)",
+    assertion="Occurrence",
+    amount_cents=50000,
+    direction="overstated",
+    account_code="200",
+)
+T2_VOUCHERS = ["XJ-397", "XJ-405", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # T2 上 GEN-02 的判断对象 (T0 另有 XJ-430)
+T2_UNAFFECTED = {f"J-GEN-02-1-{no}" for no in ("XJ-397", "XJ-449", "XJ-499", "XJ-575", "XJ-601")}
+T2_RENUMBERED = "J-GEN-02-1-XJ-449"  # 它解释的 R10 例外随 XJ-430 删去由 R10-2 改编为 R10-1
+ORC1008 = "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b"  # 与 ORC1003 同日同额的 Hamilton Smith 发票, 有 7 月服务记录
+CON_X02 = "DOC-02c5c90d4ffb"  # 补造的 contracts/CON-X02.pdf (manifest 的文件 ID)
+
+
+def t2_gen05(run: ProcedureRun) -> RuleResult:
+    """T2 的 GEN-05: 贷项凭证 XJ-430 删去后 R10 只剩 XJ-449-2 (编号变为 R10-1), R12 (XJ-405-2) 的 full_credits 为空;
+    其余 (R09, R11, R12 的 paired_invoices, 不执行的规则与理由) 同 T0. 字段同连库 SqlRuleEngine 的结果 (连库用例断言
+    两者相等)."""
+    base = xero_gen05_result(run)
+    kept = []
+    for x in base.exceptions:
+        if x.source_ids == ["XJ-430-2"]:
+            continue
+        if x.rule_id == "R10":
+            x = x.model_copy(update={"id": f"X-GEN-05-{run.run_no}-R10-1"})
+        elif x.rule_id == "R12":
+            x = x.model_copy(update={"detail": {**x.detail, "full_credits": []}})
+        kept.append(x)
+    return engine_result("GEN-05", base.model_copy(update={"exceptions": kept}))
+
+
+# T2 的规则预置: GEN-05 按上; PLN-07, PLN-01 在副本上随试算表变 (只在连库断言), 离线沿用 T0 的 (不影响分录一串)
+T2_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {**XERO_RULES, "GEN-05": t2_gen05}
+
+
+def gen05_findings(state: EngagementState, rule_id: str) -> list[AuditException]:
+    return [x for x in state["exceptions"] if x.procedure_id == "GEN-05" and x.rule_id == rule_id]
+
+
+def assert_t2_rules(base: EngagementState, injected: EngagementState) -> None:
+    """R252 验收 2, 4 的规则层: R10 由两条 (XJ-430-2, XJ-449-2, 都是 55000) 变为只有 XJ-449-2 (R10-1); R12 两边都是
+    XJ-405-2 (55000, ORC1003), paired_invoices 都是 ORC1008 / XJ-408-2, full_credits 由 [XJ-430] 变为 []; R09
+    (XJ-397-3, XJ-499-2) 与 R11 (XJ-575-1, XJ-601-1) 两边逐字段相同."""
+
+    def r10(state: EngagementState) -> list[tuple[str, list[str], int | None]]:
+        return [(x.id, x.source_ids, x.amount_cents) for x in gen05_findings(state, "R10")]
+
+    assert r10(base) == [("X-GEN-05-1-R10-1", ["XJ-430-2"], 55000), ("X-GEN-05-1-R10-2", ["XJ-449-2"], 55000)]
+    assert r10(injected) == [("X-GEN-05-1-R10-1", ["XJ-449-2"], 55000)]
+    paired = [{"invoice_id": ORC1008, "invoice_no": "ORC1008", "journal_entry_id": "XJ-408-2"}]
+    for state, credits in ((base, ["XJ-430"]), (injected, [])):
+        [r12] = gen05_findings(state, "R12")
+        assert (r12.source_ids, r12.amount_cents, r12.detail["invoice_no"]) == (["XJ-405-2"], 55000, "ORC1003")
+        assert (r12.detail["paired_invoices"], r12.detail["full_credits"]) == (paired, credits)
+    for rule_id, sources in (("R09", ["XJ-397-3", "XJ-499-2"]), ("R11", ["XJ-575-1", "XJ-601-1"])):
+        assert [x.source_ids[0] for x in gen05_findings(injected, rule_id)] == sources
+        assert gen05_findings(injected, rule_id) == gen05_findings(base, rule_id), rule_id
+
+
+def t2_request(client: LayeredMockLLMClient) -> str:
+    """GEN-02 对 XJ-405 的请求全文 (恰好一次)."""
+    [request] = [r for r in client.requests if (r.procedure_id, r.fixture_key) == ("GEN-02", "XJ-405")]
+    return request_text(request)
+
+
+def assert_t2_judgments(base: EngagementState, injected: EngagementState, project_fields: Iterable[str] = ()) -> None:
+    """R252 验收 2, 3, 4 的判断层: T0 上 XJ-405 accept 且无草稿, 有 XJ-430 的判断; T2 上没有 XJ-430 的判断, XJ-405 为
+    misstatement (T2_DRAFT), 只解释 R12; 其余 5 条与 T0 逐字段相同 (除 RUN_FIELDS 与随项目不同的 project_fields;
+    XJ-449 另除解释的例外, 那条例外随 R10 改编号, 指向的仍是 XJ-449-2)."""
+    judgments = {j.id: j for j in base["judgments"]}
+    original = judgments[T2_XJ405]
+    assert (original.proposed_action, original.misstatement_draft) == (ProposedAction.accept, None)
+    assert "J-GEN-02-1-XJ-430" in judgments
+    judgments = {j.id: j for j in injected["judgments"]}
+    assert sorted(j.subject_id for j in judgments.values() if j.procedure_id == "GEN-02") == T2_VOUCHERS
+    duplicate = judgments[T2_XJ405]
+    assert (duplicate.proposed_action, duplicate.misstatement_draft) == (ProposedAction.misstatement, T2_DRAFT)
+    assert duplicate.exception_ids == ["X-GEN-05-1-R12-1"]
+    same_judgments(injected, base, T2_UNAFFECTED - {T2_RENUMBERED}, exclude=project_fields)
+    same_judgments(injected, base, {T2_RENUMBERED}, exclude={"exception_ids", *project_fields})
+    renumbered = [{j.id: j for j in s["judgments"]}[T2_RENUMBERED].exception_ids for s in (base, injected)]
+    assert renumbered == [["X-GEN-05-1-R10-2"], ["X-GEN-05-1-R10-1"]]
+
+
+def test_t2_patch_removes_the_credit_note(xero_case: Any) -> None:
+    """R252 验收 1: 补丁删去 JournalNumber 430 (CR1003 的过账: 200 借 500.00, 610 贷 550.00, 820 借 50.00), CR1003 的
+    Status 由 PAID 改为 VOIDED, ORC1003 的 Status 由 PAID 改为 AUTHORISED, AmountDue 由 0.0 改为 550.0 (xero_case
+    已核对各项改前值), 试算表 200 由 -3243100 调为 -3293100, 610 由 1019950 调为 1074950, 820 由 -119197 调为 -124197
+    (xero_case 已核对副本借贷平衡且等于分录推出的余额); 导入后的各表与原目录相比只少 XJ-430 的 3 行, 试算表变这 3 行
+    (发票表不变: ORC1003 仍是已生效的发票). 补丁与大模型输出中检索不到登录账号联系人."""
+    case: XeroCase = xero_case("T2")
+    original = imported_tables()
+    lines = {r.id: (r.account_code, r.debit_cents, r.credit_cents) for r in original[TableKind.journal_entries]}
+    assert {i: v for i, v in lines.items() if i.startswith("XJ-430-")} == {
+        "XJ-430-1": ("200", 50000, 0),
+        "XJ-430-2": ("610", 0, 55000),
+        "XJ-430-3": ("820", 5000, 0),
+    }
+    assert table_diff(original, imported_tables(case.loader)) == {
+        TableKind.journal_entries: TableDiff(added=[], deleted=["XJ-430-1", "XJ-430-2", "XJ-430-3"], changed={}),
+        TableKind.trial_balance: TableDiff(
+            added=[],
+            deleted=[],
+            changed={
+                "current:200": {"balance_cents": (-3243100, -3293100)},
+                "current:610": {"balance_cents": (1019950, 1074950)},
+                "current:820": {"balance_cents": (-119197, -124197)},
+            },
+        ),
+    }
+    assert scan_copies(SNAPSHOTS / SNAPSHOT, [INJECTIONS / "T2.json", LLM_INJECTED / "T2"]) == []
+
+
+async def test_t2_offline_duplicate_invoice(xero_case: Any) -> None:
+    """R252 验收 2, 3: 演示配置的功能集下, T0 与 T2 副本各跑 GEN-02 的依赖闭包 (GEN-05, GEN-02). T0 规则预置
+    XERO_RULES, 大模型读运行副本: XJ-405 的请求含 XJ-430 的 3 行, 判断 accept. T2 规则预置 T2_RULES, XJ-405 的大模型
+    输出取 llm_injected/T2: 规则层见 assert_t2_rules; XJ-405 的请求不含 XJ-430; 判断为 misstatement {factual, Sales
+    (200), Occurrence, 50000, overstated, 科目代码 200}, 证据含 XJ-405-1, XJ-408-1, SR-ORC1008 与 CON-X02 第 2 页的
+    5.1 条 (每月一张月费发票), 结论写明应收多记 550.00, GST 多记 50.00; 一次通过四级校验, 推理链每步都受支持 (金额
+    校验: 50000 即副本中 XJ-405-1 贷方的金额); 没有 XJ-430 的判断, 其余判断同 T0 (assert_t2_judgments)."""
+    t2, t0 = xero_case("T2", base="t2"), xero_case("T0", base="t0")
+    base_client = LayeredMockLLMClient([t0.supplements / "llm"])
+    baseline = (await run_programs(await offline_deps(t0, llm=base_client, features=T2_FEATURES), ["GEN-02"])).state
+    client = LayeredMockLLMClient([LLM_INJECTED / "T2", t2.supplements / "llm"])
+    deps = await offline_deps(t2, llm=client, rules=T2_RULES, features=T2_FEATURES)
+    ran = await run_programs(deps, ["GEN-02"])
+    assert_t2_rules(baseline, ran.state)
+    assert all(f'"id": "XJ-430-{n}"' in t2_request(base_client) for n in (1, 2, 3))
+    assert "XJ-430" not in t2_request(client)
+    assert_t2_judgments(baseline, ran.state)
+    duplicate = {j.id: j for j in ran.state["judgments"]}[T2_XJ405]
+    cited = {(p.source_type, p.source_id, p.locator, p.page) for p in duplicate.evidence}
+    assert {
+        ("journal_entry", "XJ-405-1", "credit_cents", None),
+        ("journal_entry", "XJ-408-1", "credit_cents", None),
+        ("delivery_note", "SR-ORC1008", "signed_date", None),
+        ("document", CON_X02, "CON-X02-T2", 2),
+    } <= cited
+    assert {s.status for s in duplicate.reasoning_chain} == {StepStatus.supported}
+    assert "Accounts Receivable (610) overstated by AUD 550.00" in duplicate.conclusion
+    assert "GST (820) overstated by AUD 50.00" in duplicate.conclusion
+    [line] = [r for r in imported_tables(t2.loader)[TableKind.journal_entries] if r.id == "XJ-405-1"]
+    assert (line.account_code, line.credit_cents, line.debit_cents) == ("200", T2_DRAFT.amount_cents, 0)
+    calls = llm_calls(ran)
+    assert [key for pid, key, *_ in calls if pid == "GEN-02"] == T2_VOUCHERS
+    assert {(attempt, failed) for _, _, attempt, failed in calls} == {(1, None)}
+    assert [(r.procedure_id, r.fixture_key) for r in client.reads if r.root == LLM_INJECTED / "T2"] == [
+        ("GEN-02", "XJ-405")
+    ]
 
 
 # ── T4 银行回函余额差异 (需求 R123) ──
