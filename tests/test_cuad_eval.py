@@ -1,11 +1,13 @@
-"""CUAD 评测的评分与反编造函数, 入库的逐页文本与 DOC-04 离线 mock 输出 (需求 R246). 只读 tests/fixtures/cuad, 不读
-data/external, 不联网, 默认就跑. 文中的摘录与条款出自 CUAD v1 (The Atticus Project, CC BY 4.0), 署名见
-tests/fixtures/cuad/README.md."""
+"""CUAD 评测的评分与反编造函数, 入库的逐页文本, DOC-04 离线 mock 输出 (需求 R246) 与金标准的自洽 (需求 R247). 只读
+tests/fixtures/cuad, 不读 data/external, 不联网, 默认就跑. 文中的摘录与条款出自 CUAD v1 (The Atticus Project,
+CC BY 4.0), 署名见 tests/fixtures/cuad/README.md."""
 
 import json
 from datetime import date
+from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from backend.agents.ingest import build_contract
 from backend.contracts.llm_outputs import ContractExtraction, ExtractedTerm
@@ -17,17 +19,24 @@ from backend.services.judgment_engine import OutputValidator
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import NOW, FakeFinancialStore, FakeTrail
 from tests.tools.cuad_eval import (
-    ALIASES,
     FIXTURES,
+    GOLD,
+    GOODS_TERMS,
     LLM,
+    PAGE_FIXTURES,
     PAGES,
+    SUMS,
+    GoldContract,
     fabricated,
+    gold_by_alias,
+    load_gold,
     load_pages,
     locate,
     normalize_party,
     parse_cuad_date,
     same_party,
     split_omitted,
+    starts_on,
 )
 from tests.tools.cuad_fetch import ATTRIBUTION, DISCLAIMER, LICENSE_URL, RECORD_URL
 
@@ -137,17 +146,90 @@ async def test_validator_and_contract() -> None:
 
 def test_readme_credits_every_cuad_file() -> None:
     """验收 5: README 写明署名句, 作者, 数据集名与版本, CC BY 4.0 与链接, Zenodo 链接, CUAD 的免责句, 改动说明, 别名到
-    原文件名的映射, 并列出入库的每个含 CUAD 文本的文件; 目录里没有 PDF; 逐页文本的别名与 ALIASES 一致."""
+    原文件名的映射 (金标准 10 份), 并列出入库的每个含 CUAD 文本的文件; 目录里没有 PDF; 逐页文本即 PAGE_FIXTURES."""
     readme = (FIXTURES / "README.md").read_text(encoding="utf-8")
     for text in (ATTRIBUTION, "The Atticus Project", "CUAD", "v1", LICENSE_URL, RECORD_URL, DISCLAIMER):
         assert text in readme, text
     for change in ("pdfplumber", "节选", "人工标注", "模型生成"):
         assert change in readme, change
-    for alias, source in ALIASES.items():
-        assert f"| {alias} | `{source}` |" in readme, alias
+    for alias, contract in load_gold().items():
+        assert f"| {alias} | `{contract.pdf}` |" in readme, alias
     committed = sorted(p.relative_to(FIXTURES).as_posix() for p in FIXTURES.rglob("*") if p.is_file())
     assert [p for p in committed if p.lower().endswith(".pdf")] == []
     for path in [p for p in committed if p != "README.md"] + ["tests/test_cuad_eval.py"]:
         assert f"`{path}`" in readme, path
-    assert sorted(p.stem for p in PAGES.glob("*.json")) == sorted(ALIASES)
-    assert all(load_pages(alias)["page_count"] == len(load_pages(alias)["pages"]) for alias in ALIASES)
+    assert sorted(p.stem for p in PAGES.glob("*.json")) == list(PAGE_FIXTURES)
+    assert all(load_pages(alias)["page_count"] == len(load_pages(alias)["pages"]) for alias in PAGE_FIXTURES)
+
+
+# 需求 R247 验收 1: 别名, 类型与页数
+GOLD_LIST = [
+    ("CUAD-01", "Distributor", 8),
+    ("CUAD-02", "Distributor", 16),
+    ("CUAD-03", "Distributor", 10),
+    ("CUAD-04", "Supply", 13),
+    ("CUAD-05", "Supply", 7),
+    ("CUAD-06", "Reseller", 5),
+    ("CUAD-07", "Manufacturing", 21),
+    ("CUAD-08", "Service", 7),
+    ("CUAD-09", "Maintenance", 7),
+    ("CUAD-10", "License", 12),
+]
+
+
+def test_gold_contracts() -> None:
+    """需求 R247 验收 1-3: 10 份依次为 GOLD_LIST; 签订日的三处特例 (LIMEENERGY 只认首段并注明 CUAD 原值, PAXMEDICA 首段
+    与签字栏都认, SPARKLING 不计分); 金额都为 null (都没有总价); 货物合同 CUAD-01 至 06 有四类条款与 REV-03 结论,
+    Healthcare (06) 为 more_evidence, 其余 accept; Apollo (07) 起只评 DOC-04; 起草状态都在两种之内."""
+    gold = load_gold()
+    assert [(c.alias, c.category, c.page_count) for c in gold.values()] == GOLD_LIST
+    assert (gold["CUAD-03"].sign_date, "7/7/99" in (gold["CUAD-03"].sign_date_note or "")) == ([date(1999, 9, 7)], True)
+    assert gold["CUAD-08"].sign_date == [date(2018, 5, 25), date(2008, 5, 25)]
+    assert gold["CUAD-09"].sign_date is None
+    assert {c.amount_cents for c in gold.values()} == {None}
+    assert {a: c.rev03 for a, c in gold.items() if c.rev03} == {
+        "CUAD-01": "accept",
+        "CUAD-02": "accept",
+        "CUAD-03": "accept",
+        "CUAD-04": "accept",
+        "CUAD-05": "accept",
+        "CUAD-06": "more_evidence",
+    }
+
+
+@pytest.mark.parametrize("alias", PAGE_FIXTURES)
+def test_gold_matches_page_fixtures(alias: str) -> None:
+    """需求 R247 验收 4: 有逐页文本的三份, 金标准的原文件, 页数与 PDF 哈希 (SHA256SUMS) 同逐页文本; 每条条款的锚点
+    从所记的页开始; 对方出现的页即其别名定位到的页."""
+    contract, fixture = load_gold()[alias], load_pages(alias)
+    pages = fixture["pages"]
+    assert (contract.pdf, contract.page_count) == (fixture["source"], fixture["page_count"])
+    assert f"{fixture['pdf_sha256']}  full_contract_pdf/{contract.pdf}\n" in SUMS.read_text(encoding="utf-8")
+    clauses = [c for found in (contract.terms or {}).values() for c in found]
+    assert clauses and [c.clause for c in clauses if not starts_on(pages, c.page, c.anchor)] == []
+    assert contract.counterparty_pages == sorted({n for a in contract.counterparty_aliases for n in locate(pages, a)})
+
+
+def gold_entry(**changes: Any) -> dict[str, Any]:
+    """金标准 CUAD-01 一条的 JSON 形式, 改 changes 中的字段."""
+    [entry] = [e for e in json.loads(GOLD.read_text(encoding="utf-8")) if e["alias"] == "CUAD-01"]
+    return entry | changes
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"sign_date": []}, {"rev03": None}, {"terms": None}, {"terms": {t: [] for t in GOODS_TERMS[:3]}}],
+    ids=["empty_sign_date", "terms_without_rev03", "rev03_without_terms", "missing_term_type"],
+)
+def test_gold_rejects_inconsistent_entries(changes: dict[str, Any]) -> None:
+    """需求 R247 验收 4: 签订日集合为空 (不计分须写 null), 四类条款与 REV-03 结论缺一, 或少一类条款时读不进来."""
+    GoldContract.model_validate(gold_entry())
+    with pytest.raises(ValidationError):
+        GoldContract.model_validate(gold_entry(**changes))
+
+
+def test_gold_aliases_unique() -> None:
+    """需求 R247 验收 4: 别名重复时读不进来."""
+    first = GoldContract.model_validate(gold_entry())
+    with pytest.raises(ValueError, match="别名重复"):
+        gold_by_alias([first, first])

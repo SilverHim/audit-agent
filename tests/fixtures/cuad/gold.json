@@ -1,0 +1,550 @@
+[
+  {
+    "alias": "CUAD-01",
+    "review": "开发者起草",
+    "csv_filename": "NETGEAR,INC_04_21_2003-EX-10.16-DISTRIBUTOR AGREEMENT.pdf",
+    "pdf": "Part_II/Distributor/NETGEAR,INC_04_21_2003-EX-10.16-DISTRIBUTOR AGREEMENT.pdf",
+    "category": "Distributor",
+    "page_count": 8,
+    "client_name": "NETGEAR, Inc.",
+    "counterparty": "Ingram Micro",
+    "counterparty_aliases": [
+      "Ingram Micro"
+    ],
+    "counterparty_pages": [
+      1,
+      8
+    ],
+    "sign_date": [
+      "1996-11-05",
+      "1996-03-01"
+    ],
+    "sign_date_pages": [
+      1
+    ],
+    "sign_date_note": "签字栏为 1996-10-16 与 1996-11-05, 取较晚者 (即 CSV 的 Agreement Date); CSV 的 Effective Date 1996-03-01 也接受",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "4.E",
+          "page": 2,
+          "anchor": "exceptasmaybespecificallyauthorizedinwritingbynetgearandsubj"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "5.D",
+          "page": 3,
+          "anchor": "forallshipmentstolocationswithintheunitedstatestitletothehar"
+        },
+        {
+          "clause": "4.A",
+          "page": 2,
+          "anchor": "pricesforproducearethosesetoutinnetgearspricelistlesstheappl"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "5.C",
+          "page": 3,
+          "anchor": "productsreceivedbydistributorasaresultofanerrorbynetgearinsh"
+        },
+        {
+          "clause": "8",
+          "page": 4,
+          "anchor": "priortoreturninganyproductwhetherforexchangeorwarrantyornonw"
+        },
+        {
+          "clause": "9.A",
+          "page": 4,
+          "anchor": "distributormayreturnpreviouslypurchasedproductsforreplacemen"
+        }
+      ],
+      "rebate": [
+        {
+          "clause": "4.C",
+          "page": 2,
+          "anchor": "intheeventofalistpricedecreaseonanyoftheproductsdistributorm"
+        }
+      ]
+    },
+    "rev03": "accept",
+    "rev03_note": "5.D: 美国境内的发运在交给承运人时所有权转移, 风险随之转移"
+  },
+  {
+    "alias": "CUAD-02",
+    "review": "开发者起草",
+    "csv_filename": "NANOPHASETECHNOLOGIESCORP_11_01_2005-EX-99.1-DISTRIBUTOR AGREEMENT.PDF",
+    "pdf": "Part_III/Distributor/NANOPHASETECHNOLOGIESCORP_11_01_2005-EX-99.1-DISTRIBUTOR AGREEMENT.PDF",
+    "category": "Distributor",
+    "page_count": 16,
+    "client_name": "Nanophase Technologies Corporation",
+    "counterparty": "Johnson Matthey Catalog Company, Inc.",
+    "counterparty_aliases": [
+      "JOHNSON MATTHEY CATALOG COMPANY, INC.",
+      "d/b/a ALFA AESAR",
+      "ALFA AESAR"
+    ],
+    "counterparty_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "sign_date": [
+      "2005-10-24"
+    ],
+    "sign_date_pages": [
+      1,
+      11
+    ],
+    "sign_date_note": "首段 dated as of 2005-10-24; 签字栏为 2005-10-14 与 2005-10-24",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "4.3",
+          "page": 3,
+          "anchor": "ntcshallinvoicealfaaesarforpaymentofproductsdeliveredtoalfaa"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "4.2",
+          "page": 3,
+          "anchor": "ntcshallshipproductsfobfcaitsfacilitiesandwillarrangedeliver"
+        },
+        {
+          "clause": "3.2",
+          "page": 3,
+          "anchor": "ntcshallshipproductsatalfaaesarsexpensefobfcaincoterms2000nt"
+        },
+        {
+          "clause": "Schedule B 3",
+          "page": 13,
+          "anchor": "allsalesarefobsellerspremisesinburrridgeorromeovilleillinois"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "5.1",
+          "page": 3,
+          "anchor": "subjecttotheprotocoldescribedbelowalfaaesarshallhavetheright"
+        },
+        {
+          "clause": "5.2",
+          "page": 4,
+          "anchor": "ntcmaydiscontinueofferinganyproductforanyreasonbyprovidingsi"
+        },
+        {
+          "clause": "9.2",
+          "page": 6,
+          "anchor": "subjecttotheprotocolinsection51alfaaesarmayreturntontcanypro"
+        },
+        {
+          "clause": "13.3",
+          "page": 9,
+          "anchor": "uponterminationofthisagreementforanyreasonalfaaesarmayiretur"
+        }
+      ],
+      "rebate": []
+    },
+    "rev03": "accept",
+    "rev03_note": "4.2: 所有权与风险在 NTC 码头发运时转移"
+  },
+  {
+    "alias": "CUAD-03",
+    "review": "开发者起草",
+    "csv_filename": "LIMEENERGYCO_09_09_1999-EX-10-DISTRIBUTOR AGREEMENT.PDF",
+    "pdf": "Part_III/Distributor/LIMEENERGYCO_09_09_1999-EX-10-DISTRIBUTOR AGREEMENT.PDF",
+    "category": "Distributor",
+    "page_count": 10,
+    "client_name": "Electric City Corp.",
+    "counterparty": "Electric City of Illinois LLC",
+    "counterparty_aliases": [
+      "Electric City of Illinois LLC",
+      "Electric City of Illinois L.L.C."
+    ],
+    "counterparty_pages": [
+      1,
+      9,
+      10
+    ],
+    "sign_date": [
+      "1999-09-07"
+    ],
+    "sign_date_pages": [
+      1
+    ],
+    "sign_date_note": "CUAD 原值 7/7/99 有误: 首段为 7th day of September, 1999; 签字栏无日期",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "2.7",
+          "page": 4,
+          "anchor": "distributorshallpaycompanywithinthirty30daysofdistributorsor"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "2.3",
+          "page": 3,
+          "anchor": "otherthandropshipdeliveriesalldeliveriesmadepursuanttothisag"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "2.6",
+          "page": 4,
+          "anchor": "unlessthecompanyhasfirstauthorizedorpermittedthereturnofanyn"
+        },
+        {
+          "clause": "4.4",
+          "page": 7,
+          "anchor": "upontheexpirationorterminationofthisagreementpursuanttosecti"
+        }
+      ],
+      "rebate": []
+    },
+    "rev03": "accept",
+    "rev03_note": "2.3: 除直运外, 交货为 FOB 公司在美国本土的工厂"
+  },
+  {
+    "alias": "CUAD-04",
+    "review": "开发者起草",
+    "csv_filename": "AgapeAtpCorp_20191202_10-KA_EX-10.1_11911128_EX-10.1_Supply Agreement.pdf",
+    "pdf": "Part_I/Supply/AgapeAtpCorp_20191202_10-KA_EX-10.1_11911128_EX-10.1_Supply Agreement.pdf",
+    "category": "Supply",
+    "page_count": 13,
+    "client_name": "Organic Preparations Inc.",
+    "counterparty": "Agape ATP International Holding Limited",
+    "counterparty_aliases": [
+      "AGAPE ATP INTERNATIONAL HOLDING LIMITED"
+    ],
+    "counterparty_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13
+    ],
+    "sign_date": [
+      "2018-01-15",
+      "2018-01-31"
+    ],
+    "sign_date_pages": [
+      2,
+      11
+    ],
+    "sign_date_note": "首段 made on 2018-01-15 (即 CSV 的值); 签字页卖方 2018-01-15, 买方 2018-01-31, 按 DOC-04 取较晚者为 01-31, 两者都接受",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "5.4",
+          "page": 5,
+          "anchor": "unlessseparatepaymenttermsareagreedtooutsideofthisagreementb"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "5.1",
+          "page": 5,
+          "anchor": "productsdeliveredpursuanttothetermsofthisagreementshallbesui"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "5.3",
+          "page": 5,
+          "anchor": "thecustomershallinspectallproductspromptlyuponreceiptthereof"
+        }
+      ],
+      "rebate": []
+    },
+    "rev03": "accept",
+    "rev03_note": "5.1: 交货为 Ex Works, 运费与保险由买方承担"
+  },
+  {
+    "alias": "CUAD-05",
+    "review": "开发者起草",
+    "csv_filename": "ULTRAGENYXPHARMACEUTICALINC_12_23_2013-EX-10.9-SUPPLY AGREEMENT.PDF",
+    "pdf": "Part_III/Supply/ULTRAGENYXPHARMACEUTICALINC_12_23_2013-EX-10.9-SUPPLY AGREEMENT.PDF",
+    "category": "Supply",
+    "page_count": 7,
+    "client_name": "Cremer Oleo GmbH & Co KG",
+    "counterparty": "Ultragenyx Pharmaceutical Inc.",
+    "counterparty_aliases": [
+      "Ultragenyx Pharmaceutical Inc",
+      "Ultragenyx"
+    ],
+    "counterparty_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "sign_date": [
+      "2012-11-19"
+    ],
+    "sign_date_pages": [
+      6
+    ],
+    "sign_date_note": null,
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "Article 3 (3)",
+          "page": 2,
+          "anchor": "paymentsshallbemadebyultragenyxineuroandwithindaysafterrecei"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "Article 2 (2)",
+          "page": 2,
+          "anchor": "deliveryoftheproductinbulkformbycremershallbeexwincoterms201"
+        },
+        {
+          "clause": "Article 3 (4)",
+          "page": 2,
+          "anchor": "transferoftitlewithrespecttoanyproductshallbesubjecttofullpa"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "Article 4 (5)",
+          "page": 3,
+          "anchor": "ultragenyxwillperformfinalreleaseoftheproductultragenyxmayre"
+        }
+      ],
+      "rebate": []
+    },
+    "rev03": "accept",
+    "rev03_note": "Article 2 (2): 交货为 EXW (Incoterms 2010); 3 (4) 所有权保留至付清, 不改变控制权转移时点"
+  },
+  {
+    "alias": "CUAD-06",
+    "review": "开发者起草",
+    "csv_filename": "HealthcareIntegratedTechnologiesInc_20190812_8-K_EX-10.1_11776966_EX-10.1_Reseller Agreement.pdf",
+    "pdf": "Part_I/Reseller/HealthcareIntegratedTechnologiesInc_20190812_8-K_EX-10.1_11776966_EX-10.1_Reseller Agreement.pdf",
+    "category": "Reseller",
+    "page_count": 5,
+    "client_name": "Vayyar Imaging Ltd.",
+    "counterparty": "Inde Living Holdings, Inc.",
+    "counterparty_aliases": [
+      "Inde Living Holdings, Inc."
+    ],
+    "counterparty_pages": [
+      1,
+      4,
+      5
+    ],
+    "sign_date": [
+      "2019-07-31"
+    ],
+    "sign_date_pages": [
+      1
+    ],
+    "sign_date_note": null,
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": {
+      "payment": [
+        {
+          "clause": "4.2",
+          "page": 2,
+          "anchor": "ifresellerfailstosubmitorderswithanaggregatevalueequaltoorgr"
+        }
+      ],
+      "control_transfer": [
+        {
+          "clause": "3.2",
+          "page": 1,
+          "anchor": "suppliershallbefullyresponsibleforshippingtheproductstothere"
+        },
+        {
+          "clause": "5.1",
+          "page": 2,
+          "anchor": "immediatelyupondeliveryoftheproductsattheresellersfacilities"
+        }
+      ],
+      "return_right": [
+        {
+          "clause": "6.2",
+          "page": 2,
+          "anchor": "duringthetermsuppliermayextendanoffertoresellerforareturnsdi"
+        }
+      ],
+      "rebate": [
+        {
+          "clause": "6.2",
+          "page": 2,
+          "anchor": "duringthetermsuppliermayextendanoffertoresellerforareturnsdi"
+        }
+      ]
+    },
+    "rev03": "more_evidence",
+    "rev03_note": "3.2, 5.1 只写运送与到货验收, 没有写所有权或风险何时转移; 6.1, 6.3, 6.4 与 4.1, 4.4 被遮盖"
+  },
+  {
+    "alias": "CUAD-07",
+    "review": "开发者起草",
+    "csv_filename": "Apollo Endosurgery - Manufacturing and Supply Agreement.PDF",
+    "pdf": "Part_III/Manufacturing/Apollo Endosurgery - Manufacturing and Supply Agreement.PDF",
+    "category": "Manufacturing",
+    "page_count": 21,
+    "client_name": "Establishment Labs, S.A",
+    "counterparty": "Apollo Endosurgery, Inc.",
+    "counterparty_aliases": [
+      "Apollo Endosurgery"
+    ],
+    "counterparty_pages": [
+      1,
+      13,
+      15
+    ],
+    "sign_date": [
+      "2014-12-05"
+    ],
+    "sign_date_pages": [
+      2,
+      15
+    ],
+    "sign_date_note": "签字栏写 as of the Effective Date, 1.5 定义 Effective Date 为 2014-12-05",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": null,
+    "rev03": null,
+    "rev03_note": null
+  },
+  {
+    "alias": "CUAD-08",
+    "review": "开发者起草",
+    "csv_filename": "PAXMEDICA,INC_07_02_2020-EX-10.12-Master Service Agreement.PDF",
+    "pdf": "Part_II/Service/PAXMEDICA,INC_07_02_2020-EX-10.12-Master Service Agreement.PDF",
+    "category": "Service",
+    "page_count": 7,
+    "client_name": "CRO Consulting (Pty) Limited",
+    "counterparty": "Purinix Pharmaceuticals LLC",
+    "counterparty_aliases": [
+      "Purinix Pharmaceuticals LLC"
+    ],
+    "counterparty_pages": [
+      1,
+      6
+    ],
+    "sign_date": [
+      "2018-05-25",
+      "2008-05-25"
+    ],
+    "sign_date_pages": [
+      1,
+      6
+    ],
+    "sign_date_note": "首段 entered into on May 25th, 2018; 签字栏两处都写 25/05/2008 (CSV 的 Agreement Date 取了它), 两者都接受",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": null,
+    "rev03": null,
+    "rev03_note": null
+  },
+  {
+    "alias": "CUAD-09",
+    "review": "开发者起草",
+    "csv_filename": "SPARKLINGSPRINGWATERHOLDINGSLTD_07_03_2002-EX-10.13-SOFTWARE LICENSE AND MAINTENANCE AGREEMENT.PDF",
+    "pdf": "Part_III/Maintenance/SPARKLINGSPRINGWATERHOLDINGSLTD_07_03_2002-EX-10.13-SOFTWARE LICENSE AND MAINTENANCE AGREEMENT.PDF",
+    "category": "Maintenance",
+    "page_count": 7,
+    "client_name": "Garman Routing Systems, Inc.",
+    "counterparty": "Sparkling Spring Water Group Limited",
+    "counterparty_aliases": [
+      "SPARKLING SPRING WATER GROUP LIMITED",
+      "SPARKLING"
+    ],
+    "counterparty_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "sign_date": null,
+    "sign_date_pages": [
+      6
+    ],
+    "sign_date_note": "Dated the ____ day of May, 2000: 日空着, 不计分",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": null,
+    "rev03": null,
+    "rev03_note": null
+  },
+  {
+    "alias": "CUAD-10",
+    "review": "开发者起草",
+    "csv_filename": "EuromediaHoldingsCorp_20070215_10SB12G_EX-10.B(01)_525118_EX-10.B(01)_Content License Agreement.pdf",
+    "pdf": "Part_I/License_Agreements/EuromediaHoldingsCorp_20070215_10SB12G_EX-10.B(01)_525118_EX-10.B(01)_Content License Agreement.pdf",
+    "category": "License",
+    "page_count": 12,
+    "client_name": "EuroMedia Holdings Corp.",
+    "counterparty": "Rogers Cable Communications Inc.",
+    "counterparty_aliases": [
+      "Rogers Cable Communications Inc.",
+      "Rogers"
+    ],
+    "counterparty_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "sign_date": [
+      "2006-07-11"
+    ],
+    "sign_date_pages": [
+      1
+    ],
+    "sign_date_note": "made as of July 11, 2006 (the Effective Date); 末页接受栏未填",
+    "counterparty_abn": null,
+    "amount_cents": null,
+    "terms": null,
+    "rev03": null,
+    "rev03_note": null
+  }
+]

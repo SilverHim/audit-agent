@@ -3,12 +3,16 @@
 - parse_cuad_date: CUAD CSV 的签订日 (m/d/yy, yy >= 90 补 19yy), 含遮盖 "[]" 的不计.
 - normalize_party, same_party: 当事方名称的规范化与比对 (去公司后缀与括号里的定义名, difflib 相似度 >= 0.9 或互相包含).
 - split_omitted, anchor, locate: CUAD 摘录按 <omitted> 拆段, 取前 60 个字母数字作锚点, 在逐页文本里定位页码.
-- fabricated: 反编造检查: 条款文本的锚点不从它声明的那一页开始 (只在评测里算, 不进正式校验).
-- 逐页文本: tests/fixtures/cuad/pages/<别名>.json, 由 pdf_pages 从 data/external/cuad 的 PDF 抽出 (同
-  FileEvidenceStore.pages 的 pdfplumber 调用); 重生成: uv run python -m tests.tools.cuad_eval
-  [--cuad data/external/cuad]. 测试只读入库的 JSON, 不读 data/external.
+- starts_on, fabricated: 锚点是否从某页开始; 反编造检查: 条款文本的锚点不从它声明的那一页开始 (只在评测里算, 不进
+  正式校验).
+- 金标准 (需求 R247): tests/fixtures/cuad/gold.json, 10 份合同 (GoldContract, load_gold), 开发者逐份读 PDF 起草, 用户
+  抽查过的标 "用户抽查"; SHA256SUMS 记这 10 份 PDF 与 master_clauses.csv, CUAD_v1.json 的 sha256.
+- 逐页文本: tests/fixtures/cuad/pages/<别名>.json (PAGE_FIXTURES 三份), 由 pdf_pages 从 data/external/cuad 的 PDF
+  抽出 (同 FileEvidenceStore.pages 的 pdfplumber 调用); 重生成逐页文本与 SHA256SUMS: uv run python -m
+  tests.tools.cuad_eval [--cuad data/external/cuad]. 测试只读入库的文件, 不读 data/external.
 
-合同 ID 与文件 ID 用别名 CUAD-nn: 原文件名含逗号, 空格与 #. 别名到原文件名见 ALIASES 与 tests/fixtures/cuad/README.md.
+合同 ID 与文件 ID 用别名 CUAD-nn: 原文件名含逗号, 空格与 #. 别名到原文件见 gold.json 的 pdf 与
+tests/fixtures/cuad/README.md.
 """
 
 import argparse
@@ -18,20 +22,23 @@ import json
 import re
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Self
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter, model_validator
 
 from backend.contracts.llm_outputs import ExtractedTerm
+from backend.contracts.models import TermType
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "tests" / "fixtures" / "cuad"
 PAGES = FIXTURES / "pages"  # 逐页文本: <别名>.json
 LLM = FIXTURES / "llm"  # 离线 mock 输出: <程序>/<别名>.json (不放 tests/fixtures/llm, 免得弄红 Numbat 的守卫)
-# 别名 → CUAD_v1/full_contract_pdf 下的相对路径 (master_clauses.csv 的 Filename 为其文件名)
-ALIASES = {
-    "CUAD-01": "Part_II/Distributor/NETGEAR,INC_04_21_2003-EX-10.16-DISTRIBUTOR AGREEMENT.pdf",
-    "CUAD-03": "Part_III/Distributor/LIMEENERGYCO_09_09_1999-EX-10-DISTRIBUTOR AGREEMENT.PDF",
-    "CUAD-05": "Part_III/Supply/ULTRAGENYXPHARMACEUTICALINC_12_23_2013-EX-10.9-SUPPLY AGREEMENT.PDF",
-}
+GOLD = FIXTURES / "gold.json"  # 金标准 (需求 R247)
+SUMS = FIXTURES / "SHA256SUMS"  # 金标准 PDF 与两个标注文件的 sha256, 路径相对 CUAD_v1/ (sha256sum 的格式)
+PAGE_FIXTURES = ("CUAD-01", "CUAD-03", "CUAD-05")  # 入库逐页文本的合同
+ANNOTATIONS = ("master_clauses.csv", "CUAD_v1.json")  # SHA256SUMS 里 PDF 以外的两个文件
+# 货物合同金标准的四类条款: CUAD 没有标注, 人工补标
+GOODS_TERMS = (TermType.payment, TermType.control_transfer, TermType.return_right, TermType.rebate)
 ANCHOR = 60  # 锚点取的字母数字个数 (cuad.md 第 2 节)
 SIMILAR = 0.9  # 当事方名称相似度门槛
 # 当事方名称里去掉的公司后缀 (规范化后按整词比对; d/b/a 规范化后为 "d b a")
@@ -93,15 +100,78 @@ def locate(pages: list[str], excerpt: str) -> list[int]:
     return [n for n, page in enumerate(pages, 1) if key and key in alnum(page)]
 
 
+def starts_on(pages: list[str], page: int, key: str) -> bool:
+    """锚点 key 是否从第 page 页开始: 跨页的条款, 锚点可延续到下一页, 但须从这一页开始. 页码越界或 key 为空为假."""
+    if not key or not 1 <= page <= len(pages):
+        return False
+    text = alnum(pages[page - 1])
+    found = (text + alnum(pages[page]) if page < len(pages) else text).find(key)
+    return 0 <= found < len(text)
+
+
 def fabricated(term: ExtractedTerm, pages: list[str]) -> bool:
-    """反编造检查: 条款文本的锚点不从它声明的那一页开始 (页码越界也算). 跨页的条款, 锚点可延续到下一页, 但须从声明页
-    开始. 文本没有字母数字时算编造."""
-    key = anchor(term.text)
-    if not key or not 1 <= term.page <= len(pages):
-        return True
-    page = alnum(pages[term.page - 1])
-    found = (page + alnum(pages[term.page]) if term.page < len(pages) else page).find(key)
-    return not 0 <= found < len(page)
+    """反编造检查: 条款文本的锚点不从它声明的那一页开始 (页码越界, 文本没有字母数字也算)."""
+    return not starts_on(pages, term.page, anchor(term.text))
+
+
+class GoldClause(BaseModel):
+    """金标准的一条条款: 条款号 (给人看), 起始页, 原文锚点 (从条款正文开头取, 不含标题; 见 anchor)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    clause: str
+    page: int
+    anchor: str
+
+
+class GoldContract(BaseModel):
+    """一份合同的金标准 (需求 R247 验收 1-3). 开发者逐份读 PDF 起草 (review "开发者起草"), 用户抽查过的改为
+    "用户抽查"."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    alias: str
+    review: Literal["开发者起草", "用户抽查"]
+    csv_filename: str  # master_clauses.csv 的 Filename
+    pdf: str  # CUAD_v1/full_contract_pdf 下的相对路径
+    category: str  # CUAD 的合同类型 (目录名)
+    page_count: int
+    client_name: str  # 卖方 (被审计单位, DOC-04 的 client_name), 逐份定: 申报公司不一定是卖方
+    counterparty: str  # 对方
+    counterparty_aliases: list[str]  # CSV Parties 摘录中指对方的 (名称比对的别名)
+    counterparty_pages: list[int]  # 别名出现的页 (Parties 的接受页集合, 由 locate 得出)
+    sign_date: list[date] | None  # 可接受的签订日; None 为不计分 (日被遮盖或空着)
+    sign_date_pages: list[int]  # 签订日出现的页 (首段与签字栏)
+    sign_date_note: str | None  # 与 CSV 不同或取舍的说明
+    counterparty_abn: None  # 恒为 null: CUAD 合同都没有 ABN
+    amount_cents: int | None  # 合同总价; 框架协议只定单价, 为 null
+    terms: dict[TermType, list[GoldClause]] | None  # 货物合同的 GOODS_TERMS 四类 (没有的为空列表); 其余为 None
+    rev03: Literal["accept", "more_evidence"] | None  # 货物合同 REV-03 的 proposed_action; 其余为 None
+    rev03_note: str | None  # REV-03 结论的依据
+
+    @model_validator(mode="after")
+    def consistent(self) -> Self:
+        """签订日集合非空或显式 null; 货物合同四类条款与 REV-03 结论都有, 其余都没有."""
+        if self.sign_date == []:
+            raise ValueError(f"{self.alias}: sign_date 为空集合, 不计分时写 null")
+        if (self.terms is None) != (self.rev03 is None):
+            raise ValueError(f"{self.alias}: terms 与 rev03 须同时有或同时没有")
+        if self.terms is not None and tuple(self.terms) != GOODS_TERMS:
+            raise ValueError(f"{self.alias}: terms 须依次为 {', '.join(GOODS_TERMS)}")
+        return self
+
+
+def gold_by_alias(contracts: list[GoldContract]) -> dict[str, GoldContract]:
+    """按别名 (原顺序); 别名重复时报错."""
+    by_alias = {c.alias: c for c in contracts}
+    if len(by_alias) != len(contracts):
+        raise ValueError("金标准的别名重复")
+    return by_alias
+
+
+def load_gold() -> dict[str, GoldContract]:
+    """入库的金标准, 按别名 (文件中的顺序)."""
+    return gold_by_alias(TypeAdapter(list[GoldContract]).validate_json(GOLD.read_bytes()))
 
 
 def pdf_pages(path: Path) -> list[str]:
@@ -112,13 +182,20 @@ def pdf_pages(path: Path) -> list[str]:
         return [page.extract_text() or "" for page in pdf.pages]
 
 
-def page_fixture(alias: str, pdf: Path) -> dict[str, Any]:
-    """一份逐页文本 fixture: 别名, 原文件 (相对 full_contract_pdf), PDF 的 sha256, 页数与各页文本."""
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def page_fixture(alias: str, root: Path) -> dict[str, Any]:
+    """一份逐页文本 fixture: 别名, 原文件 (相对 full_contract_pdf, 取金标准), PDF 的 sha256, 页数与各页文本. root 为
+    CUAD_v1/full_contract_pdf."""
+    source = load_gold()[alias].pdf
+    pdf = root / source
     pages = pdf_pages(pdf)
     return {
         "alias": alias,
-        "source": ALIASES[alias],
-        "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+        "source": source,
+        "pdf_sha256": sha256(pdf),
         "page_count": len(pages),
         "pages": pages,
     }
@@ -130,18 +207,25 @@ def load_pages(alias: str) -> dict[str, Any]:
     return value
 
 
+def sums(cuad: Path) -> str:
+    """SHA256SUMS 的全文: 金标准 PDF (按别名) 与 ANNOTATIONS, 路径相对 cuad (CUAD_v1/)."""
+    paths = [f"full_contract_pdf/{c.pdf}" for c in load_gold().values()] + list(ANNOTATIONS)
+    return "".join(f"{sha256(cuad / path)}  {path}\n" for path in paths)
+
+
 def main() -> None:
-    """从 data/external/cuad 的 PDF 重生成 tests/fixtures/cuad/pages 下的逐页文本 (PDF 只当数据读)."""
-    parser = argparse.ArgumentParser(description="CUAD 逐页文本 fixture")
+    """从 data/external/cuad 重生成 tests/fixtures/cuad 下的逐页文本与 SHA256SUMS (PDF 只当数据读)."""
+    parser = argparse.ArgumentParser(description="CUAD 逐页文本与 SHA256SUMS")
     parser.add_argument("--cuad", type=Path, default=REPO / "data" / "external" / "cuad")
     args = parser.parse_args()
-    root = args.cuad / "CUAD_v1" / "full_contract_pdf"
+    cuad = args.cuad / "CUAD_v1"
     PAGES.mkdir(parents=True, exist_ok=True)
-    for alias, relative in ALIASES.items():
-        value = page_fixture(alias, root / relative)
+    for alias in PAGE_FIXTURES:
+        value = page_fixture(alias, cuad / "full_contract_pdf")
         text = json.dumps(value, ensure_ascii=False, indent=2) + "\n"
         (PAGES / f"{alias}.json").write_text(text, encoding="utf-8")
         print(alias, value["page_count"])
+    SUMS.write_text(sums(cuad), encoding="utf-8")
 
 
 if __name__ == "__main__":
