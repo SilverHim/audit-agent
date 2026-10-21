@@ -3,8 +3,8 @@
 - parse_cuad_date: CUAD CSV 的签订日 (m/d/yy, yy >= 90 补 19yy), 含遮盖 "[]" 的不计.
 - normalize_party, same_party: 当事方名称的规范化与比对 (去公司后缀与括号里的定义名, difflib 相似度 >= 0.9 或互相包含).
 - split_omitted, anchor, locate: CUAD 摘录按 <omitted> 拆段, 取前 60 个字母数字作锚点, 在逐页文本里定位页码.
-- starts_on, fabricated: 锚点是否从某页开始; 反编造检查: 条款文本的锚点不从它声明的那一页开始 (只在评测里算, 不进
-  正式校验).
+- starts_on, fabricated: 锚点是否从某页开始; 反编造检查: 条款文本的锚点不从它声明的那一页开始 (锚点也可去掉开头的
+  条款号再取, 页文本不算单独一行的印刷页码; 只在评测里算, 不进正式校验).
 - contract_key, csv_rows, pdf_files, excerpts, segment_location (需求 R248): 本地 CUAD 的 CSV 行与 PDF 按文件名对应,
   CSV 摘录 (Python 列表字符串) 的读取与逐页定位; LOCATED_CATEGORIES 为定位统计的 20 类 (cuad.md 第 1 节列出的类别).
 - 评分 (需求 R249, cuad.md 第 3 节): termination_truth (CSV 三类终止摘录, 评测时生成), score_contract (一份 DOC-04
@@ -55,6 +55,12 @@ SIMILAR = 0.9  # 当事方名称相似度门槛
 SUFFIXES = {"inc", "corp", "corporation", "llc", "ltd", "limited", "co", "pty", "plc", "lp", "llp", "gmbh", "kg"}
 DATE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$")
 CROSS_TAIL = 40  # 首段锚点哪页都找不到时, 用末尾这么多个字母数字判断是否跨页
+# 条款文本开头的条款号 (反编造检查去掉它再取锚点). DOC-04 的提示词要求子条款连号照抄, 不带标题, 真实模型因此写成
+# "2.3 Other than ..." (原文 "2.3 Delivery. Other than ..."), "2.6 (A) Unless ..." (原文 "(A) Non-defective Products.
+# Unless ..."), 或把上级号拼上 ("4.E. Except ...", 原文 "E. PAYMENT. Except ..."), 号与正文在原文里不相连
+CLAUSE_NUMBER = re.compile(r"^\s*\d+(?:\.\d+)*(?:\.[A-Za-z](?![A-Za-z]))?(?:\s*\([0-9A-Za-z]{1,4}\))*\.?\s+")
+# 文本层里单独一行的印刷页码 (如 CUAD-03 的 "Page -8-"), 可夹在条款中间, 照抄条款时不算正文
+PAGE_MARK = re.compile(r"^\s*page\s*-?\s*\d+\s*-?\s*$", re.IGNORECASE | re.MULTILINE)
 # 定位统计的 20 类摘录 (cuad.md 第 1 节与本系统字段对照时列出的类别)
 LOCATED_CATEGORIES = (
     "Parties",
@@ -161,8 +167,12 @@ def starts_on(pages: list[str], page: int, key: str) -> bool:
 
 
 def fabricated(term: ExtractedTerm | ContractTerm, pages: list[str]) -> bool:
-    """反编造检查: 条款文本的锚点不从它声明的那一页开始 (页码越界, 文本没有字母数字也算)."""
-    return not starts_on(pages, term.page, anchor(term.text))
+    """反编造检查: 条款文本的锚点不从它声明的那一页开始 (页码越界, 文本没有字母数字也算). 锚点取全文的, 或去掉开头
+    条款号 (CLAUSE_NUMBER) 后的; 页文本取原样的, 或去掉单独一行的印刷页码 (PAGE_MARK) 后的 (照抄时连页码一起抄的
+    也认); 有一种从该页开始即可."""
+    keys = {anchor(term.text), anchor(CLAUSE_NUMBER.sub("", term.text, count=1))}
+    texts = (pages, [PAGE_MARK.sub("", page) for page in pages])
+    return not any(starts_on(text, term.page, key) for text in texts for key in keys)
 
 
 class GoldClause(BaseModel):

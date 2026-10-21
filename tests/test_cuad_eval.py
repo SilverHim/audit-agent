@@ -127,6 +127,53 @@ def test_locate_and_fabricated() -> None:
         assert [t.term_type for t in found if fabricated(t, pages)] == [], alias
 
 
+# 真实模型的条款文本 (需求 R249 的金标准评测, 各取开头): 按提示词连号照抄, 不带标题
+NETGEAR_PAYMENT = (  # CUAD-01 第 2 页, 原文 "E. PAYMENT. Except ...", 号前拼上了上级的 4
+    "4.E. Except as may be specifically authorized in writing by NETGEAR, and subject to NETGEAR's continuing approval "
+    "of Distributor's credit status"
+)
+LIME_DELIVERY = (  # CUAD-03 第 3 页, 原文 "2.3 Delivery. Other than ..."
+    '2.3 Other than "drop ship" deliveries, all deliveries made pursuant to this Agreement shall be FOB the Company\'s '
+    "facilities"
+)
+LIME_RETURNS = (  # CUAD-03 第 4 页, 原文 "(A) Non-defective Products. Unless ...", 号与括号之间有空格
+    "2.6 (A) Unless the Company has first authorized or permitted the return of any non-defective Products and except "
+    "as otherwise permitted"
+)
+LIME_TERMINATION = (  # CUAD-03 第 6 页, 原文 "upon 30 days" 与 "prior written notice" 之间夹着印刷页码 "Page -8-" 一行
+    "4.2 Either party may terminate this Agreement upon 30 days prior written notice to the other upon the occurrence "
+    "of any of the following events"
+)
+
+
+@pytest.mark.parametrize(
+    ("alias", "text", "page", "expected"),
+    [
+        ("CUAD-01", NETGEAR_PAYMENT, 2, False),
+        ("CUAD-03", LIME_DELIVERY, 3, False),
+        ("CUAD-03", LIME_RETURNS, 4, False),
+        ("CUAD-03", LIME_TERMINATION, 6, False),
+        ("CUAD-01", NETGEAR_PAYMENT, 3, True),  # 声明的页不对
+        ("CUAD-03", LIME_DELIVERY.replace('"drop ship"', "express"), 3, True),  # 正文改了
+        ("CUAD-03", LIME_TERMINATION.replace("30 days", "60 days"), 6, True),
+    ],
+    ids=[
+        "parent_number",
+        "heading_dropped",
+        "spaced_number",
+        "page_mark",
+        "wrong_page",
+        "changed_text",
+        "changed_across_mark",
+    ],
+)
+def test_fabricated_on_live_output_shapes(alias: str, text: str, page: int, expected: bool) -> None:
+    """需求 R249 排查: 反编造检查对真实模型的条款写法不误判. 条款号在原文里与正文不相连 (拼上上级号, 去掉了标题)
+    时按去掉条款号的正文取锚点; 夹在条款中间的印刷页码行不算正文. 页不对或正文改了仍判编造."""
+    term = ExtractedTerm(term_type=TermType.payment, text=text, page=page)
+    assert fabricated(term, load_pages(alias)["pages"]) is expected
+
+
 async def test_validator_and_contract() -> None:
     """验收 4: CUAD-01 的 mock 输出原样通过四级校验, 经 build_contract 得到 ABN 与金额都为空的合同 (编号, 文件 ID
     为别名); CUAD-03 (page_count 10) 的 mock 原样通过, 把一条条款的页码写成印刷页码 14 时判 reference 级失败."""
