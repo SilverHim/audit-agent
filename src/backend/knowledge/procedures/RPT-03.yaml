@@ -1,6 +1,12 @@
 id: RPT-03
 name: 报告文本生成
 workpaper: {ref: Z-2, area: Z}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: >-
+    {{ period_end }} 止的财务报表的审计报告正文 (意见类型按 FIN-01 的结论)
+  en: >-
+    The audit report text on the financial report for the period ended {{ period_end }} (opinion type as
+    concluded in FIN-01)
 phase: P4_Reporting
 cycle: Reporting
 owner: A10

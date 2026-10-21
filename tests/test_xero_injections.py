@@ -36,16 +36,19 @@ from backend.contracts.models import (
 from backend.contracts.ports import AuditOutputStore, LLMClient
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState
+from tests.fakes import csh05_population, engine_result
 from tests.test_e2e_xero17 import Xero17, run_xero17
 from tests.tools.live_budget import Budget
 from tests.xero_fakes import (
     ORC1026,
     REPO,
+    XERO_PERIOD,
     XERO_RULES,
     xero_contracts,
     xero_csh02_rows,
     xero_documents,
     xero_rev08_exception,
+    xero_tables,
 )
 from tests.xero_harness import (
     LayeredMockLLMClient,
@@ -285,11 +288,16 @@ def t4_b01(run: ProcedureRun) -> AuditException:
 
 
 def t4_rules(case: XeroCase) -> dict[str, Callable[[ProcedureRun], RuleResult]]:
-    """T4 的规则预置: CSH-05 出 B01; CSH-02 的候选行 (D02 至 D04) 按副本的表派生; 其余同 T0 (XERO_RULES). PLN-07 在
-    副本上 A01 少了 090 一条, 只在连库断言, 离线沿用 T0 的 (不影响现金一串)."""
+    """T4 的规则预置: CSH-05 出 B01, 总体按副本的表派生 (090 的账面为调过的 -1035044, 需求 R327); CSH-02 的候选行
+    (D02 至 D04) 按副本的表派生; 其余同 T0 (XERO_RULES). PLN-07 在副本上 A01 少了 090 一条, 只在连库断言, 离线沿用
+    T0 的 (不影响现金一串)."""
+    tables = xero_tables(case.loader)
+    population = csh05_population(
+        tables["bank_accounts"], tables["bank_transactions"], tables["trial_balance"], XERO_PERIOD[1]
+    )
     return {
         **XERO_RULES,
-        "CSH-05": lambda run: RuleResult(exceptions=[t4_b01(run)], rows={}),
+        "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[t4_b01(run)], rows={}), [population]),
         "CSH-02": lambda run: RuleResult(exceptions=[], rows=xero_csh02_rows(case.loader)),
     }
 

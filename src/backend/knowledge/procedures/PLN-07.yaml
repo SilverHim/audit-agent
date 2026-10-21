@@ -1,6 +1,11 @@
 id: PLN-07
 name: 初步分析程序
 workpaper: {ref: A-4, area: A}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 本期 ({{ period_start }} 至 {{ period_end }}) 与上期的试算表, 本期的总账分录
+  en: >-
+    Trial balances of the current period ({{ period_start }} to {{ period_end }}) and the prior period,
+    and journal entries of the current period
 phase: P1_Planning
 cycle: Planning
 owner: A4
@@ -64,6 +69,41 @@ rules:
        AND ABS(COALESCE(x.current_cents,0)-x.opening_cents)>=:min_change_revenue_pct*r.cents
        AND ABS(COALESCE(x.current_cents,0)-x.opening_cents)>=:change_pct*ABS(x.opening_cents)
       ORDER BY source_id
+    check: {zh: 变动未超阈值, en: Movement within the threshold}
+    # 被测总体 (需求 R327): 参与比较的全部科目 (同规则 SQL 的 compared, 不看门槛), 每科目一行: 资产负债类对期初, 两期
+    # 等长时另有损益类对上期. 余额有借有贷, 合计没有意义, 不给 amount_cents (总体的金额合计为空); 各金额列为整数分
+    population:
+      description:
+        zh: 两期试算表中的资产负债类科目 (本期末对期初), 两期等长时另含损益类科目 (本期对上期)
+        en: >-
+          Balance sheet accounts in the two trial balances (period end against opening balance), and profit or loss
+          accounts (current against prior period) when the two periods are of equal length
+      sql: |
+        WITH balances AS (
+         SELECT a.code, a.name, a.type, a.category,
+                SUM(t.balance_cents) FILTER (WHERE t.period='current') AS current_cents,
+                SUM(t.balance_cents) FILTER (WHERE t.period='prior') AS prior_cents
+         FROM trial_balance t JOIN accounts a ON a.engagement_id=t.engagement_id AND a.code=t.account_code
+         WHERE t.engagement_id=:eid
+         GROUP BY a.code, a.name, a.type, a.category),
+        carried AS (
+         SELECT (SELECT MIN(code) FROM balances WHERE category='retained_earnings') AS code,
+                COALESCE((SELECT SUM(prior_cents) FROM balances WHERE type IN ('revenue','expense')),0) AS cents),
+        span AS (
+         SELECT age(CAST(:period_end AS date)+1, CAST(:period_start AS date)) AS length),
+        same_length AS (
+         SELECT CAST(:prior_period_start AS date) IS NULL
+                OR CAST(:prior_period_start AS date)
+                   + make_interval(months => CAST(EXTRACT(YEAR FROM length)*12+EXTRACT(MONTH FROM length) AS int))
+                   = CAST(:period_start AS date) AS ok
+         FROM span)
+        SELECT 'trial_balance' AS source_type, b.code AS source_id, b.name AS account_name,
+               CASE WHEN b.type IN ('revenue','expense') THEN 'profit_or_loss' ELSE 'balance_sheet' END AS basis,
+               CAST(b.current_cents AS bigint) AS current_cents, CAST(b.prior_cents AS bigint) AS prior_cents,
+               CAST(COALESCE(b.prior_cents,0)+CASE WHEN b.code=c.code THEN c.cents ELSE 0 END AS bigint) AS opening_cents
+        FROM balances b, carried c, same_length s
+        WHERE b.type IN ('asset','liability','equity') OR (b.type IN ('revenue','expense') AND s.ok)
+        ORDER BY source_id
   - id: A02
     name: 比率计算取数
     severity: low

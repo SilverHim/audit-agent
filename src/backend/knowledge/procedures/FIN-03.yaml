@@ -1,6 +1,9 @@
 id: FIN-03
 name: 错报性质分类
 workpaper: {ref: X-A, area: X}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 尚未分类的已认定错报
+  en: Identified misstatements not yet classified
 # 规格书 6.1.1 (FIN-03 属 A8), 7.2 (L2 混合), 第 10 节 P3 (A8 对错报作性质分类含舞弊标记与期间来源); ASA 450 第 A6 段
 # (factual, judgemental, projected 三类), ASA 240 第 36 段 (错报是否有舞弊迹象). 需求 R157 定模板, A8 的执行由 R158 加.
 # 判断对象是未分类 (classification_judgment_id 为空) 的 identified 错报, 每条一个, 判断记该错报 (subject_id 为错报 ID);

@@ -1,6 +1,9 @@
 id: CSH-04
 name: 函证发起
 workpaper: {ref: C-1, area: C}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 全部银行账户, 函证 {{ as_of }} 的余额
+  en: All bank accounts, confirming balances as at {{ as_of }}
 phase: P2_Executing
 cycle: Cash
 owner: A5

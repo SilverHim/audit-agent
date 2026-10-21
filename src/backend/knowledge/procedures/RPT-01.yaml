@@ -1,6 +1,9 @@
 id: RPT-01
 name: 审计报告批准与签字
 workpaper: {ref: Z-3, area: Z}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 报告文本 (RPT-03) 的最新修订
+  en: The latest revision of the report text (RPT-03)
 phase: P4_Reporting
 cycle: Reporting
 owner: A10

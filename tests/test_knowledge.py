@@ -3740,3 +3740,77 @@ def test_standards_cross_reference() -> None:
     assert {k for k, s in rows.items() if s.not_applicable is not None} == {"ASA 600", "ASA 610"}
     known = set(library.workpaper_refs())
     assert all(set(refs) <= known for refs in STANDARD_REFS.values())
+
+
+# ── 需求 R327: 现有程序的范围说明, 被测总体与检查项名称 ──
+
+# R328 补这五条 (GEN-05, GEN-07 的总体与检查项; GEN-02, GEN-03, GEN-08 的范围说明), R328 合入后删去
+AWAITING_R328 = frozenset({"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"})
+
+
+def documentation_gaps(template: ProcedureTemplate) -> list[str]:
+    """程序缺的说明: 没写 scope, emit exception 的规则没写 population 或 check (emit rows 的以返回行为总体, 不写)."""
+    gaps = [] if template.scope is not None else ["scope"]
+    for rule in template.rules:
+        if rule.emit == "exception":
+            gaps += [f"{rule.id}.{name}" for name in ("population", "check") if getattr(rule, name) is None]
+    return gaps
+
+
+def test_every_procedure_has_scope_population_and_check() -> None:
+    """验收 3: 每条程序 (含功能未启用的) 都写了 scope, 每条 emit exception 的规则都写了 population 与 check.
+    AWAITING_R328 的程序暂不查, 但须仍有缺项: R328 补齐后这一句不过, 提醒删去名单."""
+    gaps = {t.id: documentation_gaps(t) for t in knowledge_library(ROOT).all(include_disabled=True)}
+    assert {pid: found for pid, found in gaps.items() if found and pid not in AWAITING_R328} == {}
+    assert all(gaps[pid] for pid in AWAITING_R328)
+
+
+XERO_PARAMS = {  # Xero 演示 (本期 2026-07-01 至 09-30, 收入目标为特别风险) 的参数快照中 scope 用到的几项
+    "period_start": date(2026, 7, 1),
+    "period_end": date(2026, 9, 30),
+    "as_of": date(2026, 9, 30),
+    "window_days": 20,
+    "subsequent_days": 10,
+    "lookback_days": 5,
+    "adjustment_prefix": "AJE-",
+}
+
+
+@pytest.mark.parametrize(
+    ("procedure_id", "zh"),
+    [
+        ("REV-03", "项目内全部收入合同"),
+        ("DOC-06", "收到的银行回函"),
+        ("CSH-04", "全部银行账户, 函证 2026-09-30 的余额"),
+        ("CSH-05", "全部银行账户在 2026-09-30 的对账单余额与总账余额"),
+        ("PLN-07", "本期 (2026-07-01 至 2026-09-30) 与上期的试算表, 本期的总账分录"),
+        (
+            "REV-02",
+            "期末前 20 天 (2026-09-10 至 2026-09-30) 入账且不低于执行重要性的销售发票,"
+            " 及 REV-08 尚未归因的例外所指的发票",
+        ),
+        (
+            "CSH-02",
+            "有回函的银行账户: 回函余额与 2026-09-30 总账余额的差异, 期后 10 天的银行流水, 期末前 5 天的银行科目分录",
+        ),
+        ("FIN-09", "管理层同意更正而待验证的错报, 与凭证号以 AJE- 开头的审计更正分录"),
+    ],
+)
+def test_existing_scopes_render(procedure_id: str, zh: str) -> None:
+    """验收 3: 范围说明按参数快照渲染 (折行的 YAML 读回为一行); 英文也有."""
+    template = knowledge_library(ROOT, FEATURES).load(procedure_id)
+    assert template.scope is not None
+    rendered = render_text(template.scope, XERO_PARAMS)
+    assert rendered.zh == zh and "{{" not in rendered.en and "\n" not in rendered.en
+
+
+def test_csh05_and_pln07_checks() -> None:
+    """验收 1, 2: CSH-05 B01 与 PLN-07 A01 的检查项名称; A02, A03 为 emit rows, 不写总体与检查项."""
+    library = knowledge_library(ROOT)
+    checks = {(t, r.id): (r.check.zh if r.check else None) for t in ("CSH-05", "PLN-07") for r in library.load(t).rules}
+    assert checks == {
+        ("CSH-05", "B01"): "对账单期末余额与总账一致",
+        ("PLN-07", "A01"): "变动未超阈值",
+        ("PLN-07", "A02"): None,
+        ("PLN-07", "A03"): None,
+    }

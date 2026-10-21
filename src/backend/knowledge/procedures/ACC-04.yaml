@@ -1,6 +1,11 @@
 id: ACC-04
 name: ASIC / ABN 核查
 workpaper: {ref: B-2, area: B}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 客户画像中的 ABN, 法定名称与 ACN 在 ABN 登记与 ASIC 公司登记中的记录; 没有数据集的客户另核上传的 ASIC 摘录与董事
+  en: >-
+    ABN register and ASIC company register records for the ABN, legal name and ACN in the client
+    profile; for clients without a dataset, also the uploaded ASIC extract and directors
 phase: P0_Acceptance
 cycle: Acceptance
 owner: A2

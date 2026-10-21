@@ -62,6 +62,7 @@ from backend.orchestration.scheduler import build_schedule
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE
 from backend.services.populations import distinct_items, judged_subjects, total_cents
+from backend.services.procedure_library import render_text
 from tests.external import snapshot_dir, supplements_dir
 from tests.fakes import ENGAGEMENT, FakeRuleEngine, FakeTrail, ScriptAgent, no_population, wait_idle
 from tests.fixture_sets import XERO
@@ -81,7 +82,9 @@ from tests.xero_fakes import (
     new_xero_deps,
     xero17_gates,
     xero17_reviews,
+    xero_csh05_population,
     xero_journal_reviews,
+    xero_pln07_a01_population,
     xero_rev08_populations,
     xero_uploads,
 )
@@ -618,6 +621,36 @@ async def test_populations(xero17: Xero17) -> None:
     judgments = await store.latest(xero17.eid, Judgment, procedure_id="REV-03")
     tasks = await store.latest(xero17.eid, ReviewTask, procedure_id="REV-03")
     assert judged_subjects("RUN-REV-03-1", judgments, tasks) == XERO17_CONTRACTS
+
+
+@shared_loop
+async def test_existing_procedure_populations_and_scopes(xero17: Xero17) -> None:
+    """需求 R327 验收 1-3: CSH-05 B01 的总体为 090, 091 两个银行账户 (金额为总账余额, 合计 68079; 两户都没有例外);
+    PLN-07 A01 为参与期初比较的 12 个资产负债类科目 (本期三个月, 与上期不等长, 不比损益类), 没有金额合计, 9 条变动
+    例外都在其中, A02, A03 以返回行为总体 (两期, 三个月). 每次执行的 scope 按其参数快照都渲染得出."""
+    store = xero17.runner.deps.output_store
+    populations = {p.procedure_id: p for p in await store.latest(xero17.eid, RunPopulation)}
+    [b01] = populations["CSH-05"].rules
+    assert b01 == xero_csh05_population()
+    assert ([i.source_id for i in b01.items], [i.amount_cents for i in b01.items], b01.amount_cents) == (
+        ["BA-090", "BA-091"],
+        [-1090044, 1158123],
+        68079,
+    )
+    assert [i.fields["statement_balance_cents"] for i in b01.items] == [i.amount_cents for i in b01.items]
+    a01, a02, a03 = populations["PLN-07"].rules
+    assert a01 == xero_pln07_a01_population()
+    assert (a01.count, a01.amount_cents, {i.fields["basis"] for i in a01.items}) == (12, None, {"balance_sheet"})
+    assert {row[0] for row in XERO_A01_CHANGES} < {i.source_id for i in a01.items}
+    assert [(r.rule_id, r.count) for r in (a02, a03)] == [("A02", 2), ("A03", 3)]
+    library = xero17.runner.deps.library
+    rendered = {}
+    for run in await store.latest(xero17.eid, ProcedureRun):
+        scope = library.load(run.procedure_id).scope
+        assert scope is not None, run.procedure_id
+        rendered[run.procedure_id] = render_text(scope, run.params_snapshot).zh
+    assert rendered["CSH-05"] == "全部银行账户在 2026-09-30 的对账单余额与总账余额"
+    assert rendered["REV-02"].startswith("期末前 20 天 (2026-09-10 至 2026-09-30) 入账")
 
 
 # ── 验收 8: 原目录不变 ──

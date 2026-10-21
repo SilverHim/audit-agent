@@ -1,6 +1,9 @@
 id: GEN-09
 name: 判断独立复核
 # 不单独出底稿 (不写 workpaper, 需求 R329): 复核结果写进被复核判断所在的底稿
+scope:
+  zh: A6 判断程序交来的判断 (按触发规则与抽样选出)
+  en: Judgments from the A6 judgment procedures (selected by trigger rules and sampling)
 # 贯穿程序 (规格书 6.3 GEN-09): 不单独装配与派发, 由 A6 对每条模型类判断同步调用 A7 (agents/review.py).
 # triggers 为空且没有程序依赖它, 所以不进程序包; 阶段记 P2 只为不进固定集 (runner.fixed_procedures).
 phase: P2_Executing

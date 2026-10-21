@@ -90,9 +90,11 @@ from tests.fakes import (
     FakeTrail,
     csh02_subsequent_rows,
     csh02_window_rows,
+    csh05_population,
     engine_result,
     gen05_exception,
     make_deps,
+    pln07_a01_population,
     rev08_populations,
     wait_idle,
 )
@@ -719,6 +721,27 @@ def xero_rev08_populations() -> list[RulePopulation]:
     )
 
 
+@functools.cache
+def xero_csh05_population() -> RulePopulation:
+    """CSH-05 B01 对 Xero 演示的被测总体 (需求 R327): 两个银行账户 090, 091, 由演示数据导入之后的表 (xero_tables) 按
+    总体 SQL 的口径算出; 两户对账单期末余额都等于试算表 (没有例外)."""
+    tables = xero_tables()
+    return csh05_population(
+        tables["bank_accounts"], tables["bank_transactions"], tables["trial_balance"], XERO_PERIOD[1]
+    )
+
+
+@functools.cache
+def xero_pln07_a01_population() -> RulePopulation:
+    """PLN-07 A01 对 Xero 演示的被测总体 (需求 R327): 本期三个月, 上期起始日 (数据集声明) 2025-07-01 起一年, 两期不等长,
+    只比较资产负债类科目 (对期初)."""
+    tables = xero_tables()
+    traits = xero_traits()
+    return pln07_a01_population(
+        tables["accounts"], tables["trial_balance"], XERO_PERIOD[0], XERO_PERIOD[1], traits.prior_period_start
+    )
+
+
 # GEN-05 R10 两笔贷项凭证配到的同额发票 (07-17 的 550.00 五张, ORC1003, 1008, 1009, 1010, 1011), 按 (开票日, ID)
 XERO_SAME_AMOUNT_INVOICES = [
     "SI-1d1ba340-afa2-4f4c-8ff7-a147bda9a47b",  # ORC1008
@@ -999,6 +1022,7 @@ XERO_RULES: dict[
     "PLN-07": lambda run: engine_result(
         "PLN-07",
         RuleResult(exceptions=xero_pln07_exceptions(run), rows={"A02": XERO_A02_ROWS, "A03": XERO_A03_ROWS}),
+        [xero_pln07_a01_population()],
     ),
     "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": XERO_M01_ROWS})),
     "REV-08": lambda run: engine_result(
@@ -1006,7 +1030,7 @@ XERO_RULES: dict[
     ),
     "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": XERO_S01_ROWS})),
     # 两个账户对账单的期末余额都等于试算表
-    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={})),
+    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={}), [xero_csh05_population()]),
     "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
     "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来

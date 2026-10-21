@@ -205,6 +205,7 @@ from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.runner import GraphRunner
 from backend.persistence.stores import natural_key
 from backend.services.abn import normalize_abn
+from backend.services.account_mapping import with_category
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.data_service import DataService
 from backend.services.features import BASELINE, PLANNING
@@ -1807,6 +1808,125 @@ def no_population(value: Any) -> bool:
     return True
 
 
+def csh05_population(
+    accounts: Iterable[BankAccount],
+    transactions: Iterable[BankTransaction],
+    trial_balance: Iterable[TrialBalanceRow],
+    period_end: date,
+) -> RulePopulation:
+    """CSH-05 B01 的被测总体, 按 CSH-05.yaml 总体 SQL 的口径由表独立算一遍 (需求 R327): 全部银行账户, 按 ID, 每户一项;
+    金额为该户总账科目的本期末余额 (没有试算表行为空); 另带开户行, 账号, 总账科目, 期末对账单余额与最后一笔流水
+    (流水日不晚于期末, 按 (流水日, ID) 取最后一笔; 没有为空)."""
+    current = {r.account_code: r.balance_cents for r in trial_balance if r.period == "current"}
+    lines = list(transactions)
+    items = []
+    for account in sorted(accounts, key=lambda a: a.id):
+        own = [t for t in lines if t.bank_account_id == account.id and t.txn_date <= period_end]
+        last = max(own, key=lambda t: (t.txn_date, t.id), default=None)
+        fields = {
+            "bank_name": account.bank_name,
+            "account_no": account.account_no,
+            "gl_account_code": account.gl_account_code,
+            "statement_balance_cents": last.balance_after_cents if last else None,
+            "last_bank_transaction_id": last.id if last else None,
+        }
+        items.append(
+            PopulationItem(source_id=account.id, amount_cents=current.get(account.gl_account_code), fields=fields)
+        )
+    return RulePopulation(
+        rule_id="B01",
+        source_type="bank_account" if items else None,
+        items=items,
+        count=len(items),
+        amount_cents=total_cents(i.amount_cents for i in items),
+    )
+
+
+def months_between(start: date, end: date) -> int:
+    """start 到 end 的整月数 (同 PostgreSQL age() 的年 x 12 加月)."""
+    return (end.year - start.year) * 12 + end.month - start.month - (1 if end.day < start.day else 0)
+
+
+def add_months(day: date, months: int) -> date:
+    """日期加整月, 落到月底之外时取当月最后一天 (同 PostgreSQL 的 date + interval)."""
+    total = day.year * 12 + day.month - 1 + months
+    year, month = divmod(total, 12)
+    last = (date(year + (month + 1) // 12, (month + 1) % 12 + 1, 1) - timedelta(days=1)).day
+    return date(year, month + 1, min(day.day, last))
+
+
+def pln07_a01_population(
+    accounts: Iterable[Account],
+    trial_balance: Iterable[TrialBalanceRow],
+    period_start: date,
+    period_end: date,
+    prior_period_start: date | None,
+) -> RulePopulation:
+    """PLN-07 A01 的被测总体, 按 PLN-07.yaml 总体 SQL 的口径由表独立算一遍 (需求 R327): 两期试算表出现过且在科目表里的
+    科目, 资产负债类都比较 (基数为期初: 上期末余额, 留存收益分类中代码最小的科目另加上期全部损益), 损益类只在两期
+    等长 (上期起始日加本期整月数等于本期起始日, 上期起始日为空视为等长) 时比较 (基数为上期). 每科目一项, 按代码;
+    没有金额 (余额有借有贷, 合计没有意义), 识别字段为科目名称, 比较口径与本期, 上期, 期初余额."""
+    chart = {a.code: a for a in accounts}
+    current: dict[str, int] = {}
+    prior: dict[str, int] = {}
+    for row in trial_balance:
+        if row.account_code in chart:
+            side = current if row.period == "current" else prior
+            side[row.account_code] = side.get(row.account_code, 0) + row.balance_cents
+    codes = sorted(current.keys() | prior.keys())
+    retained = [c for c in codes if chart[c].category == "retained_earnings"]
+    carried = sum(prior.get(c, 0) for c in codes if chart[c].type in ("revenue", "expense"))
+    same_length = (
+        prior_period_start is None
+        or add_months(prior_period_start, months_between(period_start, period_end + timedelta(days=1))) == period_start
+    )
+    items = []
+    for code in codes:
+        profit_or_loss = chart[code].type in ("revenue", "expense")
+        if profit_or_loss and not same_length:
+            continue
+        opening = prior.get(code, 0) + (carried if retained and code == retained[0] else 0)
+        fields = {
+            "account_name": chart[code].name,
+            "basis": "profit_or_loss" if profit_or_loss else "balance_sheet",
+            "current_cents": current.get(code),
+            "prior_cents": prior.get(code),
+            "opening_cents": opening,
+        }
+        items.append(PopulationItem(source_id=code, amount_cents=None, fields=fields))
+    return RulePopulation(
+        rule_id="A01",
+        source_type="trial_balance" if items else None,
+        items=items,
+        count=len(items),
+        amount_cents=total_cents(i.amount_cents for i in items),
+    )
+
+
+@functools.cache
+def numbat_csh05_population() -> RulePopulation:
+    """Numbat CSH-05 B01 的被测总体 (期末 2026-06-30), 由演示数据集的银行账户, 流水与试算表算出."""
+    return csh05_population(
+        numbat_records("bank_accounts", BankAccount),
+        numbat_bank_transactions(),
+        numbat_records("trial_balance", TrialBalanceRow),
+        ENGAGEMENT.period_end,
+    )
+
+
+@functools.cache
+def numbat_pln07_a01_population() -> RulePopulation:
+    """Numbat PLN-07 A01 的被测总体: 本期与上期等长 (没有数据集声明的上期起始日), 资产负债类与损益类都比较; 科目
+    分类同载入 (按名称映射, account_mapping.with_category)."""
+    return pln07_a01_population(
+        [with_category(a) for a in numbat_records("accounts", Account)],
+        numbat_records("trial_balance", TrialBalanceRow),
+        ENGAGEMENT.period_start,
+        ENGAGEMENT.period_end,
+        None,
+    )
+
+
 @functools.cache
 def numbat_rev08_populations() -> list[RulePopulation]:
     """Numbat REV-08 的被测总体 (期末 2026-06-30, 特别风险的窗口 20 天), 由演示数据集的发票, 发运单与流水算出."""
@@ -1823,13 +1943,16 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
     "PLN-07": lambda run: engine_result(
         "PLN-07",
         RuleResult(exceptions=[numbat_pln07_exception(run)], rows={"A02": NUMBAT_A02_ROWS, "A03": NUMBAT_A03_ROWS}),
+        [numbat_pln07_a01_population()],
     ),
     "PLN-01": lambda run: engine_result("PLN-01", RuleResult(exceptions=[], rows={"M01": NUMBAT_M01_ROWS})),
     "REV-08": lambda run: engine_result(
         "REV-08", RuleResult(exceptions=[numbat_rev08_exception(run)], rows={}), numbat_rev08_populations()
     ),
     "REV-02": lambda run: engine_result("REV-02", RuleResult(exceptions=[], rows={"S01": NUMBAT_S01_ROWS})),
-    "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={})),
+    "CSH-05": lambda run: engine_result(
+        "CSH-05", RuleResult(exceptions=[numbat_csh05_exception(run)], rows={}), [numbat_csh05_population()]
+    ),
     "CSH-02": lambda run: engine_result(
         "CSH-02",
         RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),

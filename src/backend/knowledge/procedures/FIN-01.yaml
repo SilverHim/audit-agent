@@ -1,6 +1,9 @@
 id: FIN-01
 name: 未更正错报评价
 workpaper: {ref: Z-1, area: Z}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 未更正错报汇总表 (FIN-04) 与重要性
+  en: The schedule of uncorrected misstatements (FIN-04) against materiality
 phase: P3_Completion
 cycle: Completion
 owner: A9

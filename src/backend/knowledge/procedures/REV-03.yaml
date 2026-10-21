@@ -1,6 +1,9 @@
 id: REV-03
 name: 收入合同条款评价
 workpaper: {ref: D-2, area: D}  # 底稿索引号与所属区 (需求 R329, knowledge/workpapers.yaml)
+scope:
+  zh: 项目内全部收入合同
+  en: All revenue contracts of the engagement
 phase: P2_Executing
 cycle: Revenue
 owner: A6

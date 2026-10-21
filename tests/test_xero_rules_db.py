@@ -47,7 +47,15 @@ from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.stores import RoutingDatasetLoader, XeroDatasetLoader, now
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import FakeJudgmentEngine, make_ctx, numbat_rev08_populations, passed, rev08_populations
+from tests.fakes import (
+    FakeJudgmentEngine,
+    make_ctx,
+    numbat_csh05_population,
+    numbat_pln07_a01_population,
+    numbat_rev08_populations,
+    passed,
+    rev08_populations,
+)
 from tests.test_data_store_postgres import table_rows
 from tests.xero_fakes import (
     SNAPSHOT_NAME,
@@ -471,10 +479,30 @@ async def test_rev08_one_item_per_invoice_on_postgres(tmp_path: Path) -> None:
         ]
 
 
+async def test_existing_populations_on_postgres(tmp_path: Path) -> None:
+    """需求 R327 验收 1, 2, 4: 六条规则程序连库的被测总体与离线预置 (由表派生, xero_fakes) 逐行相同: CSH-05 B01 为
+    090, 091 两户, PLN-07 A01 为 12 个资产负债类科目; emit rows 的规则以返回行为总体 (规则引擎的结果里都有, 判断与
+    闸门程序不写 Store): REV-02 S01 为 6 张发票, PLN-01 M01 为 3 个基准."""
+    snapshot, supplements = snapshot_dir(SNAPSHOT_NAME), supplements_dir(SNAPSHOT_NAME)
+    project = await build_xero_project(database_url(), snapshot, supplements, tmp_path)
+    results = await run_rule_programs(project)
+    for procedure_id, (run, found) in results.items():
+        assert found.populations == offline(procedure_id, run).populations, procedure_id
+    counts = {(pid, p.rule_id): p.count for pid, (_, found) in results.items() for p in found.populations}
+    assert {
+        key: counts[key] for key in (("CSH-05", "B01"), ("PLN-07", "A01"), ("REV-02", "S01"), ("PLN-01", "M01"))
+    } == {
+        ("CSH-05", "B01"): 2,
+        ("PLN-07", "A01"): 12,
+        ("REV-02", "S01"): 6,
+        ("PLN-01", "M01"): 3,
+    }
+
+
 async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> None:
     """验收 10: 同一测试库上 Numbat (data/demo, CSV 数据集载入) 的同批 SQL 结果不变: PLN-07 A01 (1100, 52500000),
-    REV-08 R01 (SI-2026-0612, 14200000), CSH-05 B01 (BA-01, -5000000). REV-08 的被测总体等于离线预置 (需求 R324 审核
-    R324-03: 默认测试用的 Numbat 总体出自它)."""
+    REV-08 R01 (SI-2026-0612, 14200000), CSH-05 B01 (BA-01, -5000000). 写了总体 SQL 的规则的被测总体等于离线预置
+    (默认测试用的 Numbat 总体出自它): REV-08 R01-R03 (需求 R324 审核 R324-03), PLN-07 A01 与 CSH-05 B01 (需求 R327)."""
     from backend.core.config import Settings
     from backend.main import build_deps
 
@@ -489,6 +517,11 @@ async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> No
     objectives, risks = deps.datasets.planning_presets("demo")
     state = initial_state(engagement, [], profile.version) | {"audit_objectives": objectives, "risk_register": risks}
     found = {}
+    expected = {
+        "PLN-07": [numbat_pln07_a01_population()],
+        "REV-08": numbat_rev08_populations(),
+        "CSH-05": [numbat_csh05_population()],
+    }
     for procedure_id, rule_id in (("PLN-07", "A01"), ("REV-08", "R01"), ("CSH-05", "B01")):
         template = deps.library.load(procedure_id)
         run = build_run(
@@ -503,8 +536,8 @@ async def test_numbat_rules_unchanged_on_the_same_database(tmp_path: Path) -> No
         )
         result = await deps.rules.run(engagement.id, template, run, run.params_snapshot)
         found[procedure_id] = [(x.source_ids[0], x.amount_cents) for x in result.exceptions if x.rule_id == rule_id]
-        if procedure_id == "REV-08":
-            assert result.populations == numbat_rev08_populations()
+        written = {p.rule_id for p in expected[procedure_id]}
+        assert [p for p in result.populations if p.rule_id in written] == expected[procedure_id], procedure_id
     assert found == {
         "PLN-07": [("1100", 52500000)],
         "REV-08": [("SI-2026-0612", 14200000)],
