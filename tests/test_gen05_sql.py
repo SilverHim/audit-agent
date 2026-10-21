@@ -17,17 +17,17 @@ from sqlalchemy import delete, insert, select
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
-from backend.contracts.records import DatasetTraits, JournalEntry
+from backend.contracts.records import DatasetTraits, DeliveryNote, JournalEntry, SalesInvoice
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.db import bind_engagement
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import NUMBAT_RULES, numbat_records
+from tests.fakes import NUMBAT_RULES, engine_result, gen05_populations, numbat_records, outside_populations
 from tests.test_knowledge import voided_cte
 from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
-from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
+from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES, xero_adjustments, xero_gen05_populations, xero_tables
 
 pytestmark = [pytest.mark.slow, pytest.mark.asyncio(loop_scope="module")]  # 用例与 module 级项目同一个事件循环
 NUMBAT_MATERIALITY = {
@@ -144,9 +144,12 @@ async def test_xero_gen05_on_postgres(xero: Gen05Project) -> None:
     守 "取凭证内金额最大的行". 删去贷项凭证 XJ-430 的 3 行后 R10 只剩 XJ-449-2 (编号变为 R10-1), R12 的 ORC1003 没有
     全额冲减的凭证 (XJ-449 是 Bank West 的)."""
     assert xero.run.params_snapshot["approval_limit_cents"] == 500000
-    assert await gen05(xero) == XERO_RULES["GEN-05"](xero.run)
+    result = await gen05(xero)
+    assert result == XERO_RULES["GEN-05"](xero.run)  # 被测总体一并相等 (需求 R328)
+    assert outside_populations(result) == []
     assert await voided_counts(xero) == {"pairs": 65, "in_period": 33, "vouchers": 66}
     reliable = await gen05(xero, entry_timestamps_reliable=True)
+    assert outside_populations(reliable) == []
     assert Counter(x.rule_id for x in reliable.exceptions) == {
         "R01": 24,
         "R08": 49,
@@ -215,7 +218,9 @@ async def test_numbat_gen05_on_postgres(numbat: Gen05Project) -> None:
     而 0 条; 没有作废冲回格式, R11 不执行, 也没有作废对). 时区反例: SJ-2026-0612 录入于 11:14Z
     (悉尼周日 21:14) 而命中 R08, CP-AP-2025-07-A 录入于 06:01Z (悉尼 16:01) 而不命中; 不换算时区时两者正好相反.
     GJ-202606-ECL-1 借 1000000 (不是付款), 供 R03 的限额覆盖 (test_numbat_overrides_make_rules_hit) 区分只取付款."""
-    assert await gen05(numbat) == NUMBAT_RULES["GEN-05"](numbat.run)
+    result = await gen05(numbat)
+    assert result == NUMBAT_RULES["GEN-05"](numbat.run)  # 被测总体一并相等 (需求 R328)
+    assert outside_populations(result) == []
     assert await voided_counts(numbat) == {"pairs": 0, "in_period": 0, "vouchers": 0}
     lines = {
         line.id: line
@@ -336,10 +341,74 @@ NOT_RUN = {  # Xero 上不执行的规则 (录入时间不可靠, 没有审批�
 @pytest.mark.parametrize("entry_nos", [FIRST_ROUND, SECOND_ROUND], ids=["round1", "round2"])
 async def test_xero_increment_finds_nothing(xero_corrected: Gen05Project, entry_nos: list[str]) -> None:
     """验收 4: 两轮更正通知的增量实例各 0 条例外 (R09 剔除 AJE- 前缀, R02 不是 10,000 的整数倍, R03 不是付款, R05
-    说明不含 revers); 不执行的规则同初始实例, R11 照常执行."""
+    说明不含 revers); 不执行的规则同初始实例, R11 照常执行. 被测总体 (需求 R328) 同离线预置, 只含本次载入的行."""
     result = await gen05(xero_corrected, entry_nos=entry_nos)
     assert result.exceptions == []
     assert {(o.rule_id, o.status) for o in result.outcomes} == NOT_RUN
+    # 需求 R328 验收 3: 总体只含本次载入的更正分录行 (R09 剔除审计更正分录, R12 没有发票挂在其上, 都为空)
+    params = xero_corrected.run.params_snapshot | {"entry_nos": entry_nos}
+    assert result.populations == engine_result("GEN-05", result, xero_gen05_populations(params)).populations
+    loaded = {line.id for line in xero_adjustments(entry_nos)}
+    assert {i.source_id for p in result.populations for i in p.items} == loaded
+    assert [p.rule_id for p in result.populations if p.count == 0] == ["R09", "R12"]
+
+
+@pytest.mark.external
+async def test_increment_populations_with_reliable_timestamps(xero_corrected: Gen05Project) -> None:
+    """需求 R328 验收 3 (录入时间改为可信, 首次沟通时间已有, 时间类规则都执行): 第 1 轮增量中 R13 与 R09 剔除审计更正
+    分录, 总体为空; R06 不受 entry_nos 限制, 总体为审计更正以外的全部本期分录行 (582 行).
+    每轮增量按其全期测试范围重复记录 R06 总体.
+    其余分录类规则只含载入的 5 行. 同离线预置."""
+    overrides = {"entry_timestamps_reliable": True, "audit_adjustment_start": "2026-10-19T04:00:00Z"}
+    result = await gen05(xero_corrected, entry_nos=FIRST_ROUND, **overrides)
+    params = xero_corrected.run.params_snapshot | overrides | {"entry_nos": FIRST_ROUND}
+    assert result.populations == engine_result("GEN-05", result, xero_gen05_populations(params)).populations
+    counts = {p.rule_id: p.count for p in result.populations}
+    assert (counts["R06"], counts["R09"], counts["R13"]) == (582, 0, 0)
+    assert {counts[r] for r in counts if r not in ("R06", "R09", "R12", "R13")} == {5}
+
+
+@pytest.mark.external
+async def test_r12_population_by_invoice_date_with_records_in_id_order(xero: Gen05Project) -> None:
+    """需求 R328: R12 的总体按开票日取 (同规则 SQL), 一张一项, 服务完成记录按记录 ID. 在测试库里加一张 09-30 开票,
+    10-01 入账的发票与它的两条记录 (ID 大的先插, 一条没签收): 它在总体里, records 为两条, 按 ID; 与离线口径
+    (fakes.gen05_populations, 表加上这几行) 一致."""
+    invoice = SalesInvoice(
+        id="SI-T-1",
+        invoice_no="ORC9001",
+        customer="Test Customer",
+        customer_abn=None,
+        contract_id=None,
+        invoice_date=date(2026, 9, 30),
+        posting_date=date(2026, 10, 1),
+        amount_cents=123400,
+        journal_entry_id=None,
+    )
+    notes = [
+        DeliveryNote(
+            id="DN-T-2", delivery_no="DN9002", invoice_id="SI-T-1", shipped_date=None, signed_date=None, signed_by=None
+        ),
+        DeliveryNote(
+            id="DN-T-1",
+            delivery_no="DN9001",
+            invoice_id="SI-T-1",
+            shipped_date=date(2026, 9, 30),
+            signed_date=date(2026, 10, 2),
+            signed_by="Test Signer",
+        ),
+    ]
+    async with (
+        with_rows(xero, "sales_invoices", [invoice.model_dump()]),
+        with_rows(xero, "delivery_notes", [n.model_dump() for n in notes]),
+    ):
+        result = await gen05(xero)
+    tables = xero_tables()
+    lines, invoices = tables["journal_entries"], [*tables["sales_invoices"], invoice]
+    expected = gen05_populations(lines, invoices, [*tables["delivery_notes"], *notes], xero.run.params_snapshot)
+    [r12] = [p for p in result.populations if p.rule_id == "R12"]
+    assert r12 == next(p for p in expected if p.rule_id == "R12")
+    [item] = [i for i in r12.items if i.source_id == "SI-T-1"]
+    assert [r["delivery_no"] for r in item.fields["records"]] == ["DN9001", "DN9002"]
 
 
 def adjustment_line(lid: str, entry_no: str, account: str, debit: int, credit: int) -> dict[str, object]:

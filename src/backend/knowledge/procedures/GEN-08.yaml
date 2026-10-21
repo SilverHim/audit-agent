@@ -28,6 +28,12 @@ workpaper: {ref: G-3, area: G}  # 底稿索引号与所属区 (需求 R329, know
 # - R02 穿透中断 (medium): 发现的公司 (含报告主体) 摘录查不到, 没有 ACN, 或在母公司链上超过 max_depth (detail.reason
 #   依次为 查不到摘录, 没有 ACN, 达到 max_depth); 或有高管因没有人员检索来源而未检索 (没有人员检索来源, 高管未检索).
 #   这些公司照样建节点 (searched 为假) 与关系, 不再往下穿透. 持股低于 significant_pct 的法人股东不在链上, 不出 R02.
+# 范围说明 (需求 R328)
+scope:
+  zh: 客户的股权结构, 向上穿透 {{ max_depth }} 层法人股东, 关联人员检索 {{ person_hops }} 轮
+  en: >-
+    The client's ownership structure, traced up {{ max_depth }} levels of corporate shareholders, with
+    {{ person_hops }} round(s) of related-person searches
 phase: P2_Executing
 cycle: Pervasive
 owner: A5

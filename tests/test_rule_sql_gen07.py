@@ -9,9 +9,12 @@ from datetime import date
 import pytest
 
 from backend.contracts.models import ProcedureRun
+from backend.contracts.records import BankTransaction
 from backend.contracts.services import RuleResult
+from tests.fakes import gen07_populations, outside_populations
+from tests.test_gen05_sql import with_rows
 from tests.xero_db import DbProject, XeroProject, first_run, rules_with
-from tests.xero_fakes import XERO_RULES
+from tests.xero_fakes import XERO_RULES, xero_tables
 
 pytestmark = [pytest.mark.slow, pytest.mark.asyncio(loop_scope="session")]  # 与会话共用的项目同一个事件循环
 
@@ -50,7 +53,8 @@ async def test_xero_gen07_on_postgres(xero_db: XeroProject, xero_run: ProcedureR
     assert (xero_run.id, xero_run.params_snapshot["data_as_of"]) == ("RUN-GEN-07-1", date(2026, 10, 17))
     result = await rules_with(xero_db, "GEN-07", xero_run)
     assert (result.rows, result.outcomes) == ({}, [])
-    assert result.exceptions == XERO_RULES["GEN-07"](xero_run).exceptions
+    assert result == XERO_RULES["GEN-07"](xero_run)
+    assert outside_populations(result) == []
     assert {x.detail["window_end"] for x in result.exceptions} == {"2026-10-17"}
 
 
@@ -117,3 +121,38 @@ async def test_numbat_gen07_sql_runs(numbat_db: DbProject, numbat_run: Procedure
     )
     result = await rules_with(numbat_db, "GEN-07", numbat_run)
     assert result.outcomes == [] and {x.detail["window_end"] for x in result.exceptions} <= {"2026-07-31"}
+
+
+@pytest.mark.external
+async def test_s01_population_is_window_transactions_of_known_accounts(
+    xero_db: XeroProject, xero_run: ProcedureRun
+) -> None:
+    """需求 R328: S01 的总体只取窗口 (10-01 至 10-17) 内银行账户表里有的账户的流水. 在测试库里加三笔小额流水 (期末当天,
+    窗口末日, 不在账户表的账户; 都不到门槛, 不出例外): 只有窗口末日那笔进总体; 与离线口径 (fakes.gen07_populations,
+    表加上这几笔) 一致."""
+
+    def txn(tid: str, account: str, day: date) -> BankTransaction:
+        return BankTransaction(
+            id=tid,
+            bank_account_id=account,
+            txn_date=day,
+            amount_cents=1000,
+            balance_after_cents=0,
+            description="Test deposit",
+            reference=None,
+        )
+
+    extra = [
+        txn("BT-T-1", "BA-090", date(2026, 9, 30)),
+        txn("BT-T-2", "BA-090", date(2026, 10, 17)),
+        txn("BT-T-3", "BA-999", date(2026, 10, 5)),
+    ]
+    async with with_rows(xero_db, "bank_transactions", [t.model_dump() for t in extra]):  # type: ignore[arg-type]
+        result = await rules_with(xero_db, "GEN-07", xero_run)
+    tables = xero_tables()
+    transactions = [*tables["bank_transactions"], *extra]
+    expected = gen07_populations(
+        tables["journal_entries"], tables["bank_accounts"], transactions, xero_run.params_snapshot
+    )
+    assert result.populations == expected
+    assert {t.id for t in extra} & {i.source_id for i in result.populations[0].items} == {"BT-T-2"}

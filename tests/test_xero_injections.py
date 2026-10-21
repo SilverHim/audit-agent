@@ -52,6 +52,7 @@ from tests.xero_fakes import (
     xero_contracts,
     xero_csh02_rows,
     xero_documents,
+    xero_gen05_populations,
     xero_gen05_result,
     xero_rev08_exception,
     xero_tables,
@@ -296,7 +297,11 @@ def t2_gen05(run: ProcedureRun) -> RuleResult:
         elif x.rule_id == "R12":
             x = x.model_copy(update={"detail": {**x.detail, "full_credits": []}})
         kept.append(x)
-    return engine_result("GEN-05", base.model_copy(update={"exceptions": kept}))
+    return engine_result(
+        "GEN-05",
+        base.model_copy(update={"exceptions": kept}),
+        xero_gen05_populations(run.params_snapshot, exclude_entries=("XJ-430",)),
+    )
 
 
 # T2 的规则预置: GEN-05 按上; PLN-07, PLN-01 在副本上随试算表变 (只在连库断言), 离线沿用 T0 的 (不影响分录一串)
@@ -434,7 +439,11 @@ def t5p_gen05(run: ProcedureRun) -> RuleResult:
     断言两者相等)."""
     base = xero_gen05_result(run)
     kept = [x for x in base.exceptions if x.source_ids != ["XJ-499-2"]]
-    return engine_result("GEN-05", base.model_copy(update={"exceptions": kept}))
+    return engine_result(
+        "GEN-05",
+        base.model_copy(update={"exceptions": kept}),
+        xero_gen05_populations(run.params_snapshot, exclude_entries=("XJ-499",)),
+    )
 
 
 # T5' 的规则预置: GEN-05 按上; PLN-07 在副本上 A01 少了 710, 711 两条, 只在连库断言, 离线沿用 T0 的 (同 T4)

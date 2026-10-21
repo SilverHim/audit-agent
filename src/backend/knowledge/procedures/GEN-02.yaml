@@ -6,6 +6,10 @@ workpaper: {ref: G-2, area: G}  # 底稿索引号与所属区 (需求 R329, know
 # 每笔凭证一个对象 (按凭证号自然序), 由 agents/fieldwork.py 的 gen02_subjects 组装上下文 (data 字段见
 # GEN-02.md.j2 头注释), 走 A6 判断公共流程. 固定集的 objective_ids 为空, 任务说明的 risks 为空, 舞弊风险另放进
 # data.fraud_risks (风险清单中 fraud_related 为真的全部风险). 建议动作不受限制 (同一笔可能被本程序与科目程序各建议一次).
+# 范围说明 (需求 R328)
+scope:
+  zh: GEN-05 尚未归因的分录例外, 每笔凭证一个判断对象
+  en: Unattributed GEN-05 journal exceptions, one judgment subject per entry
 phase: P2_Executing
 cycle: Pervasive
 owner: A6

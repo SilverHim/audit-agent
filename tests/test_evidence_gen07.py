@@ -36,6 +36,7 @@ from tests.fakes import (
     make_ctx,
     make_deps,
     make_run,
+    outside_populations,
 )
 from tests.test_xero_fixtures import xero_context
 from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_gen07_exceptions, xero_state
@@ -173,6 +174,25 @@ async def test_xero_returns_the_nine_exceptions_as_is() -> None:
     )
     assert rules.calls == [("GEN-07", run.id, XERO_PARAMS)]
     assert [e for e in trail.entries if e.kind in (TrailKind.llm_call, TrailKind.external_call)] == []
+
+
+@pytest.mark.external
+async def test_xero_populations_are_window_transactions_and_lines() -> None:
+    """需求 R328 验收 2: 期后窗口 (10-01 至 10-17) 内 S01 的总体为 73 笔流水, S02, S03 为剔除作废对的 228 行分录 (同一
+    段); 9 条例外都落在其规则的总体里."""
+    deps = make_xero_deps(rules=FakeRuleEngine(XERO_RULES), features=GOING_CONCERN)
+    ctx = xero_context(deps, xero_state(), "GEN-07", [])
+    output = await EvidenceAgent(deps).outcome(ctx)
+    populations = output.populations or []
+    assert [(p.rule_id, p.source_type, p.count) for p in populations] == [
+        ("S01", "bank_transaction", 73),
+        ("S02", "journal_entry", 228),
+        ("S03", "journal_entry", 228),
+    ]
+    dates = {i.fields.get("txn_date") or i.fields["posting_date"] for p in populations for i in p.items}
+    assert (min(dates), max(dates)) == ("2026-10-01", "2026-10-17")
+    [run] = output.patch["procedure_runs"]
+    assert outside_populations(XERO_RULES["GEN-07"](run)) == []
 
 
 async def test_no_hits_is_a_succeeded_run_without_exceptions() -> None:

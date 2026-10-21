@@ -46,6 +46,7 @@ from tests.xero_fakes import (
     XERO_RULES,
     make_xero_deps,
     manifest_documents,
+    xero_gen05_exceptions,
     xero_identified_misstatements,
     xero_profile,
     xero_registry,
@@ -85,7 +86,7 @@ async def graph_state(deps: Any, trail: FakeTrail, related_to_all: bool = False)
     的凭证号 (测试里合成的补登记, 让按节点或按凭证号取文件的上下文都取得到摘录)."""
     gen08, _, _, _ = await run_gen08(xero_registry(), xero_profile(), xero=True, trail=trail)
     graph = gen08["ownership_graph"]
-    entries = [str(x.detail["entry_no"]) for x in XERO_RULES["GEN-05"](make_run("GEN-05")).exceptions]
+    entries = [str(x.detail["entry_no"]) for x in xero_gen05_exceptions(make_run("GEN-05"))]
     related = [*(n.id for n in graph.nodes), xero_profile().id, *entries] if related_to_all else []
     extracts = [d for d in gen08["documents"] if d.type is DocumentType.registry_extract]
     deps.financial_store.document_refs += [d.model_copy(update={"related_ids": related}) for d in extracts]

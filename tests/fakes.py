@@ -157,6 +157,7 @@ from backend.contracts.models import (
     RunStatus,
     RunTrigger,
     ShareholderDirection,
+    SourceType,
     StepKind,
     TargetType,
     TaskKind,
@@ -1802,15 +1803,7 @@ def rev08_populations(
         return PopulationItem(source_id=invoice.id, amount_cents=invoice.amount_cents, fields=fields | extra)
 
     def with_notes(invoice: SalesInvoice) -> PopulationItem:
-        records = [
-            {
-                "delivery_no": n.delivery_no,
-                "signed_date": n.signed_date.isoformat() if n.signed_date else None,
-                "signed_by": n.signed_by,
-            }
-            for n in recorded.get(invoice.id, [])
-        ]
-        return item(invoice, records=records or None)
+        return item(invoice, records=delivery_records(recorded.get(invoice.id, [])))
 
     r03 = []
     for invoice in window:
@@ -1832,16 +1825,159 @@ def rev08_populations(
         "R02": [with_notes(i) for i in window],
         "R03": r03,
     }
-    return [
-        RulePopulation(
-            rule_id=rule_id,
-            source_type="sales_invoice" if found else None,
-            items=found,
-            count=len(found),
-            amount_cents=total_cents(i.amount_cents for i in found),
-        )
-        for rule_id, found in items.items()
+    return [population_of(rule_id, "sales_invoice", found) for rule_id, found in items.items()]
+
+
+def delivery_records(notes: Sequence[DeliveryNote]) -> list[dict[str, Any]] | None:
+    """一张发票的服务完成记录数组 (REV-08 R01, R02 与 GEN-05 R12 的总体 SQL 同写法, jsonb_agg 按记录 ID): 每条
+    {delivery_no, signed_date, signed_by}, 没签收的为 None; 没有记录为 None. notes 须已按记录 ID 排序."""
+    records = [
+        {
+            "delivery_no": n.delivery_no,
+            "signed_date": n.signed_date.isoformat() if n.signed_date else None,
+            "signed_by": n.signed_by,
+        }
+        for n in notes
     ]
+    return records or None
+
+
+def population_of(rule_id: str, source_type: SourceType, items: Sequence[PopulationItem]) -> RulePopulation:
+    """一条规则的被测总体: 项目数与金额合计按项目算 (同 rule_engine.rule_population); 没有项目时对象类型为空."""
+    return RulePopulation(
+        rule_id=rule_id,
+        source_type=source_type if items else None,
+        items=list(items),
+        count=len(items),
+        amount_cents=total_cents(i.amount_cents for i in items),
+    )
+
+
+def line_item(line: JournalEntry) -> PopulationItem:
+    """总体中的一行分录 (GEN-05, GEN-07 的总体 SQL 同列, 需求 R328): 行 ID, 金额为借贷两侧绝对值之和 (同例外),
+    识别字段为凭证号, 业务日期, 科目, 借贷金额, 摘要与单据号."""
+    fields = {
+        "entry_no": line.entry_no,
+        "posting_date": line.posting_date.isoformat(),
+        "account_code": line.account_code,
+        "debit_cents": line.debit_cents,
+        "credit_cents": line.credit_cents,
+        "description": line.description,
+        "source_doc": line.source_doc,
+    }
+    return PopulationItem(source_id=line.id, amount_cents=abs(line.debit_cents) + abs(line.credit_cents), fields=fields)
+
+
+def param_date(value: date | str) -> date:
+    """参数快照里的日期: 内存中为 date, 经 JSON 往返后为 ISO 文本."""
+    return value if isinstance(value, date) else date.fromisoformat(value)
+
+
+def gen05_populations(
+    lines: Iterable[JournalEntry],
+    invoices: Iterable[SalesInvoice],
+    notes: Iterable[DeliveryNote],
+    params: Mapping[str, Any],
+) -> list[RulePopulation]:
+    """GEN-05 R01-R13 的被测总体 (需求 R328), 按 GEN-05.yaml 总体 SQL 的口径由表独立算一遍, 参数取执行的参数快照:
+    本期 (period_start 至 period_end) 分录行, 一行一项, 按 (业务日期, 行 ID); entry_nos 非空时只含这些凭证 (R06 除外).
+    R01, R03-R05, R07, R08 为全部; R02, R10, R11 剔除作废对 (csh02_voided, 作废对按全部分录行认); R06, R13 剔除审计
+    更正分录 (凭证号前缀); R09 两者都剔除. R12 为本期 (按开票日) 销售发票, 一张一项, 按 ID, records 为服务完成记录
+    (delivery_records); entry_nos 非空时只含分录落在这些凭证上的发票. 执行前检查命中的规则由 engine_result 去掉."""
+    lines = list(lines)
+    start, end = param_date(params["period_start"]), param_date(params["period_end"])
+    entry_nos, prefix = params.get("entry_nos"), params["audit_adjustment_entry_prefix"]
+    voided = csh02_voided(lines, params["reversal_reference_pattern"], params["reversal_entry_no_template"])
+    period = sorted((j for j in lines if start <= j.posting_date <= end), key=lambda j: (j.posting_date, j.id))
+    limited = [j for j in period if entry_nos is None or j.entry_no in entry_nos]
+    unvoided = [j for j in limited if j.entry_no not in voided]
+
+    def not_audit(found: Iterable[JournalEntry]) -> list[JournalEntry]:
+        return [j for j in found if not j.entry_no.startswith(prefix)]
+
+    by_rule = dict.fromkeys(("R01", "R03", "R04", "R05", "R07", "R08"), limited)
+    by_rule |= dict.fromkeys(("R02", "R10", "R11"), unvoided)
+    by_rule |= {"R06": not_audit(period), "R09": not_audit(unvoided), "R13": not_audit(limited)}
+    populations = [population_of(r, "journal_entry", [line_item(j) for j in found]) for r, found in by_rule.items()]
+    loaded = {j.id for j in lines if entry_nos is None or j.entry_no in entry_nos}
+    recorded: dict[str, list[DeliveryNote]] = {}
+    for note in sorted(notes, key=lambda n: n.id):
+        recorded.setdefault(note.invoice_id, []).append(note)
+    r12 = [
+        PopulationItem(
+            source_id=i.id,
+            amount_cents=i.amount_cents,
+            fields={
+                "invoice_no": i.invoice_no,
+                "customer": i.customer,
+                "invoice_date": i.invoice_date.isoformat(),
+                "posting_date": i.posting_date.isoformat(),
+                "journal_entry_id": i.journal_entry_id,
+                "records": delivery_records(recorded.get(i.id, [])),
+            },
+        )
+        for i in sorted(invoices, key=lambda i: i.id)
+        if start <= i.invoice_date <= end and (entry_nos is None or i.journal_entry_id in loaded)
+    ]
+    return [*populations, population_of("R12", "sales_invoice", r12)]
+
+
+def gen07_populations(
+    lines: Iterable[JournalEntry],
+    bank_accounts: Iterable[BankAccount],
+    transactions: Iterable[BankTransaction],
+    params: Mapping[str, Any],
+) -> list[RulePopulation]:
+    """GEN-07 S01-S03 的被测总体 (需求 R328), 按 GEN-07.yaml 总体 SQL 的口径由表独立算一遍: 期后窗口 (period_end,
+    window_end], window_end 为期末加 subsequent_days 与 data_as_of 中较早的. S01 为窗口内银行账户表里有的账户的流水,
+    一笔一项, 按 (交易日, ID), 金额同例外 (带符号); S02, S03 为窗口内剔除作废对的分录行 (line_item), 按 (业务日期,
+    ID)."""
+    lines = list(lines)
+    period_end = param_date(params["period_end"])
+    window_end = period_end + timedelta(days=params["subsequent_days"])
+    if params.get("data_as_of") is not None:
+        window_end = min(window_end, param_date(params["data_as_of"]))
+    accounts = {b.id for b in bank_accounts}
+    s01 = [
+        PopulationItem(
+            source_id=t.id,
+            amount_cents=t.amount_cents,
+            fields={
+                "bank_account_id": t.bank_account_id,
+                "txn_date": t.txn_date.isoformat(),
+                "description": t.description,
+                "reference": t.reference,
+            },
+        )
+        for t in sorted(transactions, key=lambda t: (t.txn_date, t.id))
+        if t.bank_account_id in accounts and period_end < t.txn_date <= window_end
+    ]
+    voided = csh02_voided(lines, params["reversal_reference_pattern"], params["reversal_entry_no_template"])
+    window = [
+        line_item(j)
+        for j in sorted(lines, key=lambda j: (j.posting_date, j.id))
+        if period_end < j.posting_date <= window_end and j.entry_no not in voided
+    ]
+    return [
+        population_of("S01", "bank_transaction", s01),
+        population_of("S02", "journal_entry", window),
+        population_of("S03", "journal_entry", window),
+    ]
+
+
+def outside_populations(result: RuleResult) -> list[str]:
+    """所指对象不在出它的规则的被测总体里的例外 ID (需求 R328 的守卫, 应为空): 总体是分录行或流水时看例外的
+    source_ids; 总体是发票而例外指向发票的分录行时 (GEN-05 R12) 看 detail 的 invoice_id."""
+    tested = {p.rule_id: (p.source_type, {i.source_id for i in p.items}) for p in result.populations}
+    outside = []
+    for x in result.exceptions:
+        source_type, ids = tested[x.rule_id]
+        objects = set(x.source_ids)
+        if source_type == "sales_invoice" and "invoice_id" in x.detail:  # GEN-05 R12: 例外指向发票的分录行
+            objects = {x.detail["invoice_id"]}
+        if not objects <= ids:
+            outside.append(x.id)
+    return outside
 
 
 def no_population(value: Any) -> bool:
@@ -1963,6 +2099,16 @@ def numbat_rev08_populations() -> list[RulePopulation]:
     )
 
 
+def numbat_gen05_populations(params: Mapping[str, Any]) -> list[RulePopulation]:
+    """Numbat GEN-05 的被测总体 (需求 R328), 由演示数据集的分录, 发票与发运单按执行的参数算出 (gen05_populations)."""
+    return gen05_populations(
+        numbat_records("journal_entries", JournalEntry),
+        numbat_records("sales_invoices", SalesInvoice),
+        numbat_records("delivery_notes", DeliveryNote),
+        params,
+    )
+
+
 NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引擎对 Numbat 的结果, 按程序编号
     "PLN-07": lambda run: engine_result(
         "PLN-07",
@@ -1981,7 +2127,9 @@ NUMBAT_RULES: dict[str, Callable[[ProcedureRun], RuleResult]] = {  # 规则引�
         "CSH-02",
         RuleResult(exceptions=[], rows={"D02": NUMBAT_D02_ROWS, "D03": NUMBAT_D03_ROWS, "D04": NUMBAT_D04_ROWS}),
     ),
-    "GEN-05": lambda run: engine_result("GEN-05", numbat_gen05_result(run)),  # 功能 journals 打开时才执行
+    "GEN-05": lambda run: engine_result(  # 功能 journals 打开时才执行
+        "GEN-05", numbat_gen05_result(run), numbat_gen05_populations(run.params_snapshot)
+    ),
 }
 
 

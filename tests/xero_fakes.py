@@ -93,7 +93,9 @@ from tests.fakes import (
     csh05_population,
     engine_result,
     gen05_exception,
+    gen05_populations,
     gen06_rows,
+    gen07_populations,
     make_deps,
     pln07_a01_population,
     rev08_populations,
@@ -1093,6 +1095,27 @@ def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[d
     return xero_gen06_derived(tables["journal_entries"], tables["sales_invoices"], loader)
 
 
+def xero_gen05_populations(params: Mapping[str, Any], *, exclude_entries: Sequence[str] = ()) -> list[RulePopulation]:
+    """GEN-05 对 Xero 演示的被测总体 (需求 R328): 由演示数据导入之后的表按执行的参数算出 (fakes.gen05_populations).
+    增量实例 (entry_nos 非空) 另有这些凭证的补造更正分录 (载入之后的状态); 连库结果与它一致由 test_gen05_sql 断言."""
+    tables = xero_tables()
+    entry_nos = params.get("entry_nos")
+    lines = [*tables["journal_entries"], *(xero_adjustments(entry_nos) if entry_nos else [])]
+    return gen05_populations(
+        [line for line in lines if line.entry_no not in exclude_entries],
+        tables["sales_invoices"],
+        tables["delivery_notes"],
+        params,
+    )
+
+
+def xero_gen07_populations(params: Mapping[str, Any]) -> list[RulePopulation]:
+    """GEN-07 对 Xero 演示的被测总体 (需求 R328): 期后窗口 10-01 至 10-17 的流水与分录, 由导入之后的表按执行的参数算出
+    (fakes.gen07_populations)."""
+    tables = xero_tables()
+    return gen07_populations(tables["journal_entries"], tables["bank_accounts"], tables["bank_transactions"], params)
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
@@ -1109,13 +1132,19 @@ XERO_RULES: dict[
     # 两个账户对账单的期末余额都等于试算表
     "CSH-05": lambda run: engine_result("CSH-05", RuleResult(exceptions=[], rows={}), [xero_csh05_population()]),
     "CSH-02": lambda run: engine_result("CSH-02", RuleResult(exceptions=[], rows=xero_csh02_rows())),
-    "GEN-05": lambda run: engine_result("GEN-05", xero_gen05_result(run)),  # 功能 journals 打开时才执行
+    "GEN-05": lambda run: engine_result(
+        "GEN-05", xero_gen05_result(run), xero_gen05_populations(run.params_snapshot)
+    ),  # 功能 journals 打开时才执行
     # 功能 related_parties 打开时才执行; 缺省关系图 (GEN-08 的 VPA 与 Morgan Advisory) 只有 VPA 有往来
     "GEN-03": lambda run: engine_result(
         "GEN-03", RuleResult(exceptions=[], rows={"C01": xero_gen03_rows(["victoria property agency"]), "C02": []})
     ),
     # 功能 going_concern 打开时才执行
-    "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
+    "GEN-07": lambda run: engine_result(
+        "GEN-07",
+        RuleResult(exceptions=xero_gen07_exceptions(run), rows={}),
+        xero_gen07_populations(run.params_snapshot),
+    ),
     # 同上; 只出行, 由表派生
     "GEN-06": lambda run: engine_result("GEN-06", RuleResult(exceptions=[], rows=xero_gen06_rows())),
 }
