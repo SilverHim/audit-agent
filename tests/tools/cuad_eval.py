@@ -5,6 +5,8 @@
 - split_omitted, anchor, locate: CUAD 摘录按 <omitted> 拆段, 取前 60 个字母数字作锚点, 在逐页文本里定位页码.
 - starts_on, fabricated: 锚点是否从某页开始; 反编造检查: 条款文本的锚点不从它声明的那一页开始 (只在评测里算, 不进
   正式校验).
+- contract_key, csv_rows, pdf_files, excerpts, segment_location (需求 R248): 本地 CUAD 的 CSV 行与 PDF 按文件名对应,
+  CSV 摘录 (Python 列表字符串) 的读取与逐页定位; LOCATED_CATEGORIES 为定位统计的 20 类 (cuad.md 第 1 节列出的类别).
 - 金标准 (需求 R247): tests/fixtures/cuad/gold.json, 10 份合同 (GoldContract, load_gold), 开发者逐份读 PDF 起草, 用户
   抽查过的标 "用户抽查"; SHA256SUMS 记这 10 份 PDF 与 master_clauses.csv, CUAD_v1.json 的 sha256.
 - 逐页文本: tests/fixtures/cuad/pages/<别名>.json (PAGE_FIXTURES 三份), 由 pdf_pages 从 data/external/cuad 的 PDF
@@ -16,10 +18,13 @@ tests/fixtures/cuad/README.md.
 """
 
 import argparse
+import ast
+import csv
 import difflib
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any, Literal, Self
@@ -44,6 +49,31 @@ SIMILAR = 0.9  # 当事方名称相似度门槛
 # 当事方名称里去掉的公司后缀 (规范化后按整词比对; d/b/a 规范化后为 "d b a")
 SUFFIXES = {"inc", "corp", "corporation", "llc", "ltd", "limited", "co", "pty", "plc", "lp", "llp", "gmbh", "kg"}
 DATE = re.compile(r"^\s*(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\s*$")
+CROSS_TAIL = 40  # 首段锚点哪页都找不到时, 用末尾这么多个字母数字判断是否跨页
+# 定位统计的 20 类摘录 (cuad.md 第 1 节与本系统字段对照时列出的类别)
+LOCATED_CATEGORIES = (
+    "Parties",
+    "Agreement Date",
+    "Effective Date",
+    "Expiration Date",
+    "Renewal Term",
+    "Notice Period To Terminate Renewal",
+    "Governing Law",
+    "Termination For Convenience",
+    "Post-Termination Services",
+    "Warranty Duration",
+    "Most Favored Nation",
+    "Price Restrictions",
+    "Revenue/Profit Sharing",
+    "Minimum Commitment",
+    "Volume Restriction",
+    "Affiliate License-Licensor",
+    "Affiliate License-Licensee",
+    "Cap On Liability",
+    "Uncapped Liability",
+    "Liquidated Damages",
+)
+HARPOON = "_Option Agreement"  # Harpoon 那份 PDF 的文件名比 CSV 多出的后缀
 
 
 def parse_cuad_date(text: str) -> date | None:
@@ -172,6 +202,55 @@ def gold_by_alias(contracts: list[GoldContract]) -> dict[str, GoldContract]:
 def load_gold() -> dict[str, GoldContract]:
     """入库的金标准, 按别名 (文件中的顺序)."""
     return gold_by_alias(TypeAdapter(list[GoldContract]).validate_json(GOLD.read_bytes()))
+
+
+def contract_key(name: str) -> str:
+    """CSV 的 Filename 与 PDF 文件名对应用的键 (cuad.md 第 0 节): NFC 规范化, 去扩展名 (含 Kallo 一行末尾多出的
+    ".pdf'") 与首尾空白, & 与 ' 换成 _; Harpoon 的 PDF 去掉多出的后缀."""
+    text = unicodedata.normalize("NFC", name).strip()
+    text = re.sub(r"\.pdf'?$", "", text, flags=re.IGNORECASE).strip().removesuffix(HARPOON)
+    return text.replace("&", "_").replace("'", "_")
+
+
+def csv_rows(cuad: Path) -> dict[str, dict[str, str]]:
+    """master_clauses.csv 的各行, 按 contract_key; cuad 为 CUAD_v1/. 键重复时报错."""
+    with (cuad / "master_clauses.csv").open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    by_key = {contract_key(r["Filename"]): r for r in rows}
+    if len(by_key) != len(rows):
+        raise ValueError("master_clauses.csv 的文件名对应不唯一")
+    return by_key
+
+
+def pdf_files(cuad: Path) -> dict[str, Path]:
+    """full_contract_pdf 下的全部 PDF, 按 contract_key. 键重复时报错."""
+    paths = [p for p in (cuad / "full_contract_pdf").rglob("*") if p.is_file()]
+    by_key = {contract_key(p.name): p for p in paths}
+    if len(by_key) != len(paths):
+        raise ValueError("PDF 的文件名对应不唯一")
+    return by_key
+
+
+def excerpts(row: dict[str, str], category: str) -> list[str]:
+    """CSV 一行某类的摘录: 摘录列是 Python 列表的字符串 (只当字面量读)."""
+    value = ast.literal_eval(row[category])
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError(f"{category} 的摘录不是字符串列表")
+    return value
+
+
+def segment_location(pages: list[str], segment: str) -> Literal["single", "multi", "cross", "missing"] | None:
+    """一段摘录的定位 (cuad.md 第 2 节): 锚点只出现在一页, 出现在多页, 哪页都没有而末尾 CROSS_TAIL 个字母数字能找到
+    (跨页), 都找不到; 段里没有字母数字时为 None (不计)."""
+    key = anchor(segment)
+    if not key:
+        return None
+    texts = [alnum(page) for page in pages]
+    found = sum(key in text for text in texts)
+    if found:
+        return "single" if found == 1 else "multi"
+    tail = alnum(segment)[-CROSS_TAIL:]
+    return "cross" if any(tail in text for text in texts) else "missing"
 
 
 def pdf_pages(path: Path) -> list[str]:
