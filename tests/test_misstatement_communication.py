@@ -111,8 +111,8 @@ def payload(run_no: int, records: list[str]) -> dict[str, Any]:
     return {"awaiting": "human", "procedure_id": FIN08, "run_id": f"RUN-FIN-08-{run_no}", "records": records}
 
 
-def listed(m: Misstatement, conclusion: str | None) -> dict[str, Any]:
-    """材料中的一条错报 (验收 2 列的各项, JSON 形式)."""
+def listed(m: Misstatement, source: Judgment) -> dict[str, Any]:
+    """材料中的一条错报 (验收 2 列的各项, JSON 形式; 来源判断的结论与执行, 需求 R340)."""
     return {
         "id": m.id,
         "version": m.version,
@@ -123,7 +123,8 @@ def listed(m: Misstatement, conclusion: str | None) -> dict[str, Any]:
         "direction": m.direction.value,
         "type": m.type.value,
         "fraud_indicative": m.fraud_indicative,
-        "source_conclusion": conclusion,
+        "source_conclusion": source.conclusion,
+        "source_run_id": source.run_id,
     }
 
 
@@ -141,14 +142,14 @@ async def test_round1_dispatched_registered_and_collected(monkeypatch: pytest.Mo
     - first_misstatement_communicated_at 解析为第 1 轮的沟通时间."""
     s = await at_communicate()
     xj499, csh02 = round1_misstatements()
-    conclusions = {j.id: j.conclusion for j in fin03_state()["judgments"]}
+    sources = {j.id: j for j in fin03_state()["judgments"]}
 
     assert latest(s, ProcedureRun, "RUN-FIN-08-1").status == "succeeded"
     task = latest(s, ReviewTask, task_of(1))
     assert (task.kind, task.subject_id, task.target_id) == (TaskKind.manual, "RESULT", "RUN-FIN-08-1")
     assert task.manual_request.material == {
         "request": CORRECTION_REQUEST,
-        "misstatements": [listed(m, conclusions[m.judgment_id]) for m in (xj499, csh02)],
+        "misstatements": [listed(m, sources[m.judgment_id]) for m in (xj499, csh02)],
     }
     assert [(row["amount_cents"], row["direction"]) for row in task.manual_request.material["misstatements"]] == [
         (75000, "overstated"),

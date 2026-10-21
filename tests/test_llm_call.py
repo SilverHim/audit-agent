@@ -194,16 +194,21 @@ def test_render_does_not_escape_html() -> None:
 
 
 async def test_request_fields() -> None:
-    llm = ScriptedLLM({"CON-001": [raw("CON-001")]})
+    llm = ScriptedLLM({"CON-001": [raw("CON-001")] * 2})
     engine, _ = setup(llm)
     result = await call(engine)
-    [req] = llm.requests
+    req = llm.requests[0]
     assert (req.procedure_id, req.run_id, req.fixture_key) == ("DOC-04", "RUN-DOC-04-1", "CON-001")
     assert req.eid == EID  # R78: mock 按它选 fixture 目录
     assert req.temperature == 0 and req.max_tokens == 32768
     assert json.dumps(ContractExtraction.model_json_schema(), indent=2) in req.system
     assert req.messages == [LLMMessage(role="user", content=engine.render(doc04(), variables()))]
     assert result.attempts == 1 and result.report.level_failed is None and len(result.trail_ids) == 1
+    # 需求 R340: 输出语言取执行记录的 language, 调用方给的同名变量不算
+    zh = RUN.model_copy(update={"language": "zh"})
+    context = ValidationContext(document=CON001, standards_of=None)
+    await engine.call_llm(EID, doc04(), zh, {**variables(), "output_language": "en"}, context, AgentId.A3, "CON-001")
+    assert "Working language: Simplified Chinese." in llm.requests[1].messages[0].content
 
 
 async def test_max_tokens_from_template() -> None:

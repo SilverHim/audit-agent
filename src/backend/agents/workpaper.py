@@ -57,7 +57,7 @@ FIN09 = "FIN-09"
 V01, V02 = "V01", "V02"  # FIN-09 的规则: 审计更正分录的全部行 (规则 SQL), 分录与错报对不上 (在代码中生成)
 # 借方余额的科目类别: 高估以贷方为更正, 低估以借方为更正; 其余类别 (负债, 权益, 收入) 相反 (需求 R165)
 DEBIT_NORMAL = frozenset({"asset", "expense"})
-# FIN-08 材料逐条列的错报字段 (需求 R161 验收 2), 另加来源判断的结论 source_conclusion
+# FIN-08 材料逐条列的错报字段 (需求 R161 验收 2), 另加来源判断的结论 source_conclusion 与其执行 source_run_id
 LISTED_FIELDS = {
     "id",
     "version",
@@ -448,22 +448,23 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
 
     def prepare(self, ctx: RunContext) -> dict[str, Any] | None:
         """FIN-08 派发的材料 (需求 R161 验收 2): 逐条列沟通对象 (to_communicate) 的 LISTED_FIELDS 与来源判断 (状态中的
-        当前版本) 的结论 source_conclusion (来源是例外或判断不在状态中时为空), 加更正请求 request; 均为 JSON 形式.
+        当前版本) 的结论 source_conclusion 与执行 source_run_id (页面据此标结论的语言, 需求 R340; 来源是例外或判断
+        不在状态中时都为空), 加更正请求 request; 均为 JSON 形式.
         没有沟通对象时为 None (空执行, 不建任务)."""
         misstatements = to_communicate(ctx.state)
         if not misstatements:
             return None
-        conclusions = {j.id: j.conclusion for j in ctx.state["judgments"]}
-        return {
-            "request": CORRECTION_REQUEST,
-            "misstatements": [
-                {
-                    **m.model_dump(mode="json", include=LISTED_FIELDS),
-                    "source_conclusion": conclusions.get(m.judgment_id or ""),
-                }
-                for m in misstatements
-            ],
-        }
+        sources = {j.id: j for j in ctx.state["judgments"]}
+
+        def listed(m: Misstatement) -> dict[str, Any]:
+            source = sources.get(m.judgment_id or "")
+            return {
+                **m.model_dump(mode="json", include=LISTED_FIELDS),
+                "source_conclusion": source.conclusion if source is not None else None,
+                "source_run_id": source.run_id if source is not None else None,
+            }
+
+        return {"request": CORRECTION_REQUEST, "misstatements": [listed(m) for m in misstatements]}
 
     def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]:
         """FIN-08 登记的核对 (需求 R161 验收 7, 在通用核对之后): 每条材料中的错报恰好一行, 不多不少; 依据的版本须为

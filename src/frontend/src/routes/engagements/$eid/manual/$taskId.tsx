@@ -12,6 +12,7 @@ import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { useContentLanguage } from '@/components/working-language'
 import { UPLOAD_ACCEPT } from '@/lib/data-api'
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, errorText } from '@/lib/errors'
@@ -168,6 +169,7 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
           <Card title={t.manualPage.result}>
             {listed ? (
               <ResponsesForm
+                eid={eid}
                 listed={listed}
                 rows={rows}
                 errors={rowErrors}
@@ -235,6 +237,15 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
   )
 }
 
+// 来源判断的结论 (判断文字): lang 取那条判断的执行记录的语言 (需求 R340)
+function SourceConclusion({ eid, item }: { eid: string; item: ListedMisstatement }) {
+  return (
+    <p className="m-0 text-[13px] text-secondary-foreground" lang={useContentLanguage(eid, item.source_run_id)}>
+      {item.source_conclusion}
+    </p>
+  )
+}
+
 // FIN-08 的登记表: 材料中的每条错报一行 (沟通时间与对象, 回复时间与原文, 是否同意更正); 时刻按本机时区填, 提交时带
 // 时区. 有问题的行在行下提示 (lib/misstatements.responsesDetails)
 // 是否同意更正的两个选项; 两个都没选为未选 (null)
@@ -244,12 +255,14 @@ const AGREE_CHOICES: ReadonlyArray<['yes' | 'no', boolean]> = [
 ]
 
 function ResponsesForm({
+  eid,
   listed,
   rows,
   errors,
   onChange,
   disabled,
 }: {
+  eid: string
   listed: ListedMisstatement[]
   rows: Record<string, ResponseRow>
   errors: Record<string, string>
@@ -276,11 +289,7 @@ function ResponsesForm({
                 <Code>{formatAud(item.amount_cents)}</Code>
               </span>
             </legend>
-            {item.source_conclusion ? (
-              <p className="m-0 text-[13px] text-secondary-foreground" lang="en">
-                {item.source_conclusion}
-              </p>
-            ) : null}
+            {item.source_conclusion ? <SourceConclusion eid={eid} item={item} /> : null}
             <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5">
               <label htmlFor={`${id}-communicated-at`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
                 {f.communicatedAt}

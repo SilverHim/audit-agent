@@ -73,6 +73,7 @@ export type ListedMisstatement = {
   type: MisstatementType
   fraud_indicative: boolean | null
   source_conclusion: string | null
+  source_run_id: string | null // 来源判断的执行, 页面据此给结论标语言 (需求 R340)
 }
 
 // 一行登记的表单值: 两个时刻为 datetime-local 的文本 (本机时区); 是否同意更正为三态, 缺省未选 (null): 管理层拒绝更正

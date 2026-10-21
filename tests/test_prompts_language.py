@@ -4,6 +4,7 @@
 另核对同一份 mock 输出在两种语言下抽出的字段相同, fixture_key 不随语言变 (校验见 tests/test_output_validator.py).
 """
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any, get_args
@@ -48,14 +49,23 @@ LATER = {"RPT-03.md.j2": "R341"}  # 暂不带输出语言一节的模板 → 归
 SECTION = "\n## Output language\n"
 NAMES: dict[WorkingLanguage, str] = {"zh": "Simplified Chinese", "en": "Australian English"}
 # 口径 → 关键词: 输出语言一节须有一行同时含这几个词 (不分大小写), {name} 换成语言名
+LITERALS = ("instructions above give in quotation marks", "exactly as given", "do not translate them")  # 引号固定值照抄
 NARRATIVE = {
     "文字字段用工作语言": ("write every free-text field", "conclusions", "reasoning", "in {name}"),
     "引文不翻译, 照原文放在引号里": ("do not translate quotations", "quotation marks", "original language"),
     "客户等名称, 科目名与准则原文照输入": ("names of the client", "account names", "wording of standards"),
+    "提示词给的引号固定值照抄": LITERALS,
     "JSON 键, 枚举, ID 与指针字段照规定": ("json keys", "enum values", "`locator`"),
 }
 EXTRACTED = {
-    "抽出的值照原文, 不翻译": ("copy every value", "exactly as written", "original language", "do not translate"),
+    "抽出的值照原文 (模板规则要求的格式除外), 不翻译": (
+        "copy every value",
+        "exactly as written",
+        "original language",
+        "apart from the formatting the rules above require",
+        "do not translate",
+    ),
+    "提示词给的引号固定值照抄": LITERALS,
     "JSON 键, 枚举, ID 与指针字段照规定": ("json keys", "enum values", "`locator`"),
 }
 
@@ -76,12 +86,17 @@ class Blank(ChainableUndefined):
     __lt__ = __le__ = __gt__ = __ge__ = _false
 
 
-def language_section(template: str, language: WorkingLanguage) -> str | None:
-    """按 output_language 渲染一次 (其余变量取 Blank, tojson 遇到它写 null), 截出末尾的输出语言一节; 没有为 None."""
+def rendered(template: str, language: WorkingLanguage) -> str:
+    """按 output_language 渲染一次, 其余变量取 Blank (tojson 遇到它写 null)."""
     env = prompt_env(PROMPTS)
     env.undefined = Blank
     env.policies["json.dumps_kwargs"] = {"sort_keys": True, "default": lambda _: None}
-    parts = env.get_template(template).render(output_language=language).split(SECTION)
+    return env.get_template(template).render(output_language=language)
+
+
+def language_section(template: str, language: WorkingLanguage) -> str | None:
+    """渲染一次 (rendered), 截出末尾的输出语言一节; 没有为 None."""
+    parts = rendered(template, language).split(SECTION)
     assert len(parts) <= 2, f"{template} 有不止一节输出语言"
     return parts[1] if len(parts) == 2 else None
 
@@ -117,16 +132,26 @@ def test_every_prompt_states_the_output_language(template: str, language: Workin
         assert "explanatory field" not in section
         return
     assert missing_rules(section, EXTRACTED, name) == []
-    explained = EXTRACTION[template]
-    if explained:
-        assert (
-            missing_rules(
-                section, {"说明性字段用工作语言": ("explanatory field", f"`{explained[0]}`", f"in {name}")}, name
-            )
-            == []
-        )
+    [line] = [line for line in section.splitlines() if "explanatory field" in line]
+    if EXTRACTION[template]:  # 说明性字段与登记的整个相等 (个数与顺序), 写在一行里
+        assert re.findall(r"`(\w+)`", line) == EXTRACTION[template] and line.endswith(f" in {name}.")
     else:
-        assert "no explanatory field" in section and f"in {name}" not in section
+        assert "no explanatory field" in line and f"in {name}" not in section
+
+
+@pytest.mark.parametrize(
+    ("template", "literals"),
+    [
+        ("CSH-02.md.j2", ['`account` "Cash"', '"Interest income"', '"Interest expense"']),
+        ("REV-02.md.j2", ['`account` "Revenue"']),
+    ],
+)
+def test_literal_account_names_stay_as_given(template: str, literals: list[str]) -> None:
+    """审核 R340-01: 提示词写死的科目名 (不在输入里; 下游 misstatement_objective 按它配审计目标) 在 zh 的提示词里原样在,
+    输出语言一节写明引号给出的固定值照抄, 不翻译."""
+    prompt = rendered(template, "zh")
+    assert [literal for literal in literals if literal not in prompt] == []
+    assert missing_rules(prompt.split(SECTION)[1], {"提示词给的引号固定值照抄": LITERALS}, NAMES["zh"]) == []
 
 
 # ── 抽取类: 抽出的值不随语言变 (验收 3, 4) ──
