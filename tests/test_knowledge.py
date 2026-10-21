@@ -141,11 +141,11 @@ def test_count_guards_on_extra_templates(tmp_path: Path) -> None:
 @pytest.mark.parametrize("feature", ["", "feature: journals\n"])
 def test_fixed_templates_are_checked_on_load(tmp_path: Path, feature: str) -> None:
     """R81 验收 1, 2: 现有 knowledge 下的 fixed 模板为 GEN-02, GEN-05 (功能 journals, 需求 R134, R131), GEN-03, GEN-08
-    (功能 related_parties, 需求 R139, R137) 与 GEN-07 (功能 going_concern, 需求 R177), 基线下都不启用; 非 P2 模板写
-    fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时, ProcedureLibrary 构造即抛
-    ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
+    (功能 related_parties, 需求 R139, R137) 与 GEN-07, GEN-06 (功能 going_concern, 需求 R177, R179), 基线下都不启用;
+    非 P2 模板写 fixed, fixed 模板写 triggers, fixed 模板或其依赖闭包中的 P2 程序的参数按风险等级取值时,
+    ProcedureLibrary 构造即抛 ValueError, 消息含程序编号. 挂了未启用的功能 (journals 不在基线中) 的模板同样校验."""
     assert ProcedureLibrary(ROOT).fixed() == []
-    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"} <= {
+    assert {"GEN-02", "GEN-03", "GEN-05", "GEN-06", "GEN-07", "GEN-08"} <= {
         t.id for t in ProcedureLibrary(ROOT).all(True) if t.fixed
     }  # 集合包含
     root = tmp_path / "knowledge"
@@ -2767,8 +2767,8 @@ def voided_cte(sql: str) -> str | None:
 
 def test_voided_pair_cte_is_one_text_everywhere() -> None:
     """需求 R132 验收 1 (裁定第 1 批: 作废对的 SQL 共用一段写法): 写了作废对 CTE (reversal AS) 的规则都带起止标记, 标记
-    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139) 与 GEN-07 的 S01-S03 (需求
-    R177)). 防只改一处使几个程序认的作废对不同."""
+    之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139), GEN-07 的 S01-S03 (需求
+    R177) 与 GEN-06 的 E01 (需求 R179)). 防只改一处使几个程序认的作废对不同."""
     marked = {
         (t.id, rule.id): voided_cte(rule.sql)
         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
@@ -2782,6 +2782,7 @@ def test_voided_pair_cte_is_one_text_everywhere() -> None:
         ("GEN-03", "C01"),
         ("GEN-03", "C02"),
         *(("GEN-07", r) for r in ("S01", "S02", "S03")),
+        ("GEN-06", "E01"),
     }
     assert expected <= set(marked)
     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
@@ -2913,6 +2914,12 @@ DATASET_REFS = {
     },
     "GEN-07": {  # 期后窗口截到数据截止日, 作废对 (需求 R177)
         "data_as_of": "data_as_of",
+        "reversal_reference_pattern": "reversal_reference_pattern",
+        "reversal_entry_no_template": "reversal_entry_no_template",
+    },
+    "GEN-06": {  # 同 GEN-07, 另加对方名称的前缀 (需求 R179)
+        "data_as_of": "data_as_of",
+        "counterparty_prefixes": "counterparty_prefixes",
         "reversal_reference_pattern": "reversal_reference_pattern",
         "reversal_entry_no_template": "reversal_entry_no_template",
     },

@@ -1,4 +1,4 @@
-"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02, GEN-03.
+"""A6: REV-08, REV-03, REV-02, CSH-05, CSH-02, GEN-05, GEN-02, GEN-03, GEN-06.
 
 返回字段: exceptions, judgments, review_tasks, confirmations, procedure_runs.
 """
@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, rule_patch, run_rules
 from backend.agents.evidence import current_confirmations, legacy_accounts
+from backend.agents.going_concern import gen06_subjects
 from backend.agents.ingest import client_profile
 from backend.agents.judging import (
     Judged,
@@ -121,17 +122,19 @@ __all__ = ["CashFindings", "FieldworkAgent", "Judged", "Subject", "Subjects", "i
 
 
 class FieldworkAgent(ProcedureAgent[Findings]):
-    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02) 与关联方图谱研判 (GEN-03),
-    产出例外与判断.
+    """A6: 执行收入与货币资金的实质性程序, 全量分录扫描 (GEN-05), 分录例外归因 (GEN-02), 关联方图谱研判 (GEN-03) 与
+    期后事项研判 (GEN-06), 产出例外与判断.
 
-    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03) 共用判断公共流程
-    (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources); 尚未登记的执行时报未实现.
+    按程序编号分派到各自的执行与解读. 判断程序 (REV-03, REV-02, CSH-02, GEN-02, GEN-03, GEN-06) 共用判断公共流程
+    (agents/judging.py), 各自只提供 "取判断对象" (登记在 subject_sources; GEN-06 的在 agents/going_concern.py);
+    尚未登记的执行时报未实现.
     """
 
     agent_id: ClassVar[AgentId] = AgentId.A6  # 智能体编号
-    # 负责的程序 (GEN-05, GEN-02 属功能 journals, GEN-03 属 related_parties, 未启用时注册表不映射)
+    # 负责的程序 (GEN-05, GEN-02 属功能 journals, GEN-03 属 related_parties, GEN-06 属 going_concern, 未启用时注册表
+    # 不映射)
     procedures: ClassVar[frozenset[str]] = frozenset(
-        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02", "GEN-03"}
+        {"REV-08", "REV-03", "REV-02", "CSH-05", "CSH-02", "GEN-05", "GEN-02", "GEN-03", "GEN-06"}
     )
 
     def __init__(self, deps: AgentDeps) -> None:
@@ -143,6 +146,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             "REV-02": self.rev02_subjects,
             "GEN-02": self.gen02_subjects,
             "GEN-03": self.gen03_subjects,
+            "GEN-06": self.gen06_subjects,
         }
 
     def handler(self, procedure_id: str) -> tuple[Execute, Interpret]:
@@ -200,7 +204,7 @@ class FieldworkAgent(ProcedureAgent[Findings]):
 
     async def related_documents(self, eid: str, related_id: str) -> list[dict[str, Any]]:
         """关联对象含 related_id 的已登记文件 (FinancialDataStore.documents(related_id=...) 的顺序), 每项为 {document
-        (DocumentRef, JSON 形式), pages (EvidenceStore.pages, 下标 0 为第 1 页)}; GEN-02, GEN-03 共用. 登记摘录
+        (DocumentRef, JSON 形式), pages (EvidenceStore.pages, 下标 0 为第 1 页)}; GEN-02, GEN-03, GEN-06 共用. 登记摘录
         (registry_extract) 不给 (需求 R310): 摘录页印有人员的出生日期, 人员检索的文件名带 yyyymmdd, 判断引擎的遮蔽
         只认人员节点 ID 与 birth_date 字段, 管不到页面文字."""
         return [
@@ -336,6 +340,11 @@ class FieldworkAgent(ProcedureAgent[Findings]):
             findings = [x for x in open_findings if node.id in x.source_ids]
             subjects.append(Subject(node.id, data, findings, client_profile=profile))
         return Subjects(subjects, rules.outcomes)
+
+    async def gen06_subjects(self, ctx: RunContext) -> Subjects:
+        """GEN-06 期后事项研判的判断对象与 data (需求 R179): 见 going_concern.gen06_subjects, 已登记文件经
+        related_documents 取 (不给登记摘录)."""
+        return await gen06_subjects(self.deps, ctx, self.related_documents)
 
     async def gen03_data(
         self,

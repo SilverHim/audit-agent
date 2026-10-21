@@ -14,6 +14,7 @@ import pytest
 
 from backend.adapters.llm import MockLLMClient
 from backend.agents.base import RunContext
+from backend.agents.evidence import EvidenceAgent
 from backend.agents.fieldwork import FieldworkAgent
 from backend.agents.ingest import DocumentIntake
 from backend.agents.registry import AGENT_CLASSES
@@ -275,28 +276,37 @@ GUARDED = sorted(
 )
 # 守卫按程序的 owner 执行: A6 的判断程序与 A8 的 FIN-03 (需求 R158)
 OWNERS = {AgentId.A6: FieldworkAgent, AgentId.A8: WorkpaperAgent}
+# 依赖闭包里先执行的程序的 owner: A6, 与 A5 的规则程序 GEN-07 (GEN-06 的前置, 需求 R179; 结果取 XERO_RULES). A5 的
+# GEN-08 已在状态里 (graph_state), 不再执行
+EARLIER = {AgentId.A6: FieldworkAgent, AgentId.A5: EvidenceAgent}
+# 受查而 Xero 正本还没有 fixture 的程序 → 加 fixture 的需求: 判断全部失败, A7 没有判断可复核, 只查 owner 的消息. 加了
+# fixture 时 test_guarded_programs_are_listed 即失败, 须同一提交删去这一项
+AWAITING_FIXTURES: dict[str, str] = {"GEN-06": "R180"}
 
 
 def test_guarded_programs_are_listed() -> None:
-    """守卫自身: 上下文可能带人员信息的判断程序按依赖闭包与 document_reads 自动列出, 现含 GEN-02, GEN-03 与 FIN-03
-    (A8, 需求 R158); 之后的 GEN-01 等加进程序库即进下一例受查. 不读关系图也不读摘录登记的 (如 REV-02) 不在其中.
-    受查的都由 OWNERS 里的 Agent 执行."""
+    """守卫自身: 上下文可能带人员信息的判断程序按依赖闭包与 document_reads 自动列出, 现含 GEN-02, GEN-03, GEN-06
+    (需求 R179) 与 FIN-03 (A8, 需求 R158); 之后的 GEN-01 等加进程序库即进下一例受查. 不读关系图也不读摘录登记的 (如
+    REV-02) 不在其中. 受查的都由 OWNERS 里的 Agent 执行; AWAITING_FIXTURES 中的确实还没有 Xero 正本 fixture."""
     assert {"GEN-02", "GEN-03", "FIN-03"} <= set(GUARDED) and "GEN-08" not in GUARDED and "REV-02" not in GUARDED
     assert all(LIBRARY.load(p).owner in OWNERS and p in OWNERS[LIBRARY.load(p).owner].procedures for p in GUARDED)
     executed = {p for agent in AGENT_CLASSES for p in agent.procedures}
     assert all(sees_person_data(p) for p in PENDING) and not set(PENDING) & executed  # 待落地的确实还没有 Agent
+    assert set(AWAITING_FIXTURES) <= set(GUARDED)
+    assert [p for p in AWAITING_FIXTURES if (XERO.fixtures / p).exists()] == []  # 确实还没有 fixture
 
 
 @needs("q1_snapshot", "q1_supplements")
 @pytest.mark.parametrize("procedure_id", GUARDED)
 async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
     """验收 2 (守卫): 上下文可能带人员信息的每个判断程序 (GUARDED) 在 Xero 演示上执行一次, 防新程序把出生日期发给
-    模型: 先按依赖顺序执行依赖闭包里 A6 的程序 (GEN-08 已在状态里, 规则结果取 XERO_RULES), 再由程序的 owner (OWNERS)
-    执行它, 运行时自主度都提到 L3 (A7 按主规则复核建议 accept 的判断). 错报闭环的程序 (outputs 含 misstatements)
-    另在状态里放已认定而未分类的两条错报与其来源判断 (FIN-03 的判断对象, xero_identified_misstatements). 四份登记
-    摘录补登记关联到关系图的全部节点, 客户与 GEN-05 例外所指的凭证 (合成的登记, 让按关联对象取文件的上下文都取得到
-    摘录). owner 与 A7 发给模型的消息都不含出生日期 (三种写法) 与人员节点 ID 原文. 用的是正本 fixture, 没有 fixture
-    的调用失败也照样查消息."""
+    模型: 先按依赖顺序执行依赖闭包里 A6 的程序与 A5 的 GEN-07 (EARLIER; GEN-08 已在状态里, 规则结果取
+    XERO_RULES), 再由程序的 owner (OWNERS) 执行它, 运行时自主度都提到 L3 (A7 按主规则复核建议 accept 的判断). 错报
+    闭环的程序 (outputs 含 misstatements) 另在状态里放已认定而未分类的两条错报与其来源判断 (FIN-03 的判断对象,
+    xero_identified_misstatements). 四份登记摘录补登记关联到关系图的全部节点, 客户与 GEN-05 例外所指的凭证 (合成的
+    登记, 让按关联对象取文件的上下文都取得到摘录). owner 与 A7 发给模型的消息都不含出生日期 (三种写法) 与人员节点
+    ID 原文. 用的是正本 fixture, 没有 fixture 的调用失败也照样查消息; 还没有 fixture 的程序 (AWAITING_FIXTURES) 判断
+    全部失败, A7 没有消息, 只查 owner 的."""
     trail = FakeTrail()
     client = MockLLMClient(XERO.fixtures)
     deps = make_xero_deps(
@@ -311,14 +321,20 @@ async def test_guarded_programs_send_no_birth_dates(procedure_id: str) -> None:
         }
     graph = state["ownership_graph"]
     assert graph is not None
-    earlier = (p for p in closure(procedure_id) if p in FieldworkAgent.procedures)
+    runners = {**EARLIER, **OWNERS}
+
+    def runs_first(p: str) -> bool:
+        agent = EARLIER.get(LIBRARY.load(p).owner)
+        return p != "GEN-08" and agent is not None and p in agent.procedures
+
+    earlier = (p for p in closure(procedure_id) if runs_first(p))
     order = [*sorted(earlier, key=lambda p: len(closure(p))), procedure_id]  # 闭包小的在前, 即依赖顺序
     for pid in order:
         ctx = xero_context(deps, state, pid, [])
         procedure = ctx.procedure.model_copy(update={"autonomy_level": AutonomyLevel.L3})
         ctx = RunContext(ctx.engagement, procedure, ctx.template, ctx.run, state | {"procedure_pack": [procedure]})
-        agent = OWNERS[LIBRARY.load(pid).owner](deps)
+        agent = runners[LIBRARY.load(pid).owner](deps)
         state = apply_patch(state, await agent.run(ctx))  # type: ignore[arg-type]
     owner, a7 = sent(trail, LIBRARY.load(procedure_id).owner), sent(trail, AgentId.A7)
-    assert owner and a7  # 两边都发了消息, 守卫查得到东西
+    assert owner and (a7 or procedure_id in AWAITING_FIXTURES)  # 两边都发了消息, 守卫查得到东西
     assert leaks([*owner, *a7], graph) == []

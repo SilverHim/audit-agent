@@ -1,0 +1,111 @@
+id: GEN-06
+name: 期后事项研判
+# 规格书 6.1.2 (GEN-06 ← GEN-07), 7.2 节 (L3 混合); ASA 560 第 6, 8 段; AASB 110 第 3, 8-10 段; AASB 15 第 88 段.
+# Xero 演示数据集设计第 6.4 节 (GEN-06 上下文的通用扩展). 以前置程序 GEN-07 尚未归因的例外为判断对象 (例外所指的
+# 银行流水或分录行, 每行一个对象), 判断它是调整事项, 非调整事项还是常规的期后交易: 调整事项而期末未反映时建议错报,
+# 其余 accept (需求 R179). 判断对象与 data 见接口文档第 6 节 GEN-06 段与 GEN-06.md.j2 头注释, 由
+# agents/going_concern.py 组装, 走 A6 判断公共流程 (含 A7 复核).
+#
+# 规则只出行 (rows), 不出例外; 按对象的匹配在 A6 做 (going_concern.gen06_subjects):
+# - 窗口上限 window_end 同 GEN-07: LEAST(period_end + subsequent_days, COALESCE(data_as_of, period_end + subsequent_days)),
+#   即期末后固定天数, 数据只到 data_as_of 时截到那天. Xero 演示为 2026-10-17. data.window 为 (期末, window_end].
+# - E01 本期起 (period_start) 至 window_end 的分录行, 剔除作废对: 按参考号与对方名称找总账凭证的候选.
+# - E02 入账日 (posting_date) 在本期起至 window_end 的销售发票: 相关发票的候选.
+# - 参考号 token: 流水的 reference 或分录对象的 source_doc 按非字母数字切分, 长度不小于 reference_token_min_length 且
+#   含数字的串 (不区分大小写); 与 E01 行 source_doc, description 切分后的词整词相等即命中.
+# - 对方名称: 流水的 description (收款人) 经 party_name_key(原文, counterparty_prefixes, entity_suffixes), 在 E01 行
+#   description 或 source_doc 的 party_name_key(原文, counterparty_prefixes, {}) 中整词出现即命中 (同 GEN-03 C01 的
+#   比法); 分录对象不按名称找总账行.
+# - 作废对 (E01 剔除): 同 CSH-02 的注释; WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02,
+#   GEN-05, GEN-03, GEN-07 逐字相同 (tests/test_knowledge.py 守住), 改口径时几处一起改.
+#
+# 风险 (需求 R179 验收 9): 按现有置信度口径 (决定 2 保持现状), 有规则例外而建议 accept 时 c_rule 记 0, GEN-06 的
+# accept 判断置信度偏低 (A7 一致时 critic 分项计 1, 见 AC-51); 功能 autonomy (动态降级) 打开后的级别以接口文档第 6 节
+# 自主度段为准. 本条不改口径.
+phase: P2_Executing
+cycle: Pervasive
+owner: A6
+feature: going_concern            # 功能开关 (services/features.py): 持续经营
+fixed: true                       # P2 固定集: 每个审计都做, 不按审计目标装配
+outputs: [judgments, exceptions, review_tasks]
+# 分录行与科目表 (E01, 对象凭证, 科目名称), 发票与服务完成记录 (E02), 流水与银行账户 (流水对象与其总账科目), 本期
+# 试算表 (涉及科目的余额), 文件登记 (documents(related_id=...) 取到的已登记文件)
+reads: [journal_entries, accounts, sales_invoices, delivery_notes, bank_accounts, bank_transactions, trial_balance,
+        documents]
+# 读哪几类文件的登记 (需求 R304): 关联对象为本对象, 凭证或发票的文件, 类型不定 (Xero 演示里有 agreement,
+# correspondence, internal_record, invoice), 同 GEN-02 列出全部可作证据的类型, 即 judgment_engine.DOCUMENT_EVIDENCE 的键
+document_reads: [contract, invoice, confirmation, bank_statement, minutes, registry_extract, engagement_letter,
+                 representation_letter, correspondence, governance_communication, agreement, internal_record]
+engine: hybrid
+autonomy_level: L3
+assertions: [Completeness, Cutoff, Valuation]
+params:
+  period_start: {ref: period_start}
+  period_end: {ref: period_end}
+  subsequent_days: 31             # 期后窗口的天数, 同 GEN-07
+  data_as_of: {ref: dataset.data_as_of}   # 数据截止日, 窗口不越过它; 为空不设上限
+  performance_materiality_cents: {ref: performance_materiality_cents}   # 提示词给出, 评价错报金额用
+  clearly_trivial_cents: {ref: clearly_trivial_cents}
+  counterparty_prefixes: {ref: dataset.counterparty_prefixes}   # 对方名称前的说明前缀 (如 "payment to"), 比较时去掉
+  entity_suffixes: [pty ltd, pty limited, pty, ltd, limited]   # 公司后缀, 名称比较时去掉 (同 GEN-03)
+  reference_token_min_length: 4   # 参考号 token 的最短长度
+  reversal_reference_pattern: {ref: dataset.reversal_reference_pattern}   # 写法要求见 CSH-02.yaml 的注释
+  reversal_entry_no_template: {ref: dataset.reversal_entry_no_template}
+depends_on: [GEN-07]
+standards: [ASA560-P06, ASA560-P08, AASB110-P03, AASB110-P08, AASB110-P09, AASB110-P10, AASB15-P88]
+evidence_required: [bank, voucher]
+rules:
+  - id: E01
+    name: 本期起至窗口上限的分录行
+    severity: low
+    emit: rows
+    # 入账日在 [period_start, window_end] 的分录行, 剔除作废对; 按 (posting_date, entry_no 自然序, entry_no, id) 排序,
+    # 自然序同 GEN-05
+    sql: |
+      -- 作废对共用段 起
+      WITH reversal AS (
+        SELECT DISTINCT r.entry_no,
+               replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                       substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+        FROM journal_entries r
+        WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+          AND r.description ~ CAST(:reversal_reference_pattern AS text)
+      ), voided AS (
+        SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+      -- 作废对共用段 止
+      ), bounds AS (
+        SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                     COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                 AS window_end
+      )
+      SELECT j.id, j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description,
+             j.source_doc
+      FROM journal_entries j CROSS JOIN bounds w
+      WHERE j.engagement_id=:eid
+        AND j.posting_date BETWEEN CAST(:period_start AS date) AND w.window_end
+        AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+      ORDER BY j.posting_date,
+               regexp_replace(regexp_replace(j.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
+                 COLLATE "C",
+               j.entry_no COLLATE "C", j.id COLLATE "C"
+  - id: E02
+    name: 本期起至窗口上限入账的销售发票
+    severity: low
+    emit: rows
+    # 入账日在 [period_start, window_end] 的销售发票 (发票表各列), 按 (posting_date, id) 排序
+    sql: |
+      WITH bounds AS (
+        SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                     COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                 AS window_end
+      )
+      SELECT i.id, i.invoice_no, i.customer, i.customer_abn, i.contract_id, i.invoice_date, i.posting_date,
+             i.amount_cents, i.journal_entry_id
+      FROM sales_invoices i CROSS JOIN bounds w
+      WHERE i.engagement_id=:eid
+        AND i.posting_date BETWEEN CAST(:period_start AS date) AND w.window_end
+      ORDER BY i.posting_date, i.id COLLATE "C"
+llm:
+  prompt: GEN-06.md.j2
+  output_model: JudgmentDraft
+  context_budget: 8000

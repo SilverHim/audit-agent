@@ -2390,6 +2390,45 @@ def csh02_subsequent_rows(
     ]
 
 
+GEN06_E01_COLUMNS = frozenset(  # GEN-06 E01 的列
+    {"id", "entry_no", "posting_date", "account_code", "debit_cents", "credit_cents", "description", "source_doc"}
+)
+
+
+def natural_entry_no(entry_no: str) -> str:
+    """凭证号的自然序键, 同规则 SQL 的写法: 每段数字左补零到 10 位 (GEN-05, GEN-07, GEN-06 的 ORDER BY)."""
+    return re.sub(r"\d+", lambda m: m.group().rjust(10, "0"), entry_no)
+
+
+def gen06_rows(
+    lines: Iterable[JournalEntry],
+    invoices: Iterable[SalesInvoice],
+    period_start: date,
+    window_end: date,
+    pattern: str | None = None,
+    template: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """GEN-06 E01, E02 的行, 按两条规则 SQL 的口径派生 (需求 R179): E01 为入账日在 [period_start, window_end] 的分录
+    行, 作废对 (csh02_voided, 同共用段) 整张凭证剔除, 按 (入账日, 凭证号自然序, 凭证号, 行 ID); E02 为入账日在同一
+    区间的销售发票 (发票表各列), 按 (入账日, ID). 列与值的类型同 SQL (日期为 date). Numbat 与 Xero 的假规则引擎共用."""
+    lines = list(lines)
+    voided = csh02_voided(lines, pattern, template)
+    e01 = [
+        j.model_dump(include=GEN06_E01_COLUMNS)
+        for j in sorted(
+            (j for j in lines if period_start <= j.posting_date <= window_end and j.entry_no not in voided),
+            key=lambda j: (j.posting_date, natural_entry_no(j.entry_no), j.entry_no, j.id),
+        )
+    ]
+    e02 = [
+        i.model_dump()
+        for i in sorted(
+            (i for i in invoices if period_start <= i.posting_date <= window_end), key=lambda i: (i.posting_date, i.id)
+        )
+    ]
+    return {"E01": e01, "E02": e02}
+
+
 # CSH-02 D02, D03, D04 的行: 由 data/demo 的 CSV 按规则的口径派生 (Numbat 没有作废对), 天数同 CSH-02.yaml; D03, D04
 # 与连库结果整行相同由 tests/test_persistence_postgres 核对. D02 中 BA-02 在期后 10 天没有流水
 NUMBAT_D02_ROWS = csh02_subsequent_rows(numbat_bank_transactions(), ENGAGEMENT.period_end, 10)

@@ -20,7 +20,7 @@ import functools
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -93,6 +93,7 @@ from tests.fakes import (
     csh05_population,
     engine_result,
     gen05_exception,
+    gen06_rows,
     make_deps,
     pln07_a01_population,
     rev08_populations,
@@ -1013,6 +1014,31 @@ def xero_gen07_exceptions(run: ProcedureRun) -> list[AuditException]:
     ]
 
 
+GEN06_SUBSEQUENT_DAYS = 31  # GEN-06 期后窗口的天数, 同 GEN-06.yaml (与 GEN-07 相同)
+
+
+def xero_gen06_rows(loader: XeroDatasetLoader | None = None) -> dict[str, list[dict[str, Any]]]:
+    """GEN-06 E01, E02 的行 (需求 R179): 由演示数据导入之后的表 (xero_tables) 按规则的口径派生 (tests.fakes 的
+    gen06_rows), 区间为本期起 (快照的期间) 至窗口上限 (期末加 GEN06_SUBSEQUENT_DAYS 天截到数据集声明的 data_as_of,
+    即 GEN07_WINDOW_END), 作废对按数据集声明剔除. 读快照, 规则引擎取 GEN-06 时才算, 每次新建; 与连库结果整行相同由
+    tests/test_rule_sql_gen06.py 核对. 给了 loader 时取它指向的副本 (注入场景)."""
+    tables = xero_tables(loader)
+    traits = xero_traits(loader)
+    period = (loader if loader is not None else xero_loader()).period(XERO_DATASET)
+    assert period is not None
+    end = period[1] + timedelta(days=GEN06_SUBSEQUENT_DAYS)
+    if traits.data_as_of is not None:
+        end = min(end, traits.data_as_of)
+    return gen06_rows(
+        tables["journal_entries"],
+        tables["sales_invoices"],
+        period[0],
+        end,
+        traits.reversal_reference_pattern,
+        traits.reversal_entry_no_template,
+    )
+
+
 XERO_RULES: dict[
     str, Callable[[ProcedureRun], RuleResult]
 ] = {  # 规则引擎对 Xero 演示的结果, 按程序编号 (同 NUMBAT_RULES); 被测总体经 engine_result 补齐 (需求 R324)
@@ -1036,6 +1062,8 @@ XERO_RULES: dict[
     ),
     # 功能 going_concern 打开时才执行
     "GEN-07": lambda run: engine_result("GEN-07", RuleResult(exceptions=xero_gen07_exceptions(run), rows={})),
+    # 同上; 只出行, 由表派生
+    "GEN-06": lambda run: engine_result("GEN-06", RuleResult(exceptions=[], rows=xero_gen06_rows())),
 }
 
 
