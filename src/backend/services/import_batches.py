@@ -234,10 +234,11 @@ def item_number(item_id: str) -> int:
 
 
 def chosen_of(previous: Sequence[BatchItem]) -> Chosen | None:
-    """一个文件重新识别前确认单上的项里审计师改定的类型 (调整过类型的文件项), 没有为空."""
+    """一个文件重新识别前确认单上的项里审计师改定的类型 (调整过类型的文件项; 理由选填, Issue #61, 没写的也算), 没有
+    为空."""
     for item in previous:
-        if item.item_kind == "document" and item.adjusted_by and item.document_type and item.type_reason:
-            return Chosen(item.document_type, item.type_reason, item.adjusted_by)
+        if item.item_kind == "document" and item.adjusted_by and item.document_type:
+            return Chosen(item.document_type, item.type_reason or "", item.adjusted_by)
     return None
 
 

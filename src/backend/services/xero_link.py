@@ -669,7 +669,7 @@ class XeroLink:
         项目锁内 (锁定 423, 忙 409 ENGAGEMENT_BUSY): 没有连接 409 XERO_NOT_CONNECTED; key 不是当前待处理的核对 (Xero
         的值或画像变了, 已处理过, 或本来一致) 409 PROFILE_CHECK_STALE, 并发的两次选择只有一次写成.
 
-        keep: 理由必填 (去首尾空白后为空 422 MISSING_FIELD), 写 data 留痕 xero_profile_kept.
+        keep: 理由选填 (Issue #61), 去首尾空白后照记 (可为空串), 写 data 留痕 xero_profile_kept.
         update: 以该客户最新一版为底, 只改 Xero 与这一版对不上的项 (profile_differences, 名称规范化后相同时保留
         这一版的写法), 其余字段沿用, 来源 xero; 是否提示按本项目采用的版本比 (differences), 改哪些项按合并的底比,
         两版不同时 (本项目采用的版本落后于最新一版) 写出的仍与 Xero 一致. 最新一版已与 Xero 一致时照写一版
@@ -678,7 +678,7 @@ class XeroLink:
         再呈报. 其余时候 (未到 ACC-01 或已过) 在本方法的锁内只给客户写新版本 (下一年度新建项目带出), 本项目照用
         已采用的版本, 不写检查点.
         两条路径的 ABN 校验同 ACC-01 更新客户资料 (需求 R289): 校验位不对 422 INVALID_VALUE (闸门外只在改 ABN 时查),
-        改了 ABN 而已是别的客户的 409 ABN_TAKEN; 都不写画像与留痕, 核对仍待处理 (审计师可改为保持原样并写理由).
+        改了 ABN 而已是别的客户的 409 ABN_TAKEN; 都不写画像与留痕, 核对仍待处理 (审计师可改为保持原样).
         写 data 留痕 xero_profile_updated (版本, 本项目是否采用). 留痕写不进时报错 (选择就记在留痕里)."""
         async with self.data.locked(eid):
             engagement = await self.data.unlocked(eid)
@@ -691,8 +691,6 @@ class XeroLink:
             }
             if decision == "keep":
                 text = (reason or "").strip()
-                if not text:
-                    raise DataRejected("MISSING_FIELD", "reason")
                 summary = f"不按 Xero 组织信息更新客户画像, 保持第 {check.profile_version} 版"
                 await self.write(eid, actor, summary, {"action": "xero_profile_kept", **payload, "reason": text})
                 return await self.current_check(eid)

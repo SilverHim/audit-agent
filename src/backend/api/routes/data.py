@@ -158,9 +158,9 @@ async def edit_batch_item(
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> ImportBatch:
-    """调整确认单的一项 (换规整方案, 改文件类型并写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
-    processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁);
-    批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE; 改类型没写理由 422 MISSING_FIELD."""
+    """调整确认单的一项 (换规整方案, 改文件类型并可写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
+    processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 理由选填 (Issue #61). 锁定 423; 忙 409 (识别中的
+    批次由识别作业持锁); 批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE."""
     async with catch_api():
         return await service.edit_batch_item(engagement.id, batch_id, item_id, body, user.id)
 
@@ -228,7 +228,7 @@ async def set_account_category(
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> CategoryVersion:
-    """修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由为空 422 MISSING_FIELD;
+    """修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由选填 (Issue #61).
     分类不属于该科目的类别或与当前相同 422 INVALID_VALUE; 科目不存在 404; 锁定 423; 忙 409."""
     async with catch_api():
         return await service.set_account_category(engagement.id, code, body.category, body.reason, user.id)
@@ -265,8 +265,8 @@ async def mark_request_unavailable(
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> DataRequest:
     """标 "客户无此类资料" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.
-    请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;
-    锁定 423; 忙 409 ENGAGEMENT_BUSY."""
+    理由选填 (Issue #61). 请求不存在 404; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE; 锁定
+    423; 忙 409 ENGAGEMENT_BUSY."""
     async with catch_api():
         return await service.mark_unavailable(engagement.id, request_id, body.reason, user.id)
 
@@ -278,9 +278,9 @@ async def ready(
     service: Annotated[DataService, Depends(get_data_service)],
     body: DataReadyIn | None = None,
 ) -> DataReadiness:
-    """确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
-    (detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);
-    项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进."""
+    """确认数据已齐, 越过 P1 开始前的等待. 理由选填, 最近一次体检有不通过的项时也可不写 (Issue #61). 不在等数据
+    409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY (detail.missing_tables); 项目锁定 423, 忙 409
+    ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进."""
     async with catch_api():
         return await service.confirm_ready(engagement.id, user.id, body.reason if body else None)
 
@@ -361,8 +361,8 @@ async def xero_profile_check(
     xero: Annotated[XeroLink, Depends(get_xero)],
     decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
 ) -> XeroProfileCheck | None:
-    """对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由
-    (空 422 MISSING_FIELD); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑
+    """对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 可写理由
+    (选填, Issue #61); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑
     ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接
     409 XERO_NOT_CONNECTED; Xero 带出的 ABN 校验位不对 422 INVALID_VALUE, 已是别的客户的 409 ABN_TAKEN; 停在 ACC-01 时
     同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH)."""

@@ -224,8 +224,8 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
     1. 同步快照原样的组织信息: 一致, 不提示, 待办里没有这一类; stage at, next_version 2.
     2. 换成改了法定名称的副本再同步: 提示 legal_name; 待办里排在补交资料之后; 可标稍后处理 (key 不对 409), 标后
        GET /deferrals 列出.
-    3. 项目锁被占时 409 ENGAGEMENT_BUSY; 选择的留痕写不进时报错, 不算已处理; keep 没写理由 422 MISSING_FIELD;
-       写理由后已处理 (稍后处理随之失效), 留痕一条, 只记 key, 两项, 画像版本与理由.
+    3. 项目锁被占时 409 ENGAGEMENT_BUSY; 选择的留痕写不进时报错, 不算已处理; keep 的理由选填 (Issue #61): 只有
+       空白的照常已处理 (稍后处理随之失效), 理由记为空串, 留痕一条, 只记 key, 两项, 画像版本与理由.
     4. 副本再改 ABN 再同步: 新的一次核对 (key 变了), 两项都提示; 旧 key 409 PROFILE_CHECK_STALE. 停在 ACC-01 的
        update 放开本方法的锁到 update_client_profile 取锁之间插进一次 keep: keep 写成, update 在锁内重新核对报 409
        (R291-02), 同一 key 只记一种选择.
@@ -290,14 +290,10 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
             await c.xero.resolve_profile(c.eid, first["key"], "keep", "reason", NUMBAT_AUDITOR.id, decisions)
         monkeypatch.undo()
         assert resolutions(c) == []
-        missing = await choose(http, c, first["key"], "keep", "  ")
-        assert (missing.status_code, missing.json()["detail"]["code"]) == (422, "MISSING_FIELD")
-        kept = await choose(
-            http, c, first["key"], "keep", "Xero shows the trading name; the register has the profile name"
-        )
+        kept = await choose(http, c, first["key"], "keep", "  ")
         assert kept.status_code == 200, kept.text
-        assert (kept.json()["resolution"], kept.json()["reason"][:4]) == ("kept", "Xero")
-        assert [p["action"] for p in resolutions(c)] == ["xero_profile_kept"]
+        assert (kept.json()["resolution"], kept.json()["reason"]) == ("kept", "")
+        assert [(p["action"], p["reason"]) for p in resolutions(c)] == [("xero_profile_kept", "")]
         assert set(resolutions(c)[0]) == {"action", "key", "legal_name", "abn", "profile_version", "reason"}
         assert await open_types(c) == before
         assert (await http.get(deferrals_url)).json() == []
@@ -321,7 +317,8 @@ async def test_profile_check_through_acc01_and_after(tmp_path: Path, monkeypatch
         monkeypatch.undo()
         assert ([r.status_code for r in interleaved], raced.status_code) == ([200], 409)
         assert raced.json()["detail"]["code"] == "PROFILE_CHECK_STALE"
-        assert [p["action"] for p in resolutions(c) if p["key"] == second["key"]] == ["xero_profile_kept"]
+        kept_second = [(p["action"], p["reason"]) for p in resolutions(c) if p["key"] == second["key"]]
+        assert kept_second == [("xero_profile_kept", "synthetic reason")]  # 写了理由的照记
 
         organisation_copy(c, tmp_path, "taken", LegalName=renamed, RegistrationNumber=NUMBAT_PROFILE.abn)
         taken = await sync(http, c)

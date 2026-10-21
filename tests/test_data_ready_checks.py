@@ -1,5 +1,6 @@
-"""需求 R273: 最近一次体检有不通过的项时, 确认数据已齐 (POST /data/ready) 须写明理由; 理由与当时的未通过项记入
-就绪确认与 data 留痕. 存储用假实现 (连库的见 test_data_store_postgres)."""
+"""需求 R273: 确认数据已齐 (POST /data/ready) 时的理由与当时最近一次体检的未通过项记入就绪确认与 data 留痕. 理由
+选填 (Issue #61; R273 原为有未通过项时必填, 报 DATA_CHECKS_FAILED): 没写的记为空, 未通过项照记. 存储用假实现 (连库的
+见 test_data_store_postgres)."""
 
 import csv
 import hashlib
@@ -12,7 +13,6 @@ import httpx
 import pytest
 
 from backend.contracts.data import CheckId, CheckInputs, DataReadiness
-from backend.contracts.errors import DataRejected
 from backend.contracts.models import TrailEntry, TrailKind
 from backend.orchestration.runner import GraphRunner, awaiting_data
 from backend.orchestration.trail import data_ready_entry
@@ -71,10 +71,21 @@ def ready_entries(runner: GraphRunner) -> list[TrailEntry]:
     return [e for e in trail.entries if e.kind is TrailKind.data and e.payload["action"] == "ready"]
 
 
-async def test_failed_checkup_needs_reason_to_confirm() -> None:
+@pytest.mark.parametrize(
+    ("body", "reason", "summary"),
+    [
+        ({"reason": f" {REASON}\n"}, REASON, "体检 2 项不通过, 写明理由后确认数据已齐, 开始计划阶段分析"),
+        ({"reason": "  \n "}, None, "体检 2 项不通过, 未填理由, 确认数据已齐, 开始计划阶段分析"),
+        (None, None, "体检 2 项不通过, 未填理由, 确认数据已齐, 开始计划阶段分析"),
+    ],
+    ids=["given", "blank", "no_body"],
+)
+async def test_failed_checkup_confirms_with_or_without_reason(
+    body: dict[str, str] | None, reason: str | None, summary: str
+) -> None:
     """验收 1: 总账一行借方改大 1 元后导入, 借贷平衡不通过 (该科目发生额随之不同, 分录与试算表一致也不通过).
-    不带理由或理由为空白被拒 (DATA_CHECKS_FAILED 附未通过项), 不记确认; 带理由确认后继续到 PLN-01/03 闸门,
-    理由与未通过项记入就绪确认与留痕. 原文件不变."""
+    理由选填 (Issue #61): 带理由, 理由为空白或不带请求体都照常确认, 继续到 PLN-01/03 闸门; 理由 (去首尾空白, 空的
+    记为空) 与未通过项记入就绪确认与留痕, 摘要写明有没有填理由. 原文件不变."""
     original = hashlib.sha256((DEMO / "journal_entries.csv").read_bytes()).hexdigest()
     runner, _, data = await waiting_for_data()
 
@@ -89,25 +100,22 @@ async def test_failed_checkup_needs_reason_to_confirm() -> None:
         }
         balance = next(c for c in data.check_results if c.id is CheckId.debits_equal_credits)
         assert balance.params == {"debit_cents": 5271620100, "credit_cents": 5271620000}
-        plain = await client.post(READY)
-        blank = await client.post(READY, json={"reason": "  \n "})
-        assert not runner.is_running(EID)  # 被拒时项目锁已释放
-        confirmed = await client.post(READY, json={"reason": f" {REASON}\n"})
+        confirmed = await client.post(READY, json=body)
         await wait_idle(runner, EID)
 
-    for rejected in (plain, blank):
-        assert rejected.status_code == 409
-        detail = rejected.json()["detail"]
-        assert (detail["code"], detail["failed_checks"]) == ("DATA_CHECKS_FAILED", FAILED)
-    assert confirmed.status_code == 202
-    body = confirmed.json()
-    assert (body["ready_by"], body["ready_reason"], body["ready_failed_checks"]) == ("U-1", REASON, FAILED)
+    assert confirmed.status_code == 202, confirmed.text
+    readiness = confirmed.json()
+    assert (readiness["ready_by"], readiness["ready_reason"], readiness["ready_failed_checks"]) == (
+        "U-1",
+        reason,
+        FAILED,
+    )
     assert data.confirm_calls == [(EID, "U-1")]
-    assert (data.ready_reason, data.ready_failed_checks) == (REASON, [CheckId(c) for c in FAILED])
+    assert (data.ready_reason, data.ready_failed_checks) == (reason, [CheckId(c) for c in FAILED])
     [entry] = ready_entries(runner)
     assert entry.actor == "U-1"
-    assert entry.payload == {"action": "ready", "reason": REASON, "failed_checks": FAILED}
-    assert entry.summary == "体检 2 项不通过, 写明理由后确认数据已齐, 开始计划阶段分析"
+    assert entry.payload == {"action": "ready", **({"reason": reason} if reason else {}), "failed_checks": FAILED}
+    assert entry.summary == summary
     assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
     assert hashlib.sha256((DEMO / "journal_entries.csv").read_bytes()).hexdigest() == original
 
@@ -129,8 +137,8 @@ async def test_passed_checkup_confirms_without_reason() -> None:
 
 
 async def test_retry_keeps_first_reason_and_still_checks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """确认已记而后台没启动: 再确认时照常校验 (不带理由仍被拒); 带了别的理由也保留第一次的人, 理由与未通过项,
-    留痕只有一条."""
+    """确认已记而后台没启动: 再确认时照常校验 (理由选填, 不带也通过, Issue #61); 带了别的理由也保留第一次的人, 理由
+    与未通过项, 留痕只有一条."""
     runner, _, data = await waiting_for_data()
     async with api_client(runner) as client:
         await import_numbat(client, unbalanced_journals())
@@ -146,14 +154,11 @@ async def test_retry_keeps_first_reason_and_still_checks(monkeypatch: pytest.Mon
         await service.confirm_ready(EID, "U-1", REASON)
     monkeypatch.setattr(runner, "launch", launch)
 
-    with pytest.raises(DataRejected) as rejected:
-        await service.confirm_ready(EID, "U-2")
-    assert (rejected.value.code, rejected.value.extra) == ("DATA_CHECKS_FAILED", {"failed_checks": FAILED})
     again = await service.confirm_ready(EID, "U-2", "另一个理由")
     await wait_idle(runner, EID)
 
     assert (again.ready_by, again.ready_reason, again.ready_failed_checks) == ("U-1", REASON, FAILED)
-    assert data.confirm_calls == [(EID, "U-1"), (EID, "U-2")]  # 被拒的那次没到存储
+    assert data.confirm_calls == [(EID, "U-1"), (EID, "U-2")]
     [entry] = ready_entries(runner)
     assert (entry.actor, entry.payload["reason"]) == ("U-1", REASON)
     assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
@@ -204,7 +209,8 @@ def test_dataset_ready_entry_is_unchanged() -> None:
 
 
 async def test_stale_checkup_is_redone_before_judging(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R273-01: 写入不平的总账后体检出错, data_checks 还是上一版的全过. 确认时先补做体检, 不带理由被拒."""
+    """R273-01: 写入不平的总账后体检出错, data_checks 还是上一版的全过. 确认时先补做体检, 记下的是补做出的未通过项
+    (不带理由照常确认, Issue #61)."""
     runner, _, data = await waiting_for_data()
     async with api_client(runner) as client:
         await import_numbat(client, (DEMO / "journal_entries.csv").read_bytes())
@@ -218,16 +224,20 @@ async def test_stale_checkup_is_redone_before_judging(monkeypatch: pytest.Monkey
         monkeypatch.setattr(data, "check_inputs", inputs)
         assert "failed" not in statuses(data).values()  # 最近一次体检仍是上一版总账的
         plain = await client.post(READY)
+        await wait_idle(runner, EID)
 
-    assert (plain.status_code, plain.json()["detail"]["code"]) == (409, "DATA_CHECKS_FAILED")
-    assert plain.json()["detail"]["failed_checks"] == FAILED
+    assert plain.status_code == 202, plain.text
+    assert (plain.json()["ready_reason"], plain.json()["ready_failed_checks"]) == (None, FAILED)
     assert statuses(data)["debits_equal_credits"] == "failed"  # 已补做
-    assert data.confirm_calls == [] and not runner.is_running(EID)
+    assert data.confirm_calls == [(EID, "U-1")]
 
 
-async def test_retry_after_clean_confirmation_records_required_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    """R273-02: 第一次确认时体检全过而留痕没写成, 之后导入不平的总账. 再确认须写理由; 写了的补记进确认记录 (人与
-    时间仍是第一次的) 与补写的留痕, 不静默丢弃."""
+@pytest.mark.parametrize(("body", "reason"), [({"reason": REASON}, REASON), (None, None)], ids=["given", "none"])
+async def test_retry_after_clean_confirmation_records_failed_checks(
+    monkeypatch: pytest.MonkeyPatch, body: dict[str, str] | None, reason: str | None
+) -> None:
+    """R273-02: 第一次确认时体检全过而留痕没写成, 之后导入不平的总账. 再确认时补记这次的未通过项与理由 (选填, Issue
+    #61; 没写的记为空) 进确认记录 (人与时间仍是第一次的) 与补写的留痕, 不静默丢弃."""
     runner, _, data = await waiting_for_data()
     trail = runner.deps.trail
     assert isinstance(trail, FakeTrail)
@@ -246,17 +256,19 @@ async def test_retry_after_clean_confirmation_records_required_reason(monkeypatc
         monkeypatch.setattr(trail, "record", original)
         first = data.ready_at
         await import_csv(client, "journal_entries.csv", unbalanced_journals())  # 图仍在等, 还能导入
-        plain = await client.post(READY)
-        confirmed = await client.post(READY, json={"reason": REASON})
+        confirmed = await client.post(READY, json=body)
         await wait_idle(runner, EID)
 
-    assert (plain.status_code, plain.json()["detail"]["code"]) == (409, "DATA_CHECKS_FAILED")
-    assert confirmed.status_code == 202
-    body = confirmed.json()
-    assert (body["ready_by"], body["ready_reason"], body["ready_failed_checks"]) == ("U-1", REASON, FAILED)
-    assert (data.ready_at, data.ready_reason, data.ready_failed_checks) == (first, REASON, [CheckId(c) for c in FAILED])
+    assert confirmed.status_code == 202, confirmed.text
+    readiness = confirmed.json()
+    assert (readiness["ready_by"], readiness["ready_reason"], readiness["ready_failed_checks"]) == (
+        "U-1",
+        reason,
+        FAILED,
+    )
+    assert (data.ready_at, data.ready_reason, data.ready_failed_checks) == (first, reason, [CheckId(c) for c in FAILED])
     [entry] = ready_entries(runner)
-    assert entry.payload == {"action": "ready", "reason": REASON, "failed_checks": FAILED}
+    assert entry.payload == {"action": "ready", **({"reason": reason} if reason else {}), "failed_checks": FAILED}
     assert entry.idempotency_key == f"{EID}:data:ready:checks_failed"
     assert (await runner.app.aget_state(GraphRunner.config(EID))).next == ("gate_p1_risk",)
 

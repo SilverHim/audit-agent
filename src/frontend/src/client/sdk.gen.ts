@@ -471,9 +471,9 @@ export const evidenceListContracts = <ThrowOnError extends boolean = false>(opti
 /**
  * Set Document Type
  *
- * 人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 文件不存在 404; 理由
- * 为空 422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定
- * 423; 忙 409.
+ * 人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 理由选填 (Issue
+ * #61). 文件不存在 404; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;
+ * 忙 409.
  */
 export const evidenceSetDocumentType = <ThrowOnError extends boolean = false>(options: Options<EvidenceSetDocumentTypeData, ThrowOnError>): RequestResult<EvidenceSetDocumentTypeResponses, EvidenceSetDocumentTypeErrors, ThrowOnError> => (options.client ?? client).put<EvidenceSetDocumentTypeResponses, EvidenceSetDocumentTypeErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -488,9 +488,9 @@ export const evidenceSetDocumentType = <ThrowOnError extends boolean = false>(op
 /**
  * Set Document Details
  *
- * 补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 文件不存在
- * 404; 理由为空 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或重复 422 INVALID_VALUE;
- * 锁定 423; 忙 409. 同一修改的重试返回当前登记.
+ * 补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 理由选填
+ * (Issue #61). 文件不存在 404; 三项都没给 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或
+ * 重复 422 INVALID_VALUE; 锁定 423; 忙 409. 同一修改的重试返回当前登记.
  */
 export const evidenceSetDocumentDetails = <ThrowOnError extends boolean = false>(options: Options<EvidenceSetDocumentDetailsData, ThrowOnError>): RequestResult<EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentDetailsErrors, ThrowOnError> => (options.client ?? client).put<EvidenceSetDocumentDetailsResponses, EvidenceSetDocumentDetailsErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -529,8 +529,8 @@ export const evidenceGetEvidence = <ThrowOnError extends boolean = false>(option
  * Edit Contract
  *
  * 修改合同抽取结果, 返回新版本. field 为 counterparty, counterparty_abn, amount_cents, sign_date,
- * terms[n].text, terms[n].term_type (n 从 0 起). 合同不存在 404; 理由为空 422 MISSING_FIELD; 字段或值不合法,
- * 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
+ * terms[n].text, terms[n].term_type (n 从 0 起). 理由选填 (Issue #61). 合同不存在 404; 字段或值不合法, 与当前
+ * 相同 422 INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditContract = <ThrowOnError extends boolean = false>(options: Options<EvidenceEditContractData, ThrowOnError>): RequestResult<EvidenceEditContractResponses, EvidenceEditContractErrors, ThrowOnError> => (options.client ?? client).put<EvidenceEditContractResponses, EvidenceEditContractErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -570,7 +570,7 @@ export const evidenceListRegistryExtracts = <ThrowOnError extends boolean = fals
  *
  * 修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
  * registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
- * 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+ * 理由选填 (Issue #61). 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 字段或值不合法, 与当前相同 422
  * INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditRegistryExtract = <ThrowOnError extends boolean = false>(options: Options<EvidenceEditRegistryExtractData, ThrowOnError>): RequestResult<EvidenceEditRegistryExtractResponses, EvidenceEditRegistryExtractErrors, ThrowOnError> => (options.client ?? client).put<EvidenceEditRegistryExtractResponses, EvidenceEditRegistryExtractErrors, ThrowOnError>({
@@ -620,8 +620,8 @@ export const evidenceListConfirmations = <ThrowOnError extends boolean = false>(
  * Edit Confirmation
  *
  * 修改回函抽取结果, 返回函证新版本. field 为 confirming_party, balance_date, confirmed_balance_cents.
- * 只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 函证不存在 404; 理由为空 422 MISSING_FIELD;
- * 字段或值不合法, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
+ * 只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 理由选填 (Issue #61). 函证不存在 404; 字段或值不合法,
+ * 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409.
  */
 export const evidenceEditConfirmation = <ThrowOnError extends boolean = false>(options: Options<EvidenceEditConfirmationData, ThrowOnError>): RequestResult<EvidenceEditConfirmationResponses, EvidenceEditConfirmationErrors, ThrowOnError> => (options.client ?? client).put<EvidenceEditConfirmationResponses, EvidenceEditConfirmationErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -726,9 +726,9 @@ export const dataGetBatch = <ThrowOnError extends boolean = false>(options: Opti
 /**
  * Edit Batch Item
  *
- * 调整确认单的一项 (换规整方案, 改文件类型并写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
- * processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 锁定 423; 忙 409 (识别中的批次由识别作业持锁);
- * 批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE; 改类型没写理由 422 MISSING_FIELD.
+ * 调整确认单的一项 (换规整方案, 改文件类型并可写理由, 勾选或取消), 返回整张确认单; 改了文件类型的批次回到
+ * processing, A3 在后台按新类型重新识别与抽取, 前端照常轮询. 理由选填 (Issue #61). 锁定 423; 忙 409 (识别中的
+ * 批次由识别作业持锁); 批次或该项不存在 404; 批次不在待确认, 字段不适用 422 INVALID_VALUE.
  */
 export const dataEditBatchItem = <ThrowOnError extends boolean = false>(options: Options<DataEditBatchItemData, ThrowOnError>): RequestResult<DataEditBatchItemResponses, DataEditBatchItemErrors, ThrowOnError> => (options.client ?? client).put<DataEditBatchItemResponses, DataEditBatchItemErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -795,7 +795,7 @@ export const dataTablePage = <ThrowOnError extends boolean = false>(options: Opt
 /**
  * Set Account Category
  *
- * 修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由为空 422 MISSING_FIELD;
+ * 修改科目的标准分类, 生成新的一版并返回; 数据版本 +1, 写 data 留痕 (action edit). 理由选填 (Issue #61).
  * 分类不属于该科目的类别或与当前相同 422 INVALID_VALUE; 科目不存在 404; 锁定 423; 忙 409.
  */
 export const dataSetAccountCategory = <ThrowOnError extends boolean = false>(options: Options<DataSetAccountCategoryData, ThrowOnError>): RequestResult<DataSetAccountCategoryResponses, DataSetAccountCategoryErrors, ThrowOnError> => (options.client ?? client).put<DataSetAccountCategoryResponses, DataSetAccountCategoryErrors, ThrowOnError>({
@@ -835,8 +835,8 @@ export const dataDataRequests = <ThrowOnError extends boolean = false>(options: 
  * Mark Request Unavailable
  *
  * 标 "客户无此类资料" (需求 R280): 请求转 unavailable, 等它的程序记未执行 (无数据). 返回改后的请求.
- * 请求不存在 404; 理由为空 422 MISSING_FIELD; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE;
- * 锁定 423; 忙 409 ENGAGEMENT_BUSY.
+ * 理由选填 (Issue #61). 请求不存在 404; 不是待补交 409 REQUEST_NOT_OPEN; 就绪必需的表 422 INVALID_VALUE; 锁定
+ * 423; 忙 409 ENGAGEMENT_BUSY.
  */
 export const dataMarkRequestUnavailable = <ThrowOnError extends boolean = false>(options: Options<DataMarkRequestUnavailableData, ThrowOnError>): RequestResult<DataMarkRequestUnavailableResponses, DataMarkRequestUnavailableErrors, ThrowOnError> => (options.client ?? client).post<DataMarkRequestUnavailableResponses, DataMarkRequestUnavailableErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -851,9 +851,9 @@ export const dataMarkRequestUnavailable = <ThrowOnError extends boolean = false>
 /**
  * Ready
  *
- * 确认数据已齐, 越过 P1 开始前的等待. 不在等数据 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY
- * (detail.missing_tables); 最近一次体检有不通过的项而没写理由 409 DATA_CHECKS_FAILED (detail.failed_checks);
- * 项目锁定 423, 忙 409 ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.
+ * 确认数据已齐, 越过 P1 开始前的等待. 理由选填, 最近一次体检有不通过的项时也可不写 (Issue #61). 不在等数据
+ * 409 NOT_AWAITING_DATA; 缺必需表 409 DATA_NOT_READY (detail.missing_tables); 项目锁定 423, 忙 409
+ * ENGAGEMENT_BUSY. 返回确认后的就绪状态 (含理由与未通过项), 后台已在推进.
  */
 export const dataReady = <ThrowOnError extends boolean = false>(options: Options<DataReadyData, ThrowOnError>): RequestResult<DataReadyResponses, DataReadyErrors, ThrowOnError> => (options.client ?? client).post<DataReadyResponses, DataReadyErrors, ThrowOnError>({
     security: [{ scheme: 'bearer', type: 'http' }],
@@ -940,8 +940,8 @@ export const dataXeroSync = <ThrowOnError extends boolean = false>(options: Opti
 /**
  * Xero Profile Check
  *
- * 对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 写理由
- * (空 422 MISSING_FIELD); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑
+ * 对 Xero 组织信息与客户画像不一致的选择, 返回处理后的核对 (概览 sources.xero.profile_check 的新值). keep 可写理由
+ * (选填, Issue #61); update 按 Xero 改对不上的项出画像新版本 (来源 xero): 停在 ACC-01 时本项目采用并重跑
  * ACC-04, 其余时候只给客户写新版本. key 不是当前待处理的核对 409 PROFILE_CHECK_STALE; 锁定 423; 没有连接
  * 409 XERO_NOT_CONNECTED; Xero 带出的 ABN 校验位不对 422 INVALID_VALUE, 已是别的客户的 409 ABN_TAKEN; 停在 ACC-01 时
  * 同更新客户资料 (忙 409 ENGAGEMENT_BUSY, 版本过期 409 VERSION_MISMATCH).

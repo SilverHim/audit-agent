@@ -81,9 +81,9 @@ async def set_document_type(
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> DocumentRef:
-    """人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 文件不存在 404; 理由
-    为空 422 MISSING_FIELD; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定
-    423; 忙 409."""
+    """人工指定文件类型, 返回改后的登记 (classified); 合同, 回函与 ASIC 摘录随即在后台抽取. 理由选填 (Issue
+    #61). 文件不存在 404; 文件还在智能导入的确认单里 (暂存), 或确认时没勾选而未导入 422 INVALID_VALUE; 锁定 423;
+    忙 409."""
     async with catch_api():
         return await service.set_document_type(engagement.id, document_id, body.type, body.reason, user.id)
 
@@ -96,9 +96,9 @@ async def set_document_details(
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> DocumentRef:
-    """补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 文件不存在
-    404; 理由为空 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或重复 422 INVALID_VALUE;
-    锁定 423; 忙 409. 同一修改的重试返回当前登记."""
+    """补登记文件的可靠性, 文件日期与关联对象 (只给要改的), 返回改后的登记; 留版本与留痕, 数据版本 +1. 理由选填
+    (Issue #61). 文件不存在 404; 三项都没给 422 MISSING_FIELD; 暂存或未导入的文件, 没有要改的, 关联对象有空串或
+    重复 422 INVALID_VALUE; 锁定 423; 忙 409. 同一修改的重试返回当前登记."""
     async with catch_api():
         [updated] = await service.set_document_details(engagement.id, {document_id: body}, user.id)
         return updated
@@ -145,8 +145,8 @@ async def edit_contract(
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> Contract:
     """修改合同抽取结果, 返回新版本. field 为 counterparty, counterparty_abn, amount_cents, sign_date,
-    terms[n].text, terms[n].term_type (n 从 0 起). 合同不存在 404; 理由为空 422 MISSING_FIELD; 字段或值不合法,
-    与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409."""
+    terms[n].text, terms[n].term_type (n 从 0 起). 理由选填 (Issue #61). 合同不存在 404; 字段或值不合法, 与当前
+    相同 422 INVALID_VALUE; 锁定 423; 忙 409."""
     async with catch_api():
         return await service.edit_contract(engagement.id, contract_id, body, user.id)
 
@@ -183,7 +183,7 @@ async def edit_registry_extract(
 ) -> RegistryExtractView:
     """修改 ASIC 摘录的抽取结果, 返回新的一版. field 为 name, acn, abn, status, type, registered_date,
     registered_address, officeholders[n].name, officeholders[n].role, officeholders[n].appointed (n 从 0 起).
-    文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 理由为空 422 MISSING_FIELD; 字段或值不合法, 与当前相同 422
+    理由选填 (Issue #61). 文件不是审计师上传的 ASIC 摘录或还没有抽取结果 404; 字段或值不合法, 与当前相同 422
     INVALID_VALUE; 锁定 423; 忙 409."""
     async with catch_api():
         return RegistryExtractView.of(await service.edit_registry_extract(engagement.id, document_id, body, user.id))
@@ -235,7 +235,7 @@ async def edit_confirmation(
     service: Annotated[DataService, Depends(get_data_service)],
 ) -> Confirmation:
     """修改回函抽取结果, 返回函证新版本. field 为 confirming_party, balance_date, confirmed_balance_cents.
-    只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 函证不存在 404; 理由为空 422 MISSING_FIELD;
-    字段或值不合法, 与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409."""
+    只在图停在闸门或等复核时可改, 否则 409 NOT_EDITABLE. 理由选填 (Issue #61). 函证不存在 404; 字段或值不合法,
+    与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409."""
     async with catch_api():
         return await service.edit_confirmation(engagement.id, confirmation_id, body, user.id)
