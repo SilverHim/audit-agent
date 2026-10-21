@@ -59,7 +59,7 @@ from backend.core.config import get_settings
 from backend.orchestration.query import GraphStateQuery
 from backend.orchestration.trail import phase_transition
 from backend.services.data_service import DataService
-from backend.services.features import BASELINE
+from backend.services.features import BASELINE, MISSTATEMENT
 from backend.services.judgment_engine import DOCUMENT_EVIDENCE
 from backend.services.procedure_library import ProcedureLibrary, document_read_problems
 from backend.services.staleness import current_results, rerunnable, stale_procedures
@@ -225,30 +225,47 @@ def test_library_rejects_undeclared_document_reads(tmp_path: Path) -> None:
         ProcedureLibrary(root)
 
 
+def timed_run(pid: str, run_no: int, version: int, minutes: int, trigger: RunTrigger) -> ProcedureRun:
+    """pid 第 run_no 次执行: 记数据版本 version, 在 NOW 之后 minutes 分钟开始, 触发方式 trigger."""
+    started = NOW + timedelta(minutes=minutes)
+    update = {"data_version": version, "started_at": started, "trigger": trigger}
+    return finished(make_run(pid, run_no)).model_copy(update=update)
+
+
 @pytest.mark.parametrize(
-    ("unrelated", "expected"),
-    [(False, ["GEN-02"]), (True, ["GEN-05", "GEN-02"])],
-    ids=["correction_only", "earlier_change"],
+    ("versions", "expected"),
+    [((3,), []), ((2, 3), ["GEN-05", "GEN-02"]), ((3, 4), ["GEN-05", "GEN-02"])],
+    ids=["correction_only", "earlier_change", "later_import"],
 )
-def test_increment_covers_only_its_correction_load(unrelated: bool, expected: list[str]) -> None:
-    """审核 R194-02: GEN-05 最近一次是增量执行时, 以最近一次全量执行 (版本 1) 为基准, 只把增量执行记下的版本 (紧挨在前
-    的更正通知载入, 版本 3) 算已覆盖. 只有更正载入时 GEN-05 不过期, GEN-02 过期 (它依赖的 GEN-05 之后又执行过); 载入
-    前另有一次与更正无关的分录变动 (版本 2) 时 GEN-05 也过期 (全量执行没扫过它)."""
+def test_increment_covers_only_its_correction_load(versions: tuple[int, ...], expected: list[str]) -> None:
+    """审核 R194-02, 需求 R195: GEN-05 最近一次是增量执行时, 以最近一次全量执行 (版本 1) 为基准; 增量执行记下的版本
+    (紧挨在前的更正通知载入, 版本 3) 对所有程序都算已覆盖, GEN-02 也不因它依赖的 GEN-05 之后又有增量执行而过期. 只有
+    更正载入时都不过期; 载入前另有一次与更正无关的分录变动 (版本 2), 或载入之后又有一次普通导入 (版本 4) 时, 两条都
+    过期 (全量执行没扫过它)."""
     library = knowledge_library(KNOWLEDGE, BASELINE | {"journals"})
     pack = [make_procedure(pid, Phase.P2_Executing, status=ProcedureStatus.completed) for pid in ("GEN-05", "GEN-02")]
-
-    def run(pid: str, run_no: int, version: int, minutes: int, trigger: RunTrigger) -> ProcedureRun:
-        started = NOW + timedelta(minutes=minutes)
-        update = {"data_version": version, "started_at": started, "trigger": trigger}
-        return finished(make_run(pid, run_no)).model_copy(update=update)
-
     runs = [
-        run("GEN-05", 1, 1, 0, RunTrigger.initial),
-        run("GEN-02", 1, 1, 1, RunTrigger.initial),
-        run("GEN-05", 2, 3, 10, RunTrigger.incremental),
+        timed_run("GEN-05", 1, 1, 0, RunTrigger.initial),
+        timed_run("GEN-02", 1, 1, 1, RunTrigger.initial),
+        timed_run("GEN-05", 2, 3, 10, RunTrigger.incremental),
     ]
-    journals = [DataChange(data_version=v, input=DataInput.journal_entries) for v in ((2, 3) if unrelated else (3,))]
+    journals = [DataChange(data_version=v, input=DataInput.journal_entries) for v in versions]
     assert stale_procedures(pack, runs, [*SEEDED, *journals], library) == expected
+
+
+@pytest.mark.parametrize(
+    ("versions", "expected"),
+    [((3,), set()), ((3, 4), {"PLN-07", "CSH-02", "REV-02"})],
+    ids=["correction_only", "later_import"],
+)
+def test_verification_covers_the_correction_load(versions: tuple[int, ...], expected: set[str]) -> None:
+    """需求 R195: 更正验证 (FIN-09, 模板 misstatement_update_kind 为 verification) 记下的版本 (紧挨在前的更正通知
+    载入审计调整分录, 版本 3) 对执行阶段读总账的程序 (PLN-07, CSH-02, REV-02) 也算已覆盖, 不过期; 载入之后又有一次
+    普通导入 (版本 4) 时它们照常过期."""
+    library = knowledge_library(KNOWLEDGE, BASELINE | {MISSTATEMENT})
+    runs = [*RUNS, timed_run("FIN-09", 1, 3, 10, RunTrigger.initial)]
+    journals = [DataChange(data_version=v, input=DataInput.journal_entries) for v in versions]
+    assert set(stale_procedures(PACK, runs, [*SEEDED, *journals], library)) == expected
 
 
 def test_nothing_stale_without_later_changes() -> None:

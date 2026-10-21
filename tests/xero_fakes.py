@@ -470,6 +470,48 @@ class XeroFakeDatasetLoader(FakeDatasetLoader):
         return self.span
 
 
+class LoadingDatasets(XeroFakeDatasetLoader):
+    """更正分录载入同真实载入 (TableLoader.insert_adjustments): 有新行时经数据管理存储把总账整表换一版 (现有行加新行,
+    来源 xero, 原文件名 adjustments/journal_entries.csv), 数据版本加一并记一条总账变动, 行同时进假财务存储
+    (XeroFakeDataStore.write_tables): FIN-09 的 V01 (xero_fin09_result), 指针解析与过期判定都看得到. 已载入的行跳过.
+    错报闭环的图测试 (test_p3_loop) 与演示走通 (xero_flow.demo_offline) 共用."""
+
+    def __init__(self, data: "XeroFakeDataStore") -> None:
+        assert data.financial is not None
+        super().__init__(data.financial)
+        self.data = data
+
+    async def load_adjustments(
+        self, eid: str, dataset: str, entry_nos: Sequence[str] | None = None, *, actor: str = "A1"
+    ) -> Any:
+        lines = await super().load_adjustments(eid, dataset, entry_nos, actor=actor)
+        current = self.data.tables[TableKind.journal_entries]
+        known = {r.id for r in current}
+        new = [line for line in lines if line.id not in known]
+        if new:
+            rows = sorted([*current, *new], key=lambda r: r.id)
+            tables = {TableKind.journal_entries: rows}
+            await self.data.write_tables(eid, tables, source="xero", actor=actor, file_name=ADJUSTMENTS.as_posix())
+        return lines
+
+
+def loaded(store: FakeFinancialStore) -> list[str]:
+    """假财务存储中已载入的审计更正分录的凭证号."""
+    return sorted(
+        {
+            str(r["entry_no"])
+            for (kind, _), r in store.records.items()
+            if kind == "journal_entry" and str(r["entry_no"]).startswith("AJE-")
+        }
+    )
+
+
+def xero_fin09_result(store: FakeFinancialStore) -> Callable[[ProcedureRun], RuleResult]:
+    """FIN-09 的规则结果 (供 FakeRuleEngine): V01 为 store 中已载入的更正分录 (xero_v01_rows, 同载入之后连库跑的
+    结果), 跟着载入走."""
+    return lambda run: RuleResult(exceptions=[], rows={"V01": xero_v01_rows(loaded(store))})
+
+
 def table_stats(tables: Mapping[str, Sequence[Any]]) -> dict[TableKind, TableStats]:
     stats = {TableKind(name): TableStats(records=len(rows)) for name, rows in tables.items()}
     current = sum(r.period == "current" for r in tables["trial_balance"])
