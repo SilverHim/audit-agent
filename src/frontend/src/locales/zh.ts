@@ -669,7 +669,7 @@ export const zh: Messages = {
     material: '材料',
     noMaterial: '没有材料。',
     evidence: '证据',
-    minEvidence: (n) => `从已登记的文件中至少选 ${n} 页。`,
+    minEvidence: (n) => (n > 0 ? `从已登记的文件中至少选 ${n} 页。` : '证据可不附；需要时从已登记的文件中选页。'),
     upload: '上传文件',
     uploading: '正在上传…',
     classifying: '正在分类，分为可作证据的类型后即可选用。',

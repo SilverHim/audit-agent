@@ -737,7 +737,10 @@ export const en = {
     material: 'Material',
     noMaterial: 'No material.',
     evidence: 'Evidence',
-    minEvidence: (n: number) => `Choose at least ${n} page${n === 1 ? '' : 's'} from registered documents.`,
+    minEvidence: (n: number) =>
+      n > 0
+        ? `Choose at least ${n} page${n === 1 ? '' : 's'} from registered documents.`
+        : 'Evidence is optional: you can choose pages from registered documents.',
     upload: 'Upload documents',
     uploading: 'Uploading…',
     classifying: 'Being classified. It can be chosen once classified as a type that can serve as evidence.',
