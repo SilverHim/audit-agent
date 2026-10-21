@@ -1,7 +1,9 @@
 """需求 R264: Demo需求文档与程序库一致. 第 2 节程序清单的编号集合等于程序库 (含未启用功能的程序), 逐行核对引擎,
 自主度, 闸门, 负责 Agent, 依赖与功能; 文中的条数等于程序库与演示配置下启用的条数; 第 7 节准则片段表等于各程序
-standards 引用的片段 ID 集合, 逐行核对引用它的程序. 程序库或文档改了一边而另一边没跟上时失败."""
+standards 引用的片段 ID 集合, 逐行核对引用它的程序. 需求 R266: 规格书第 17.3 节的程序表与条数同样与程序库一致.
+程序库或文档改了一边而另一边没跟上时失败."""
 
+import re
 from collections import defaultdict
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from tests.xero_fakes import DEMO_FEATURES
 
 REPO = Path(__file__).resolve().parents[1]
 DEMO_DOC = REPO / "docs" / "Demo需求文档.md"
+SPEC = REPO / "docs" / "ELEC5620_设计规格说明书.md"
 LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT)
 DEMO_LIBRARY = ProcedureLibrary(get_settings().KNOWLEDGE_ROOT, DEMO_FEATURES)
 ENGINES = {"规则": "rule", "LLM": "llm", "混合": "hybrid", "人工": "manual"}  # 文档的引擎写法 → 模板的 engine
@@ -19,10 +22,12 @@ NONE = "—"  # 表中的空值
 
 
 def section(text: str, heading: str) -> str:
-    """从标题行 heading (如 "## 2. 程序清单") 到下一个同级标题之前的正文."""
+    """从标题行 heading (如 "## 2. 程序清单", "### 17.3 ...") 到下一个同级或更高级标题之前的正文."""
     start = text.index(f"\n{heading}\n")
-    end = text.find("\n## ", start + 1)
-    return text[start : end if end != -1 else len(text)]
+    level = heading.split()[0]
+    ends = [text.find(f"\n{'#' * n} ", start + 1) for n in range(2, len(level) + 1)]
+    end = min([e for e in ends if e != -1], default=len(text))
+    return text[start:end]
 
 
 def first_table(body: str) -> list[list[str]]:
@@ -119,3 +124,13 @@ def test_standards_table_matches_the_references() -> None:
     assert sorted(documented) == sorted(referenced)
     assert [fid for fid in documented if LIBRARY.fragment(fid) is None] == []
     assert {fid: sorted(p) for fid, p in documented.items() if p != referenced[fid]} == {}
+
+
+def test_spec_scope_matches_the_library() -> None:
+    """R266 验收 1: 规格书第 17.3 节程序表中出现的程序编号集合与程序库 (含未启用功能的) 相同; 写的条数等于程序库
+    与演示配置下启用的条数."""
+    body = section(SPEC.read_text(encoding="utf-8"), "### 17.3 Stage 2 实现范围")
+    listed = {pid for row in first_table(body) for pid in re.findall(r"\b[A-Z]{3}-\d{2}\b", row[1])}
+    assert sorted(listed) == sorted(t.id for t in LIBRARY.all(include_disabled=True))
+    total, demo = len(LIBRARY.all(include_disabled=True)), len(DEMO_LIBRARY.all())
+    assert f"程序库有 {total} 条程序" in body and f"启用 {demo} 条" in body
