@@ -116,4 +116,7 @@ Address the reason in the affected sections and procedure notes. Keep the rest c
 
 - Every fact must come from the inputs. Do not invent dates, people, amounts or documents.
 - Amounts in Australian dollars, e.g. "$1,250,000" (cents divided by 100; drop ".00", keep cents otherwise). Dates in text as "1 July 2025".
-- Australian English; plain text inside each field; no Markdown.
+- Plain text inside each field; no Markdown.
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

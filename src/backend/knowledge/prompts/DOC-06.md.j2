@@ -48,3 +48,6 @@ File {{ document.file_name }}, document ID {{ document.id }}, {{ document.page_c
   - Example: "Interest accrued to 31 March 2026 and not yet paid: $210.75 (interest period 20 March to 19 April 2026, to be credited on 20 April 2026)" → 21075.
 - `evidence`: one pointer for each non-null field above, including `accrued_interest_cents` when it is not null:
   `{"type": "external", "source_type": "document", "source_id": "{{ document.id }}", "locator": "<field name>", "page": <page>, "reliability": "{{ document.reliability }}"}`
+
+{% from "_output_language.md.j2" import extraction_language with context %}
+{{ extraction_language([]) }}

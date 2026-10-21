@@ -183,3 +183,6 @@ Evidence pointers. Every pointer must include `source_type`.
 | Document {{ d.document.file_name }} | voucher | document | {{ d.document.id }} | a short quote from the page | page number, 1 to {{ d.document.page_count }} | {{ d.document.reliability }} |
 {% endfor %}
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

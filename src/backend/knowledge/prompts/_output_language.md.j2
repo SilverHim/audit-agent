@@ -1,0 +1,37 @@
+{#
+程序提示词共用的输出语言一节 (需求 R340, Issue #51), 节名 "## Output language", 各程序提示词在末尾引入, 写文字的程序:
+  {% from "_output_language.md.j2" import narrative_language with context %}
+  {{ narrative_language() }}
+抽取类 (DOC-04, DOC-06, DOC-CLASSIFY, DOC-SHEET, DOC-REGISTRY, ACC-08-extract):
+  {% from "_output_language.md.j2" import extraction_language with context %}
+  {{ extraction_language(["reason"]) }}
+两个宏:
+  narrative_language()            判断, 计划, 复核等: 文字字段用工作语言; 引文, 客户与对方等名称, 科目名与准则原文不翻译
+  extraction_language(explained)  抽出的值照原文, 只有说明性字段用工作语言; explained 为这些字段名, 没有为 []
+变量 (with context, 取引入方的):
+  output_language  zh 或 en: JudgmentEngine.call_llm 取执行记录的 language (ProcedureRun.language, 需求 R339) 注入, 不读
+                   项目当前的值; 各模板头注释不另列. 直接渲染 (测试) 没给时为 en
+RPT-03 暂不引入: 报告的标题, 写法, 固定段落与校验按语言归 R341.
+守卫: tests/test_prompts_language.py 逐个渲染程序提示词, 截出本节核对.
+#}
+{% macro language_name() %}{{ "Simplified Chinese" if (output_language | default("en")) == "zh" else "Australian English" }}{% endmacro %}
+{% macro narrative_language() %}
+## Output language
+
+Working language: {{ language_name() }}.
+- Write every free-text field (conclusions, reasoning steps, counter-arguments, reasons, notes and narrative) in {{ language_name() }}.
+- Do not translate quotations from documents: keep them in quotation marks, in their original language. Keep the names of the client, counterparties and people, account names and the wording of standards exactly as they appear in the inputs.
+- Keep JSON keys, enum values, IDs and pointer fields (`source_type`, `source_id`, `locator`, `page`) exactly as specified above.
+{% endmacro %}
+{% macro extraction_language(explained) %}
+## Output language
+
+Working language: {{ language_name() }}.
+- Copy every value taken from the inputs (names, addresses, clause text, account numbers, headings and cell text) exactly as written, in its original language: do not translate or reword it. Amounts and dates follow the formats above.
+{% if explained %}
+- Write only the explanatory field{{ "s" if explained | length > 1 }} `{{ explained | join("`, `") }}` in {{ language_name() }}.
+{% else %}
+- This output has no explanatory field: every field is a value taken from the inputs.
+{% endif %}
+- Keep JSON keys, enum values, IDs and pointer fields (`source_type`, `source_id`, `locator`, `page`) exactly as specified above.
+{% endmacro %}

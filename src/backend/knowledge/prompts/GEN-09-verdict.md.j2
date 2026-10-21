@@ -36,3 +36,6 @@ Decide whether the two conclusions agree on what the evidence shows and on wheth
   - `different_conclusion`: the same evidence supports a different conclusion.
   - `reasoning_error`: the original conclusion does not follow from the facts it relies on.
 - `critic_reason`: one to three sentences naming the specific point of agreement or disagreement.
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

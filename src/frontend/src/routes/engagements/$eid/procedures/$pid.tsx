@@ -14,6 +14,7 @@ import { formatAud } from '@/lib/money'
 import { procedureName } from '@/lib/review'
 import { notRunRules, outcomeStatuses, outcomeTone } from '@/lib/rule-outcomes'
 import { useEngagement } from '@/lib/use-engagement'
+import { contentLanguage } from '@/lib/working-language'
 
 export const Route = createFileRoute('/engagements/$eid/procedures/$pid')({ component: ProcedurePage })
 
@@ -142,7 +143,7 @@ function ProcedurePage() {
                             </Link>
                           ) : null}
                         </span>
-                        <p className="m-0" lang="en">
+                        <p className="m-0" lang={contentLanguage(overview, judgment.run_id)}>
                           {judgment.conclusion}
                         </p>
                         <PointerList eid={eid} pointers={judgment.evidence} />

@@ -6,7 +6,13 @@ import { invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { useOverview } from '@/lib/use-engagement'
-import { currentLanguage, generatedNote, WORKING_LANGUAGES } from '@/lib/working-language'
+import {
+  contentLanguage,
+  currentLanguage,
+  generatedNote,
+  WORKING_LANGUAGES,
+  type WorkingLanguage,
+} from '@/lib/working-language'
 
 // 工作语言 (需求 R339): "以英文生成 / 以中文生成" 的标注 (判断, 计划, 报告等处共用) 与项目页的修改入口
 
@@ -21,6 +27,11 @@ export function GeneratedLanguage({ eid, runId }: { eid: string; runId: string |
       <StatusPill tone="neutral">{t.workingLanguage.generatedIn[shown]}</StatusPill>
     </span>
   )
+}
+
+// 一段生成内容 (判断, 计划, 报告正文) 的语言, 作正文的 lang 属性 (需求 R340), 按内容的 run_id 取 (见 contentLanguage)
+export function useContentLanguage(eid: string, runId: string | null | undefined): WorkingLanguage {
+  return contentLanguage(useOverview(eid), runId)
 }
 
 // 项目页改工作语言: 下拉即提交 (PUT working-language), 之后的执行用新语言, 已生成的内容不改; 项目锁定时不可改

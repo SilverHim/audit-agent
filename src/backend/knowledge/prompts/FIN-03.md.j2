@@ -120,3 +120,6 @@ Evidence pointers. Every pointer must include `source_type`.
 | Other cited row | as in the source judgment's pointer | the row's `source_type` | row `id` | column name | null | as in the source judgment's pointer |
 | Document page | as in the source judgment's pointer | document | document `id` | what the page shows | a page the source judgment cites, 1 to `page_count` | the document's `reliability` |
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

@@ -72,3 +72,6 @@ The facts are checked against these provisions (for reference; do not apply them
 {% for d in documents %}
   Document {{ d.document.id }} ({{ d.document.type }}): reliability `{{ d.document.reliability }}`, pages 1 to {{ d.document.page_count }}.
 {% endfor %}
+
+{% from "_output_language.md.j2" import extraction_language with context %}
+{{ extraction_language([]) }}

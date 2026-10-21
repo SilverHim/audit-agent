@@ -10,7 +10,7 @@ import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { GeneratedLanguage } from '@/components/working-language'
+import { GeneratedLanguage, useContentLanguage } from '@/components/working-language'
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -256,6 +256,7 @@ function ReviewQueue() {
 function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
   const { t } = useI18n()
   const judgment = isJudgment(item.view.target) ? item.view.target : null
+  const lang = useContentLanguage(eid, judgment?.run_id)
   const pending = item.view.task.status === 'pending'
   return (
     <>
@@ -275,7 +276,7 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
               <SectionLabel>{t.judgment.conclusion}</SectionLabel>
               <GeneratedLanguage eid={eid} runId={judgment.run_id} />
             </span>
-            <p className="m-0 text-[14px] leading-[1.65]" lang="en">
+            <p className="m-0 text-[14px] leading-[1.65]" lang={lang}>
               {judgment.conclusion}
             </p>
           </div>

@@ -30,7 +30,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { UpdateFields, UpdatePayload } from '@/components/update-fields'
-import { GeneratedLanguage } from '@/components/working-language'
+import { GeneratedLanguage, useContentLanguage } from '@/components/working-language'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -72,6 +72,7 @@ import {
   sideProposal,
 } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
+import type { WorkingLanguage } from '@/lib/working-language'
 
 // 对话流的组成部件: 消息, 判断卡片, 人工决定卡片
 
@@ -139,7 +140,8 @@ const STEP_TONES: Record<string, string> = {
   limitation: 'bg-risk-soft text-risk',
 }
 
-function ReasoningChain({ eid, steps }: { eid: string; steps: ReasoningStep[] }) {
+// 推理链; lang 为生成它的那次执行的语言 (useContentLanguage, 需求 R340)
+function ReasoningChain({ eid, steps, lang }: { eid: string; steps: ReasoningStep[]; lang: WorkingLanguage }) {
   const { t } = useI18n()
   return (
     <ol className="m-0 flex list-none flex-col p-0">
@@ -160,7 +162,7 @@ function ReasoningChain({ eid, steps }: { eid: string; steps: ReasoningStep[] })
             >
               {t.stepKinds[step.kind]}
             </span>
-            <span className="text-[14px] leading-[1.65]" lang="en">
+            <span className="text-[14px] leading-[1.65]" lang={lang}>
               {step.text}
             </span>
             {step.from_steps?.length ? (
@@ -184,13 +186,13 @@ type Critic = {
   critic_conclusion?: string | null
 }
 
-function CriticPanel({ judgment }: { judgment: Judgment }) {
+function CriticPanel({ judgment, lang }: { judgment: Judgment; lang: WorkingLanguage }) {
   const { t } = useI18n()
   const critic = judgment as Judgment & Critic
   if (!critic.critic_verdict) return null
   const verdict = critic.critic_verdict
   const reason = criticReasonText(judgment, t)
-  const modelWritten = verdict === 'consistent' || verdict === 'inconsistent' // 理由由复核模型写 (英文)
+  const modelWritten = verdict === 'consistent' || verdict === 'inconsistent' // 理由由复核模型写 (执行记录的语言)
   const tone = verdict === 'consistent' ? 'ok' : verdict === 'inconsistent' ? 'risk' : 'neutral'
   return (
     <div className="flex flex-1 basis-[240px] flex-col gap-1.5 border-line-soft p-4 sm:border-l">
@@ -203,9 +205,9 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
           {t.judgment.critic.reasonTypes[critic.critic_reason_type] ?? critic.critic_reason_type}
         </span>
       ) : null}
-      {/* 跳过或没做成的原因按界面语言显示 (R309), 技术细节原样; 模型写的理由与旧数据照原文, 只有前者标英文 */}
+      {/* 跳过或没做成的原因按界面语言显示 (R309), 技术细节原样; 模型写的理由与旧数据照原文, 只有前者标执行的语言 */}
       {reason ? (
-        <p className="m-0 text-[14px] text-secondary-foreground" lang={reason.raw && modelWritten ? 'en' : undefined}>
+        <p className="m-0 text-[14px] text-secondary-foreground" lang={reason.raw && modelWritten ? lang : undefined}>
           {reason.text}
         </p>
       ) : null}
@@ -217,7 +219,7 @@ function CriticPanel({ judgment }: { judgment: Judgment }) {
       {critic.critic_conclusion ? (
         <div className="flex flex-col gap-1 pt-1">
           <span className="text-[12px] text-muted-foreground">{t.judgment.critic.ownConclusion}</span>
-          <p className="m-0 text-[14px]" lang="en">
+          <p className="m-0 text-[14px]" lang={lang}>
             {critic.critic_conclusion}
           </p>
         </div>
@@ -274,11 +276,13 @@ function SideColumn({
   side,
   which,
   proposals,
+  lang,
 }: {
   eid: string
   side: PresentedSide
   which: 'generator' | 'reviewer'
   proposals: boolean
+  lang: WorkingLanguage
 }) {
   const { t } = useI18n()
   const p = t.judgment.presentation
@@ -307,18 +311,18 @@ function SideColumn({
         </div>
       ) : null}
       {side.conclusion ? (
-        <p className="m-0 text-[15px] leading-[1.65]" lang="en">
+        <p className="m-0 text-[15px] leading-[1.65]" lang={lang}>
           {side.conclusion}
         </p>
       ) : null}
       <div className="flex flex-col gap-2.5">
         <SectionLabel>{t.judgment.reasoning(side.reasoning_chain.length)}</SectionLabel>
-        <ReasoningChain eid={eid} steps={side.reasoning_chain} />
+        <ReasoningChain eid={eid} steps={side.reasoning_chain} lang={lang} />
       </div>
       {side.counter_argument ? (
         <div className="flex flex-col gap-1.5 rounded-[10px] bg-counter p-3">
           <SectionLabel className="text-warn">{t.judgment.counter}</SectionLabel>
-          <p className="m-0 text-[14px] leading-[1.6]" lang="en">
+          <p className="m-0 text-[14px] leading-[1.6]" lang={lang}>
             {side.counter_argument}
           </p>
         </div>
@@ -331,7 +335,7 @@ function SideColumn({
             </span>
           ) : null}
           {side.reason ? (
-            <p className="m-0 text-[14px] leading-[1.6]" lang="en">
+            <p className="m-0 text-[14px] leading-[1.6]" lang={lang}>
               {side.reason}
             </p>
           ) : null}
@@ -346,10 +350,12 @@ function DisputeBody({
   eid,
   presentation,
   proposals,
+  lang,
 }: {
   eid: string
   presentation: TaskPresentation
   proposals: boolean
+  lang: WorkingLanguage
 }) {
   const { t } = useI18n()
   const p = t.judgment.presentation
@@ -358,8 +364,8 @@ function DisputeBody({
   return (
     <>
       <div className="grid grid-cols-1 divide-y divide-line-soft border-line-soft border-b sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-        <SideColumn eid={eid} side={generator} which="generator" proposals={proposals} />
-        <SideColumn eid={eid} side={reviewer} which="reviewer" proposals={proposals} />
+        <SideColumn eid={eid} side={generator} which="generator" proposals={proposals} lang={lang} />
+        <SideColumn eid={eid} side={reviewer} which="reviewer" proposals={proposals} lang={lang} />
       </div>
       <div className="flex flex-col items-center gap-2.5 px-4 py-4 text-center" data-testid="presented-evidence">
         <SectionLabel>{p.evidence}</SectionLabel>
@@ -383,6 +389,8 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
   const collab = useOverview(eid)?.features?.includes('collab') ?? false
   const layout = cardLayout(view, presentation)
   const target = view.target
+  // 判断正文 (两方的结论, 推理, 复核理由) 的语言: 生成它的那次执行记录的语言 (需求 R340)
+  const lang = useContentLanguage(eid, isJudgment(target) ? target.run_id : null)
   const proc = procedureName(t, view.task.procedure_id, view.procedure_name)
   const header = (
     <div className="flex flex-wrap items-center gap-2.5 border-line-soft border-b px-4 py-3.5">
@@ -456,7 +464,7 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       <article className="overflow-hidden rounded-[14px] border bg-card" data-testid="dispute-presentation">
         {header}
         <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">{facts}</div>
-        <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} />
+        <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} lang={lang} />
       </article>
     )
   }
@@ -483,23 +491,23 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       </div>
       <div className="flex flex-col gap-1.5 border-line-soft border-b px-4 py-4">
         <SectionLabel>{t.judgment.conclusion}</SectionLabel>
-        <p className="m-0 text-[15px] leading-[1.65]" lang="en">
+        <p className="m-0 text-[15px] leading-[1.65]" lang={lang}>
           {target.conclusion}
         </p>
       </div>
       {target.misstatement_update ? <UpdatePayload update={target.misstatement_update} /> : null}
       <div className="flex flex-col gap-2.5 border-line-soft border-b px-4 py-4">
         <SectionLabel>{t.judgment.reasoning(target.reasoning_chain.length)}</SectionLabel>
-        <ReasoningChain eid={eid} steps={target.reasoning_chain} />
+        <ReasoningChain eid={eid} steps={target.reasoning_chain} lang={lang} />
       </div>
       <div className="flex flex-wrap">
         <div className="flex flex-1 basis-[300px] flex-col gap-1.5 bg-counter p-4">
           <SectionLabel className="text-warn">{t.judgment.counter}</SectionLabel>
-          <p className="m-0 text-[14px] leading-[1.6]" lang="en">
+          <p className="m-0 text-[14px] leading-[1.6]" lang={lang}>
             {target.counter_argument}
           </p>
         </div>
-        <CriticPanel judgment={target} />
+        <CriticPanel judgment={target} lang={lang} />
       </div>
     </article>
   )

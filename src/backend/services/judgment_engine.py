@@ -957,7 +957,8 @@ class JudgmentEngine:
         错误追加进对话重试, 最多共 MAX_ATTEMPTS 次; 只标 unsupported 的步骤算通过, 不重试.
 
         每次尝试写一行 llm_call 留痕. variables 为模板变量 (对象须先 model_dump(mode="json");
-        渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310),
+        渲染前去掉 birth_date 字段, 再经 mask_person_node_ids 遮蔽人员节点 ID 的出生日期, 需求 R139, R310; 另加
+        output_language, 取 run.language, 需求 R340),
         ctx 为校验上下文, actor 为调用方 Agent, fixture_key 为判断对象或文件 (mock 模式据此取固定输出).
         请求与留痕的 procedure_id 取模板编号 (GEN-09 在 A6 那次执行里调用, run_id 仍是 A6 的执行).
         llm: 换用的客户端 (独立复核用复核模型), 缺省为本引擎的; system: 系统提示词模板, 须含 {schema}.
@@ -973,6 +974,9 @@ class JudgmentEngine:
         # 先去掉个人信息再渲染 (接口文档第 0 节 "个人信息"): 出生日期字段 (需求 R310), 人员节点 ID 的出生日期一段
         # (关系图的端点, 例外的 detail 都可能带它, 需求 R139)
         outbound = mask_person_node_ids(drop_fields(dict(variables), PERSONAL_FIELDS))
+        # 输出语言取这次执行记录的 language (需求 R339, R340), 不读项目当前的值: 执行之后改了工作语言, 这次照旧;
+        # 重跑是新的执行记录, 取它建立时的语言. 各提示词末尾的 _output_language.md.j2 一节用它; 调用方给的同名变量不算
+        outbound["output_language"] = run.language
         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):

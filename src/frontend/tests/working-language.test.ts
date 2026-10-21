@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { EngagementOverview, TrailEntry } from '../src/client/types.gen'
 import { buildTimeline } from '../src/lib/timeline'
-import { currentLanguage, generatedNote } from '../src/lib/working-language'
+import { contentLanguage, currentLanguage, generatedNote } from '../src/lib/working-language'
 import { zh } from '../src/locales/zh'
 
 // 项目当前为 zh; 总览的 run_languages 只列生成语言与之不同的执行 (改为中文之前的执行)
@@ -30,6 +30,16 @@ describe('生成语言的标注', () => {
   test('总览还没取到时不标; 文案同验收 4', () => {
     expect(generatedNote(undefined, 'RUN-REV-02-1')).toBeNull()
     expect([zh.workingLanguage.generatedIn.en, zh.workingLanguage.generatedIn.zh]).toEqual(['以英文生成', '以中文生成'])
+  })
+})
+
+describe('生成内容的 lang 属性 (需求 R340)', () => {
+  test.each([
+    ['RUN-REV-02-1', 'en'], // 生成语言与当前不同: 取执行的
+    ['RUN-REV-02-2', 'zh'], // 没列出: 与当前工作语言相同
+    [null, 'en'], // 没有 run_id (迁移前的报告稿): 那时的输出都是英文
+  ])('执行 %p → %p', (runId, expected) => {
+    expect(contentLanguage(overview('zh'), runId)).toBe(expected as 'zh' | 'en')
   })
 })
 

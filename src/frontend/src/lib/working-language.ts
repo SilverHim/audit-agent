@@ -20,3 +20,13 @@ export function generatedNote(
 ): WorkingLanguage | null {
   return (runId && overview?.run_languages?.[runId]) || null
 }
+
+// 生成内容 (判断, 计划, 报告正文) 的语言, 给 lang 属性 (需求 R340): 执行记录的语言 (与当前工作语言不同的在
+// run_languages 里, 否则就是当前工作语言); 没有 run_id (迁移前的报告稿) 为 en, 那时的输出都是英文
+export function contentLanguage(
+  overview: EngagementOverview | undefined,
+  runId: string | null | undefined,
+): WorkingLanguage {
+  if (!runId) return 'en'
+  return generatedNote(overview, runId) ?? currentLanguage(overview)
+}

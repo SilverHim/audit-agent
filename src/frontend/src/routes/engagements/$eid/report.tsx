@@ -34,6 +34,7 @@ function Report() {
             <>
               {current ? (
                 <ReportPreview
+                  eid={eid}
                   report={current}
                   decisions={reports.data.decisions.filter((item) => item.decision === 'reject')}
                 />

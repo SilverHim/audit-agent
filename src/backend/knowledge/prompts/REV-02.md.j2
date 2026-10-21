@@ -129,3 +129,6 @@ Evidence pointers. Every pointer must include `source_type`.
 | Contract term | contract | document | {{ data.contract.document_id }} | term ID | the term's `page` | {{ data.document.reliability }} |
 {% endif %}
 | Standard fragment | standard | standard | fragment ID | `para <paragraph>` | null | null |
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}
