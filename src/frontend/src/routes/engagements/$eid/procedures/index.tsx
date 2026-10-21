@@ -6,6 +6,7 @@ import { reviewsGetProcedureOptions } from '@/client/@tanstack/react-query.gen'
 import type { EngagementOverview, Engine, ProcedureStatus, ProcedureSummary } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
 import { standardLabel } from '@/components/evidence-link'
+import { ProcedureIntroView } from '@/components/procedure-intro'
 import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -227,7 +228,8 @@ function ProcedureAside({
           <RerunButton eid={eid} overview={overview} procedure={item} size="default" />
         </div>
       ) : null}
-      <dl className="m-0 grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-[13.5px]">
+      <ProcedureIntroView procedureId={item.id} runs={detail.data?.runs} />
+      <dl className="m-0 grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-2.5 border-t pt-4 text-[13.5px]">
         <dt className="text-muted-foreground">{t.proceduresPage.stage}</dt>
         <dd className="m-0">{t.phases[item.phase]}</dd>
         <dt className="text-muted-foreground">{t.proceduresPage.cols.method}</dt>
