@@ -149,9 +149,9 @@ def test_every_prompt_states_the_output_language(template: str, language: Workin
 def test_literal_account_names_stay_as_given(template: str, literals: list[str]) -> None:
     """审核 R340-01: 提示词写死的科目名 (不在输入里; 下游 misstatement_objective 按它配审计目标) 在 zh 的提示词里原样在,
     输出语言一节写明引号给出的固定值照抄, 不翻译."""
-    prompt = rendered(template, "zh")
-    assert [literal for literal in literals if literal not in prompt] == []
-    assert missing_rules(prompt.split(SECTION)[1], {"提示词给的引号固定值照抄": LITERALS}, NAMES["zh"]) == []
+    head, section = rendered(template, "zh").split(SECTION)  # 字面值只在正文里找: 输出语言一节自带示例 (审核 R340-07)
+    assert [literal for literal in literals if literal not in head] == []
+    assert missing_rules(section, {"提示词给的引号固定值照抄": LITERALS}, NAMES["zh"]) == []
 
 
 # ── 抽取类: 抽出的值不随语言变 (验收 3, 4) ──

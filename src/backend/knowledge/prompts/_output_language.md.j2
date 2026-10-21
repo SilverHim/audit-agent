@@ -30,8 +30,8 @@ Working language: {{ language_name() }}.
 ## Output language
 
 Working language: {{ language_name() }}.
-- Copy every value taken from the inputs (names, addresses, clause text, account numbers, headings and cell text) exactly as written, in its original language, apart from the formatting the rules above require (amounts, dates, digits-only numbers, name order, generated column names such as `Column n`, one-sentence summaries): do not translate or reword it.
-- Copy field values that the instructions above give in quotation marks (for example `account` "Cash") exactly as given; do not translate them.
+- Copy every value taken from the inputs (names, addresses, clause text, account numbers, headings and cell text) exactly as written, in its original language, apart from the formatting the rules above require (amounts, dates, digits-only numbers, name order, generated column names such as `Column n`): do not translate or reword it.
+- Copy field values that the instructions above give in quotation marks exactly as given; do not translate them.
 {% if explained %}
 - Write only the explanatory field{{ "s" if explained | length > 1 }} `{{ explained | join("`, `") }}` in {{ language_name() }}.
 {% else %}
