@@ -1,6 +1,8 @@
 # 审计报告的固定部分, 按工作语言 (zh, en) 各一份, 结构相同 (需求 R341): 意见段与形成意见的基础段首行的标题 (headings,
-# RPT-03 的提示词与校验同取这里), 报告中的日期写法 (date), 拼在模型写的两段之后的固定段落 (sections, 每段首行为标题,
-# 签名块除外). RPT-03 按执行记录的语言取 (ProcedureRun.language).
+# RPT-03 的提示词与校验同取这里), 报告中的日期写法 (date), 模型写两段时用的名称 (terms, 与固定段落的写法相同, 提示词
+# 要求照写), 拼在模型写的两段之后的固定段落 (sections, 每段首行为标题, 签名块除外). RPT-03 按执行记录的语言取
+# (ProcedureRun.language). 载入时核对: 两种语言的意见类型, 段落, 标题与名称的键相同, 标题与名称不为空, 各段的占位符
+# 相同 (procedure_library.report_templates).
 # 英文底本: ASA 700 [Aus] Illustration 1A (docs/参考资料/ 的 ASA 700 编译版第 41-42 页), 照录;
 # ASA 705 [Aus] Illustration 1A 的这几段写明 "按 ASA 700 Illustration 1A", 所以保留意见与无保留意见用同一份 (&en, &zh).
 # Numbat 不是上市公司: 去掉关键审计事项, 其他信息, 薪酬报告 (s300A 只适用于上市公司);
@@ -21,6 +23,15 @@ en:
       opinion: Qualified Opinion
       basis_for_opinion: Basis for Qualified Opinion
   date: "{d.day} {d:%B %Y}"  # 如 30 June 2026
+  terms:  # 照固定段落的写法 (撇号同正文为 ’)
+    company: the Company
+    directors: the directors
+    financial_report: financial report
+    auditors_report: auditor’s report
+    auditor: auditor
+    accounting_standards: Australian Accounting Standards
+    auditing_standards: Australian Auditing Standards
+    corporations_act: Corporations Act 2001
   sections:
     unqualified: &en
       directors_responsibilities: |
@@ -62,6 +73,15 @@ zh:
       opinion: 保留意见
       basis_for_opinion: 形成保留意见的基础
   date: "{d.year}年{d.month}月{d.day}日"  # 如 2026年6月30日
+  terms:  # 照固定段落的写法, 键同 en
+    company: 公司
+    directors: 董事
+    financial_report: 财务报告
+    auditors_report: 审计报告
+    auditor: 审计师
+    accounting_standards: 澳大利亚会计准则
+    auditing_standards: 澳大利亚审计准则
+    corporations_act: 《2001年公司法》
   sections:
     unqualified: &zh
       directors_responsibilities: |
@@ -87,7 +107,7 @@ zh:
 
         • 评价财务报告的总体列报、结构和内容（包括披露），并评价财务报告是否以实现公允列报的方式反映相关交易和事项。
 
-        我们与董事就计划的审计范围、时间安排和重大审计发现等事项进行沟通，包括我们在审计中识别出的内部控制重大缺陷。
+        我们与董事就计划的审计范围、时间安排和重大审计发现等事项进行沟通，包括我们在审计中识别出的值得治理层关注的内部控制缺陷。
       other_legal_and_regulatory: ""
       signature: |
         {auditor_name}

@@ -9,6 +9,7 @@
   narrative_language()            判断, 计划, 复核等: 文字字段用工作语言; 引文, 客户与对方等名称, 科目名与准则原文不翻译
   extraction_language(explained)  抽出的值照原文 (模板规则要求的格式除外), 只有说明性字段用工作语言; explained 为这些
                                   字段名, 没有为 []
+另有 language_name(language): 语言的英文名, 不给 language 时为工作语言的 (RPT-03 修订时另写上一稿的语言).
 两个宏都写明: 提示词正文里用引号给出的字段固定值 (如 `account` "Cash") 照抄, 不翻译 (下游按它配审计目标).
 变量 (with context, 取引入方的):
   output_language  zh 或 en: JudgmentEngine.call_llm 取执行记录的 language (ProcedureRun.language, 需求 R339) 注入, 不读
@@ -16,7 +17,7 @@
 RPT-03 也引入 (需求 R341); 报告两段的标题, 日期写法与固定段落另按语言取 templates/report.yaml.
 守卫: tests/test_prompts_language.py 逐个渲染程序提示词, 截出本节核对.
 #}
-{% macro language_name() %}{{ "Simplified Chinese" if (output_language | default("en")) == "zh" else "Australian English" }}{% endmacro %}
+{% macro language_name(language=none) %}{{ "Simplified Chinese" if (language or (output_language | default("en"))) == "zh" else "Australian English" }}{% endmacro %}
 {% macro narrative_language() %}
 ## Output language
 

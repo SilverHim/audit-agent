@@ -607,7 +607,7 @@ class OutputValidator:
 
     def __init__(self, financial: FinancialDataStore, library: ProcedureLibrary, trail: AuditTrail) -> None:
         self.financial = financial  # 解析行指针与文件登记
-        self.library = library  # 解析准则片段
+        self.library = library  # 解析准则片段, 取报告标题
         self.trail = trail  # 解析留痕指针
 
     @classmethod

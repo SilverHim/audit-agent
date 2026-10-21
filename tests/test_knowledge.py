@@ -1913,19 +1913,51 @@ def test_chinese_report_template_follows_the_english_one() -> None:
     ]
 
 
+@pytest.mark.parametrize("language", ["en", "zh"])
+def test_report_terms_are_written_as_in_the_fixed_sections(language: Literal["zh", "en"]) -> None:
+    """R341 审核 03: 模型写两段时用的名称 (terms) 与固定段落的写法相同, 每个都出现在该语言的固定段落里."""
+    library = ProcedureLibrary(ROOT)
+    text = "\n".join(library.report_sections(OpinionType.unqualified, language).values())
+    assert [term for term in library.report_terms(language).values() if term not in text] == []
+
+
+SAME = "各语言的意见类型, 段落, 占位符, 标题与名称须相同"
+HEADED = "有标题的意见类型与有固定段落的须相同"
+
+
 @pytest.mark.parametrize(
     ("change", "error"),
     [
         (lambda doc: doc.pop("zh"), "须按 zh, en 各给一份"),
-        (lambda doc: doc["zh"]["sections"]["qualified"].pop("signature"), "各语言的意见类型, 段落与标题须相同"),
-        (lambda doc: doc["zh"]["headings"].pop("qualified"), "各语言的意见类型, 段落与标题须相同"),
+        (lambda doc: doc["zh"]["sections"]["qualified"].pop("signature"), SAME),
+        (lambda doc: doc["zh"]["headings"].pop("qualified"), f"zh: {HEADED}"),
+        (lambda doc: [doc[x]["headings"].pop("qualified") for x in ("zh", "en")], HEADED),
+        (lambda doc: doc["zh"]["headings"]["qualified"].update(opinion=" "), "zh: 标题与名称不能为空"),
+        (lambda doc: doc["zh"]["terms"].update(auditor=""), "zh: 标题与名称不能为空"),
+        (lambda doc: doc["zh"]["terms"].pop("auditor"), SAME),
+        (
+            lambda doc: doc["zh"]["sections"]["qualified"].update(
+                signature=doc["zh"]["sections"]["qualified"]["signature"].replace("{auditor_name}", "{auditor}")
+            ),
+            SAME,
+        ),
     ],
-    ids=["missing_language", "missing_section", "missing_heading"],
+    ids=[
+        "missing_language",
+        "missing_section",
+        "missing_heading",
+        "headings_without_sections",
+        "empty_heading",
+        "empty_term",
+        "missing_term",
+        "placeholder_typo",
+    ],
 )
 def test_report_template_languages_must_match(
     tmp_path: Path, change: Callable[[dict[str, Any]], Any], error: str
 ) -> None:
-    """report.yaml 缺一种语言, 或两种语言的意见类型, 段落与标题不一致时, 程序库载入即报 ValueError."""
+    """report.yaml 载入即核对, 不过报 ValueError (R341, 审核 04): 缺一种语言; 一种语言里有标题的意见类型与有固定段落的
+    不同 (两种语言都缺同一类标题也报); 标题或名称为空; 两种语言的意见类型, 段落, 名称的键或同一段的占位符不同."""
     doc = yaml.safe_load((ROOT / "templates" / "report.yaml").read_text(encoding="utf-8"))
     doc["zh"]["sections"]["qualified"] = dict(doc["zh"]["sections"]["qualified"])  # 拆开别名, 只改 qualified
     change(doc)

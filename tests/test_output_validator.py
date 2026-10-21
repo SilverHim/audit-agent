@@ -1223,32 +1223,18 @@ async def test_report_semantic_failures(changes: dict[str, Any], opinion: Opinio
     assert report.level_failed == "semantic" and report.retryable and error in report.errors
 
 
-# 验收原文 (需求 R341 验收 2) 的中文标题: 意见类型 → (意见段, 形成意见的基础段)
-ZH_HEADINGS = {
-    OpinionType.unqualified: ("审计意见", "形成审计意见的基础"),
-    OpinionType.qualified: ("保留意见", "形成保留意见的基础"),
-}
-EN_HEADINGS = {
-    OpinionType.unqualified: ("Opinion", "Basis for Opinion"),
-    OpinionType.qualified: ("Qualified Opinion", "Basis for Qualified Opinion"),
-}
-
-
 @pytest.mark.parametrize("opinion", [OpinionType.unqualified, OpinionType.qualified])
 @pytest.mark.parametrize(
-    ("language", "written", "passes"),
-    [("zh", ZH_HEADINGS, True), ("zh", EN_HEADINGS, False), ("en", EN_HEADINGS, True), ("en", ZH_HEADINGS, False)],
+    ("language", "written"),
+    [("zh", "zh"), ("zh", "en"), ("en", "en"), ("en", "zh")],
     ids=["zh", "zh_with_english_headings", "en", "en_with_chinese_headings"],
 )
 async def test_report_headings_follow_the_language(
-    language: Literal["zh", "en"],
-    written: dict[OpinionType, tuple[str, str]],
-    passes: bool,
-    opinion: OpinionType,
+    language: Literal["zh", "en"], written: Literal["zh", "en"], opinion: OpinionType
 ) -> None:
-    """需求 R341 验收 2: 两段首行的标题按校验上下文的语言取 report.yaml 的一份 (call_llm 按执行记录的语言填); zh 为
-    验收写明的中文标题, 英文标题的输出判 semantic, 反之亦然."""
-    opinion_heading, basis_heading = written[opinion]
+    """需求 R341 验收 2: 两段首行的标题按校验上下文的语言取 report.yaml 的一份 (call_llm 按执行记录的语言填); 写成另一种
+    语言的标题判 semantic. 两种语言的标题各是什么由 test_knowledge 核对."""
+    opinion_heading, basis_heading = LIBRARY.report_headings(written)[opinion]
     draft = QUALIFIED_DRAFT.model_copy(
         update={
             "opinion": f"{opinion_heading}\n\n...",
@@ -1257,11 +1243,10 @@ async def test_report_headings_follow_the_language(
         }
     )
     report = await check_report(draft, [confirmed_judgment()], opinion, language)
-    assert LIBRARY.report_headings(language)[opinion] == (ZH_HEADINGS if language == "zh" else EN_HEADINGS)[opinion]
-    if passes:
+    if written == language:
         assert (report.level_failed, report.errors) == (None, [])
     else:
-        expected = (ZH_HEADINGS if language == "zh" else EN_HEADINGS)[opinion]
+        expected = LIBRARY.report_headings(language)[opinion]
         assert report.level_failed == "semantic"
         assert report.errors == [f"意见段首行应为 {expected[0]}", f"基础段首行应为 {expected[1]}"]
 

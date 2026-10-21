@@ -11,7 +11,7 @@ from langgraph.types import Command
 
 from backend.agents.base import RunContext
 from backend.agents.concierge import ConciergeAgent
-from backend.agents.concierge.report import fin01_reason, misstatement_inputs, revision_inputs
+from backend.agents.concierge.report import DATE_EXAMPLE, fin01_reason, misstatement_inputs, revision_inputs
 from backend.contracts.llm_outputs import ReportDraft
 from backend.contracts.models import (
     AgentId,
@@ -310,7 +310,8 @@ async def test_report_follows_the_language_of_its_run(
     prompt = llm.requests[0].messages[0].content
     assert f'the heading "{opinion_heading}"' in prompt and f'the heading "{basis_heading}"' in prompt
     assert f"described in the {responsibilities.splitlines()[0]} section" in prompt
-    assert f'Dates as "{library.report_date(date(2025, 7, 1), language)}"' in prompt
+    assert f'Dates as "{library.report_date(DATE_EXAMPLE, language)}"' in prompt
+    assert all(f'"{text}"' in prompt for text in library.report_terms(language).values())  # 名称按固定段落的写法
     assert f"Working language: {'Simplified Chinese' if language == 'zh' else 'Australian English'}." in prompt
     expected = fixed(OpinionType.qualified, language)
     assert {s: report.sections[s] for s in expected} == expected
@@ -368,11 +369,16 @@ def revising(state: dict[str, Any], run_no: int, llm: Any = None) -> tuple[Conci
     return agent, RunContext(ctx.engagement, ctx.procedure, ctx.template, run, ctx.state | state), trail  # type: ignore[arg-type]
 
 
-async def test_second_revision_addresses_reject() -> None:
+@pytest.mark.parametrize("language", ["en", "zh"], ids=["same_language", "en_to_zh"])
+async def test_second_revision_addresses_reject(language: Literal["zh", "en"]) -> None:
+    """退回后的第 2 稿带上一稿与批注. 上一稿 (没有 run_id 的旧稿, 按 en) 与本次同语言时要求其余措辞不变; 本次为 zh
+    (退回后项目改了工作语言) 时写明上一稿是英文, 按中文重写全文, 保持意思, 不再要求措辞不变 (R341 审核 01)."""
     first = report(1)
+    llm = ScriptedLLM({"r2": [ZH_R1.model_dump_json()]}) if language == "zh" else None
     agent, ctx, trail = revising(
-        {"report_versions": [first], "gate_decisions": [fin01(OpinionType.qualified), REJECT]}, run_no=2
+        {"report_versions": [first], "gate_decisions": [fin01(OpinionType.qualified), REJECT]}, run_no=2, llm=llm
     )
+    ctx = replace(ctx, run=ctx.run.model_copy(update={"language": language}))
     patch = await agent.run(ctx)
     [report2] = patch["report_versions"]
     assert (report2.id, report2.version, report2.revision, report2.addresses_decision_id) == ("REPORT-2", 1, 2, "D-r")
@@ -384,6 +390,12 @@ async def test_second_revision_addresses_reject() -> None:
     assert "## Revision 2" in prompt
     assert first.sections[ReportSection.opinion] in prompt and first.sections[ReportSection.basis_for_opinion] in prompt
     assert "- [basis_for_opinion]: Cite the contract clause that sets the point at which control transfers." in prompt
+    rewrite = (
+        "The previous text is in Australian English, not Simplified Chinese: write both sections in full in Simplified "
+        "Chinese, keeping their meaning; do not keep its wording."
+    )
+    keep = "Keep all other wording unchanged."
+    assert (rewrite in prompt, keep in prompt) == ((True, False) if language == "zh" else (False, True))
 
 
 async def test_r2_fixture_cites_contract_clause() -> None:
@@ -730,9 +742,9 @@ def test_previous_draft_is_current_version_of_previous_revision() -> None:
         }
     )
     state = ctx.state | {"report_versions": [current, old], "gate_decisions": [REJECT]}
-    previous, annotations, addresses = revision_inputs(replace(ctx, state=state), 2)
-    assert previous == {"opinion": "current opinion", "basis_for_opinion": "current basis"}
-    assert annotations[0]["comment"] == REJECT.annotations[0].comment and addresses == REJECT.id
+    inputs = revision_inputs(replace(ctx, state=state), 2)
+    assert inputs.previous == {"opinion": "current opinion", "basis_for_opinion": "current basis"}
+    assert inputs.annotations[0]["comment"] == REJECT.annotations[0].comment and inputs.addresses == REJECT.id
 
 
 def test_r2_fixture_only_adds_contract_clause() -> None:

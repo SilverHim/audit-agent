@@ -870,12 +870,12 @@ async def test_redraft_after_rerun_has_no_annotations() -> None:
         "rerun_requests": [request(report_revision=1, procedure_ids=["CSH-02"], superseded_run_ids=["RUN-CSH-02-1"])],
     }
     agent, ctx, trail = revising(state, run_no=2)
-    previous, annotations, addresses = revision_inputs(ctx, 2)
-    assert previous == {
+    inputs = revision_inputs(ctx, 2)
+    assert inputs.previous == {
         "opinion": first.sections[ReportSection.opinion],
         "basis_for_opinion": first.sections[ReportSection.basis_for_opinion],
     }
-    assert (annotations, addresses) == ([], None)
+    assert (inputs.language, inputs.annotations, inputs.addresses) == ("en", [], None)
     [report_2] = (await agent.run(ctx))["report_versions"]
     assert (report_2.id, report_2.revision, report_2.addresses_decision_id) == ("REPORT-2", 2, None)
     [entry] = [e for e in trail.entries if e.kind is TrailKind.llm_call]
@@ -890,7 +890,7 @@ async def test_reject_wins_and_rerun_of_other_report_does_not_count() -> None:
     _, ctx, _ = revising(
         {"report_versions": [first], "gate_decisions": [REJECT], "rerun_requests": [request(report_revision=1)]}, 2
     )
-    assert revision_inputs(ctx, 2)[2] == REJECT.id
+    assert revision_inputs(ctx, 2).addresses == REJECT.id
     _, ctx, _ = revising({"report_versions": [first], "rerun_requests": [request(report_revision=None)]}, 2)
     with pytest.raises(LookupError, match="也没有其后的过期重跑"):
         revision_inputs(ctx, 2)

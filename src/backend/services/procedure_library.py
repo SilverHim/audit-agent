@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import string
 import subprocess
 import types
 from collections.abc import Callable, Iterable, Mapping
@@ -433,6 +434,11 @@ class ProcedureLibrary:
         """报告正文里的日期写法 (需求 R341), 如 en 的 30 June 2026."""
         return self._report[language].date.format(d=day)
 
+    def report_terms(self, language: WorkingLanguage) -> dict[str, str]:
+        """该语言下模型写两段时的名称 (键 → 写法, 与固定段落相同, R341 审核 03); 两种语言的键相同, 按 report.yaml
+        的顺序."""
+        return dict(self._report[language].terms)
+
     def prompts_sha256(self) -> str:
         """prompts/*.j2 按文件名排序后, 各文件内容依次拼接的 sha256. 每次调用重新读文件, 改任一 prompt 即变化."""
         digest = hashlib.sha256()
@@ -442,20 +448,38 @@ class ProcedureLibrary:
 
 
 def report_templates(path: Path) -> dict[WorkingLanguage, ReportTemplate]:
-    """读 templates/report.yaml (需求 R341): 每种工作语言一份 ReportTemplate, 各语言的意见类型与段落须相同 (同一份结构,
-    段落一一对应). 缺语言或结构不一抛 ValueError, 程序库载入时即报."""
+    """读 templates/report.yaml (需求 R341): 每种工作语言一份 ReportTemplate, 结构相同 (段落一一对应). 程序库载入时即
+    核对, 不过抛 ValueError (消息含文件名与语言): 缺语言; 每种语言有标题的意见类型与有固定段落的相同, 标题与名称
+    (terms) 去掉首尾空白后不为空; 各语言的意见类型, 段落, 标题与名称的键相同; 同一意见类型, 同一段的占位符
+    (str.format 的字段名) 各语言相同."""
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     languages = get_args(WorkingLanguage)
     if sorted(doc) != sorted(languages):
         raise ValueError(f"{path.name}: 须按 {', '.join(languages)} 各给一份, 现为 {', '.join(doc)}")
     templates = {cast(WorkingLanguage, language): ReportTemplate.model_validate(part) for language, part in doc.items()}
+    for language, template in templates.items():
+        if set(template.headings) != set(template.sections):
+            raise ValueError(f"{path.name} {language}: 有标题的意见类型与有固定段落的须相同")
+        headings = [t for h in template.headings.values() for t in (h.opinion, h.basis_for_opinion)]
+        texts = [*headings, *template.terms.values()]
+        if not all(text.strip() for text in texts):
+            raise ValueError(f"{path.name} {language}: 标题与名称不能为空")
     shapes = {
-        language: ({o: list(t) for o, t in template.sections.items()}, sorted(template.headings))
+        language: (
+            {o: {name: placeholders(text) for name, text in t.items()} for o, t in template.sections.items()},
+            sorted(template.headings),
+            sorted(template.terms),
+        )
         for language, template in templates.items()
     }
     if len({repr(shape) for shape in shapes.values()}) != 1:
-        raise ValueError(f"{path.name}: 各语言的意见类型, 段落与标题须相同: {shapes}")
+        raise ValueError(f"{path.name}: 各语言的意见类型, 段落, 占位符, 标题与名称须相同: {shapes}")
     return templates
+
+
+def placeholders(text: str) -> list[str]:
+    """str.format 模板里的字段名, 去重排序, 如 "{auditor_name}\n..." 得 ["auditor_name"]."""
+    return sorted({field for _, field, _, _ in string.Formatter().parse(text) if field})
 
 
 def is_model(annotation: Any) -> TypeGuard[type[BaseModel]]:

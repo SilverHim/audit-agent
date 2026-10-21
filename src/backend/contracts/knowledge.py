@@ -287,9 +287,11 @@ class ReportHeadings(Model):
 
 class ReportTemplate(Model):
     """templates/report.yaml 中一种工作语言的一份 (需求 R341; 文件按 WorkingLanguage 各一份, 结构相同, 见
-    ProcedureLibrary). RPT-03 的提示词与校验取 headings, 报告正文的日期按 date 写, 拼在模型写的两段之后的固定段落取
-    sections."""
+    ProcedureLibrary). RPT-03 的提示词与校验取 headings, 报告正文的日期按 date 写, 模型写两段时的名称按 terms 写,
+    拼在模型写的两段之后的固定段落取 sections."""
 
     headings: dict[OpinionType, ReportHeadings]  # 意见类型 → 两段的标题
     date: str  # 报告中的日期写法: str.format 的模板, d 为日期, 如 "{d.day} {d:%B %Y}"
+    # 模型写的两段里的名称, 与固定段落的写法相同 (R341 审核 03): 键 → 写法, 如 corporations_act → Corporations Act 2001
+    terms: dict[str, str]
     sections: dict[OpinionType, dict[ReportSection, str]]  # 意见类型 → 固定段落 (每段首行为标题, 签名块除外; 含占位符)

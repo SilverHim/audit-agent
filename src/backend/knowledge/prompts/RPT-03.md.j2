@@ -11,13 +11,19 @@ RPT-03 报告文本生成 → ReportDraft，每个 revision 调用一次；只�
   misstatements  schedule.items 对应的 Misstatement：id、judgment_id、type、account、assertion、amount_cents、direction
   judgments      上述错报所依据的已确认 Judgment（当前结果）：key（引用键，程序:对象，人工判断另加 :H{n}）、id、version、procedure_id、subject_id、conclusion、evidence
   previous       上一 revision 的 {opinion, basis_for_opinion}，首稿为 null
+  previous_language  上一 revision 的语言（起草它的执行记录的 language）与本次不同时为它（zh 或 en），相同或首稿为 null；
+                 不同时要求按工作语言重写全文、保持意思，不再要求措辞不变（R341 审核 01）
   annotations    RPT-01 对上一 revision 的批注：section、quote、comment；首稿为空；过期程序重跑后的重拟（不是退回引起的）也为空
   standards      StandardFragment 列表：id、standard、paragraph、text
   headings       两段首行的标题：opinion、basis_for_opinion（templates/report.yaml 中执行记录语言、该意见类型的，校验同取这里，需求 R341）
   responsibilities_heading  固定段落里审计师责任段的标题，基础段要指向它
   date_example   日期写法的示例（报告语言的写法，如 1 July 2025）
+  terms          名称的写法（templates/report.yaml 的 terms，与固定段落相同）：en（本提示词正文里的英文叫法）、text（报告语言的
+                 写法），en 下两者相同
 输出语言一节（_output_language.md.j2）的 output_language 由 call_llm 按执行记录注入，不在此列。
 #}
+{% from "_output_language.md.j2" import narrative_language, language_name with context %}
+{% macro rewrite() %}The previous text is in {{ language_name(previous_language) }}, not {{ language_name() }}: write both sections in full in {{ language_name() }}, keeping their meaning; do not keep its wording.{% endmacro %}
 {% set period_end = task.params.period_end %}
 {% set qualified = opinion_type == "qualified" %}
 You draft two sections of the independent auditor's report on the financial report of {{ client_name }} for the year ended {{ period_end }}, audited under Australian Auditing Standards and the Corporations Act 2001: the Opinion section and the Basis for Opinion section. The other sections come from a fixed template; do not write them.
@@ -65,9 +71,14 @@ Reviewer annotations to address:
 - [{{ a.section }}]{% if a.quote %} on "{{ a.quote }}"{% endif %}: {{ a.comment }}
 {% endfor %}
 
-Revise the previous text so that every annotation is addressed. Keep all other wording unchanged.
+{% if previous_language %}
+Revise the previous text so that every annotation is addressed. {{ rewrite() }}
 {% else %}
-The previous draft was not rejected: procedures were rerun on updated data and the auditor confirmed the results again at FIN-01. Redraft both sections from the inputs above. Where the inputs support the previous wording, keep it unchanged.
+Revise the previous text so that every annotation is addressed. Keep all other wording unchanged.
+{% endif %}
+{% else %}
+The previous draft was not rejected: procedures were rerun on updated data and the auditor confirmed the results again at FIN-01. Redraft both sections from the inputs above. {% if previous_language %}{{ rewrite() }}{% else %}Where the inputs support the previous wording, keep it unchanged.{% endif %}
+
 {% endif %}
 {% endif %}
 
@@ -97,6 +108,7 @@ The previous draft was not rejected: procedures were rerun on updated data and t
 
 - Every factual statement about a misstatement must come from the misstatements or judgments above. Do not mention materiality amounts, procedures performed, or facts not in the inputs.
 - Amounts in Australian dollars, e.g. "$1,250,000" (drop ".00"; keep cents otherwise). Dates as "{{ date_example }}".
+- Names as in the fixed sections of the report: {% for t in terms %}{% if t.en == t.text %}"{{ t.text }}"{% else %}{{ t.en }} as "{{ t.text }}"{% endif %}{{ "; " if not loop.last }}{% endfor %}.
 - Plain text; paragraphs separated by a blank line; no Markdown.
 
 ## Output (ReportDraft)
@@ -105,5 +117,4 @@ The previous draft was not rejected: procedures were rerun on updated data and t
 - `basis_for_opinion`: the full Basis section, heading first.
 - `judgment_keys`: the key of every judgment above whose facts appear in the text, copied exactly (e.g. `{{ judgments[0].key if judgments else "REV-02:SI-2026-0001" }}`); only keys listed above; empty for an unqualified opinion.
 
-{% from "_output_language.md.j2" import narrative_language with context %}
 {{ narrative_language() }}
