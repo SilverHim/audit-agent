@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { reviewsListExceptionsOptions, reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
 import { reviewsSubmitReviewRecord } from '@/client/sdk.gen'
+import { BusyNote } from '@/components/activity-bar'
 import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
@@ -231,6 +232,7 @@ function ReviewQueue() {
                               {t.queuePage.confirmSelected(batch.size)}
                             </Button>
                           ) : null}
+                          {isBatch ? <BusyNote eid={eid} className="basis-full text-right" /> : null}
                         </div>
                       ) : null}
                     </div>

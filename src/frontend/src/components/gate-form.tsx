@@ -26,6 +26,7 @@ import type {
   RiskLevel,
 } from '@/client/types.gen'
 import { AbnLookupNote } from '@/components/abn-lookup-note'
+import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
@@ -476,6 +477,7 @@ export function GateDecisionCard({
 
   return (
     <DecisionFrame
+      eid={eid}
       title={
         <>
           <Code className="font-semibold">{gate}</Code> · {t.gateQuestions[gate]}
@@ -968,6 +970,7 @@ export function ProfileForm({
             {t.clientPage.cancel}
           </Button>
         ) : null}
+        <BusyNote eid={eid} className="basis-full" />
       </div>
     </section>
   )

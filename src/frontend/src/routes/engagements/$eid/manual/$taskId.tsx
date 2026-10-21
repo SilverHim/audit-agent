@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { manualListManualTasksQueryKey, reviewsSubmitReviewRecordMutation } from '@/client/@tanstack/react-query.gen'
 import type { DocumentRef } from '@/client/types.gen'
+import { BusyNote } from '@/components/activity-bar'
 import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink } from '@/components/evidence-link'
 import { SELECT } from '@/components/import-dialog'
@@ -221,10 +222,11 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
                 onChange={(event) => set({ reason: event.target.value })}
               />
             </div>
-            <div className="flex justify-end">
+            <div className="flex flex-col items-end gap-1">
               <Button type="button" size="lg" disabled={busy} onClick={record}>
                 {t.manualPage.submit}
               </Button>
+              <BusyNote eid={eid} className="text-right" />
             </div>
           </Card>
         </>

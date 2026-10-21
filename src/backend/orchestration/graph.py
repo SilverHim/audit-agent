@@ -45,7 +45,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.state import EngagementState, StatePatch, fill_defaults
 from backend.orchestration import gates
-from backend.orchestration.nodes import NODE_PROCEDURES, WAITING, FieldworkInput, GraphNodes
+from backend.orchestration.nodes import NODE_PROCEDURES, SETTLED, WAITING, FieldworkInput, GraphNodes
 from backend.orchestration.scheduler import p2_procedures, ready_procedures
 from backend.services.features import BASELINE, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary
@@ -66,7 +66,6 @@ P3_NODES = (
     "final_review",
 )
 UNFINISHED = (ProcedureStatus.planned, ProcedureStatus.executing)  # 还要派发执行的程序状态
-SETTLED = (ProcedureStatus.completed, ProcedureStatus.no_data)  # P2 结清: 已完成, 或未执行 (无数据, 需求 R280)
 LATE = NODE_PROCEDURES["p1_ingest"]  # 执行阶段等到数据后经 p1_ingest 补跑的 P2 以外程序 (需求 R272)
 
 

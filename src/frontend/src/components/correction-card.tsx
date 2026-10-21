@@ -56,6 +56,7 @@ export function CorrectionCard({ eid, ids, disabled }: { eid: string; ids: strin
 
   return (
     <DecisionFrame
+      eid={eid}
       title={t.correction.title}
       footer={
         <>

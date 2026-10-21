@@ -116,6 +116,84 @@ export type AccountCategoryIn = {
 };
 
 /**
+ * Activity
+ *
+ * 系统正在做的一件事 (需求 R361): 登记在 services.activities.ActivityBoard, 总览只读它. 前端按 kind 与 actor
+ * 拼文案, 认不出的 kind 显示 description.
+ */
+export type Activity = {
+    /**
+     * Kind
+     */
+    kind: 'demo_import' | 'document_intake' | 'import_batch' | 'table_import' | 'xero_sync' | 'data_edit' | 'procedure';
+    /**
+     * Actor
+     */
+    actor: AgentId | 'system';
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Done
+     */
+    done?: number | null;
+    /**
+     * Total
+     */
+    total?: number | null;
+    /**
+     * Current
+     */
+    current?: string | null;
+    /**
+     * Subject Id
+     */
+    subject_id?: string | null;
+    /**
+     * Started At
+     */
+    started_at: string;
+    /**
+     * Updated At
+     */
+    updated_at: string;
+};
+
+/**
+ * ActivityFailure
+ *
+ * 最近一次失败的数据作业 (需求 R361): 后台作业漏出异常, 智能导入批次识别出错, Xero 同步失败. 只在内存中, 同种
+ * 作业再开始时清除, 进程重启后没有. 程序执行的失败另见执行记录与 failed 任务, 后台推进的异常见 run_error.
+ */
+export type ActivityFailure = {
+    /**
+     * Kind
+     */
+    kind: 'demo_import' | 'document_intake' | 'import_batch' | 'table_import' | 'xero_sync' | 'data_edit' | 'procedure';
+    /**
+     * Actor
+     */
+    actor: AgentId | 'system';
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Subject Id
+     */
+    subject_id?: string | null;
+    /**
+     * Retry
+     */
+    retry?: 'demo_import' | 'import_batch' | 'xero_sync' | null;
+    /**
+     * Failed At
+     */
+    failed_at: string;
+};
+
+/**
  * AdjustmentEntryView
  *
  * 可载入的一笔更正分录 (需求 R163, GET adjustment-entries): DatasetLoader.adjustment_entries 的摘要, 另带是否
@@ -2343,6 +2421,11 @@ export type EngagementOverview = {
     run_languages?: {
         [key: string]: 'zh' | 'en';
     };
+    /**
+     * Activities
+     */
+    activities?: Array<Activity>;
+    last_failure?: ActivityFailure | null;
 };
 
 /**

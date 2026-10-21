@@ -4801,6 +4801,179 @@
         "title": "AccountCategoryIn",
         "description": "审计师修改科目的标准分类."
       },
+      "Activity": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "demo_import",
+              "document_intake",
+              "import_batch",
+              "table_import",
+              "xero_sync",
+              "data_edit",
+              "procedure"
+            ],
+            "title": "Kind"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "string",
+                "const": "system"
+              }
+            ],
+            "title": "Actor"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "done": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Done"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "actor",
+          "description",
+          "started_at",
+          "updated_at"
+        ],
+        "title": "Activity",
+        "description": "系统正在做的一件事 (需求 R361): 登记在 services.activities.ActivityBoard, 总览只读它. 前端按 kind 与 actor\n拼文案, 认不出的 kind 显示 description."
+      },
+      "ActivityFailure": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "demo_import",
+              "document_intake",
+              "import_batch",
+              "table_import",
+              "xero_sync",
+              "data_edit",
+              "procedure"
+            ],
+            "title": "Kind"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentId"
+              },
+              {
+                "type": "string",
+                "const": "system"
+              }
+            ],
+            "title": "Actor"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "retry": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "demo_import",
+                  "import_batch",
+                  "xero_sync"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry"
+          },
+          "failed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Failed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "actor",
+          "reason",
+          "failed_at"
+        ],
+        "title": "ActivityFailure",
+        "description": "最近一次失败的数据作业 (需求 R361): 后台作业漏出异常, 智能导入批次识别出错, Xero 同步失败. 只在内存中, 同种\n作业再开始时清除, 进程重启后没有. 程序执行的失败另见执行记录与 failed 任务, 后台推进的异常见 run_error."
+      },
       "AdjustmentEntryView": {
         "properties": {
           "entry_no": {
@@ -9080,6 +9253,24 @@
             "type": "object",
             "title": "Run Languages",
             "default": {}
+          },
+          "activities": {
+            "items": {
+              "$ref": "#/components/schemas/Activity"
+            },
+            "type": "array",
+            "title": "Activities",
+            "default": []
+          },
+          "last_failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActivityFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

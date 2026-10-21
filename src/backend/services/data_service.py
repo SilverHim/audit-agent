@@ -90,11 +90,13 @@ from backend.contracts.models import (
 from backend.contracts.ports import DataStore, XeroConnections
 from backend.contracts.records import Account, AccountCategory
 from backend.contracts.state import fill_defaults
+from backend.contracts.views import ActivityKind
 from backend.orchestration.gates import current_gate
 from backend.orchestration.nodes import DATA_READY, INPUTS_CHANGED
 from backend.orchestration.runner import GraphRunner, awaiting_data, awaiting_inputs, review_waits
 from backend.orchestration.trail import data_ready_entry, record_transitions
 from backend.services.account_mapping import CATEGORY_GROUPS, with_category
+from backend.services.activities import failure_reason
 from backend.services.data_import import (
     MAX_FAILURES,
     SCHEMAS,
@@ -107,7 +109,7 @@ from backend.services.data_import import (
     sheet_names,
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
-from backend.services.demo_import import DEMO_JOB, NO_DEMO, DemoImport, stage_statuses
+from backend.services.demo_import import DEMO_JOB, NO_DEMO, STAGE_NAMES, DemoImport, stage_statuses
 from backend.services.extraction_edits import (
     apply_confirmation_edit,
     apply_contract_edit,
@@ -357,11 +359,6 @@ BATCH_NOT_READY: dict[str, str] = {"processing": "还在识别", "failed": "识�
 BATCH_DONE: dict[str, str] = {"ready": "已识别完", "committed": "已写入"}
 
 
-def failure_reason(exc: BaseException) -> str:
-    """识别作业出错的原因 (ImportBatch.error): 异常类型与消息, 截断到 300 字."""
-    return f"{type(exc).__name__}: {exc}"[:300]
-
-
 def table_columns(kind: TableKind) -> list[TableColumn]:
     """账表查看的各列: 导入字段 (名称与类型); 科目表另有分类, 依据, 两期余额与是否改过."""
     columns = [TableColumn(name=f.name, type=f.type) for f in SCHEMAS[kind].fields]
@@ -417,9 +414,9 @@ class DataService:
         # 演示数据导入的清单来源 (需求 R269; 组装根为 RoutingDatasetLoader): 按数据集取已核对的补造目录; 为空时都没有
         # 演示资料
         self.demo = demo
-        # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁
+        # 进行中的作业 (导入, 同步, 文件处理): 项目编号 → 作业 → 作业涉及的账表或文件. 单 worker, 同 runner 的项目锁.
+        # 作业的种类, 描述与进度登记在 deps.activities (需求 R361), 键同这里的作业键
         self.jobs: dict[str, dict[object, frozenset[str]]] = {}
-        self.kinds: dict[object, str] = {}  # 作业 → 作业种类 (launch 的 kind, 如 Xero 同步), 没给的不在其中
         self.tasks: set[asyncio.Task[None]] = set()  # launch 起的后台作业; 保留引用, 防止完成前被回收
 
     async def gate_now(self, eid: str) -> GateId | None:
@@ -447,11 +444,12 @@ class DataService:
             raise DataRejected("ENGAGEMENT_LOCKED", eid)
         return engagement
 
-    def _register(self, eid: str, labels: Iterable[str], kind: str | None = None) -> object:
+    def _register(self, eid: str, labels: Iterable[str], kind: ActivityKind, **activity: Any) -> object:
+        """登记一个作业 (持项目锁时): 涉及的账表或文件, 与总览的一项活动 (种类 kind; activity 为 ActivityBoard.start
+        的其余参数, 如描述, 作业对象, 进度). 返回作业键."""
         key = object()
         self.jobs.setdefault(eid, {})[key] = frozenset(labels)
-        if kind is not None:
-            self.kinds[key] = kind
+        self.deps.activities.start(eid, key, kind, **activity)
         return key
 
     def _relabel(self, eid: str, key: object, labels: Iterable[str]) -> None:
@@ -461,14 +459,21 @@ class DataService:
     def _unregister(self, eid: str, key: object) -> None:
         jobs = self.jobs.get(eid, {})
         jobs.pop(key, None)
-        self.kinds.pop(key, None)
+        self.deps.activities.finish(eid, key)
         if not jobs:
             self.jobs.pop(eid, None)
 
-    def running(self, eid: str, kind: str) -> bool:
-        """该项目有没有登记着的 kind 类作业 (launch 时给的种类): 从登记 (取项目锁之后, prepare 之前) 到作业结束注销,
-        期间项目锁被它占着, 再同步或导入报 ENGAGEMENT_BUSY."""
-        return any(self.kinds.get(key) == kind for key in self.jobs.get(eid, {}))
+    def running(self, eid: str, kind: ActivityKind) -> bool:
+        """该项目有没有登记着的 kind 类作业: 从登记 (取项目锁之后, prepare 之前) 到作业结束注销, 期间项目锁被它占着,
+        再同步或导入报 ENGAGEMENT_BUSY."""
+        activities = self.deps.activities
+        return any((a := activities.get(eid, key)) is not None and a.kind == kind for key in self.jobs.get(eid, {}))
+
+    def progress(self, eid: str, **changes: Any) -> None:
+        """推进该项目在做的数据作业的进度 (ActivityBoard.update: done, total, current 等). 持项目锁时调用, 同一时刻
+        只有一个作业; 没有登记的作业时不做什么."""
+        for key in self.jobs.get(eid, {}):
+            self.deps.activities.update(eid, key, **changes)
 
     @asynccontextmanager
     async def locked(self, eid: str) -> AsyncIterator[None]:
@@ -482,14 +487,17 @@ class DataService:
             self.runner.release(eid)
 
     @asynccontextmanager
-    async def holding(self, eid: str, labels: Iterable[str]) -> AsyncIterator[object]:
+    async def holding(
+        self, eid: str, labels: Iterable[str], kind: ActivityKind = "data_edit", **activity: Any
+    ) -> AsyncIterator[object]:
         """在块内做一件数据写操作: 进入时查锁定 (ENGAGEMENT_LOCKED), 取项目锁 (取不到 ENGAGEMENT_BUSY), 把 labels
-        (涉及的账表种类或文件 ID) 登记为进行中的作业, 补写以前没写成的 data 留痕 (backfill_trails); 离开时注销,
+        (涉及的账表种类或文件 ID) 登记为进行中的作业 (kind 与 activity 为总览的活动, 见 _register), 补写以前没写成的
+        data 留痕 (backfill_trails); 离开时注销,
         成功时锁交给 continue_waiting (图在等程序要的数据就交给后台恢复, 否则释放), 出错时释放. 数据提交在注销之前,
         概览据此判断. 块内得到作业的登记键, 取锁后才知道涉及什么的 (如确认导入) 用 _relabel 改登记."""
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, labels)
+        key = self._register(eid, labels, kind, **activity)
         try:
             await self.backfill_trails(eid)
             yield key
@@ -528,18 +536,20 @@ class DataService:
         labels: Iterable[str],
         job: Callable[[], Awaitable[None]],
         prepare: Callable[[], Awaitable[None]] | None = None,
-        kind: str | None = None,
+        kind: ActivityKind = "data_edit",
         failed: Callable[[BaseException], Awaitable[None]] | None = None,
+        **activity: Any,
     ) -> None:
         """在后台做一件数据写操作 (如 Xero 同步, 文件处理): 在调用方这里查锁定, 取项目锁并登记作业 (不过立即抛出,
         同 holding), 再执行 prepare (有时; 起作业前要当场报错的检查, 如 Xero 连接是否可用), 它抛错时注销, 释放锁并
         上抛; 后台补写缺的留痕后执行 job; job 结束 (成败) 时注销, 锁交给 continue_waiting (见 _spawn). job 自己处理
-        业务失败 (如把文件置 needs_manual); 漏出的异常只记日志. kind: 作业种类, 登记期间 running(eid, kind) 为真.
-        failed: 补写留痕或 job 出错时以异常调用 (如记一条失败留痕, 仍在锁内), 之后异常照常交 _spawn 记日志."""
+        业务失败 (如把文件置 needs_manual); 漏出的异常记日志与总览的最近一次失败 (见 _spawn). kind: 作业种类, 登记期间
+        running(eid, kind) 为真; activity 为总览活动的其余参数 (见 _register). failed: 补写留痕或 job 出错时以异常调用
+        (如记一条失败留痕, 仍在锁内), 之后异常照常交 _spawn."""
         names = frozenset(labels)
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, names, kind)
+        key = self._register(eid, names, kind, **activity)
         if prepare is not None:
             try:
                 await prepare()
@@ -566,7 +576,8 @@ class DataService:
         job: Callable[[], Awaitable[None]],
         then: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
-        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 漏出的异常只记日志. 作业结束 (成败) 后注销, 锁交给
+        """在后台执行已登记的作业 (调用方已持项目锁并登记 key); 漏出的异常记日志, 并记为总览的最近一次失败 (种类,
+        执行者与作业对象取这个作业的活动, 需求 R361). 作业结束 (成败) 后注销, 锁交给
         then (缺省 continue_waiting: 图在等程序要的数据就交给后台恢复, 否则释放), 由它交出或释放, 完成回调不再释放;
         作业没跑完就被取消 (含还没开始) 时由任务的完成回调注销并释放锁, 只做一次. then 须保证锁交出或释放 (含取消)."""
         done = False
@@ -584,8 +595,13 @@ class DataService:
             nonlocal handed
             try:
                 await job()
-            except Exception:
+            except Exception as error:
                 logger.exception("数据作业失败: %s %s", eid, sorted(self.jobs.get(eid, {}).get(key, ())))
+                activity = self.deps.activities.get(eid, key)
+                if activity is not None:
+                    reason = failure_reason(error)
+                    actor, subject = activity.actor, activity.subject_id
+                    self.deps.activities.fail(eid, activity.kind, reason, actor=actor, subject_id=subject)
             self._unregister(eid, key)
             handed = True  # 从这里到 then 内部第一次等待之间不会被取消打断
             await (then or self.continue_waiting)(eid)
@@ -801,8 +817,9 @@ class DataService:
         有解析失败 IMPORT_PARSE_ERROR (detail.errors 为前 20 处 {row, column, value}). 科目表按名称归类,
         记 category_basis (services.account_mapping).
         """
-        async with self.holding(eid, {body.kind.value}):  # 进入时补写以前没写成的 data 留痕
+        async with self.holding(eid, {body.kind.value}, "table_import"):  # 进入时补写以前没写成的 data 留痕
             session, raw = await self._session(eid, import_id)
+            self.progress(eid, current=session.file_name)
             if session.status == "committed":
                 # 同一提交的重试 (如上次写入后留痕失败而报错): 不再写, 返回上次的结果; 选择不同则拒绝
                 chosen = (session.kind, session.sheet, session.date_format, session.mapping)
@@ -874,7 +891,7 @@ class DataService:
             )
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, ())
+        key = self._register(eid, (), "import_batch")
         try:
             await self.backfill_trails(eid)
             batch_files: list[BatchFile] = []
@@ -911,6 +928,7 @@ class DataService:
             )
             await self.deps.data.save_batch(eid, batch)
             self.jobs[eid][key] = frozenset(f.document_id for f in batch_files)
+            self.deps.activities.update(eid, key, subject_id=batch.id)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
@@ -934,9 +952,11 @@ class DataService:
             intake = BatchIntake(self.deps)
             ctx = await intake.context(eid, engagement)
             requested = await self._requested(eid, batch.request_id)
+            total = len(batch.files)
             for index, file in enumerate(batch.files):
                 if file.done:
                     continue
+                self.progress(eid, done=sum(f.done for f in batch.files), total=total, current=file.name)
                 previous = [i for i in batch.items if i.document_id == file.document_id]
                 items = [i for i in batch.items if i.document_id != file.document_id]
                 after = max((item_number(i.id) for i in items), default=0) + 1
@@ -952,11 +972,13 @@ class DataService:
                 merged = sorted([*items, *carried(previous, new)], key=lambda i: item_number(i.id))
                 batch = batch.model_copy(update={"items": merged, "files": files})
                 await self.deps.data.save_batch(eid, batch)
+            self.progress(eid, done=total, total=total, current=None)
             batch = batch.model_copy(update={"status": "ready", "items": finalize(batch.items)})
             await self.deps.data.save_batch(eid, batch)
         except Exception as exc:
             logger.exception("识别批次出错: %s %s", eid, batch_id)
             failed = batch.model_copy(update={"status": "failed", "error": failure_reason(exc)})
+            self.deps.activities.fail(eid, "import_batch", failed.error or "", subject_id=batch_id)
             await self.deps.data.save_batch(eid, failed)
 
     async def retry_batch(self, eid: str, batch_id: str) -> ImportBatch:
@@ -966,7 +988,7 @@ class DataService:
         INVALID_VALUE."""
         await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, ())
+        key = self._register(eid, (), "import_batch", subject_id=batch_id)
         try:
             batch = await self.batch(eid, batch_id)
             if batch.status not in ("failed", "processing"):
@@ -1008,7 +1030,7 @@ class DataService:
         字段不适用于该项 INVALID_VALUE."""
         engagement = await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, ())
+        key = self._register(eid, (), "data_edit", subject_id=batch_id)
         try:
             batch = await self.batch(eid, batch_id)
             if batch.status != "ready":
@@ -1033,6 +1055,7 @@ class DataService:
             raise
         if restage:
             self._relabel(eid, key, {item.document_id})
+            self.deps.activities.start(eid, key, "import_batch", subject_id=batch_id)  # 改调整为重新识别
             self._spawn(eid, key, lambda: self.process_batch(eid, batch_id))
         else:
             self._unregister(eid, key)
@@ -1087,7 +1110,8 @@ class DataService:
         409 (识别中的批次由识别作业持锁, 确认得到 409); 批次不存在 404; 不在待确认 (进程退出后遗留的识别中, 识别出错)
         INVALID_VALUE; 勾选了不是账表的项, 同一张表勾了两项 INVALID_VALUE; 勾选的文件没有类型 MISSING_FIELD; 方案套
         不上 INVALID_VALUE 或 MISSING_FIELD; 解析失败 IMPORT_PARSE_ERROR (detail.errors 为前 20 处)."""
-        async with self.holding(eid, ()) as key:  # 进入时补写以前没写成的 data 留痕
+        activity = {"description": "写入智能导入的确认单", "subject_id": batch_id}
+        async with self.holding(eid, (), "table_import", **activity) as key:  # 进入时补写以前没写成的 data 留痕
             batch = await self.batch(eid, batch_id)
             if batch.status == "committed":
                 await self.checkup_if_stale(eid)  # 上次提交后的体检失败或没做时补做
@@ -1393,7 +1417,9 @@ class DataService:
         async def failed(error: BaseException) -> None:  # 记一条 failed 的留痕, 页面据此提示再导入一次
             await importer.record_failure(eid, chosen, actor, error)
 
-        await self.launch(eid, importer.labels(chosen), job, kind=DEMO_JOB, failed=failed)
+        description = f"载入演示资料 ({STAGE_NAMES[chosen]})"
+        labels = importer.labels(chosen)
+        await self.launch(eid, labels, job, kind=DEMO_JOB, failed=failed, description=description, subject_id=chosen)
         return importer.started(chosen)
 
     async def _demo_plan(self, engagement: Engagement) -> DemoPlan:
@@ -1426,7 +1452,7 @@ class DataService:
             raise DataRejected("INVALID_VALUE", f"只支持 PDF, Word, Excel, PNG, JPG 文件: {', '.join(unsupported)}")
         engagement = await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, ())
+        key = self._register(eid, (), "document_intake")
         try:
             await self.backfill_trails(eid)
             saved = await self.register_uploads(eid, names, [data for _, data in files], actor, request_id)
@@ -1511,8 +1537,11 @@ class DataService:
         RuntimeError."""
         self.require_lock(eid, "处理文件")
         intake = DocumentIntake(self.deps)
-        for document in documents:
+        total = len(documents)
+        for done, document in enumerate(documents):
+            self.progress(eid, done=done, total=total, current=document.file_name)
             await intake.resume(eid, document, engagement, jobs.get(document.id), requested.get(document.id))
+        self.progress(eid, done=total, total=total, current=None)
 
     def _resumed(
         self, eid: str, intake: Callable[[], Awaitable[None]] | None, batch_ids: Sequence[str]
@@ -1617,7 +1646,7 @@ class DataService:
                         self.runner.release(eid)
                     continue
                 labels = {d.id for d in documents} | {f.document_id for b in batches for f in b.files}
-                key = self._register(eid, labels)
+                key = self._register(eid, labels, "document_intake" if documents else "import_batch")
                 try:
                     await record_transitions(self.deps.trail, [upload_entry(eid, d) for d in documents])
                     jobs, requested = await self._resume_info(eid, documents)
@@ -1650,7 +1679,7 @@ class DataService:
             raise DataRejected("INVALID_VALUE", f"文件 {document.file_name} 没有导入, 需要时重新上传")
         engagement = await self._check_unlocked(eid)
         self.runner.acquire(eid)
-        key = self._register(eid, {document_id})
+        key = self._register(eid, {document_id}, "document_intake", done=0, total=1, current=document.file_name)
         intake = DocumentIntake(self.deps)
         try:
             await self.backfill_trails(eid)

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { Pencil } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
+import { BusyNote } from '@/components/activity-bar'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { EvidenceLink } from '@/components/evidence-link'
 import { ProfileForm, useGate } from '@/components/gate-form'
@@ -51,6 +52,8 @@ function Client() {
               <Pencil className="size-4" aria-hidden="true" />
               {t.clientPage.edit}
             </Button>
+          ) : view?.editable && !editing ? (
+            <BusyNote eid={eid} className="max-w-[360px] text-right" />
           ) : null
         }
       />

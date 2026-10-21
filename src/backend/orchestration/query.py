@@ -1,7 +1,7 @@
 """StateQuery (A 负责): 项目总览, 闸门材料与审计计划, 供前端读取.
 
 图的位置 (停在哪道闸门, 是否等复核) 与审计计划读检查点; 程序状态与复核任务读 AuditOutputStore; 是否在执行读 runner;
-正在运行的程序读 run 留痕 (需求 R325).
+系统正在做的事 (数据作业与程序执行, 含正在运行的程序) 读 deps.activities (需求 R325, R361).
 """
 
 from collections import Counter
@@ -24,7 +24,6 @@ from backend.contracts.models import (
     ReviewTask,
     RiskLevel,
     TaskStatus,
-    TrailKind,
 )
 from backend.contracts.state import EngagementState, fill_defaults
 from backend.contracts.views import (
@@ -36,7 +35,7 @@ from backend.contracts.views import (
     ProcedureSummary,
 )
 from backend.orchestration.gates import current_gate, current_plan, current_spec
-from backend.orchestration.graph import SETTLED
+from backend.orchestration.nodes import SETTLED
 from backend.orchestration.runner import (
     GraphRunner,
     at_rerun_point,
@@ -48,7 +47,6 @@ from backend.orchestration.runner import (
 from backend.services.data_quality import missing_tables
 from backend.services.features import frozen_features
 from backend.services.staleness import rerunnable, stale_procedures, superseded_runs
-from backend.services.trail_pages import all_of_kind
 
 PHASE_ORDER: list[Phase] = list(Phase)  # 阶段的定义顺序 P0 ... P4, 总览按此排列程序
 
@@ -154,11 +152,13 @@ class GraphStateQuery:
         correction = correction_wait(snapshot)
         running = self.runner.is_running(eid)
         current = [p for p in procedures if p.phase is engagement.phase]
+        activities = self.deps.activities.activities(eid)
         progress = PhaseProgress(
             phase=engagement.phase,
             done=sum(1 for p in current if p.status in SETTLED),
             total=len(current),
-            running=await self.running_procedures(eid) if running else [],
+            # 程序执行的活动 (开始了而还没写结束留痕的执行, 后台推进结束时清掉) 所属的程序, 按开始的先后, 去重
+            running=list(dict.fromkeys(a.current for a in activities if a.kind == "procedure" and a.current)),
         )
         return EngagementOverview(
             engagement=engagement,
@@ -184,20 +184,8 @@ class GraphStateQuery:
             opinion_route=values["opinion_route"],
             features=sorted(frozen_features(engagement.version_snapshot, self.deps.features)),
             run_languages={run.id: run.language for run in runs if run.language != engagement.working_language},
-        )
-
-    async def running_procedures(self, eid: str) -> list[str]:
-        """run 留痕中有开始 (started) 而没有结束 (finished) 的执行所属的程序, 按开始的先后, 去重. 开始与结束按执行 ID
-        配对 (与写入先后无关): 程序重跑是新的执行, 上一次的结束不抵这一次的开始. 只读本项目的 run 留痕
-        (trail_pages.all_of_kind)."""
-        entries = await all_of_kind(self.deps.trail, eid, TrailKind.run)
-        ended = {e.run_id for e in entries if e.payload.get("action") == "finished"}
-        return list(
-            dict.fromkeys(
-                e.procedure_id
-                for e in entries
-                if e.payload.get("action") == "started" and e.run_id not in ended and e.procedure_id is not None
-            )
+            activities=activities,
+            last_failure=self.deps.activities.last_failure(eid),
         )
 
     async def _resume_hint(self, eid: str) -> str | None:
