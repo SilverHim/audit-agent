@@ -144,13 +144,6 @@ class ManualSpec(Model):
     subject: str = "RESULT"  # manual 任务的 subject_id
 
 
-class Bilingual(Model):
-    """一段固定文字的中文与英文 (底稿配置的名称与说明, 需求 R329)."""
-
-    zh: str
-    en: str
-
-
 class WorkpaperRef(Model):
     """程序的底稿 (需求 R329): 索引号与所属区, 写在程序 YAML 的 workpaper 一行. 规则见 workpapers.yaml 与
     procedure_library.workpaper_problems."""
@@ -233,7 +226,7 @@ class WorkpaperArea(Model):
     """底稿的区 (需求 R329)."""
 
     id: str  # 区字母, 如 A
-    name: Bilingual
+    name: LocalizedText
     # 程序底稿索引号的序号写法: digits 为 {区}-1 起, letters 为 {区}-A 起 (错报区 X: X-数字留给错报汇总表中的错报编号).
     # 区字母本身 (如 X) 也可作索引号, 与系统底稿不重复即可
     numbering: Literal["digits", "letters"] = "digits"
@@ -243,7 +236,7 @@ class SystemWorkpaper(Model):
     """系统生成, 不对应程序的底稿 (00 索引, 导引表 C, D, S 准则对照)."""
 
     ref: str  # 索引号
-    name: Bilingual
+    name: LocalizedText
     area: str | None = None  # 导引表属其区 (索引号即区字母); 索引与准则对照不属任何区
     categories: list[AccountCategory] = []  # 导引表取试算表中这些标准分类的科目 (Q29); 其余为空
 
@@ -253,7 +246,7 @@ class RequiredItem(Model):
     (ProcedureLibrary.required_items)."""
 
     id: str  # 代号, 如 preparer
-    name: Bilingual
+    name: LocalizedText
     standard: str  # 出处的准则, 如 ASA 230
     paragraph: str  # 出处的段号 (现行), 如 9(b)
     supplementable: bool  # 缺了时能否由审计师的补充说明补齐 (需求 R330): 理由, 考虑因素与结论可以; 编制, 复核与事实不行
@@ -266,11 +259,11 @@ class StandardRequirement(Model):
 
     standard: str  # 准则, 如 ASA 240
     paragraphs: str  # 现行段号, 如 45-48
-    content: Bilingual  # 要求记录的内容
+    content: LocalizedText  # 要求记录的内容
     refs: list[str] = []  # 对应的底稿 (索引号)
     areas: list[str] = []  # 另对应这些区的全部底稿 (程序底稿与导引表, ProcedureLibrary.standard_refs)
-    note: Bilingual | None = None  # 说明 (如 ASA 330 第 30 段由导引表与试算表的勾稽支持)
-    not_applicable: Bilingual | None = None  # 不适用的条件 (如 ASA 600: 单一主体)
+    note: LocalizedText | None = None  # 说明 (如 ASA 330 第 30 段由导引表与试算表的勾稽支持)
+    not_applicable: LocalizedText | None = None  # 不适用的条件 (如 ASA 600: 单一主体)
 
 
 class WorkpaperConfig(Model):
@@ -279,5 +272,5 @@ class WorkpaperConfig(Model):
     areas: list[WorkpaperArea]  # 区, 按档案中的顺序
     system: list[SystemWorkpaper]  # 不对应程序的系统底稿
     required: list[RequiredItem]  # 必填项
-    standards_note: Bilingual  # 准则对照的说明一行
+    standards_note: LocalizedText  # 准则对照的说明一行
     standards: list[StandardRequirement]  # 准则对照, 按准则编号

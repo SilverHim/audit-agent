@@ -3527,6 +3527,22 @@ def drop_area(area: str) -> Any:
     return edit
 
 
+def test_workpaper_order_follows_config(tmp_path: Path) -> None:
+    """ProcedureLibrary.workpaper_order (审核 R329-06): 区内数字序号按数值 (G-2 在 G-10 之前), 字母序号先比长度再比
+    字母 (X-Z 在 X-AA 之前), 区字母本身在该区序号之前; 不属区的系统底稿按配置 system 列表的顺序, 列在第一份属区的
+    系统底稿之前的排在全部区之前, 之后的排在全部区之后 (不写死 00): 把 S 挪到列表最前, 00 挪到最后, 档案顺序随之."""
+    library = knowledge_library(ROOT)
+    assert sorted(["G-10", "G-2", "G", "G-1"], key=library.workpaper_order) == ["G", "G-1", "G-2", "G-10"]
+    assert sorted(["X-AA", "X-B", "X-Z", "X", "X-A"], key=library.workpaper_order) == ["X", "X-A", "X-B", "X-Z", "X-AA"]
+
+    def swap(data: dict[str, Any]) -> None:
+        index, *leads, criteria = data["system"]
+        data["system"] = [criteria, *leads, index]
+
+    refs = ProcedureLibrary(edited_knowledge(tmp_path, config=swap)).workpaper_refs()
+    assert (refs[0], refs[-1]) == ("S", "00")
+
+
 @pytest.mark.parametrize(
     ("procedure", "config", "message"),
     [
@@ -3536,8 +3552,16 @@ def drop_area(area: str) -> Any:
         ({"REV-08": "workpaper: {ref: C-9, area: D}"}, None, "REV-08: 索引号 C-9 应为 D 或 D-序号"),  # 不以区字母开头
         ({"REV-08": "workpaper: {ref: D-0, area: D}"}, None, "REV-08: 索引号 D-0 应为 D 或 D-序号"),
         # 错报区按配置为字母序号: X-数字留给错报编号; 功能未启用 (misstatement) 的 FIN-03 照样校验
-        ({"FIN-03": "workpaper: {ref: X-1, area: X}"}, None, "FIN-03: 索引号 X-1 应为 X 或 X-序号 (错报区的序号为A 起"),
-        ({"REV-08": "workpaper: {ref: D-A, area: D}"}, None, "REV-08: 索引号 D-A 应为 D 或 D-序号 (收入区的序号为1 起"),
+        (
+            {"FIN-03": "workpaper: {ref: X-1, area: X}"},
+            None,
+            "FIN-03: 索引号 X-1 应为 X 或 X-序号 (错报区的序号为 A 起",
+        ),
+        (
+            {"REV-08": "workpaper: {ref: D-A, area: D}"},
+            None,
+            "REV-08: 索引号 D-A 应为 D 或 D-序号 (收入区的序号为 1 起",
+        ),
         (None, drop_area("G"), "GEN-05: 区 G 不在底稿配置的 areas 中"),
         (None, lambda d: d["required"][-1]["refs"].append("A-9"), "必填项 plan_changes: 索引号 A-9 不存在"),
         (None, lambda d: d["standards"][0]["refs"].append("B-9"), "准则对照 ASA 210: 索引号 B-9 不存在"),
@@ -3545,6 +3569,9 @@ def drop_area(area: str) -> Any:
         (None, lambda d: d["areas"].append(d["areas"][0]), "区 A 重复"),
         (None, lambda d: d["required"].append(d["required"][0]), "必填项代号 preparer 重复"),
         (None, lambda d: d["system"][1].pop("area"), "系统底稿 C: 导引表 (有 categories) 须属一个区"),
+        # 不属区的系统底稿 (S 准则对照, 00 索引) 的索引号不能是区的写法 (审核 R329-08)
+        (None, lambda d: d["system"][3].update(ref="B"), "系统底稿 B: 不属任何区, 索引号却是 B 区的写法 (B 或 B-序号)"),
+        (None, lambda d: d["system"][0].update(ref="A-9"), "系统底稿 A-9: 不属任何区, 索引号却是 A 区的写法"),
     ],
     ids=[
         "duplicate",
@@ -3561,6 +3588,8 @@ def drop_area(area: str) -> Any:
         "area_repeated",
         "item_repeated",
         "lead_without_area",
+        "system_area_letter",
+        "system_area_number",
     ],
 )
 def test_workpaper_problems_rejected_on_load(
@@ -3651,27 +3680,61 @@ STANDARD_PARAGRAPHS = [  # 准则对照: 准则与现行段号 (需求 R329 依�
 ]
 
 
+# 准则对照各行对应的底稿 (验收 4, ProcedureLibrary.standard_refs, 按档案顺序): refs 加 areas 中各区的全部底稿; ASA 330
+# 第 28-30 段为 A-1 (第 28(a) 段的总体应对记在总体审计策略) 与现金, 收入, 一般三区的程序底稿及导引表 C, D; 空的为
+# 本版没有对应底稿 (ASA 250, 260, 540, 720 待相应程序, ASA 600, 610 不适用)
+STANDARD_REFS = {
+    "ASA 210": ["B-1", "B-2", "B-3"],
+    "ASA 220": ["B-1", "B-3", "Z-1"],
+    "ASA 240": ["A-3", "D-3", "G-1", "G-2"],
+    "ASA 250": [],
+    "ASA 260": [],
+    "ASA 300": ["A-1"],
+    "ASA 315": ["A-3", "A-4"],
+    "ASA 320": ["A-2"],
+    "ASA 330": [
+        "A-1",
+        "C",
+        "C-1",
+        "C-2",
+        "C-3",
+        "C-4",
+        "D",
+        "D-1",
+        "D-2",
+        "D-3",
+        "D-4",
+        "G-1",
+        "G-2",
+        "G-3",
+        "G-4",
+        "G-5",
+    ],
+    "ASA 450": ["X", "X-A", "X-B", "X-C", "Z-1"],
+    "ASA 540": [],
+    "ASA 550": ["G-3", "G-4"],
+    "ASA 600": [],
+    "ASA 610": [],
+    "ASA 720": [],
+}
+
+
 def test_standards_cross_reference() -> None:
     """验收 4: 准则对照 15 条, 准则与段号同依据一行 (现行段号); 每条有要求记录的内容 (zh, en); 说明一行写明附录 1 中
-    ASA 240, 250, 260 为修订前编号. ASA 330 第 28-30 段对应现金, 收入, 一般三区的程序底稿与导引表 C, D, 说明第 30 段
-    由导引表与试算表的勾稽支持 (报表以账套为准, Issue #46); ASA 600, 610 标不适用的条件 (单一主体, 没有内部审计);
-    对应的索引号都是现有底稿."""
+    ASA 240, 250, 260 为修订前编号. 各行对应的底稿见 STANDARD_REFS, 都是现有底稿. ASA 330 的说明写明第 28(a) 段记在
+    A-1, 第 29 段不适用 (本版不依赖以前审计测试过的控制), 第 30 段由导引表 C, D 与试算表的勾稽支持 (报表以账套为准,
+    Issue #46); 标了不适用条件的为 ASA 600, 610 (单一主体, 没有内部审计)."""
     library = knowledge_library(ROOT)
     config = library.workpapers
     assert [(s.standard, s.paragraphs) for s in config.standards] == STANDARD_PARAGRAPHS
     assert all(s.content.zh and s.content.en for s in config.standards)
     assert "ASA 240, 250, 260 的段号为修订前编号 (分别为 44-47, 29, 23)" in config.standards_note.zh
-    rows = {s.standard: s for s in config.standards}
-    asa330 = library.standard_refs(rows["ASA 330"])
+    assert {s.standard: library.standard_refs(s) for s in config.standards} == STANDARD_REFS
     programs = sorted(w for w in WORKPAPERS.values() if w[0] in "CDG")
-    assert {"C", "D"} <= set(asa330) and set(asa330) == {"C", "D", *programs}
+    assert set(STANDARD_REFS["ASA 330"]) == {"A-1", "C", "D", *programs}
+    rows = {s.standard: s for s in config.standards}
     note = rows["ASA 330"].note
-    assert note is not None and "第 30 段" in note.zh and "Issue #46" in note.zh and "C, D" in note.zh
+    assert note is not None and all(part in note.zh for part in ("28(a)", "A-1", "第 29 段", "第 30 段", "Issue #46"))
     assert {k for k, s in rows.items() if s.not_applicable is not None} == {"ASA 600", "ASA 610"}
-    assert [rows[k].not_applicable.zh for k in ("ASA 600", "ASA 610")] == [
-        "单一主体, 不是集团审计",
-        "被审计单位没有内部审计",
-    ]  # type: ignore[union-attr]
-    assert library.standard_refs(rows["ASA 320"]) == ["A-2"] and library.standard_refs(rows["ASA 450"])[0] == "X"
     known = set(library.workpaper_refs())
-    assert all(set(library.standard_refs(s)) <= known for s in config.standards)
+    assert all(set(refs) <= known for refs in STANDARD_REFS.values())

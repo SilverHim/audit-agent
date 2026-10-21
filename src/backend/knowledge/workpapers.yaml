@@ -17,6 +17,8 @@ areas:
 
 # 系统生成, 不对应程序的底稿. 导引表 (有 categories 的) 取试算表中这些标准分类的科目; 只给有审计程序的现金, 收入
 # 两区各一张 (Q29), 其余报表项目列在索引的 "本期未执行专门程序的报表项目" 一节
+# 不属区的 (索引 00, 准则对照 S) 在档案中按这里的顺序: 列在第一份属区的之前的排在全部区之前, 之后的排在全部区之后
+# (ProcedureLibrary.workpaper_order); 其索引号不能是区的写法
 system:
   - {ref: "00", name: {zh: 审计档案索引, en: Audit file index}}
   - {ref: C, area: C, name: {zh: 现金导引表, en: Cash lead schedule}, categories: [cash]}
@@ -213,10 +215,11 @@ standards:
     content:
       zh: "总体应对, 进一步程序的性质时间范围, 与认定层次风险的对应, 结果与结论; 财务报表与会计记录一致"
       en: "Overall responses, nature, timing and extent of further procedures, linkage to assertion-level risks, results and conclusions; agreement of the financial report with the accounting records"
+    refs: [A-1]
     areas: [C, D, G]
     note:
-      zh: "第 30 段 (报表与会计记录一致) 按 \"报表以账套为准\" (Issue #46), 由导引表 C, D 与试算表的勾稽说明"
-      en: "Paragraph 30 (agreement with the accounting records) is supported by reconciling lead schedules C and D to the trial balance, the financial report being prepared from the ledger (Issue #46)"
+      zh: "第 28(a) 段的总体应对记在总体审计策略 (A-1); 第 29 段不适用: 本版不依赖以前审计测试过的控制; 第 30 段 (报表与会计记录一致) 按 \"报表以账套为准\" (Issue #46), 由导引表 C, D 与试算表的勾稽说明"
+      en: "The overall responses under paragraph 28(a) are recorded in the overall audit strategy (A-1); paragraph 29 does not apply as this version does not rely on controls tested in a previous audit; paragraph 30 (agreement with the accounting records) is supported by reconciling lead schedules C and D to the trial balance, the financial report being prepared from the ledger (Issue #46)"
   - standard: ASA 450
     paragraphs: "15"
     content:

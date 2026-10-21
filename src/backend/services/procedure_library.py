@@ -374,18 +374,29 @@ class ProcedureLibrary:
         return [AuditObjective.model_validate(o) for o in objectives], [RiskItem.model_validate(r) for r in risks]
 
     def workpaper_refs(self) -> list[str]:
-        """全部底稿的索引号: 各程序 (含未启用的) 的与系统底稿的, 按档案顺序 (区的顺序, 区内按序号; 不属任何区的
-        索引与准则对照分在最前与最后, 同示例的 00 与 S)."""
+        """全部底稿的索引号: 各程序 (含未启用的) 的与系统底稿的, 按档案顺序 (workpaper_order)."""
         refs = [t.workpaper.ref for t in self._all.values() if t.workpaper is not None]
         return sorted([*refs, *(w.ref for w in self.workpapers.system)], key=self.workpaper_order)
 
-    def workpaper_order(self, ref: str) -> tuple[int, int, str]:
-        """索引号的档案顺序键: (区的位置, 区字母本身在前, 序号按数值或字母), 不属任何区的 00 在最前, 其余在最后."""
-        areas = [a.id for a in self.workpapers.areas]
-        area, _, suffix = ref.partition("-")
-        if area not in areas:
-            return (-1 if ref == "00" else len(areas), 0, ref)
-        return (areas.index(area), 1 if suffix else 0, suffix.rjust(8, "0") if suffix.isdigit() else suffix)
+    def workpaper_order(self, ref: str) -> tuple[int, int, int, str]:
+        """索引号的档案顺序键 (R330, R334 的底稿与档案按它排): 属区的按区的顺序, 区字母本身 (导引表, 错报汇总) 在前,
+        序号按该区的写法比较 (数字按数值, 字母先比长度再比字母, 即 A..Z, AA..). 不属任何区的系统底稿按配置 system
+        列表的顺序: 列在第一份属区的系统底稿之前的排在全部区之前 (如索引 00), 之后的排在全部区之后 (如准则对照 S).
+        不在配置里的索引号排在最后."""
+        areas = {a.id: (i, a) for i, a in enumerate(self.workpapers.areas)}
+        system = self.workpapers.system
+        position = next((i for i, w in enumerate(system) if w.ref == ref and w.area is None), None)
+        if position is not None:
+            first = next((i for i, w in enumerate(system) if w.area is not None), len(system))
+            return (-1 if position < first else len(areas), 0, position, ref)
+        area_id, _, suffix = ref.partition("-")
+        if area_id not in areas:
+            return (len(areas) + 1, 0, 0, ref)
+        index, area = areas[area_id]
+        if not suffix:
+            return (index, 0, 0, "")
+        number = int(suffix) if area.numbering == "digits" and suffix.isdigit() else len(suffix)
+        return (index, 1, number, suffix)
 
     def required_items(self, ref: str) -> list[RequiredItem]:
         """该索引号的底稿必须记录的内容 (底稿配置的 required, 按配置顺序): 不限范围的 (全部底稿), kinds 含该程序的
@@ -526,7 +537,8 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
     """底稿索引号与底稿配置的问题 (需求 R329; 含未启用的模板, 消息含程序编号或索引号): 区, 必填项代号与准则对照的
     准则各不重复; 程序 workpaper 与导引表的区须在 areas 中, 索引号为区字母本身或 {区}-{序号}, 序号按该区的
     numbering (错报区 X 为 letters: X-A 起, X-数字留给错报汇总表中的错报编号); 有 categories 的系统底稿 (导引表)
-    须属一个区; 程序与系统底稿的索引号不重复; 必填项与准则对照所引的索引号与区都在."""
+    须属一个区; 不属区的系统底稿 (索引, 准则对照) 的索引号不能是区的写法 (区字母本身或 {区}-序号); 程序与系统底稿的
+    索引号不重复; 必填项与准则对照所引的索引号与区都在."""
     templates = list(templates)
     areas = {a.id: a for a in config.areas}
     problems: list[str] = []
@@ -542,8 +554,16 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
         if area is None:
             return f"{owner}: 区 {area_id} 不在底稿配置的 areas 中"
         pattern, hint = WORKPAPER_NUMBERING[area.numbering]
-        if re.fullmatch(rf"{re.escape(area_id)}(-{pattern})?", ref) is None:
-            return f"{owner}: 索引号 {ref} 应为 {area_id} 或 {area_id}-序号 ({area.name.zh}区的序号为{hint})"
+        if re.fullmatch(rf"{re.escape(area_id)}(?:-(?:{pattern}))?", ref) is None:
+            return f"{owner}: 索引号 {ref} 应为 {area_id} 或 {area_id}-序号 ({area.name.zh}区的序号为 {hint})"
+        return None
+
+    def area_like(ref: str) -> str | None:
+        """索引号形如某区的底稿 (区字母本身或 {区}-序号) 时为该区, 否则为 None."""
+        for area_id, area in areas.items():
+            pattern, _ = WORKPAPER_NUMBERING[area.numbering]
+            if re.fullmatch(rf"{re.escape(area_id)}(?:-(?:{pattern}))?", ref) is not None:
+                return area_id
         return None
 
     owners: dict[str, list[str]] = {}  # 索引号 → 用它的底稿 (程序编号, 或 "系统底稿")
@@ -557,6 +577,8 @@ def workpaper_problems(templates: Iterable[ProcedureTemplate], config: Workpaper
             problems += [p for p in [index_problem(owner, w.ref, w.area)] if p is not None]
         elif w.categories:
             problems.append(f"{owner}: 导引表 (有 categories) 须属一个区")
+        elif (like := area_like(w.ref)) is not None:
+            problems.append(f"{owner}: 不属任何区, 索引号却是 {like} 区的写法 ({like} 或 {like}-序号)")
         owners.setdefault(w.ref, []).append("系统底稿")
     problems += [f"索引号 {ref} 重复: {', '.join(who)}" for ref, who in owners.items() if len(who) > 1]
     for r in config.required:
