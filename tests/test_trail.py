@@ -9,6 +9,7 @@ import pytest
 from langgraph.types import Command
 
 from backend.agents.base import RunContext
+from backend.contracts.knowledge import LocalizedText
 from backend.contracts.models import (
     AgentId,
     AuditException,
@@ -529,26 +530,44 @@ async def test_attempt_replay_after_rerun_writes_each_key_once() -> None:
     ]
 
 
-async def test_backfilled_start_takes_the_run_in_store() -> None:
-    """验收 3 (审核 R325-05): 开始留痕没写成而执行在 Store 中已是终态 (如升级前跑过的执行) 时, 重放按 Store 中的那次
-    补写: 期间程序库改了参数 (REV-08 的 window_days 各档加 7 天), 补写的仍与第一次相同, 与结束留痕说的是同一范围."""
+@pytest.mark.parametrize("change", ["window_days", "extra_days"], ids=["param_changed", "scope_param_added"])
+async def test_backfilled_entries_take_the_run_in_store(change: str, caplog: pytest.LogCaptureFixture) -> None:
+    """验收 3 (审核 R325-05): 开始与结束留痕都没写成而执行在 Store 中已是终态 (如升级前跑过的执行) 时, 重放按 Store 中的
+    那次补写. 期间程序库改了参数 (REV-08 的 window_days 各档加 7 天): 补写的与第一次相同, 开始与结束是同一范围.
+    程序库给 scope 加了快照里没有的参数 (extra_days): 渲染不出, 两行的 scope 记为空, 记一行 warning (执行 ID 与缺的
+    参数), 节点不报错, 其余字段同第一次."""
     nodes, _, state, trail = await assembled_with_trail()
     state["staged_results"] = (await nodes.fieldwork(dispatch(state, "REV-08")))["staged_results"]
     await nodes.fan_in(state)
-    started_key, finished_key = (f"{EID}:run:RUN-REV-08-1:{a}" for a in ("started", "finished"))
-    [first] = [e for e in trail.entries if e.idempotency_key == started_key]
-    trail.entries[:] = [e for e in trail.entries if e.idempotency_key != started_key]
+    keys = [f"{EID}:run:RUN-REV-08-1:{a}" for a in ("started", "finished")]
+    first = [next(e for e in trail.entries if e.idempotency_key == key) for key in keys]
+    trail.entries[:] = [e for e in trail.entries if e.idempotency_key not in keys]
     original = nodes.deps.library.load
     template = original("REV-08")
-    window = {"by_risk": {k: v + 7 for k, v in template.params["window_days"]["by_risk"].items()}}
-    changed = template.model_copy(update={"params": {**template.params, "window_days": window}})
+    assert template.scope is not None
+    if change == "window_days":
+        window = {"by_risk": {k: v + 7 for k, v in template.params["window_days"]["by_risk"].items()}}
+        update: dict[str, Any] = {"params": {**template.params, "window_days": window}}
+    else:
+        scope = LocalizedText(
+            zh=template.scope.zh + ", 另加 {{ extra_days }} 天", en=template.scope.en + " + {{ extra_days }}"
+        )
+        update = {"params": {**template.params, "extra_days": 3}, "scope": scope}
+    changed = template.model_copy(update=update)
     nodes.deps.library.load = lambda pid: changed if pid == "REV-08" else original(pid)  # type: ignore[method-assign]
 
-    await nodes.fieldwork(dispatch(state, "REV-08"))
+    replayed = await nodes.fieldwork(dispatch(state, "REV-08"))
+    await nodes.fan_in(state | {"staged_results": replayed["staged_results"]})
 
-    [again] = [e for e in trail.entries if e.idempotency_key == started_key]
-    [end] = [e for e in trail.entries if e.idempotency_key == finished_key]
-    assert again.payload == first.payload and again.payload["scope"] == end.payload["scope"]
+    again = [next(e for e in trail.entries if e.idempotency_key == key) for key in keys]
+    if change == "window_days":
+        assert [e.payload for e in again] == [e.payload for e in first]
+        assert again[0].payload["scope"] == again[1].payload["scope"]
+    else:
+        assert [e.payload for e in again] == [e.payload | {"scope": None} for e in first]
+        assert [r.getMessage() for r in caplog.records if "RUN-REV-08-1" in r.getMessage()] == [
+            "执行 RUN-REV-08-1 的范围说明渲染不出, scope 记为空: 'extra_days' is undefined"
+        ] * 2
 
 
 async def test_failed_run_finishes_once_with_its_reason() -> None:

@@ -9,14 +9,19 @@
 已有同键的留痕即跳过, 节点重放与恢复补做时不重复写. 首版与状态未变的新版本不写 transition.
 """
 
+import logging
 from collections.abc import Iterable
 from typing import Any, Literal
+
+from jinja2 import UndefinedError
 
 from backend.contracts.data import DataReadiness
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.models import AgentId, Phase, Procedure, ProcedureRun, RunStatus, TrailEntry, TrailKind
 from backend.contracts.ports import AuditOutputStore, AuditTrail
 from backend.services.procedure_library import render_text
+
+logger = logging.getLogger(__name__)
 
 
 def transition(
@@ -100,8 +105,7 @@ def run_entry(
     eid: str, template: ProcedureTemplate, run: ProcedureRun, action: Literal["started", "finished"], summary: str
 ) -> TrailEntry:
     """一行 run 留痕 (需求 R325), 写入者 A1. payload: action, procedure_id, run_id, run_no, trigger, phase (程序所属
-    阶段), scope (程序的范围说明按本次的参数快照渲染, {zh, en}; 模板没写为空)."""
-    scope = render_text(template.scope, run.params_snapshot).model_dump() if template.scope is not None else None
+    阶段), scope (见 run_scope)."""
     return TrailEntry(
         engagement_id=eid,
         kind=TrailKind.run,
@@ -117,9 +121,21 @@ def run_entry(
             "run_no": run.run_no,
             "trigger": run.trigger.value,
             "phase": template.phase.value,
-            "scope": scope,
+            "scope": run_scope(template, run),
         },
     )
+
+
+def run_scope(template: ProcedureTemplate, run: ProcedureRun) -> dict[str, str] | None:
+    """程序的范围说明按本次的参数快照渲染, {zh, en}; 模板没写为空. 快照里缺占位用的参数 (程序库之后给 scope 加了参数,
+    重放升级前的执行) 时也为空, 记一行 warning (执行 ID 与缺的参数), 不让节点报错 (留痕在终态提交之后写)."""
+    if template.scope is None:
+        return None
+    try:
+        return render_text(template.scope, run.params_snapshot).model_dump()
+    except UndefinedError as e:
+        logger.warning("执行 %s 的范围说明渲染不出, scope 记为空: %s", run.id, e)
+        return None
 
 
 def run_started(eid: str, template: ProcedureTemplate, run: ProcedureRun) -> TrailEntry:
