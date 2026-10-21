@@ -143,6 +143,9 @@ export const zh: Messages = {
     'GEN-08': '股权穿透与关联方关系图',
     'GEN-09': '判断独立复核',
   },
+  manualInstructions: {
+    'FIN-08': '请求管理层更正已累计的错报并登记回复（ASA 450 第 8 段）',
+  },
   engines: { rule: '规则', llm: '模型', hybrid: '规则 + 模型', manual: '人工决定' },
   levels: { L1: '逐条决定', L2: '逐条复核', L3: '仅复核异常', L4: '事后抽查' },
   agents: {

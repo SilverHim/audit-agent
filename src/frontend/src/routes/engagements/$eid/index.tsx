@@ -39,7 +39,7 @@ import { errorText, isApiCode } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
 import { formatAud } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
-import { procedureName, type RankedTask, rankTasks, splitManual } from '@/lib/review'
+import { manualInstructions, procedureName, type RankedTask, rankTasks, splitManual } from '@/lib/review'
 import {
   buildTimeline,
   earlierCursor,
@@ -761,8 +761,8 @@ function ManualTaskEntry({
         </h2>
       </div>
       {view.task.manual_request?.instructions ? (
-        <p className="m-0 whitespace-pre-line px-[18px] py-3.5 text-[14px]" lang="en">
-          {view.task.manual_request.instructions}
+        <p className="m-0 whitespace-pre-line px-[18px] py-3.5 text-[14px]">
+          {manualInstructions(t, view.task.procedure_id, view.task.manual_request.instructions)}
         </p>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2.5 bg-[#fafbfc] px-[18px] py-3">

@@ -152,6 +152,11 @@ export const en = {
     'GEN-08': 'Ownership and related party map',
     'GEN-09': 'Independent review of judgments',
   } as Record<string, string>,
+  // 人工程序的 "What to do" (需求 R357), 按程序编号取 (lib/review 的 manualInstructions): 键为程序库中带
+  // manual.instructions 的程序; 缺项时退回后端给的 manual.instructions (程序 YAML 的中文)
+  manualInstructions: {
+    'FIN-08': 'Ask management to correct the accumulated misstatements and record their responses (ASA 450 para 8)',
+  } as Record<string, string>,
   engines: { rule: 'Rule', llm: 'Model', hybrid: 'Rule + model', manual: 'Auditor decision' },
   levels: { L1: 'Decide each', L2: 'Review each', L3: 'Review exceptions', L4: 'Spot-check afterwards' },
   agents: {

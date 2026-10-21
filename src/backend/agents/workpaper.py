@@ -48,6 +48,7 @@ from backend.contracts.models import (
     ReviewTask,
     RunTrigger,
     SourceType,
+    WorkingLanguage,
 )
 from backend.contracts.services import JudgmentOutcome
 from backend.contracts.state import StatePatch
@@ -71,8 +72,12 @@ LISTED_FIELDS = {
     "type",
     "fraud_indicative",
 }
-# 随材料给审计师的更正请求 (ASA 450 第 8, 9 段), 照此与管理层沟通
-CORRECTION_REQUEST = "请管理层更正下列错报; 不更正的, 请说明理由 (ASA 450 第 8, 9 段)."
+# 随材料给审计师的更正请求 (ASA 450 第 8, 9 段), 照此与管理层沟通; 按本次执行的生成语言取 (需求 R357)
+CORRECTION_REQUEST: dict[WorkingLanguage, str] = {
+    "en": "Please correct the misstatements listed below; for any you do not correct, please give your reasons "
+    "(ASA 450 paras 8 and 9).",
+    "zh": "请管理层更正下列错报; 不更正的, 请说明理由 (ASA 450 第 8, 9 段).",
+}
 # 期间来源 (需求 R158 验收 2): 一律本期. 首次审计没有上期未更正错报 (ASA 450 第 13 段的结转口径之后另加)
 ORIGIN: MisstatementOrigin = "current_period"
 ROW_SOURCES = frozenset(get_args(SourceType))  # 经 FinancialDataStore.record 解析的行类型
@@ -465,7 +470,8 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
     def prepare(self, ctx: RunContext) -> dict[str, Any] | None:
         """FIN-08 派发的材料 (需求 R161 验收 2): 逐条列沟通对象 (to_communicate) 的 LISTED_FIELDS 与来源判断 (状态中的
         当前版本) 的结论 source_conclusion 与执行 source_run_id (页面据此标结论的语言, 需求 R340; 来源是例外或判断
-        不在状态中时都为空), 加更正请求 request; 均为 JSON 形式.
+        不在状态中时都为空), 加更正请求 request (CORRECTION_REQUEST 中本次执行的生成语言 run.language, 即
+        AgentDeps.run_language, 需求 R357); 均为 JSON 形式.
         没有沟通对象时为 None (空执行, 不建任务)."""
         misstatements = to_communicate(ctx.state)
         if not misstatements:
@@ -480,7 +486,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
                 "source_run_id": source.run_id if source is not None else None,
             }
 
-        return {"request": CORRECTION_REQUEST, "misstatements": [listed(m) for m in misstatements]}
+        return {"request": CORRECTION_REQUEST[ctx.run.language], "misstatements": [listed(m) for m in misstatements]}
 
     def check(self, ctx: RunContext, task: ReviewTask, record: ReviewRecord) -> list[str]:
         """FIN-08 登记的核对 (需求 R161 验收 7, 在通用核对之后): 每条材料中的错报恰好一行, 不多不少; 依据的版本须为

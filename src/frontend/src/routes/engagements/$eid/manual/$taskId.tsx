@@ -38,7 +38,7 @@ import {
   separateCode,
 } from '@/lib/misstatements'
 import { formatAud } from '@/lib/money'
-import { procedureName } from '@/lib/review'
+import { manualInstructions, procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
 export const Route = createFileRoute('/engagements/$eid/manual/$taskId')({ component: ManualTaskPage })
@@ -137,8 +137,8 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
   return (
     <>
       <Card title={t.manualPage.instructions}>
-        <p className="m-0 text-[14px] leading-[1.65]" lang="en">
-          {view.request.instructions}
+        <p className="m-0 text-[14px] leading-[1.65]">
+          {manualInstructions(t, view.task.procedure_id, view.request.instructions)}
         </p>
         <div className="flex flex-col gap-1.5">
           <SectionLabel>{t.manualPage.material}</SectionLabel>
