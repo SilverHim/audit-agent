@@ -50,14 +50,14 @@ describe('profileRows', () => {
 })
 
 describe('profileChoice', () => {
-  test('保持原样要理由 (去首尾空白), 更新不带理由; 都绑定看到的 key', () => {
-    expect(profileChoice(CHECK, 'keep', '   ', zh)).toBe(zh.errors.reasonRequired)
-    expect(profileChoice(CHECK, 'keep', '  演示画像按设计覆盖 Xero 的登记号 ', zh)).toEqual({
+  test('保持原样的理由选填 (去首尾空白, 需求 R360), 更新不带理由; 都绑定看到的 key', () => {
+    expect(profileChoice(CHECK, 'keep', '   ')).toEqual({ key: CHECK.key, decision: 'keep', reason: '' })
+    expect(profileChoice(CHECK, 'keep', '  演示画像按设计覆盖 Xero 的登记号 ')).toEqual({
       key: CHECK.key,
       decision: 'keep',
       reason: '演示画像按设计覆盖 Xero 的登记号',
     })
-    expect(profileChoice(CHECK, 'update', 'ignored', zh)).toEqual({ key: CHECK.key, decision: 'update', reason: null })
+    expect(profileChoice(CHECK, 'update', 'ignored')).toEqual({ key: CHECK.key, decision: 'update', reason: null })
   })
 })
 
@@ -70,6 +70,7 @@ describe('checkStatus', () => {
     expect(checkStatus({ ...CHECK, resolution: 'kept', reason: '合成画像' }, zh)).toBe(
       zh.xeroProfile.status.kept('合成画像'),
     )
+    expect(checkStatus({ ...CHECK, resolution: 'kept', reason: '' }, zh)).toBe(zh.xeroProfile.status.kept('未填理由'))
     const updated = { ...CHECK, resolution: 'updated' as const, updated_version: 2 }
     expect(checkStatus({ ...updated, adopted: true }, zh)).toBe(zh.xeroProfile.status.adopted(2))
     expect(checkStatus({ ...updated, adopted: false }, zh)).toBe(zh.xeroProfile.status.clientOnly(2, 1))

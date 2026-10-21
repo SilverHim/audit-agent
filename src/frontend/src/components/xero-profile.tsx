@@ -14,7 +14,7 @@ import { profileChoice, profileRows } from '@/lib/xero-profile'
 type Choice = XeroProfileCheckIn['decision']
 
 // Xero 组织信息与客户画像不一致 (后端 R291): 两边的法定名称与 ABN 并列 (对不上的标红), 审计师选按 Xero 更新画像或
-// 保持原样 (理由必填). 只有停在 ACC-01 时更新由本项目采用并重新做承接核查; 其余时候 (未到 ACC-01 或已过) 只给客户写
+// 保持原样 (理由选填, 需求 R360). 只有停在 ACC-01 时更新由本项目采用并重新做承接核查; 其余时候 (未到 ACC-01 或已过) 只给客户写
 // 新版本. 写出的版本 (next_version) 与本项目所处的位置 (stage) 都由后端给, 前端只按它们选文案. 工作台与数据管理页
 // 共用; inset 为工作台里与对话对齐的缩进
 export function XeroProfileCard({
@@ -39,15 +39,12 @@ export function XeroProfileCard({
   const [choice, setChoice] = useState<Choice | null>(null)
   const [reason, setReason] = useState('')
   const busy = disabled || submit.isPending
-  const ready = choice === 'update' || (choice === 'keep' && reason.trim().length > 0)
   const name = `xero-profile-${check.key}`
   const next = check.next_version
 
   const record = () => {
     if (!choice) return
-    const body = profileChoice(check, choice, reason, t)
-    if (typeof body === 'string') return toast.error(body)
-    submit.mutate(body, {
+    submit.mutate(profileChoice(check, choice, reason), {
       onSuccess: () => toast.success(choice === 'keep' ? t.xeroProfile.kept : t.xeroProfile.updated),
       onError: (error) => toast.error(errorText(error, t)),
     })
@@ -127,7 +124,7 @@ export function XeroProfileCard({
       {choice === 'keep' ? (
         <div className="flex flex-col gap-1.5">
           <label htmlFor={`${name}-reason`} className="font-semibold text-[13px]">
-            {t.card.reason} <span className="font-normal text-muted-foreground">{t.card.reasonRequired}</span>
+            {t.reason.label}
           </label>
           <Textarea id={`${name}-reason`} rows={3} value={reason} onChange={(event) => setReason(event.target.value)} />
         </div>
@@ -140,7 +137,7 @@ export function XeroProfileCard({
         ) : (
           <span />
         )}
-        <Button type="button" size="lg" disabled={busy || !ready} onClick={record}>
+        <Button type="button" size="lg" disabled={busy || !choice} onClick={record}>
           {t.card.record}
         </Button>
       </div>

@@ -64,20 +64,25 @@ describe('生命周期', () => {
 describe('更正通知', () => {
   const draft = { kind: 'adjustments_posted' as const, misstatementIds: [XJ499, CSH02], entryNos: [], reason: '' }
 
-  test('客户已过账: 勾选的错报与凭证号, 理由可空', () => {
+  test('客户已过账: 勾选的错报与凭证号, 理由可空 (照发空串)', () => {
     expect(correctionNoticeBody({ ...draft, entryNos: ['AJE-X01', 'AJE-X05'] }, en)).toEqual({
       kind: 'adjustments_posted',
       misstatement_ids: [XJ499, CSH02],
       adjustment_entry_nos: ['AJE-X01', 'AJE-X05'],
-      reason: null,
+      reason: '',
     })
     expect(correctionNoticeBody(draft, en)).toBe(en.correction.errors.entries)
     expect(correctionNoticeBody({ ...draft, misstatementIds: [] }, en)).toBe(en.correction.errors.misstatements)
   })
 
-  test('停止等待: 理由必填 (去首尾空白), 不带凭证号', () => {
+  test('停止等待: 理由选填 (去首尾空白, 需求 R360), 不带凭证号', () => {
     const stop = { ...draft, kind: 'stop_waiting' as const, misstatementIds: [CSH02], entryNos: ['AJE-X05'] }
-    expect(correctionNoticeBody({ ...stop, reason: '  ' }, zh)).toBe(zh.errors.reasonRequired)
+    expect(correctionNoticeBody({ ...stop, reason: '  ' }, zh)).toEqual({
+      kind: 'stop_waiting',
+      misstatement_ids: [CSH02],
+      adjustment_entry_nos: [],
+      reason: '',
+    })
     expect(correctionNoticeBody({ ...stop, reason: ' Not posted before the deadline. ' }, zh)).toEqual({
       kind: 'stop_waiting',
       misstatement_ids: [CSH02],
@@ -213,10 +218,13 @@ describe('复核表单的错报更新载荷', () => {
     expect(updateBase(failed, [])).toBeNull()
   })
 
-  test('分类: 类型与舞弊迹象, 有舞弊迹象须写理由; AI 的载荷可作起点', () => {
+  test('分类: 类型与舞弊迹象, 舞弊迹象的理由选填 (需求 R360); AI 的载荷可作起点', () => {
     const base = { misstatement_id: XJ499, base_version: 1 }
-    const draft = { ...updateFromPayload(carried), type: 'judgmental' as const, fraud: true }
-    expect(misstatementUpdate('classification', base, draft, en)).toBe(en.updateForm.errors.fraudReason)
+    const draft = { ...updateFromPayload(carried), type: 'judgmental' as const, fraud: true, fraudReason: ' ' }
+    expect(misstatementUpdate('classification', base, draft, en)).toMatchObject({
+      fraud_indicative: true,
+      fraud_reason: '',
+    })
     expect(
       misstatementUpdate('classification', base, { ...draft, fraudReason: ' sole director posted it ' }, en),
     ).toEqual({

@@ -162,7 +162,7 @@ export function evidencePointers(view: ManualTaskView, evidence: EvidenceChoice[
   })
 }
 
-// 人工结果的决定; 缺结论, 理由, 执行日期, 证据不够或结构化结果写不对时返回错误文案. details 给了时用它 (如 FIN-08
+// 人工结果的决定; 缺结论, 执行日期, 证据不够或结构化结果写不对时返回错误文案 (理由选填, 需求 R360). details 给了时用它 (如 FIN-08
 // 逐条错报的登记, lib/misstatements.responsesDetails), 不再按结果模型的字段解析
 export function manualRecordBody(
   view: ManualTaskView,
@@ -173,7 +173,6 @@ export function manualRecordBody(
   const conclusion = draft.conclusion.trim()
   const reason = draft.reason.trim()
   if (!conclusion) return t.errors.conclusionRequired
-  if (!reason) return t.errors.reasonRequired
   if (!draft.performedOn) return t.manualPage.errors.performedOn
   const evidence = evidencePointers(view, draft.evidence)
   if (evidence.length < view.request.min_evidence) return t.manualPage.errors.evidence(view.request.min_evidence)

@@ -12,6 +12,7 @@ import { useActorName } from '@/lib/actor'
 import { type DataRequest, requestTitle, useMarkUnavailable } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { reasonText } from '@/lib/reason'
 import { procedureName } from '@/lib/review'
 import type { Messages } from '@/locales/en'
 
@@ -53,7 +54,7 @@ function RequestDetails({ request }: { request: DataRequest }) {
         {request.status === 'unavailable' ? (
           <>
             <dt className="text-muted-foreground">{t.requests.unavailable.reason}</dt>
-            <dd className="m-0 text-[#2d3443]">{request.unavailable_reason}</dd>
+            <dd className="m-0 text-[#2d3443]">{reasonText(request.unavailable_reason, t)}</dd>
             <dt className="text-muted-foreground">{t.requests.unavailable.markedBy}</dt>
             <dd className="m-0 text-[#2d3443]">
               {[actorName(request.resolved_by), formatDateTime(request.resolved_at)].filter(Boolean).join(' · ')}
@@ -196,7 +197,7 @@ export function DataRequestCard({
   )
 }
 
-// 标 "客户无此类资料": 理由必填, 等这项资料的程序记为未执行 (需求 R280)
+// 标 "客户无此类资料": 理由选填 (需求 R360), 等这项资料的程序记为未执行 (需求 R280)
 function UnavailableDialog({
   eid,
   request,
@@ -229,7 +230,7 @@ function UnavailableDialog({
           <DialogDescription>{t.requests.unavailable.intro}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-          <label htmlFor="request-unavailable-reason">{t.requests.unavailable.reason}</label>
+          <label htmlFor="request-unavailable-reason">{t.reason.label}</label>
           <Textarea
             id="request-unavailable-reason"
             rows={3}
@@ -243,7 +244,7 @@ function UnavailableDialog({
           </Button>
           <Button
             type="button"
-            disabled={!request || !reason.trim() || mark.isPending}
+            disabled={!request || mark.isPending}
             onClick={() =>
               request &&
               mark.mutate(

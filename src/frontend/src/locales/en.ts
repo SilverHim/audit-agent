@@ -343,6 +343,7 @@ export const en = {
     type: 'Type',
     fraud: 'Indicates possible fraud',
     fraudReason: 'Reason for the fraud indication',
+    fraudReasonInput: 'Reason for the fraud indication (optional)',
     status: 'Result',
     entryNos: 'Verified adjustment entries (comma-separated)',
     corrected: 'Corrected (AUD)',
@@ -350,10 +351,11 @@ export const en = {
     recommunicate: 'Communicate with management again',
     errors: {
       base: 'The misstatement for this task is not loaded yet. Try again shortly.',
-      fraudReason: 'Give the reason for the fraud indication',
       amount: 'Amounts must be numbers',
     },
   },
+  // 人填的理由一律选填 (需求 R360): 各理由框的标签, 理由为空时的显示 (lib/reason.reasonText)
+  reason: { label: 'Reason (optional)', none: 'No reason given' },
   directions: { overstated: 'Overstated', understated: 'Understated' },
   trailKinds: {
     all: 'All',
@@ -378,7 +380,6 @@ export const en = {
     resumedEvent: (target: string) => `${target} taken back from pending decisions`,
     you: 'You',
     decisionRecorded: (target: string) => `Decision recorded · ${target}`,
-    noReason: 'No reason given.',
     running: 'Procedures are running. The next item comes to you when they finish.',
     loadingItems: 'Loading the items that need you…',
     nothingPending: 'Nothing needs you right now.',
@@ -469,9 +470,7 @@ export const en = {
   },
   card: {
     decision: 'Auditor decision',
-    reason: 'Reason',
-    reasonRequired: '(required for this choice)',
-    reasonOptional: '(optional)',
+    optional: '(optional)',
     record: 'Record decision',
     decideLater: 'Decide later',
     attachMisstatement: 'Also record a misstatement',
@@ -609,10 +608,9 @@ export const en = {
     preview: (overall: string, performance: string) => `Overall ${overall} · performance ${performance}`,
     risks: 'Risk register',
     fraud: 'fraud risk',
-    levelReason: 'Reason for the level change',
+    levelReason: 'Reason for the level change (optional)',
     uncovered: (ids: string) =>
       `No procedure covers these objectives at the current levels: ${ids}. Change a level or send the plan back.`,
-    giveReason: (id: string) => `Give a reason for changing ${id}`,
     monthly: {
       title: 'Monthly trend (current period)',
       month: 'Month',
@@ -640,7 +638,6 @@ export const en = {
     needComment: 'Add at least one comment',
   },
   errors: {
-    reasonRequired: 'A reason is required',
     conclusionRequired: 'A conclusion is required',
     misstatementRequired: 'Account and amount are required',
     consultationRequired: 'Record who you consulted and what they concluded',
@@ -823,6 +820,7 @@ export const en = {
       yes: 'Required',
       no: 'Not required',
       basis: 'Basis',
+      basisHint: '(required)',
       basisRequired: 'Give the basis for whether an engagement quality review is required',
       expert: "No auditor's expert is needed",
       expertHint: "This version has no auditor's expert procedure; the answer is only recorded.",
@@ -830,7 +828,7 @@ export const en = {
     open: 'Open the audit plan',
     errors: {
       missing: (fields: string) => `The decision is missing a required field: ${fields}.`,
-      invalid: 'Part of the decision is not valid. Check the confirmations and the reason.',
+      invalid: 'Part of the decision is not valid. Check the confirmations.',
       invalidWith: (message: string) => `Part of the decision is not valid: ${message}`,
       stale: 'The material has been updated. Refresh and decide again.',
     },
@@ -1184,8 +1182,7 @@ export const en = {
     ready: 'Data complete, continue planning',
     readyCheck: {
       title: 'Some data checks did not pass',
-      intro: 'Planning will continue on the data as it stands. Record why you are confirming it anyway.',
-      reason: 'Reason',
+      intro: 'Planning will continue on the data as it stands. You can record why you are confirming it anyway.',
       confirm: 'Confirm data complete',
     },
     awaiting: 'Planning is waiting for the data',
@@ -1379,7 +1376,6 @@ export const en = {
     } as Record<string, string>,
     steps: ['Received', 'Classified', 'Text read', 'Details extracted', 'Linked', 'Done'],
     setType: 'Set the type',
-    typeReason: 'Reason',
     reliabilities: {
       external_original: 'External original',
       external_copy: 'External copy',
@@ -1491,7 +1487,6 @@ export const en = {
       auditor: 'Set by the auditor',
     } as Record<string, string>,
     balances: (current: string, prior: string) => `Current year ${current} · prior year ${prior}`,
-    reason: 'Reason for the change',
     cancel: 'Cancel',
     save: 'Save change',
     saved: 'Change saved',
@@ -1526,7 +1521,6 @@ export const en = {
     page: (n: number) => `Page ${n}`,
     edit: 'Edit selected item',
     value: 'Value',
-    reason: 'Reason for the change',
     save: 'Save change',
     cancel: 'Cancel',
     saved: 'Change saved',
@@ -1563,7 +1557,6 @@ export const en = {
       noRelated: 'None',
       edit: 'Update registration',
       dialogTitle: (name: string) => `Update the registration of ${name}`,
-      reason: 'Reason',
       save: 'Save',
       cancel: 'Cancel',
       saved: 'Registration updated',
@@ -1580,7 +1573,6 @@ export const en = {
       },
       listSeparator: ', ',
       errors: {
-        missing: 'Enter a reason for the update.',
         invalid: 'The values could not be saved',
         invalidWith: (message: string) => `The values could not be saved (${message})`,
       },
@@ -1780,7 +1772,6 @@ export const en = {
     document: {
       title: (name: string) => `Set the type of ${name}`,
       type: 'Document type',
-      reason: 'Reason',
       save: 'Save',
     },
   },
@@ -1801,7 +1792,7 @@ export const en = {
     updateAfter: (version: number, current: number) =>
       `Saves version ${version} for the client with the differing details taken from Xero (used by its next new engagement). This engagement is past the acceptance decision and keeps version ${current}, which the acceptance checks and the audit report use.`,
     keep: 'Keep the client profile',
-    keepHint: 'Record why the profile stays as it is.',
+    keepHint: 'You can record why the profile stays as it is.',
     kept: 'Kept the client profile',
     updated: 'Client profile updated from Xero',
     workspaceIntro:

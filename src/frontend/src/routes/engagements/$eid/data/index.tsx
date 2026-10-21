@@ -868,7 +868,7 @@ function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef | 
           </select>
         </label>
         <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-          <label htmlFor="doc-type-reason">{t.data.typeReason}</label>
+          <label htmlFor="doc-type-reason">{t.reason.label}</label>
           <Textarea id="doc-type-reason" rows={2} value={reason} onChange={(event) => setReason(event.target.value)} />
         </div>
         <div className="flex justify-end gap-2.5">
@@ -877,7 +877,7 @@ function SetTypeDialog({ eid, doc, onClose }: { eid: string; doc: DocumentRef | 
           </Button>
           <Button
             type="button"
-            disabled={!doc || !reason.trim() || setType.isPending}
+            disabled={!doc || setType.isPending}
             onClick={() =>
               doc &&
               setType.mutate(

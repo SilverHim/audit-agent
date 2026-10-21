@@ -80,7 +80,7 @@ LABELS = {
         "disagrees": "Does not agree",
         "performedOn": "Date performed",
         "conclusion": "Conclusion",
-        "reason": "Reason",
+        "reason": "Reason (optional)",
     },
     "correction": {  # 总览的更正卡片
         "title": "Waiting for client correction",

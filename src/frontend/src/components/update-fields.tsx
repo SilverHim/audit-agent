@@ -44,7 +44,7 @@ export function UpdatePayload({ update }: { update: MisstatementUpdate }) {
   )
 }
 
-// 复核表单里人给的载荷 (推翻, 对例外认定错报, 失败任务给手工结果时必填): 分类为类型与舞弊迹象 (有迹象须写理由);
+// 复核表单里人给的载荷 (推翻, 对例外认定错报, 失败任务给手工结果时必填): 分类为类型与舞弊迹象 (有迹象时理由选填);
 // 验证为结果, 凭证号, 已更正与剩余金额 (是否须重新沟通由后端按结果推出, 不在这里填)
 export function UpdateFields({
   id,
@@ -95,7 +95,7 @@ export function UpdateFields({
           </div>
           {value.fraud ? (
             <label htmlFor={`${id}-fraud-reason`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-              {u.fraudReason}
+              {u.fraudReasonInput}
               <Textarea
                 id={`${id}-fraud-reason`}
                 rows={2}

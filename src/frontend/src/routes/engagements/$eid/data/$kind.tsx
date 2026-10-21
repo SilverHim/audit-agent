@@ -23,6 +23,7 @@ import {
 } from '@/lib/data-api'
 import { errorText } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
+import { reasonText } from '@/lib/reason'
 
 type Search = { q?: string; page?: number; selected?: string }
 
@@ -287,7 +288,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
     )
   }
   const draft = category ?? row.category
-  const canSave = draft !== null && draft !== row.category && reason.trim().length > 0
+  const canSave = draft !== null && draft !== row.category
   return (
     <aside
       aria-label={row.name}
@@ -323,9 +324,7 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
         ) : null}
       </label>
       <div className="flex flex-col gap-1.5 font-semibold text-[13px]">
-        <label htmlFor="account-reason">
-          {t.dataTable.reason} <span className="text-risk">*</span>
-        </label>
+        <label htmlFor="account-reason">{t.reason.label}</label>
         <Textarea
           id="account-reason"
           rows={3}
@@ -383,7 +382,9 @@ function AccountAside({ eid, row }: { eid: string; row: AccountRow | undefined }
                   : t.dataTable.unmapped}
                 {version.basis ? ` · ${t.dataTable.basis[version.basis]}` : ''}
               </span>
-              {version.reason ? <span className="text-[#4a5262]">“{version.reason}”</span> : null}
+              {version.basis === 'auditor' ? (
+                <span className="text-[#4a5262]">{reasonText(version.reason, t, true)}</span>
+              ) : null}
             </div>
           ))}
         </div>

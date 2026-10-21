@@ -43,11 +43,9 @@ export function detailsBody(doc: DocumentRef, form: DetailsForm): DocumentDetail
   return changed ? body : null
 }
 
-// 补登记被拒的文字: 理由为空, 取值不合格 (附后端的说明, 如关联对象重复), 锁定, 忙各有文案; 其余同 errorText
+// 补登记被拒的文字: 取值不合格 (附后端的说明, 如关联对象重复) 有专门文案; 其余同 errorText. 理由选填 (需求 R360)
 export function detailsErrorText(error: unknown, t: Messages): string {
-  const code = apiCode(error)
-  if (code === 'MISSING_FIELD') return t.docView.details.errors.missing
-  if (code === 'INVALID_VALUE') {
+  if (apiCode(error) === 'INVALID_VALUE') {
     const message = (error as { detail?: { message?: string } }).detail?.message
     return message ? t.docView.details.errors.invalidWith(message) : t.docView.details.errors.invalid
   }

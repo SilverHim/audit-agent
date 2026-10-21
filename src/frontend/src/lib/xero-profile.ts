@@ -1,4 +1,5 @@
 import type { XeroProfileCheck, XeroProfileCheckIn, XeroSource } from '@/client/types.gen'
+import { reasonText } from '@/lib/reason'
 import type { Messages } from '@/locales/en'
 
 // Xero 组织信息与客户画像的核对 (后端 R291). 待处理: 有对不上的项且还没作出选择; 锁定的项目不提示
@@ -36,22 +37,19 @@ export function profileRows(check: XeroProfileCheck, t: Messages): ProfileRow[] 
   ]
 }
 
-// 请求体; 保持原样没写理由时返回错误文案
+// 请求体; 保持原样的理由选填 (需求 R360), 更新时不带理由
 export function profileChoice(
   check: XeroProfileCheck,
   decision: XeroProfileCheckIn['decision'],
   reason: string,
-  t: Messages,
-): XeroProfileCheckIn | string {
-  const text = reason.trim()
-  if (decision === 'keep' && !text) return t.errors.reasonRequired
-  return { key: check.key, decision, reason: decision === 'keep' ? text : null }
+): XeroProfileCheckIn {
+  return { key: check.key, decision, reason: decision === 'keep' ? reason.trim() : null }
 }
 
 // 数据管理页 Xero 卡片里的核对结果一行; 没有核对 (没同步过) 时为空. 锁定的项目不列核对卡, 不写 "见下方"
 export function checkStatus(check: XeroProfileCheck | null | undefined, t: Messages, locked = false): string | null {
   if (!check) return null
-  if (check.resolution === 'kept') return t.xeroProfile.status.kept(check.reason ?? '')
+  if (check.resolution === 'kept') return t.xeroProfile.status.kept(reasonText(check.reason, t))
   if (check.resolution === 'updated') {
     const version = check.updated_version ?? check.profile_version
     return check.adopted
