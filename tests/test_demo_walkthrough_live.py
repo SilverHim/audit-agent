@@ -37,7 +37,6 @@ from backend.api.schemas import ReviewRecordIn
 from backend.contracts.models import (
     AuditException,
     ExceptionDisposition,
-    OpinionType,
     ProcedureRun,
     TrailEntry,
     TrailKind,
@@ -146,16 +145,15 @@ async def test_demo_walkthrough_live(tmp_path: Path, live_budget: Budget) -> Non
 @pytest.mark.slow
 @pytest.mark.external
 async def test_live_path_on_real_storage_with_mock_llm(tmp_path: Path) -> None:
-    """连库自测: 真实模型用例的同一条路径 (real_walk), 大模型换成组装根的 mock (按项目数据集读演示运行副本); FIN-01 选
-    无保留意见 (固定输出的报告两稿按它写). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用 FIXED_CALLS 次 (同 R287
-    的离线走法)."""
+    """连库自测: 真实模型用例的同一条路径 (real_walk), 大模型换成组装根的 mock (按项目数据集读演示运行副本); FIN-01 按
+    汇总表的候选意见 (保留) 决定, 报告读保留意见的两稿 (需求 R260). 走到归档, 硬性检查都过, 没有软性差异与重跑, 调用
+    FIXED_CALLS 次 (同 R287 的离线走法)."""
     XERO.ready()
     budget = Budget(max_calls=MAX_CALLS)
     walk, data, calls = await real_walk(
         tmp_path / "run",
         budget,
         "demo-live-selftest",
-        fin=lambda material: OpinionType.unqualified.value,
         root=tmp_path,
         LLM_MODE="mock",
     )
@@ -168,8 +166,8 @@ async def offline_walk(
     tmp_path: Path, failing: dict[tuple[str, str], int]
 ) -> tuple[LiveWalk, dict[str, Any], list[AuditException], GraphRunner]:
     """不联网走一遍: 同一驱动与检查, 大模型换成演示运行副本的固定输出 (离线假存储, 规则引擎为 XERO_RULES, 同 R287 的
-    离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 选无保留意见: 固定输出的报告两稿按
-    无保留意见写 (候选意见为保留; 真实模型按所选意见起草, 见 test_demo_walkthrough_live). 汇总写在临时目录.
+    离线走法; failing 中的对象先失败几次, 见 FlakyLLM), 外面照样包上预算. FIN-01 按汇总表的候选意见 (保留) 决定, 报告
+    读保留意见的两稿 (需求 R260; 真实模型同样按所选意见起草). 汇总写在临时目录.
     返回走法记录, 汇总, 走到归档时存储中各例外的最新版本与 runner (存储照常可读)."""
     XERO.ready()
     llm = SwitchableLLMClient(FlakyLLM(LayeredMockLLMClient([XERO.runtime]), failing), "mock")
@@ -177,8 +175,7 @@ async def offline_walk(
     walk = LiveWalk()
     async with demo_offline(llm) as (runner, service, client):
         install_budget(runner.deps, budget)
-        unqualified = OpinionType.unqualified.value
-        await drive(client, runner, service, walk, fin=lambda material: unqualified, budget=budget)
+        await drive(client, runner, service, walk, budget=budget)
     data = await evaluate(runner, walk, budget)
     write_summary("demo-live-selftest", data, root=tmp_path)
     return walk, data, await runner.deps.output_store.latest(walk.eid or "", AuditException), runner
@@ -230,7 +227,7 @@ D04 = ["X-CSH-02-1-D04-1"]  # CSH-02 的例外: 各组都只有第 1 次执行�
         # 第一条规则例外是本次新建的 D04 (v1 即 unattributed); 重跑沿用它, 不另建 (第 1 轮审核 R347-02)
         ([("CSH-02", "BA-091")], "unattributed"),
         # 计划两个修订与报告两稿各整条失败一次 (需求 R317)
-        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "r1"), ("RPT-03", "r2")], "failed"),
+        ([("PLN-15", "r1"), ("PLN-15", "r2"), ("RPT-03", "qualified-r1"), ("RPT-03", "qualified-r2")], "failed"),
     ],
     ids=["rev02", "rev02_findings", "csh02", "revisions"],
 )
@@ -245,8 +242,10 @@ async def test_live_driver_reruns_a_failed_object_once(
     由重跑的判断解释, 随复核决定归因)."""
     _, data, exceptions, _ = await offline_walk(tmp_path, dict.fromkeys(failing, MAX_ATTEMPTS))
     assert_hard(data)
-    assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in failing}
-    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in failing)
+    # 失败按 (程序, fixture_key) 注入; 驱动对整条失败的报告按修订计重跑 (rerun_key 的 r1, r2), 不带意见类型
+    counted = [(pid, key.removeprefix("qualified-")) for pid, key in failing]
+    assert data["reruns"] == {f"{pid} {subject}": 1 for pid, subject in counted}
+    assert sorted(data["troubled_tasks"]) == sorted([pid, subject, kind] for pid, subject in counted)
     assert data["missing_subjects"] == []
     assert data["usage"]["calls"] == FIXED_CALLS + MAX_ATTEMPTS * len(failing)
     assert data["decisions"]["rerun"] == len(failing)

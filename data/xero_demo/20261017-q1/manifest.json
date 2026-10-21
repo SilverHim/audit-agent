@@ -887,15 +887,15 @@
       "xero_refs": []
     },
     {
-      "path": "llm/RPT-03/r1.json",
-      "sha256": "9d805167587463e327439ee0a743877365c44d2cfc41d8c97056904743c58181",
+      "path": "llm/RPT-03/qualified-r1.json",
+      "sha256": "7d87f64a103466be7a898113ce8c556c55cc1b53b8a20fef84c768dc12e4ab9a",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
     },
     {
-      "path": "llm/RPT-03/r2.json",
-      "sha256": "e47813fdde54ada9f4c73753d6fb48b1ece5e542b276794ba95b64e0e95d3d97",
+      "path": "llm/RPT-03/qualified-r2.json",
+      "sha256": "130f0465202368e9c82c6ff99248f87be9dd399c71e2b389cfb39accc71e6ad8",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

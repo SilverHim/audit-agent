@@ -166,11 +166,9 @@ async def browser_walk(
 
 async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """mock 模式在本机走一遍: 走到归档, 没有问题; 闸门序列同 R287 (打开 planning 时多两次 PLN-15); R311 的硬性检查
-    都过 (每个判断对象有结论, 指针都能解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; FIN-01 选无保留
-    意见 (固定输出的报告两稿按它写)."""
-    results, data, report = await browser_walk(
-        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "unqualified"
-    )
+    都过 (每个判断对象有结论, 指针都能解析, 报告意见与 FIN-01 一致); 决定同演示决定表, 没有重跑; FIN-01 按汇总表的
+    候选意见 (保留) 决定, 报告读保留意见的两稿 (需求 R260)."""
+    results, data, report = await browser_walk(tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate")
     assert results["issues"] == [], report
     assert results["reached_archive"] and results["gates"] == gates_expected(), report
     assert_hard(data)
@@ -184,7 +182,7 @@ async def test_browser_walk_mock_reruns_unattributed(tmp_path: Path, monkeypatch
     硬性检查都过; 汇总记重跑一次与这条任务, 其余决定同 mock 走查."""
     failing = {("REV-02", ORC1026): MAX_ATTEMPTS}
     results, data, report = await browser_walk(
-        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "unqualified", failing
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", failing
     )
     assert results["issues"] == [], report
     assert results["reached_archive"] and results["gates"] == gates_expected(), report

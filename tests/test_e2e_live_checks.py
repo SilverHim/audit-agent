@@ -74,7 +74,7 @@ class InjectingLLM:
                 data["counterparty"] = "Definitely Wrong Counterparty Pty Ltd"  # 重跑后校验通过但结果错
         if self.mode == "report_without_facts" and req.procedure_id == "RPT-03":
             data["basis_for_opinion"] = "Basis for Qualified Opinion\n\nThere is an unspecified issue."
-        if self.mode == "report_wrong_clause" and key == ("RPT-03", "r2"):  # 第 2 次真实联调中出现过
+        if self.mode == "report_wrong_clause" and key == ("RPT-03", "qualified-r2"):  # 第 2 次真实联调中出现过
             basis = data["basis_for_opinion"].replace("Clause 5.1 of contract CON-001", "Clause CON-001-T2")
             data["basis_for_opinion"] = basis
         if self.mode in ("overstatement_wording", "understatement_wording") and req.procedure_id == "RPT-03":

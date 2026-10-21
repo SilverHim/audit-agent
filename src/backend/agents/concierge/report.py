@@ -35,7 +35,8 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
     """RPT-03 的执行: 起草下一修订 REPORT-{revision} (revision 为状态中最大修订号 + 1), 草稿第 1 版; 修订时带上一稿
     与退回批注, 上一稿的语言与本次不同时另告诉模型 (previous_language, 按本次的语言重写全文, R341 审核 01).
 
-    意见类型取 FIN-01 选定的 opinion_route; 模型输入见 RPT-03.md.j2 头注释, fixture_key 为 r{revision}.
+    意见类型取 FIN-01 选定的 opinion_route; 模型输入见 RPT-03.md.j2 头注释, fixture_key 为 {意见类型}-r{revision}
+    (如 qualified-r1: mock 模式按所选意见取固定输出).
     模型按提示词列出的引用键引用判断 (judgment_keys), 校验只认这些键 (当前结果中错报所依据的已确认判断, 过期重跑
     取代的不算), 通过后换成当前判断的 ID 与版本记进报告的 judgment_refs. 校验不通过时抛 ValueError (含最后一次
     的错误), 由 A1 按执行失败处理.
@@ -86,7 +87,7 @@ async def draft(deps: AgentDeps, ctx: RunContext) -> AuditReportVersion:
         # 引用只认提示词列出的键: 当前结果的判断 (过期重跑取代的不算, 同汇总表与 FIN-01 材料)
         ValidationContext(judgments=cited, opinion=opinion, standards_of=None),
         AgentId.A10,
-        f"r{revision}",
+        f"{opinion.value}-r{revision}",
     )
     report = result.report
     if report.level_failed is not None:

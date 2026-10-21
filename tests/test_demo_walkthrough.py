@@ -4,15 +4,17 @@
 资料 (页面按钮的阶段同此): ACC-01 闸门处 acceptance, 等数据就绪时 fieldwork (财务报表以账套为准, 不再导入报表,
 Issue #46) → 闸门决定取 GET /gate 的材料 → 总体审计计划先退回一次 (要求写明银行函证的时间) 再批准 (需求 R317) →
 复核按任务列表逐条提交 (决定同 R119: BA-091 认定错报, 其余 confirm; GEN-02 的 7 条同 R146: XJ-499 认定错报, XJ-575
-推翻为接受, 其余 confirm) → FIN-01 无保留意见 → RPT-01 先退回再批准, 到归档.
+推翻为接受, 其余 confirm) → FIN-01 保留意见 (两笔未更正错报合计超过整体重要性, 同汇总表的候选) → RPT-01 先退回再
+批准, 到归档.
 
 大模型只读运行副本 data/xero_demo/20261017-q1/llm (应用里按项目数据集选的目录, 生成脚本从 llm_xero 复制, 正本里没有
 fixture 文件的程序由 llm_xero_only17 补位), 不用 R119 的分层客户端; 登记 mock 按项目数据集定位 (DatasetRegistrySource).
+RPT-03 的固定输出按意见类型取 (fixture_key 为 {意见类型}-r{修订号}): 读正本的保留意见两稿, only17 的无保留两稿只供
+R119.
 功能集为演示配置 (.env.example 的 FEATURES=critic,collab,journals,planning, R155, R146, R317; R119 仍按基线回归).
-断言: 例外, 判断, 复核任务, 错报与汇总表为 R119 加 R146 的增量 (复用其断言函数), 报告与归档同 R119 (意见与报告不在
-R146, FIN-01 仍按 R119 的决定); 总体审计计划的增量只在本模块断言 (R317, 只在 PLN-15 上: 决定, 留痕, 大模型两次与
-阶段推进点); 两个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序. R189 把全接入
-的 RPT-03 两稿放进正本后, 运行副本随之换成全接入两稿, 本模块的报告断言 (只开现有 17 条的两稿) 在同一提交里随之改.
+断言: 例外, 判断, 复核任务, 错报与汇总表为 R119 加 R146 的增量 (复用其断言函数), 报告的版本与归档同 R119, 意见为
+保留意见 (需求 R260); 总体审计计划的增量只在本模块断言 (R317, 只在 PLN-15 上: 决定, 留痕, 大模型两次与阶段推进点);
+两个阶段都已导入, 补交请求只剩审批日志 open, 走完没有过期程序.
 不与 R119 共用一次运行: 走 HTTP, 经演示资料导入上传文件, 终态 (文件 21 份) 不同.
 读快照与补造目录, 标 external; 连库变体标 slow. 离线的走通按项目的工作语言 en, zh 各走一次 (需求 R343): mock 不另备
 中文固定输出, 两次的结果相同, 执行记录都记 en.
@@ -40,6 +42,7 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     GateVerdict,
+    OpinionType,
     PlanStatus,
     ProcedureRun,
     ReviewTask,
@@ -47,6 +50,7 @@ from backend.contracts.models import (
     TaskKind,
     TrailEntry,
     TrailKind,
+    UncorrectedSchedule,
     WorkingLanguage,
 )
 from backend.contracts.views import GateView
@@ -98,6 +102,13 @@ shared_loop = pytest.mark.asyncio(loop_scope="module")  # 用模块共用的走�
 BA091 = "J-CSH-02-1-BA-091"
 REVIEW_ROUNDS = 5  # 复核循环的轮数上限 (本路径分三层出任务, 3 轮即完)
 DEMO_ABN = "25900043021"
+# FIN-01 的理由 (需求 R260): 未更正错报 XJ-499 (75000) 与 BA-091 (4853) 合计 79853, 超过整体重要性 32431
+FIN_REASON = (
+    "Uncorrected misstatements total AUD 798.53, above overall materiality of AUD 324.31 "
+    "(ASA 450 para 11; ASA 705 para 7)."
+)
+# 保留意见引的判断: 两笔未更正错报的来源判断 (同固定输出的 judgment_keys 顺序)
+QUALIFIED_BY = [BA091, "J-GEN-02-1-XJ-499"]
 # 每个停点: (总览的闸门, 是否等数据就绪, 是否等复核, 概览建议导入的阶段); 复核的停点只记第一次
 STOPS = [
     ("ACC-01", False, False, "acceptance"),
@@ -232,8 +243,7 @@ async def walk_steps(
             overview = await settle()
     assert not overview["awaiting_review"], f"{REVIEW_ROUNDS} 轮之后仍在等复核"
     await stop()
-    fin = xero17_gates(owner)["fin"]
-    await decide("approve", disposition=fin.disposition, reason=fin.reason)
+    await decide("approve", disposition=OpinionType.qualified.value, reason=FIN_REASON)
     await stop()
     reject = xero17_gates(owner)["rpt_reject"]
     await decide("reject", annotations=[XERO17_ANNOTATION.model_dump()], reason=reject.reason)
@@ -413,17 +423,29 @@ DEMO_LLM_CALLS = {
     ("DOC-CLASSIFY", True): 21,
     ("DOC-04", True): 3,
 }
+# 留痕各类的行数, 共 228. data: upload, classify, edit 各 21, sync 7, request_raised 5, import 4, request_received 4,
+# check 2, demo_import 2, ready 1; decision: 闸门 7, 复核 17; run: 执行 18 次 (DEMO_RUNS) 开始与结束各一行 (需求 R325)
+DEMO_TRAIL = {
+    TrailKind.data: 88,
+    TrailKind.llm_call: 47,
+    TrailKind.run: 36,
+    TrailKind.transition: 29,
+    TrailKind.decision: 24,
+    TrailKind.external_call: 4,
+}
 
 
 async def assert_end_state(w: Walk) -> None:
     """需求 R260 (并入 R259, 按 Q32 改写为演示配置): 走通的终态, 计数与留痕, 离线与连库 (R261), 重启 (R262) 共用.
     - 停点同 STOPS; 后台没有错误, 走完没有过期程序, 项目冻结的功能集为演示配置.
     - 例外 18 条, 判断 18 条, 复核任务 17 条 decided, 函证两户, 错报 2 条 (未更正) 与汇总表, 重要性: R119 加 R146 的
-      增量 (assert_results, assert_materiality, journals); 报告两稿与归档锁定同 R119 (assert_report).
-    - 闸门决定 7 条 (DEMO_GATES); 人工队列, 更正通知与审计更正分录都没有 (错报闭环不在演示配置).
+      增量 (assert_results, assert_materiality, journals); 汇总表候选保留意见.
+    - 报告两稿为保留意见, 引两笔错报的来源判断 (QUALIFIED_BY), 版本与归档锁定同 R119 (assert_report).
+    - 闸门决定 7 条 (DEMO_GATES); FIN-01 选保留意见, 同汇总表的候选; 人工队列, 更正通知与审计更正分录都没有 (错报
+      闭环不在演示配置).
     - 文件 23 份, 数据版本 10 与补交请求同 R119 (assert_documents).
     - 每条程序由真实 Agent 执行, 次数 DEMO_RUNS, 执行都成功.
-    - 留痕: llm_call 47 行 (DEMO_LLM_CALLS), decision 24 行 (闸门 7, 复核 17), external_call 4 行 (ACC-04 2, CSH-04 2).
+    - 留痕各类行数同 DEMO_TRAIL (run 36 行); llm_call 按程序同 DEMO_LLM_CALLS, external_call 为 ACC-04 2, CSH-04 2.
     - 证据指针 (判断, 合同, 函证, 例外, 承接评分卡) 都能解析; 原目录哈希不变.
     - 签字后再提交决定报 ENGAGEMENT_LOCKED."""
     x = w.x
@@ -433,10 +455,13 @@ async def assert_end_state(w: Walk) -> None:
     assert sorted(w.overview["features"]) == sorted(DEMO_FEATURES)
     await assert_results(x, journals=True)
     await assert_materiality(x, journals=True)
-    await assert_report(x, w.reject_id)
+    await assert_report(x, w.reject_id, OpinionType.qualified, QUALIFIED_BY)
     await assert_documents(x)
     gates = sorted(await deps.output_store.latest(x.eid, GateDecision), key=lambda d: d.decided_at)
     assert [(d.gate.value, d.decision.value) for d in gates] == DEMO_GATES
+    [fin] = [d for d in gates if d.gate is GateId.FIN_01]
+    schedule = await deps.output_store.get(x.eid, UncorrectedSchedule, "SCHEDULE")
+    assert schedule is not None and (fin.disposition, fin.reason) == (schedule.candidate_opinion, FIN_REASON)
     assert await deps.output_store.latest(x.eid, CorrectionNotice) == []
     assert [t for t in await deps.output_store.latest(x.eid, ReviewTask) if t.kind is TaskKind.manual] == []
     assert {pid: name for pid, name, _ in x.agents} == DEMO_AGENTS
@@ -446,8 +471,8 @@ async def assert_end_state(w: Walk) -> None:
     assert Counter(r.procedure_id for r in runs) == DEMO_RUNS and {r.status for r in runs} == {RunStatus.succeeded}
     trail = await deps.trail.list(x.eid, limit=10_000)
     calls = [e for e in trail if e.kind is TrailKind.llm_call]
+    assert Counter(e.kind for e in trail) == DEMO_TRAIL
     assert Counter((e.procedure_id, (e.run_id or "").startswith("UPLOAD-")) for e in calls) == DEMO_LLM_CALLS
-    assert len([e for e in trail if e.kind is TrailKind.decision]) == len(DEMO_GATES) + 17
     assert Counter(e.procedure_id for e in trail if e.kind is TrailKind.external_call) == {"ACC-04": 2, "CSH-04": 2}
     started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]
     await assert_pointers_resolve(started, x.eid, everything=True)
@@ -569,14 +594,14 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
 
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
-    """大模型 FIXED_CALLS 次都读运行副本里各自的 fixture (各程序的次数见 FIXTURE_READS: RPT-03 两稿 r1, r2 与 PLN-15
-    两个修订 r1, r2 也在里面), 没有回落到 default.json 或找不到, 各文件一次, attempt 1 无失败级别; 组装根的 mock
-    客户端对这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
+    """大模型 FIXED_CALLS 次都读运行副本里各自的 fixture (各程序的次数见 FIXTURE_READS: RPT-03 保留意见的两稿
+    qualified-r1, qualified-r2 与 PLN-15 两个修订 r1, r2 也在里面), 没有回落到 default.json 或找不到, 各文件一次,
+    attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
     llm = walked.x.client
     reads = [(r.procedure_id, r.fixture_key, r.root) for r in llm.reads]
     assert [r for r in llm.reads if r.file != f"{r.procedure_id}/{r.fixture_key}.json"] == []
     assert Counter(pid for pid, *_ in reads) == FIXTURE_READS
-    assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["r1", "r2"]
+    assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["qualified-r1", "qualified-r2"]
     assert sorted(key for pid, key, _ in reads if pid == "PLN-15") == ["r1", "r2"]
     assert len(set(reads)) == len(reads)
     calls = [e for e in entries(walked) if e.kind is TrailKind.llm_call]
@@ -607,7 +632,7 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
         assert w.stops == STOPS
         await assert_results(w.x, journals=True)
         await assert_materiality(w.x, journals=True)
-        await assert_report(w.x, w.reject_id)
+        await assert_report(w.x, w.reject_id, OpinionType.qualified, QUALIFIED_BY)
         assert (w.overview["stale_procedure_ids"], sorted(w.overview["features"])) == ([], sorted(DEMO_FEATURES))
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
         assert Counter(e.procedure_id for e in calls)["RPT-03"] == 2
