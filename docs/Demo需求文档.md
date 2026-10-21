@@ -413,7 +413,7 @@ compose.yml                        B
 | Numbat 全流程回归：基线功能（只开 critic），四道闸门中断并按决定恢复，结果与第 3 节预期一致；新功能在程序包、状态、任务与闸门里没有痕迹 | 离线 mock；真实存储变体；三处中断的重启；真实模型 | `tests/test_e2e_mock.py`、`tests/test_e2e_restart.py`、`tests/test_e2e_live.py`、`tests/test_numbat_switches.py` | R55–R57、R59、R258 |
 | Xero 演示走通（第 1 节）：每个停点、闸门与复核决定、例外、判断、错报与汇总表、报告版本与归档、文件与留痕的计数；工作语言 en、zh 各一次 | 离线 mock，经 HTTP 接口 | `tests/test_demo_walkthrough.py` | R260、R343 |
 | Xero 演示走通的连库变体：真实 Postgres 存储与检查点、规则 SQL、真实 DataService 的演示数据导入，结果同离线 | 连库 | `tests/test_demo_walkthrough.py`（slow） | R261 |
-| Xero 演示走通的重启：中途中断后用同一检查点与存储新建 runner 恢复，已持久化的程序不重跑，函证与登记查询不重复 | 离线 | 待 R262 合入 | R262 |
+| Xero 演示走通的重启：P2 发函后被杀、PLN-15 批准与认定错报的决定写进 Store 后中断，用同一检查点与存储起新进程恢复，照页面走到归档；函证不重发，已持久化的程序不重跑，终态与留痕同不中断时 | 离线 | `tests/test_e2e_xero_restart.py` | R262 |
 | Xero 演示走通的真实模型全流程：重要性、汇总表与意见同候选，偏离只在人给了结论的对象上；中文工作语言跑一次 | 连库，真实模型 | `tests/test_demo_walkthrough_live.py` | R263、R343 |
 | 注入测试（只改临时副本，原目录哈希不变）：T0 基线副本，T1 收入截止，T4 银行回函差异，T2 重复开票未冲销，T5 与反向对照 T5' 折旧错记；真实模型成对断言 T1、T4、T2 | 离线；连库；真实模型 | `tests/test_xero_injections.py`、`tests/test_xero_injections_db.py` | R121–R124、R252、R253、R255 |
 | Xero 上的真实模型程序评测：现有程序与分录测试程序（GEN-05 真实 SQL，GEN-02 交真实模型）在真实异常上的结论 | 连库，真实模型 | `tests/test_eval_xero_live.py` | R250、R251 |
