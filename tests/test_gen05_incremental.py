@@ -6,22 +6,28 @@ Xero 演示上沿用错报闭环的装配 (misstatement_fakes.fin09_deps: 规则
 停在 await_correction 等更正通知, 提交后 verify_correction 先做增量扫描再执行 FIN-09 (FIN-09 等复核).
 """
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
+from backend.agents.fieldwork import FieldworkAgent
 from backend.contracts.errors import RuleError
 from backend.contracts.models import (
     AuditException,
     CorrectionNotice,
+    Decision,
     ExceptionDisposition,
     Judgment,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
+    ReviewTask,
     RunPopulation,
     RunStatus,
     RunTrigger,
+    TaskKind,
+    TaskStatus,
 )
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState
@@ -32,6 +38,7 @@ from backend.services.features import BASELINE, MISSTATEMENT
 from tests.fakes import (
     ENGAGEMENT,
     FakeTrail,
+    ScriptedLLM,
     fin08_registered,
     finished,
     gen05_exception,
@@ -45,8 +52,10 @@ from tests.misstatement_fakes import (
     FIN09,
     FIRST,
     SECOND,
+    XJ499,
     fin03_state,
     fin09_deps,
+    fin09_fixture,
     notice,
     round1_communicated,
     round1_misstatements,
@@ -54,6 +63,7 @@ from tests.misstatement_fakes import (
     round2_sources,
 )
 from tests.test_decisions import Started
+from tests.test_review_decisions import record
 from tests.xero_fakes import registration, xero_engagement
 
 pytestmark = pytest.mark.external  # Xero 快照, 补造与 FIN-09 的 Xero fixture
@@ -80,16 +90,27 @@ def posted(oid: str, entry_nos: list[str]) -> CorrectionNotice:
         ([posted("D-CN1", FIRST)], [], FIRST),
         ([posted("D-CN1", FIRST), posted("D-CN2", SECOND)], [incremental(2, FIRST)], SECOND),
         ([posted("D-CN1", FIRST), posted("D-CN2", [])], [incremental(2, FIRST)], SECOND),  # 空即载入全部未载入的
+        ([posted("D-CN1", []), posted("D-CN2", [])], [], ALL),
+        ([posted("D-CN1", FIRST), posted("D-CN2", SECOND)], [], ALL),  # 上一轮没扫成, 这一轮补上
         ([posted("D-CN1", ["AJE-X05", "AJE-X01"])], [finished(make_run(GEN05, 2, {"entry_nos": FIRST}))], FIRST),
         ([notice("D-STOP", kind="stop_waiting", adjustment_entry_nos=[], reason="r")], [], []),
     ],
-    ids=["first", "second", "empty_notice", "rerun", "stop_waiting"],
+    ids=["first", "second", "empty_notice", "two_empty", "unscanned", "rerun", "stop_waiting"],
 )
 def test_increment_entry_nos(notices: list[CorrectionNotice], runs: list[ProcedureRun], expected: list[str]) -> None:
     """要扫的凭证: 各份 adjustments_posted 通知载入的 (为空取数据集可载入的全部), 去掉增量执行扫过的, 排序. 改参数的
-    重跑 (trigger rerun) 带 entry_nos 也不算扫过."""
+    重跑 (trigger rerun) 带 entry_nos 也不算扫过. 可载入的全部只在有凭证号为空的 adjustments_posted 通知时才取, 至多
+    一次 (审核 R194-06)."""
+    calls: list[None] = []
+
+    def available() -> list[str]:
+        calls.append(None)
+        return ALL
+
     state = fin03_state(correction_notices=notices, procedure_runs=runs)
-    assert increment_entry_nos(state, GEN05, ALL) == expected
+    assert increment_entry_nos(state, available) == expected
+    empty = [n for n in notices if n.kind == "adjustments_posted" and not n.adjustment_entry_nos]
+    assert len(calls) == min(len(empty), 1)
 
 
 def gen05_pack(deps: Any) -> list[Procedure]:
@@ -98,10 +119,11 @@ def gen05_pack(deps: Any) -> list[Procedure]:
     return [first[0].model_copy(update={"status": ProcedureStatus.completed}), *first[1:]]
 
 
-def scanning_deps(exceptions: Any = None, entries: list[str] = FIRST) -> Any:
-    """fin09_deps 加 GEN-05 的规则结果 (缺省不出例外; exceptions 为按执行生成例外的函数), 功能另开 journals."""
+def scanning_deps(exceptions: Any = None, entries: list[str] = FIRST, llm: Any = None) -> Any:
+    """fin09_deps 加 GEN-05 的规则结果 (缺省不出例外; exceptions 为按执行生成例外的函数), 功能另开 journals; llm 为空时
+    读 Xero fixture 正本."""
     gen05 = {GEN05: lambda run: RuleResult(exceptions=exceptions(run) if exceptions else [], rows={})}
-    return fin09_deps(FakeTrail(), entries=entries, results=gen05, features=FEATURES)
+    return fin09_deps(FakeTrail(), llm, entries=entries, results=gen05, features=FEATURES)
 
 
 def node_state(deps: Any, **changes: Any) -> EngagementState:
@@ -223,6 +245,79 @@ async def test_increment_exception_stays_open_and_joins_fin09() -> None:
     assert [(x.id, x.version, x.disposition) for x in stored] == [("X-GEN-05-2-R02-1", 1, ExceptionDisposition.open)]
     judgments = [x for x in s.output_store.rows if isinstance(x, Judgment) and x.procedure_id == FIN09]
     assert [j.exception_ids for j in judgments] == [["X-GEN-05-2-R02-1"], []]
+
+
+async def fin09_tasks(s: Started) -> dict[TaskKind, ReviewTask]:
+    """FIN-09 待决的复核任务, 按种类 (每种至多一条)."""
+    pending = await s.output_store.latest(ENGAGEMENT.id, ReviewTask, status=TaskStatus.pending)
+    return {t.kind: t for t in pending if t.procedure_id == FIN09}
+
+
+async def test_replay_keeps_fin09_tasks_on_increment_exceptions() -> None:
+    """审核 R194-01: XJ499 的分录对得上 (没有 V02), 规则例外只有增量例外 X-GEN-05-2-R02-1, 模型连续结构失败: 例外出 v2
+    unattributed, 以它为目标建 FIN-09 的 unattributed 任务; CSH02 照常判断 (normal 任务). (a) confirm CSH02 后节点从头
+    重放: GEN-05 的增量重放只取回自己的执行与例外, FIN-09 重放 RUN-FIN-09-1, 不重新执行 (没有 RUN-FIN-09-2 与
+    J-FIN-09-2-*). (b) 再对 unattributed 任务 rerun: 没有节点错误, RUN-FIN-09-2 只重判 XJ499, 规则例外仍为该增量例外
+    (此时 v2 unattributed)."""
+    llm = ScriptedLLM({"XJ-499": ["not json"] * 3 + [fin09_fixture("XJ-499")], "BA-091": [fin09_fixture("BA-091")]})
+    deps = scanning_deps(x01_hit, llm=llm)
+    s = await at_correction(deps, round1_communicated())
+    await submit_and_wait(s, notice())
+    tasks = await fin09_tasks(s)
+    assert tasks[TaskKind.unattributed].target_id == "X-GEN-05-2-R02-1"
+
+    normal = tasks[TaskKind.normal]
+    await submit_and_wait(s, record(normal.id, id="D-1"))
+    assert rule_calls(deps, FIN09) == [("RUN-FIN-09-1", None)]
+    fin09 = [o for o in s.output_store.rows if getattr(o, "procedure_id", None) == FIN09]
+    assert {o.id for o in fin09 if isinstance(o, ProcedureRun)} == {"RUN-FIN-09-1"}
+    assert not any(o.id.startswith("J-FIN-09-2-") for o in fin09 if isinstance(o, Judgment))
+
+    unattributed = tasks[TaskKind.unattributed]
+    rerun = record(unattributed.id, Decision.rerun, id="D-R", target_version=unattributed.target_version)
+    await submit_and_wait(s, rerun)
+    assert rule_calls(deps, FIN09) == [("RUN-FIN-09-1", None), ("RUN-FIN-09-2", None)]
+    [judgment] = [o for o in s.output_store.rows if isinstance(o, Judgment) and o.run_id == "RUN-FIN-09-2"]
+    assert (judgment.subject_id, judgment.exception_ids) == (XJ499, ["X-GEN-05-2-R02-1"])
+    increment = latest(s, AuditException, "X-GEN-05-2-R02-1")
+    assert (increment.version, increment.disposition) == (2, ExceptionDisposition.unattributed)
+
+
+INITIAL, INCREMENTAL, RERUN = RunTrigger.initial, RunTrigger.incremental, RunTrigger.rerun
+
+
+@pytest.mark.parametrize(
+    ("triggers", "reporter", "dropped"),
+    [
+        ((INITIAL, INCREMENTAL, INCREMENTAL), 2, True),
+        ((INITIAL, INCREMENTAL, INCREMENTAL), 1, True),
+        ((INITIAL, INCREMENTAL, RERUN, INCREMENTAL), 2, False),
+        ((INITIAL, INCREMENTAL, RERUN), 2, False),
+    ],
+    ids=["after_increment", "after_full", "before_full", "full_rerun"],
+)
+async def test_increment_drops_r06_already_reported(
+    triggers: tuple[RunTrigger, ...], reporter: int, dropped: bool
+) -> None:
+    """审核 R194-05: 增量执行 (A6 解读) 的 R06 去掉自最近一次全量执行 (含它) 以来已以同一行 (XJ-500-1) 出过的例外:
+    此前的增量或全量执行出过的都去掉; 只在最近一次全量执行之前出过的不去掉. 新录入的一行与别的规则照出 (ID 照规则
+    引擎的编号). 本次是全量执行 (rerun) 时照旧出全部. triggers 为各次执行的触发方式, 最后一个为本次."""
+    runs = [finished(make_run(GEN05, n).model_copy(update={"trigger": t})) for n, t in enumerate(triggers[:-1], 1)]
+    current = make_run(GEN05, len(triggers)).model_copy(update={"trigger": triggers[-1]})
+    reported = gen05_exception(runs[reporter - 1], "R06", "high", "XJ-500-1", 50000, {"entry_no": "XJ-500"})
+
+    def found(run: ProcedureRun) -> list[AuditException]:
+        return [
+            gen05_exception(run, "R06", "high", "XJ-500-1", 50000, {"entry_no": "XJ-500"}),
+            gen05_exception(run, "R06", "high", "XJ-501-1", 60000, {"entry_no": "XJ-501"}, number=2),
+            gen05_exception(run, "R02", "medium", "AJE-X02-1", 426120, {"entry_no": "AJE-X02"}),
+        ]
+
+    deps = scanning_deps(exceptions=found)
+    state = node_state(deps, exceptions=[reported]) | {"procedure_runs": runs}
+    ctx = replace(make_ctx(deps, GEN05, engagement=xero_engagement()), run=current, state=state)  # type: ignore[arg-type]
+    patch = await FieldworkAgent(deps).run(ctx)
+    assert [x.id for x in patch["exceptions"]] == [x.id for x in found(current)[1 if dropped else 0 :]]
 
 
 @pytest.mark.parametrize("entry_nos", [SECOND, []], ids=["listed", "empty"])

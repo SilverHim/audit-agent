@@ -5,7 +5,7 @@ PostgresFinancialDataStore 与 SqlRuleEngine 执行, 参数同 GraphNodes 用 bu
 R131-01). R132 另核对作废对的个数与删去一笔贷项凭证后 R10, R12 的变化. 没有 TEST_DATABASE_URL 时跳过."""
 
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -17,14 +17,14 @@ from sqlalchemy import delete, insert, select
 
 from backend.agents.base import AgentDeps
 from backend.contracts.models import ClientProfile, Engagement, ProcedureRun
-from backend.contracts.records import DatasetTraits
+from backend.contracts.records import DatasetTraits, JournalEntry
 from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, initial_state
 from backend.orchestration.nodes import build_run
 from backend.persistence import models as m
 from backend.persistence.db import bind_engagement
 from tests.external import snapshot_dir, supplements_dir
-from tests.fakes import NUMBAT_RULES
+from tests.fakes import NUMBAT_RULES, numbat_records
 from tests.test_knowledge import voided_cte
 from tests.test_xero_rules_db import build_xero_project, database_url, new_owner, procedure_of
 from tests.xero_fakes import SNAPSHOT_NAME, XERO_RULES
@@ -376,44 +376,57 @@ async def test_increment_limits_rules_to_entry_nos(xero_corrected: Gen05Project)
     assert (hits(others, "R09"), hits(others, "R02")) == ([], [])
 
 
-async def assert_limited(project: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]) -> None:
-    """参数覆盖下这些规则命中; entry_nos 为命中的全部凭证时命中不变, 为不相干的凭证号时都不命中."""
+async def assert_limited(
+    project: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...], extra: Sequence[str] = ()
+) -> None:
+    """参数覆盖下这些规则命中; entry_nos 为命中的全部凭证 (再加上 extra 中全期不命中的凭证) 时这些规则的例外连同明细
+    都不变 (extra 仍不命中), 为不相干的凭证号时都不命中."""
     full = await gen05(project, **overrides)
-    entries = sorted({x.detail["entry_no"] for x in full.exceptions if x.rule_id in rule_ids})
-    assert {x.rule_id for x in full.exceptions} >= set(rule_ids)
-    same = await gen05(project, entry_nos=entries, **overrides)
+    picked = set(rule_ids)
+    entries = sorted({x.detail["entry_no"] for x in full.exceptions if x.rule_id in picked})
+    assert {x.rule_id for x in full.exceptions} >= picked
+    same = await gen05(project, entry_nos=[*entries, *extra], **overrides)
     others = await gen05(project, entry_nos=["NOT-AN-ENTRY"], **overrides)
-    for rule_id in rule_ids:
-        assert (hits(same, rule_id), hits(others, rule_id)) == (hits(full, rule_id), [])
+    assert [x for x in same.exceptions if x.rule_id in picked] == [x for x in full.exceptions if x.rule_id in picked]
+    assert [x for x in others.exceptions if x.rule_id in picked] == []
 
 
 @pytest.mark.parametrize(
-    ("overrides", "rule_ids"),
+    ("overrides", "rule_ids", "regular"),
     [
-        ({}, ("R01", "R04", "R08")),  # SJ-2026-0612
-        ({"approval_limit_cents": 1555001}, ("R03",)),
-        ({"rare_user_max": 78}, ("R07",)),  # 录入人计数按全期, 只在最后一步筛
+        ({}, ("R01", "R04", "R08"), None),  # SJ-2026-0612
+        ({"approval_limit_cents": 1555001}, ("R03",), None),
+        ({"rare_user_max": 78}, ("R07",), "ar.clerk"),  # 录入人计数按全期, 只在最后一步筛
     ],
     ids=["R01-R04-R08", "R03", "R07"],
 )
 async def test_numbat_entry_nos_limits_rules(
-    numbat: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]
+    numbat: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...], regular: str | None
 ) -> None:
     """R06 以外各规则的 entry_nos 筛选 (R02, R09 至 R12 见上面两条用例), Numbat 上命中的规则 (同
-    test_numbat_gen05_on_postgres, test_numbat_overrides_make_rules_hit): 见 assert_limited."""
-    await assert_limited(numbat, overrides, rule_ids)
+    test_numbat_gen05_on_postgres, test_numbat_overrides_make_rules_hit): 见 assert_limited. R07 的 entry_nos 另加
+    一笔常规录入人 (本期凭证多于 rare_user_max) 的凭证: 计数若只按 entry_nos 算, 这一笔会命中, 命中的计数也会变."""
+    params = numbat.run.params_snapshot
+    extra = [
+        j.entry_no
+        for j in numbat_records("journal_entries", JournalEntry)
+        if j.created_by == regular and str(params["period_start"]) <= str(j.posting_date) <= str(params["period_end"])
+    ][:1]
+    assert len(extra) == (regular is not None)
+    await assert_limited(numbat, overrides, rule_ids, extra)
 
 
 @pytest.mark.external
 @pytest.mark.parametrize(
     ("overrides", "rule_ids"),
-    [({"period_end": "2026-07-17"}, ("R05",)), ({"entry_timestamps_reliable": True}, ("R13",))],
-    ids=["R05", "R13"],
+    [({"period_end": "2026-07-17"}, ("R05",)), ({"entry_timestamps_reliable": True}, ("R13",)), ({}, ("R11",))],
+    ids=["R05", "R13", "R11"],
 )
 async def test_xero_entry_nos_limits_rules(
     xero: Gen05Project, overrides: dict[str, object], rule_ids: tuple[str, ...]
 ) -> None:
-    """同上, Xero 上以参数覆盖命中的 R05, R13 (同 test_xero_overrides_make_rules_hit, test_xero_gen05_on_postgres)."""
+    """同上, Xero 上以参数覆盖命中的 R05, R13 (同 test_xero_overrides_make_rules_hit, test_xero_gen05_on_postgres) 与
+    缺省参数下命中的 R11: entry_nos 只有命中的重记凭证 (原凭证与冲回凭证都不在其中, 由全期的作废对找到) 时仍命中."""
     await assert_limited(xero, overrides, rule_ids)
 
 

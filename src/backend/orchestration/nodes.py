@@ -3,8 +3,9 @@
 闸门节点不做业务处理: 决定由 DecisionSubmit 写入, 并以 aupdate_state(as_node=闸门节点) 直接越过闸门.
 """
 
+import functools
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any, TypedDict, cast, get_args, get_origin, get_type_hints
 
@@ -554,16 +555,17 @@ def awaiting_correction(state: EngagementState) -> list[str]:
     )
 
 
-def increment_entry_nos(state: EngagementState, procedure_id: str, available: Sequence[str]) -> list[str]:
+def increment_entry_nos(state: EngagementState, available: Callable[[], Sequence[str]]) -> list[str]:
     """增量实例要扫的凭证号 (需求 R194): 状态中各份 adjustments_posted 更正通知载入的凭证 (通知的凭证号为空即载入了全部
-    未载入的, 取 available: 数据集可载入的全部更正分录), 去掉本程序已有的增量执行 (trigger incremental) 参数快照里
-    entry_nos 扫过的, 排序. 纯函数."""
+    未载入的, 这时才调 available 取数据集可载入的全部更正分录, 至多一次), 去掉已有的增量执行 (trigger incremental,
+    同 workpaper.increment_findings 的口径; 只有 GEN-05 有增量实例) 参数快照里 entry_nos 扫过的, 排序."""
+    every = functools.cache(available)
     posted = [n for n in state["correction_notices"] if n.kind == "adjustments_posted"]
-    loaded = {no for n in posted for no in (n.adjustment_entry_nos or available)}
+    loaded = {no for n in posted for no in (n.adjustment_entry_nos or every())}
     scanned = {
         no
         for r in state["procedure_runs"]
-        if r.procedure_id == procedure_id and r.trigger is RunTrigger.incremental
+        if r.trigger is RunTrigger.incremental
         for no in r.params_snapshot.get("entry_nos") or []
     }
     return sorted(loaded - scanned)
@@ -736,9 +738,10 @@ class GraphNodes:
         trigger incremental, 参数为模板参数的解析结果, entry_nos 换成排序后的这些凭证号), 调 Agent, 片段经合并校验后
         与执行记录, 被测总体 (run_population, 需求 R324) 在一个事务内写入 Store; 程序不出新版本 (仍 completed), 不建
         任务. 返回写入后的片段, 由节点并入状态.
-        重放: 这次执行已在 Store 中且为终态时不调 Agent, 产出从 Store 取回 (同 perform). 模板 incremental 为假抛
-        ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过为节点错误, 照常抛出
-        (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error, 恢复时重做."""
+        重放: 这次执行已在 Store 中且为终态时不调 Agent, 只取回执行记录与它 run_id 下的例外, 再查一遍外键 (同 perform).
+        模板 incremental 为假抛 ValueError; entry_nos 为空时不执行, 返回 {}. Agent 出错 (含 RuleError) 与片段校验不过
+        为节点错误, 照常抛出 (不代写失败的执行与 failed 任务: 程序不出新版本, 没有地方等人), 由 runner 记入 run_error,
+        恢复时重做."""
         template = self.deps.library.load(procedure_id)
         if not template.incremental:
             raise ValueError(f"{procedure_id} 没有增量实例 (模板 incremental 为假)")
@@ -750,7 +753,18 @@ class GraphNodes:
         run = await self.new_run(state, engagement, template, procedure, RunTrigger.incremental, overrides)
         stored = await self.deps.output_store.get(eid, ProcedureRun, run.id)
         if stored is not None and stored.status is not RunStatus.running:
-            return await stored_outputs(self.deps, eid, template, stored)
+            # 只取回本次执行自己写入的: 执行记录与它 run_id 下的例外 (最新版本). stored_outputs 另会补齐以这些例外为
+            # 目标的别的程序的任务与执行 (如 FIN-09 对增量例外的 unattributed 任务与 RUN-FIN-09-1), 并进状态会让 FIN-09
+            # 的 run_no 前移而重新执行 (审核 R194-01)
+            replayed = await stored_outputs(self.deps, eid, template, stored)
+            own: StatePatch = {
+                "procedure_runs": [stored],
+                "exceptions": [x for x in replayed.get("exceptions", []) if x.run_id == stored.id],
+            }
+            problems = check_refs(own, state)
+            if problems:
+                raise RuntimeError(f"重放 {stored.id} 取回的产出引用不完整: {'; '.join(problems)}")
+            return own
         agent = self.agents[procedure_id]
         writer = writer_of(template, agent)
         output = await agent.outcome(
@@ -1094,9 +1108,11 @@ class GraphNodes:
         if engagement is None:
             raise LookupError(f"Engagement {state['engagement_id']} not found")
         dataset = engagement.dataset
-        available = self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
-        entry_nos = increment_entry_nos(state, procedure_id, available)
-        return await self.scan_increment(state, engagement, procedure_id, entry_nos)
+
+        def available() -> Sequence[str]:
+            return self.deps.datasets.adjustment_entry_nos(dataset) if dataset is not None else []
+
+        return await self.scan_increment(state, engagement, procedure_id, increment_entry_nos(state, available))
 
     async def inputs_before_run(self, state: EngagementState, procedure_id: str) -> StatePatch:
         """执行一条 P2 以外的程序前查它要的资料 (需求 R272), 首次执行与 rerun 都经过这里 (execute): 按现有资料重定

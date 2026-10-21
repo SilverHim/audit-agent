@@ -24,6 +24,7 @@ from backend.agents.judging import (
     judge_all,
     judging_steps,
     judgments_patch,
+    open_findings,
 )
 from backend.agents.review import ReviewAgent
 from backend.contracts.errors import VersionConflict
@@ -36,7 +37,6 @@ from backend.contracts.models import (
     Direction,
     EvidencePointer,
     EvidenceType,
-    ExceptionDisposition,
     Judgment,
     ManagementResponse,
     Misstatement,
@@ -308,20 +308,15 @@ def mismatch_exception(
 
 
 def increment_findings(state: Any, lines: Sequence[dict[str, Any]]) -> list[AuditException]:
-    """增量扫描 (GEN-05 的增量实例, 需求 R194) 在匹配凭证上的例外: 当前结果中增量执行 (trigger incremental) 引出而
-    未归因的例外里, detail.entry_no 为匹配行所在凭证的, 按 ID. 接在 V02 之后作该错报判断的规则例外. 纯函数."""
-    incremental = {r.id for r in state["procedure_runs"] if r.trigger is RunTrigger.incremental}
+    """增量扫描 (GEN-05 的增量实例, 需求 R194) 在匹配凭证上的例外: 增量执行 (trigger incremental) 引出而尚未归因的例外
+    (open_findings) 里, detail.entry_no 为匹配行所在凭证的, 按 ID. 接在 V02 之后作该错报判断的规则例外. 纯函数."""
+    incremental = {r.id: r.procedure_id for r in state["procedure_runs"] if r.trigger is RunTrigger.incremental}
     entries = {r["entry_no"] for r in lines}
-    return sorted(
-        (
-            x
-            for x in current_results(state).exceptions
-            if x.run_id in incremental
-            and x.disposition is not ExceptionDisposition.attributed
-            and x.detail.get("entry_no") in entries
-        ),
-        key=lambda x: x.id,
-    )
+    return [
+        x
+        for x in open_findings(state, set(incremental.values()))
+        if x.run_id in incremental and x.detail.get("entry_no") in entries
+    ]
 
 
 def verification_subject(

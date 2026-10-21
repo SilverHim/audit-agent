@@ -6,6 +6,7 @@ manual/fin08_round{n}.json (xero_fakes.round_file). 模块常量不读快照与�
 第 2 轮的 SECOND, round2_communicated, round2_sources 现由 FIN-09 第 2 轮的用例用, 也是给 R167 两轮闭环预留的.
 """
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -82,6 +83,12 @@ def fin09_deps(
     deps = fin03_deps(trail, llm, rules=rules, **kwargs)
     with_adjustments(deps.financial_store, entries)  # type: ignore[arg-type]
     return deps
+
+
+def fin09_fixture(name: str, **changes: Any) -> str:
+    """FIN-09 的 Xero fixture 正本 (原文, 来源对象 name 的), 改 changes 中的字段; 供脚本大模型 (ScriptedLLM) 用."""
+    raw = json.loads((XERO.fixtures / FIN09 / f"{name}.json").read_text(encoding="utf-8"))
+    return json.dumps(raw | changes)
 
 
 def fin03_state(**changes: Any) -> EngagementState:

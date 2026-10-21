@@ -74,9 +74,9 @@ from tests.fakes import (
     stopping_graph,
 )
 from tests.fixture_sets import XERO
-from tests.misstatement_fakes import CSH02, FIN09, XJ499, fin03_deps, fin03_state, notice
+from tests.misstatement_fakes import CSH02, FIN09, XJ499, fin03_deps, fin03_state, fin09_fixture, notice
 from tests.misstatement_fakes import round2_sources as fin15_proposals
-from tests.test_correction_verification import MISMATCH, fixture
+from tests.test_correction_verification import MISMATCH
 from tests.test_fin_gate import fin_decision
 from tests.test_misstatement_communication import DECIDED_1, DECIDED_2, registered
 from tests.test_p3_flow import stub_library
@@ -610,7 +610,7 @@ async def test_mismatch_recommunicates_then_corrects(tmp_path: Path) -> None:
       v8 corrected.
     - 之后照常进 p3_reassess, summarize (RUN-FIN-04-2 在 RUN-FIN-09-3 之后, 每轮仍只一次), final_review, FIN-01 闸门;
       SCHEDULE v2 的 corrected_ids 为 5 条."""
-    loop = await drive(await start(tmp_path, Replies({(FIN09, "826"): [fixture("826", **MISMATCH)]})), STEPS[:7])
+    loop = await drive(await start(tmp_path, Replies({(FIN09, "826"): [fin09_fixture("826", **MISMATCH)]})), STEPS[:7])
     partial = notice(
         "D-CN2", misstatement_ids=ROUND2, adjustment_entry_nos=["AJE-X03", "AJE-X04"], decided_at=ROUND2_AT
     )

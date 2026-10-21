@@ -1,7 +1,8 @@
 """过期程序与当前结果 (需求 R274, 接口文档第 3 节).
 
 过期: 程序最近一次执行记了数据版本 v, 而 (1) 它读的数据 (模板 reads, 见 reads_change) 在 v 之后有变动
-(DataStore.changes), 或
+(DataStore.changes; 最近一次是增量执行时 v 取最近一次全量执行的, 增量执行记下的版本算已覆盖, 见 covered_versions),
+或
 (2) 它依赖 (depends_on) 的程序过期, 或依赖的程序在它之后又执行过 (如只重跑了 REV-08, REV-02 随之过期), 或依赖的
 程序最近一次执行已被过期重跑取代 (它所依据的前置结果已不是当前的).
 过期只针对有当前结果的程序: 最近一次执行被过期重跑取代而之后没有新执行的 (重跑后转等数据, 未执行 (无数据) 或
@@ -28,6 +29,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     RerunRequest,
+    RunTrigger,
 )
 from backend.contracts.state import EngagementState
 from backend.services.procedure_library import ProcedureLibrary
@@ -65,6 +67,7 @@ def stale_procedures(
 ) -> list[str]:
     """程序包中过期的程序, 按程序包顺序. 判定见模块说明; 依赖只看程序包中有的程序. superseded 为被过期重跑取代的
     执行 (superseded_runs, 调用方取 Store 中的重跑请求); 程序状态取 pack."""
+    runs = list(runs)
     latest = latest_runs(runs)
     in_pack = {p.id for p in pack}
     status = {p.id: p.status for p in pack}
@@ -78,8 +81,10 @@ def stale_procedures(
         if run is None or run.data_version is None or run.id in superseded or status.get(pid) in STOPPED:
             return False  # 没有当前结果 (没执行过, 承接阶段, 已被重跑取代, 等数据或未执行)
         template = library.load(pid)
-        version = run.data_version
-        found = any(c.data_version > version and reads_change(template, c) for c in changes)
+        version, covered = covered_versions(pid, run, runs)
+        found = any(
+            c.data_version > version and c.data_version not in covered and reads_change(template, c) for c in changes
+        )
         for dep in template.depends_on:
             if found or dep not in in_pack:
                 continue
@@ -91,6 +96,19 @@ def stale_procedures(
         return found
 
     return [p.id for p in pack if stale(p.id)]
+
+
+def covered_versions(pid: str, latest: ProcedureRun, runs: Iterable[ProcedureRun]) -> tuple[int, set[int | None]]:
+    """判过期的基准数据版本与已覆盖的变动 (审核 R194-02). 最近一次执行不是增量执行时为它的数据版本, 没有已覆盖的.
+    是增量执行 (GEN-05 的增量实例, 需求 R194) 时, 基准为最近一次非增量执行的数据版本, 已覆盖的只有各增量执行记下的
+    数据版本 (即紧挨在前的更正通知载入; 全量执行之前的本就不大于基准): 增量只扫载入的更正分录, 全量执行之后与更正
+    无关的变动仍判过期. latest 须记了数据版本."""
+    assert latest.data_version is not None
+    mine = [r for r in runs if r.procedure_id == pid]
+    full = max((r for r in mine if r.trigger is not RunTrigger.incremental), key=lambda r: r.run_no, default=None)
+    if latest.trigger is not RunTrigger.incremental or full is None or full.data_version is None:
+        return latest.data_version, set()
+    return full.data_version, {r.data_version for r in mine if r.trigger is RunTrigger.incremental}
 
 
 def rerunnable(pack: Sequence[Procedure], stale: Iterable[str]) -> list[str]:
