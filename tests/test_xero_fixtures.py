@@ -149,11 +149,16 @@ def strings(value: Any) -> Iterator[str]:
 
 def fixture_model(library: ProcedureLibrary, procedure_id: str, fixture_key: str) -> type[BaseModel]:
     """该 fixture 应符合的输出模型: 模板 llm.output_model (上传分类取 agents/ingest 的模板); GEN-09 的第二轮
-    ({对象}-r2) 为 VERDICT_SPEC 的."""
+    ({对象}-r2) 为 VERDICT_SPEC 的; PLN-07 的 basis 与 screen 各用一个输出模型 (需求 R371)."""
     if procedure_id in INTAKE_TEMPLATES:
         return output_model(INTAKE_TEMPLATES[procedure_id])
     if procedure_id == GEN09 and fixture_key.endswith("-r2"):
         model = getattr(llm_outputs, VERDICT_SPEC.output_model)
+        assert isinstance(model, type) and issubclass(model, BaseModel)
+        return model
+    if procedure_id == "PLN-07":
+        name = "AnalyticsScreeningDraft" if fixture_key == "screen" else "AnalyticsBasisDraft"
+        model = getattr(llm_outputs, name)
         assert isinstance(model, type) and issubclass(model, BaseModel)
         return model
     return output_model(library.load(procedure_id))

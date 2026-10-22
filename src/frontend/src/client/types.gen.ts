@@ -230,9 +230,104 @@ export type AdjustmentEntryView = {
 export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
 
 /**
+ * AnalyticsAddition
+ *
+ * PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注.
+ */
+export type AnalyticsAddition = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+};
+
+/**
+ * AnalyticsObservation
+ *
+ * PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,
+ * 与 additions 一起作为 "大模型补充" 呈报.
+ */
+export type AnalyticsObservation = {
+    /**
+     * Account Codes
+     */
+    account_codes: Array<string>;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
+ * AnalyticsRecommendation
+ *
+ * PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.
+ *
+ * 仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果
+ * 不随闸门选择自动改变.
+ */
+export type AnalyticsRecommendation = {
+    /**
+     * Basis
+     */
+    basis: 'revenue' | 'gross_profit' | 'profit_before_tax' | 'total_expenses' | 'net_assets' | 'total_assets';
+    /**
+     * Base Amount Cents
+     */
+    base_amount_cents: number;
+    /**
+     * Percentage
+     */
+    percentage: number;
+    /**
+     * Threshold Cents
+     */
+    threshold_cents: number;
+    /**
+     * Rationale
+     */
+    rationale: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+    /**
+     * Counter Argument
+     */
+    counter_argument: string;
+    /**
+     * Self Confidence
+     */
+    self_confidence: number;
+};
+
+/**
  * AnalyticsResult
  *
  * PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
+ *
+ * 功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有
+ * 这些键, 读回 recommendation 为空, screening 为空, fallback 为假.
  */
 export type AnalyticsResult = {
     /**
@@ -257,6 +352,82 @@ export type AnalyticsResult = {
      * Monthly
      */
     monthly?: Array<MonthlyFigures>;
+    recommendation?: AnalyticsRecommendation | null;
+    screening?: AnalyticsScreening;
+    /**
+     * Fallback
+     */
+    fallback?: boolean;
+    /**
+     * Fallback Reason
+     */
+    fallback_reason?: string | null;
+};
+
+/**
+ * AnalyticsScreening
+ *
+ * PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.
+ *
+ * 规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371).
+ */
+export type AnalyticsScreening = {
+    /**
+     * Threshold Cents
+     */
+    threshold_cents?: number | null;
+    /**
+     * Hit Account Codes
+     */
+    hit_account_codes?: Array<string>;
+    /**
+     * Focus
+     */
+    focus?: Array<AnalyticsScreeningItem>;
+    /**
+     * Additions
+     */
+    additions?: Array<AnalyticsAddition>;
+    /**
+     * Excluded
+     */
+    excluded?: Array<AnalyticsScreeningItem>;
+    /**
+     * Observations
+     */
+    observations?: Array<AnalyticsObservation>;
+};
+
+/**
+ * AnalyticsScreeningItem
+ *
+ * PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由.
+ */
+export type AnalyticsScreeningItem = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Amount Cents
+     */
+    amount_cents?: number | null;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
 };
 
 /**

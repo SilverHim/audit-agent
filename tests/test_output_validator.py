@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from backend.agents import ingest, review
 from backend.contracts import llm_outputs
 from backend.contracts.llm_outputs import (
+    AnalyticsBasisDraft,
+    AnalyticsScreeningDraft,
     AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
@@ -234,6 +236,7 @@ def test_output_model_resolves_every_llm_procedure() -> None:
         "CSH-02": JudgmentDraft,
         "RPT-03": ReportDraft,
         "GEN-09": CriticIndependent,  # 第二轮的 CriticVerdictOut 由 A7 换模板的 llm 配置 (review.VERDICT_SPEC)
+        "PLN-07": AnalyticsBasisDraft,  # 第 3 步的 AnalyticsScreeningDraft 在代码里另取一份模板副本 (需求 R371)
     }
 
 
@@ -272,12 +275,15 @@ def test_pending_checks_are_not_registered() -> None:
 
 
 def test_dispatch_table_covers_existing_models() -> None:
-    """现有 13 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做
+    """现有 15 种输出模型都已登记引用与语义校验 (CriticVerdictOut, DocumentClassification 与 SheetRecognition 只做
     语法与结构; RegistryExtraction 与合同, 回函共用抽取校验, 需求 R290; AuditPlanDraft 由
     check_plan 校验, 需求 R204; FIN-03 的 MisstatementClassificationDraft 另查错报性质, 需求 R157; FIN-09 的
     CorrectionVerificationDraft 另查是否完整更正与其他科目, 需求 R164; FIN-02 的 GoingConcernAdvice 由
-    check_going_concern 校验, 需求 R183)."""
+    check_going_concern 校验, 需求 R183; PLN-07 的 AnalyticsBasisDraft 与 AnalyticsScreeningDraft 由
+    check_analytics_basis, check_analytics_screening 校验, 需求 R371)."""
     assert set(OutputValidator.CHECKS) == {
+        AnalyticsBasisDraft,
+        AnalyticsScreeningDraft,
         AuditPlanDraft,
         GoingConcernAdvice,
         JudgmentDraft,

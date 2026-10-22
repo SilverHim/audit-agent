@@ -1,0 +1,21 @@
+{
+  "decisions": [
+    {
+      "account_code": "1100",
+      "verdict": "focus",
+      "reason": "Trade receivables increased by AUD 525,000.00 (35.00%) from the prior period. The increase is well above the 20% movement condition and the 1% revenue threshold, and receivables are the account most exposed to existence and valuation risk in this business.",
+      "risk_or_assertion": "Existence and valuation of trade receivables",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "1100",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    }
+  ],
+  "additions": [],
+  "observations": []
+}

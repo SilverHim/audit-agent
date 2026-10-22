@@ -5970,6 +5970,133 @@
         "title": "AgentId",
         "description": "智能体编号."
       },
+      "AnalyticsAddition": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsAddition",
+        "description": "PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注."
+      },
+      "AnalyticsObservation": {
+        "properties": {
+          "account_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Account Codes"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_codes",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsObservation",
+        "description": "PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,\n与 additions 一起作为 \"大模型补充\" 呈报."
+      },
+      "AnalyticsRecommendation": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "revenue",
+              "gross_profit",
+              "profit_before_tax",
+              "total_expenses",
+              "net_assets",
+              "total_assets"
+            ],
+            "title": "Basis"
+          },
+          "base_amount_cents": {
+            "type": "integer",
+            "title": "Base Amount Cents"
+          },
+          "percentage": {
+            "type": "number",
+            "title": "Percentage"
+          },
+          "threshold_cents": {
+            "type": "integer",
+            "title": "Threshold Cents"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "counter_argument": {
+            "type": "string",
+            "title": "Counter Argument"
+          },
+          "self_confidence": {
+            "type": "number",
+            "title": "Self Confidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "base_amount_cents",
+          "percentage",
+          "threshold_cents",
+          "rationale",
+          "counter_argument",
+          "self_confidence"
+        ],
+        "title": "AnalyticsRecommendation",
+        "description": "PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.\n\n仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果\n不随闸门选择自动改变."
+      },
       "AnalyticsResult": {
         "properties": {
           "id": {
@@ -6002,6 +6129,42 @@
             "type": "array",
             "title": "Monthly",
             "default": []
+          },
+          "recommendation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsRecommendation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screening": {
+            "$ref": "#/components/schemas/AnalyticsScreening",
+            "default": {
+              "hit_account_codes": [],
+              "focus": [],
+              "additions": [],
+              "excluded": [],
+              "observations": []
+            }
+          },
+          "fallback": {
+            "type": "boolean",
+            "title": "Fallback",
+            "default": false
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
           }
         },
         "additionalProperties": false,
@@ -6012,7 +6175,115 @@
           "exception_ids"
         ],
         "title": "AnalyticsResult",
-        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."
+        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.\n\n功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有\n这些键, 读回 recommendation 为空, screening 为空, fallback 为假."
+      },
+      "AnalyticsScreening": {
+        "properties": {
+          "threshold_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Cents"
+          },
+          "hit_account_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hit Account Codes",
+            "default": []
+          },
+          "focus": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsScreeningItem"
+            },
+            "type": "array",
+            "title": "Focus",
+            "default": []
+          },
+          "additions": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsAddition"
+            },
+            "type": "array",
+            "title": "Additions",
+            "default": []
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsScreeningItem"
+            },
+            "type": "array",
+            "title": "Excluded",
+            "default": []
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsObservation"
+            },
+            "type": "array",
+            "title": "Observations",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AnalyticsScreening",
+        "description": "PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.\n\n规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371)."
+      },
+      "AnalyticsScreeningItem": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsScreeningItem",
+        "description": "PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由."
       },
       "Annotation": {
         "properties": {

@@ -589,6 +589,9 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
+# PLN-07 初步分析可选的重要性基准 (需求 R371): 清单与比例范围在 knowledge/analytic_benchmarks.json. 比 PLN-01/03 闸门
+# 可选的三个基准多毛利, 总费用与净资产 (ASA 320 A5 的基准举例); 闸门仍只接受 MaterialityBasis 的三个
+AnalyticBasis = Literal["revenue", "gross_profit", "profit_before_tax", "total_expenses", "net_assets", "total_assets"]
 # 重要性候选本期不适用的原因 (需求 R351): 税前亏损 (以税前利润为基准时), 其余基准金额不为正
 MaterialityInapplicable = Literal["loss", "not_positive"]
 # 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理; staged 为智能导入的批次里上传而
@@ -1415,12 +1418,78 @@ class MonthlyFigures(Model):
     employee_expense_cents: int  # 员工费用: employee_expense_categories 的借减贷 (含在 expense_cents 里)
 
 
+class AnalyticsRecommendation(Model):
+    """PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.
+
+    仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果
+    不随闸门选择自动改变."""
+
+    basis: AnalyticBasis  # 基准
+    base_amount_cents: int  # 基准金额 (本期试算表), 单位分
+    percentage: float  # 基准的比例
+    threshold_cents: int  # 门槛 = 基准金额 × 比例, 单位分
+    rationale: str  # 选择基准与比例的理由
+    evidence: list[EvidencePointer] = []  # 依据的证据
+    counter_argument: str  # 反方论证
+    self_confidence: float  # 模型自报的置信度 0-1
+
+
+class AnalyticsScreeningItem(Model):
+    """PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    amount_cents: int | None = None  # 变动金额, 单位分 (取规则例外的金额)
+    reason: str  # 重点关注或排除的理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据
+
+
+class AnalyticsAddition(Model):
+    """PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    reason: str  # 补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+
+
+class AnalyticsObservation(Model):
+    """PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,
+    与 additions 一起作为 "大模型补充" 呈报."""
+
+    account_codes: list[str]  # 相关的科目代码, 可以包含规则命中的科目
+    reason: str  # 观察到的内容与补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据
+
+
+class AnalyticsScreening(Model):
+    """PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.
+
+    规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371)."""
+
+    threshold_cents: int | None = None  # 第 2 步实际用的门槛 (基准金额 × 比例), 单位分; 退回规则时为本期收入 × 0.5%
+    hit_account_codes: list[str] = []  # 规则命中的全部科目代码, 按规则结果的顺序
+    focus: list[AnalyticsScreeningItem] = []  # 重点关注: 最终输出之一
+    additions: list[AnalyticsAddition] = []  # 大模型补充的新科目: 最终输出之一
+    excluded: list[AnalyticsScreeningItem] = []  # 已排除: 不删除, 列出并写理由
+    observations: list[AnalyticsObservation] = []  # 大模型对已命中科目的补充观察, 与 additions 一起作 "大模型补充"
+
+
 class AnalyticsResult(Versioned):
-    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."""
+    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
+
+    功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有
+    这些键, 读回 recommendation 为空, screening 为空, fallback 为假."""
 
     ratios: dict[str, float]  # 比率: gross_margin_current, gross_margin_prior, revenue_growth, 四位小数
     exception_ids: list[str]  # 变动超阈值的例外
     monthly: list[MonthlyFigures] = []  # A03 的月度数, 审计期间每月一行 (没有分录的月份为 0), 按月升序; 没有 A03 行为空
+    recommendation: AnalyticsRecommendation | None = None  # 第 1 步的推荐重要性 (功能 planning); 退回规则时为空
+    screening: AnalyticsScreening = AnalyticsScreening()  # 第 3 步的复筛结果; 纯规则路径与退回规则时为空
+    fallback: bool = False  # 大模型失败或输出不合格且重试用尽, 退回本期收入 × 0.5% 的规则结果
+    fallback_reason: str | None = None  # 退回规则的原因; 未退回为空
 
 
 class MaterialityCandidate(Model):

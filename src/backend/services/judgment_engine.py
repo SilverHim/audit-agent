@@ -13,6 +13,8 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
+    AnalyticsBasisDraft,
+    AnalyticsScreeningDraft,
     AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
@@ -74,6 +76,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
+from backend.services.analytic_benchmarks import load_benchmarks, period_totals
 from backend.services.correction_entries import correction_problems
 from backend.services.currency import default_currency, format_money
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
@@ -922,6 +925,125 @@ async def check_going_concern(
     return CheckResult(advice, "semantic" if semantic else None, resolved.unsupported, errors + semantic)
 
 
+async def check_analytics_basis(
+    validator: OutputValidator, eid: str, output: AnalyticsBasisDraft, ctx: ValidationContext
+) -> CheckResult:
+    """PLN-07 第 1 步的基准与比例 (需求 R371): 基准须在配置的清单内, 比例须在该基准的范围内, 基准金额须为正 (ASA 320
+    A5: 税前利润波动或亏损时不宜以它作基准); 证据指针须可解析, 且至少一个. 清单不在清单内或超出范围判语义失败."""
+    config = load_benchmarks(validator.library.root)
+    benchmark = config.get(output.basis)
+    semantic: list[str] = []
+    if benchmark is None:
+        semantic.append(f"基准 {output.basis} 不在配置的基准清单内")
+    elif not benchmark.contains(output.percentage):
+        semantic.append(
+            f"{output.basis} 的比例 {output.percentage} 不在 {benchmark.pct_min}-{benchmark.pct_max} 范围内"
+        )
+    totals = await period_totals(validator.financial, eid, "current")
+    base_cents = totals.get(output.basis)
+    if base_cents is None:
+        semantic.append(f"基准 {output.basis} 没有对应的汇总金额")
+    elif base_cents <= 0:
+        semantic.append(f"基准 {output.basis} 的本期金额 {base_cents} 不为正, 不能作重要性基准")
+    if not output.rationale.strip() or not output.counter_argument.strip():
+        semantic.append("理由与反方论证不能为空")
+    resolver = PointerResolver(validator, eid, ctx.standards_of, ctx.client_profile)
+    resolved = await resolver.resolve_chain([], output.evidence)
+    checked = output.model_copy(update={"evidence": resolved.evidence})
+    reference = list(resolved.errors)
+    if not output.evidence:
+        reference.append("没有证据指针")
+    elif resolved.valid == 0:
+        reference.append("没有一个能解析的证据指针")
+    if reference:
+        return CheckResult(checked, "reference", errors=reference + semantic)
+    return CheckResult(checked, "semantic" if semantic else None, errors=semantic)
+
+
+async def check_analytics_screening(
+    validator: OutputValidator, eid: str, output: AnalyticsScreeningDraft, ctx: ValidationContext
+) -> CheckResult:
+    """PLN-07 第 3 步的复筛 (需求 R371): 每个规则命中科目恰好一条 decision, 科目在科目表内; additions 不重复且不在
+    命中里; observations 的科目在科目表内; reason 与 risk_or_assertion 不为空; decisions 的证据指针须可解析. 没给
+    ctx.analytics_hits 时抛 ValueError (调用方漏传)."""
+    if ctx.analytics_hits is None:
+        raise ValueError("复筛输出的校验须给出第 2 步的命中科目 (ValidationContext.analytics_hits)")
+    hits = list(ctx.analytics_hits)
+    accounts = await validator.financial.accounts(eid)
+    known = {account.code for account in accounts}
+    semantic: list[str] = []
+
+    decisions = [decision.account_code for decision in output.decisions]
+    duplicates = sorted({code for code in decisions if decisions.count(code) > 1})
+    if duplicates:
+        semantic.append(f"同一命中科目有多条 decision: {', '.join(duplicates)}")
+    missing = sorted(set(hits) - set(decisions))
+    if missing:
+        semantic.append(f"规则命中的科目没有 decision: {', '.join(missing)}")
+    extra = sorted(set(decisions) - set(hits))
+    if extra:
+        semantic.append(f"decision 的科目不是规则命中: {', '.join(extra)}")
+
+    addition_codes = [addition.account_code for addition in output.additions]
+    repeated_additions = sorted({code for code in addition_codes if addition_codes.count(code) > 1})
+    if repeated_additions:
+        semantic.append(f"additions 重复: {', '.join(repeated_additions)}")
+    hit_additions = sorted(set(addition_codes) & set(hits))
+    if hit_additions:
+        semantic.append(f"additions 不能是规则命中的科目: {', '.join(hit_additions)}")
+    semantic += [f"decision 的科目 {code} 不在本项目科目表中" for code in sorted(set(decisions) - known)]
+    semantic += [f"addition 的科目 {code} 不在本项目科目表中" for code in sorted(set(addition_codes) - known)]
+    observation_codes = [code for observation in output.observations for code in observation.account_codes]
+    semantic += [f"observation 的科目 {code} 不在本项目科目表中" for code in sorted(set(observation_codes) - known)]
+    semantic += [
+        f"decision {decision.account_code} 的理由或风险/认定为空"
+        for decision in output.decisions
+        if not decision.reason.strip() or not decision.risk_or_assertion.strip()
+    ]
+    semantic += [
+        f"addition {addition.account_code} 的理由或风险/认定为空"
+        for addition in output.additions
+        if not addition.reason.strip() or not addition.risk_or_assertion.strip()
+    ]
+    semantic += [
+        f"observation {', '.join(observation.account_codes) or '(无科目)'} 的理由或风险/认定为空"
+        for observation in output.observations
+        if not observation.reason.strip() or not observation.risk_or_assertion.strip()
+    ]
+
+    resolver = PointerResolver(validator, eid, ctx.standards_of, ctx.client_profile)
+    reference: list[str] = []
+    resolved_decisions = []
+    for decision in output.decisions:
+        pointers = []
+        for pointer in decision.evidence:
+            resolved, reason = await resolver.resolve(pointer)
+            if resolved is None:
+                reference.append(f"decision {decision.account_code} 的指针 {pointer.source_id}: {reason}")
+            else:
+                pointers.append(resolved)
+        if not decision.evidence:
+            reference.append(f"decision {decision.account_code} 没有证据指针")
+        resolved_decisions.append(decision.model_copy(update={"evidence": pointers}))
+    resolved_observations = []
+    for observation in output.observations:
+        pointers = []
+        for pointer in observation.evidence:
+            resolved, reason = await resolver.resolve(pointer)
+            if resolved is None:
+                reference.append(
+                    f"observation {', '.join(observation.account_codes) or '(无科目)'} 的指针 {pointer.source_id}: "
+                    f"{reason}"
+                )
+            else:
+                pointers.append(resolved)
+        resolved_observations.append(observation.model_copy(update={"evidence": pointers}))
+    checked = output.model_copy(update={"decisions": resolved_decisions, "observations": resolved_observations})
+    if reference:
+        return CheckResult(checked, "reference", errors=reference + semantic)
+    return CheckResult(checked, "semantic" if semantic else None, errors=semantic)
+
+
 async def check_critic(
     validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
 ) -> CheckResult:
@@ -954,6 +1076,8 @@ for _model, _check in (
     (CriticIndependent, check_critic),
     (AuditPlanDraft, check_plan),
     (GoingConcernAdvice, check_going_concern),
+    (AnalyticsBasisDraft, check_analytics_basis),
+    (AnalyticsScreeningDraft, check_analytics_screening),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),

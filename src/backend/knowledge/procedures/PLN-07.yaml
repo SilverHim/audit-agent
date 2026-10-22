@@ -13,9 +13,17 @@ outputs: [analytics, exceptions]
 reads: [accounts, trial_balance, journal_entries]
 engine: rule
 autonomy_level: L3
+# 功能 planning 打开时, RiskAssessorAgent.analytics 走三步 (需求 R371). 这里登记第 1 步用的提示词与输出模型 (固定输出与
+# 提示词守卫据此认这条程序); 第 3 步的 PLN-07-screen.md.j2 与 AnalyticsScreeningDraft 在代码里另取一份模板副本.
+llm:
+  prompt: PLN-07-basis.md.j2
+  output_model: AnalyticsBasisDraft
 params:
   change_pct: 0.2                 # 变动不小于期初 (比较基数) 绝对值的这一比例
-  min_change_revenue_pct: 0.005   # 变动不小于本期收入乘以这一比例 (Numbat 收入 12,000,000.00 时为 60,000.00)
+  # 退回规则时的门槛: 变动不小于本期收入乘以这一比例. 功能 planning 打开时, A01 在 RiskAssessorAgent.analytics 里用大模型
+  # 选的 基准 × 比例 换算成这一参数重跑 (需求 R371); 这里的 0.5% 是退回规则时的原门槛, Numbat 收入 12,000,000.00 时为
+  # 60,000.00
+  min_change_revenue_pct: 0.005
   revenue_categories: [revenue]              # 收入取这些标准分类 (accounts.category): A01 的门槛, 毛利率, 收入增长率
   cost_of_sales_categories: [cost_of_sales]  # 毛利率的成本取这些标准分类
   employee_expense_categories: [employee_expenses]  # A03 月度员工费用取这些标准分类

@@ -486,10 +486,11 @@ DEMO_AGENTS = {
 }
 # 计划与报告各两稿 (退回一次); GEN-05 另有更正分录的增量执行 (需求 R194)
 DEMO_RUNS = {pid: 2 if pid in ("PLN-15", "RPT-03", "GEN-05") else 1 for pid in DEMO_AGENTS}
-# llm_call 留痕: (程序, 是否上传处理 (执行 ID 以 UPLOAD- 开头)) → 行数. 编排内 27 行, 上传处理 24 行; GEN-09 没有
-# (同 R119: REV-03, REV-02 为 L2 跳过, BA-091 的建议不触发主规则, 抽样未中; GEN-02 的 7 条, FIN-03 与 FIN-09 各 2 条
-# 为 L2 同样跳过)
+# llm_call 留痕: (程序, 是否上传处理 (执行 ID 以 UPLOAD- 开头)) → 行数. 编排内 29 行 (PLN-07 三步里第 1, 3 步各一次,
+# 需求 R371), 上传处理 24 行; GEN-09 没有 (同 R119: REV-03, REV-02 为 L2 跳过, BA-091 的建议不触发主规则, 抽样未中;
+# GEN-02 的 7 条, FIN-03 与 FIN-09 各 2 条为 L2 同样跳过)
 DEMO_LLM_CALLS = {
+    ("PLN-07", False): 2,
     ("PLN-15", False): 2,
     ("DOC-06", False): 2,
     ("REV-03", False): 3,
@@ -502,13 +503,13 @@ DEMO_LLM_CALLS = {
     ("DOC-CLASSIFY", True): 21,
     ("DOC-04", True): 3,
 }
-# 留痕各类的行数, 共 253. data: upload, classify, edit 各 21, sync 8 (第 8 为更正通知载入的总账), request_raised 5,
+# 留痕各类的行数, 共 256. data: upload, classify, edit 各 21, sync 8 (第 8 为更正通知载入的总账), request_raised 5,
 # import 4, request_received 4, check 2, demo_import 2, ready 1; decision: 闸门 7, 复核 17, 错报闭环 6 (FIN-03 2,
 # FIN-08 1, 更正通知 1, FIN-09 2); run: 执行 22 次 (DEMO_RUNS) 开始与结束各一行 (需求 R325); transition: 程序 30,
 # 项目阶段 5
 DEMO_TRAIL = {
     TrailKind.data: 89,
-    TrailKind.llm_call: 51,
+    TrailKind.llm_call: 53,
     TrailKind.run: 44,
     TrailKind.transition: 35,
     TrailKind.decision: 30,
@@ -753,14 +754,16 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
     """大模型 FIXED_CALLS 次都读运行副本里各自的 fixture (各程序的次数见 FIXTURE_READS: RPT-03 无保留意见的两稿
-    unqualified-r1, unqualified-r2 与 PLN-15 两个修订 r1, r2 也在里面), 没有回落到 default.json 或找不到, 各文件一次,
-    attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
+    unqualified-r1, unqualified-r2, PLN-15 两个修订 r1, r2 与 PLN-07 三步的 basis, screen 也在里面), 没有回落到
+    default.json 或找不到, 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本 (应用里按
+    项目数据集选目录)."""
     llm = walked.x.client
     reads = [(r.procedure_id, r.fixture_key, r.root) for r in llm.reads]
     assert [r for r in llm.reads if r.file != f"{r.procedure_id}/{r.fixture_key}.json"] == []
     assert Counter(pid for pid, *_ in reads) == FIXTURE_READS
     assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["unqualified-r1", "unqualified-r2"]
     assert sorted(key for pid, key, _ in reads if pid == "PLN-15") == ["r1", "r2"]
+    assert sorted(key for pid, key, _ in reads if pid == "PLN-07") == ["basis", "screen"]
     assert len(set(reads)) == len(reads)
     calls = [e for e in entries(walked) if e.kind is TrailKind.llm_call]
     assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}

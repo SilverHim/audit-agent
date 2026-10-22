@@ -1,0 +1,23 @@
+{
+  "basis": "revenue",
+  "percentage": 0.01,
+  "rationale": "The entity is profitable and profit before tax is positive, but revenue is the stable measure of the scale of the business and the configured 1% example for revenue in ASA 320 A8 is appropriate. It produces a threshold of AUD 120,000.00, which is low relative to the receivables movement and keeps the preliminary analysis focused.",
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "4100",
+      "locator": "balance_cents",
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-001",
+      "locator": "industry_anzsic",
+      "reliability": "internal_copy"
+    }
+  ],
+  "counter_argument": "Profit before tax is stable and positive, so 5% of profit before tax (AUD 75,000.00) is a genuine alternative and would be slightly lower than the revenue threshold. It is not preferred because revenue is less affected by the period-end accounting estimates and the 1% revenue example is expressly given in ASA 320 A8.",
+  "self_confidence": 0.82
+}
