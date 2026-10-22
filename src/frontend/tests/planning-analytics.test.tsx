@@ -11,12 +11,15 @@ import type {
   AnalyticsScreeningItem,
   EvidencePointer,
   GateView,
+  PlanView,
 } from '../src/client/types.gen'
 import { GateMaterial, PlanningAnalytics } from '../src/components/gate-form'
 import { I18nProvider } from '../src/lib/i18n'
+import { planAnalytics } from '../src/lib/plan'
 import { MoneyProvider } from '../src/lib/use-money'
 import { en } from '../src/locales/en'
 import { zh } from '../src/locales/zh'
+import { PlanAnalyticsPanel } from '../src/routes/engagements/$eid/plan'
 
 const EID = 'ENG-TEST'
 
@@ -342,5 +345,94 @@ describe('闸门材料', () => {
     expect(fallback).toContain('data-testid="analytics-fallback"')
     const legacy = render(<GateMaterial eid={EID} view={gateView({ recommendation: null, screening: {} })} />)
     expect(legacy).not.toContain('data-testid="planning-analytics"')
+  })
+})
+
+describe('审计计划页的初步分析 (需求 R372)', () => {
+  function planView(patch: Partial<PlanView> = {}): PlanView {
+    return {
+      current_plan_id: null,
+      plans: [],
+      decisions: [],
+      objectives: [],
+      risks: [],
+      rows: [],
+      ...patch,
+    }
+  }
+
+  function gateView(analyticsValue: AnalyticsResult | null): GateView {
+    return {
+      gate: 'PLN-01/03',
+      target_id: 'PLN-01/03',
+      target_version: 1,
+      material: {
+        kind: 'PLN-01/03',
+        analytics: analyticsValue,
+        analytics_exceptions: [],
+        candidates: { id: 'MC-1', candidates: [] },
+        objectives: [],
+        risks: [],
+        uncovered_objective_ids: [],
+      },
+    } as unknown as GateView
+  }
+
+  test('plan.analytics 非空时优先用它, 渲染与闸门材料相同的推荐卡片与复筛', () => {
+    const own = analytics({ id: 'AR-PLAN-1' })
+    const plan = planView({ analytics: own })
+    const selected = planAnalytics(plan, undefined)
+    expect(selected).toBe(own)
+    const html = render(<PlanAnalyticsPanel eid={EID} analytics={selected} />)
+    // 面板标题沿用现有"初步分析"文案, 内容与闸门材料同一组件
+    expect(html).toContain(en.planning.analytics)
+    expect(html).toContain('data-testid="analytics-recommendation"')
+    expect(html).toContain('data-testid="analytics-screening"')
+    expect(html).toContain('data-testid="analytics-focus"')
+    expect(html).toContain('data-testid="analytics-observations"')
+    expect(html).toContain('Recommended materiality (AI)')
+  })
+
+  test('plan.analytics 为 null 且不在闸门时整块不渲染', () => {
+    const plan = planView({ analytics: null })
+    expect(planAnalytics(plan, undefined)).toBeNull()
+    expect(planAnalytics(plan, null)).toBeNull()
+    expect(render(<PlanAnalyticsPanel eid={EID} analytics={planAnalytics(plan, null)} />)).toBe('')
+  })
+
+  test('旧数据 plan 没有 analytics 键时不崩, 也不渲染空面板', () => {
+    const legacy = planView()
+    expect(Object.hasOwn(legacy, 'analytics')).toBe(false)
+    expect(planAnalytics(legacy, undefined)).toBeNull()
+    expect(render(<PlanAnalyticsPanel eid={EID} analytics={planAnalytics(legacy, undefined)} />)).toBe('')
+    // analytics 为空的旧结果 (纯规则/退回规则) 同样不显示
+    expect(
+      render(<PlanAnalyticsPanel eid={EID} analytics={analytics({ recommendation: null, screening: {} })} />),
+    ).toBe('')
+  })
+
+  test('plan.analytics 为空而停在 PLN-01/03 闸门时退回闸门材料 (与闸门页同一份)', () => {
+    const gate = gateView(analytics({ id: 'AR-GATE-1' }))
+    expect(planAnalytics(planView({ analytics: null }), gate)).toBe(
+      gate.material.kind === 'PLN-01/03' ? gate.material.analytics : null,
+    )
+    // plan.analytics 非空时优先于闸门材料
+    const own = analytics({ id: 'AR-PLAN-2' })
+    expect(planAnalytics(planView({ analytics: own }), gate)?.id).toBe('AR-PLAN-2')
+    // 闸门不是 PLN-01/03 时没有退回
+    const otherGate = {
+      gate: 'FIN-01',
+      target_id: 'FIN-01',
+      target_version: 1,
+      material: { kind: 'FIN-01' },
+    } as unknown as GateView
+    expect(planAnalytics(planView({ analytics: null }), otherGate)).toBeNull()
+  })
+
+  test('中文界面: 面板标题与内容用现有文案', () => {
+    const html = render(<PlanAnalyticsPanel eid={EID} analytics={analytics()} />, 'AUD', 'zh-CN')
+    expect(html).toContain(zh.planning.analytics)
+    expect(html).toContain('推荐重要性（AI）')
+    expect(html).toContain('重点关注')
   })
 })

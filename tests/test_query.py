@@ -8,6 +8,9 @@ import pytest
 
 from backend.agents.base import RunContext
 from backend.contracts.models import (
+    AnalyticsRecommendation,
+    AnalyticsResult,
+    AnalyticsScreening,
     AuditPlan,
     ClientProfile,
     GateDecision,
@@ -498,6 +501,37 @@ async def test_plan_view_without_plan_over_http() -> None:
         missing = await client.get("/api/v1/engagements/ENG-missing/plan")
     assert ok.status_code == 200 and PlanView.model_validate(ok.json()) == EMPTY_PLAN
     assert missing.status_code == 404 and missing.json()["detail"]["code"] == "NOT_FOUND"
+
+
+def test_plan_view_includes_the_analytics_result() -> None:
+    """需求 R372: 计划页数据带初步分析结果 (推荐基准与比例, 三步复筛), 计划批准后仍可看; 还没执行时为空."""
+    values = initial_state(ENGAGEMENT, [], NUMBAT_PROFILE.version)
+    values["audit_plans"] = [audit_plan(status=PlanStatus.approved)]
+    analytics = AnalyticsResult(
+        id="ANALYTICS",
+        version=1,
+        ratios={},
+        exception_ids=[],
+        monthly=[],
+        recommendation=AnalyticsRecommendation(
+            basis="revenue",
+            base_amount_cents=1_200_000_000,
+            percentage=0.01,
+            threshold_cents=12_000_000,
+            rationale="本期亏损, 按 ASA 320 A5 用收入",
+            evidence=[],
+            counter_argument="稳定盈利的公司宜用税前利润",
+            self_confidence=0.8,
+        ),
+        screening=AnalyticsScreening(threshold_cents=12_000_000, hit_account_codes=["1100"]),
+    )
+    values["analytics"] = analytics
+
+    view = plan_view(values)
+
+    assert view.current_plan_id == "PLAN-1"
+    assert view.analytics == analytics
+    assert plan_view(initial_state(ENGAGEMENT, [], NUMBAT_PROFILE.version)).analytics is None
 
 
 # ── 需求 R325: 当前阶段的进度与正在运行的程序 ──

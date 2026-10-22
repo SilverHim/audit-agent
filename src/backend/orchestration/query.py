@@ -76,10 +76,19 @@ def plan_rows(plan: AuditPlan, objectives: Sequence[AuditObjective]) -> list[Pla
 def plan_view(values: EngagementState) -> PlanView:
     """审计计划页的数据, 只取状态 (已补缺省值): 当前计划, 各修订的最新版本, PLN-15 决定, 当前计划涉及的审计目标,
     特别风险 (特别风险目标下等级为 significant 的风险项; 同一目标下等级更低的不算, 目标等级取其下最高), 程序表.
-    没有计划时 current_plan_id 为空, 各列表为空."""
+    没有计划时 current_plan_id 为空, 各列表为空. analytics 为初步分析结果 (需求 R372): 计划页在 PLN-01/03 闸门通过后
+    仍能看推荐重要性与复筛; 还没执行时为空."""
     plan = current_plan(values["audit_plans"])
     if plan is None:
-        return PlanView(current_plan_id=None, plans=[], decisions=[], objectives=[], risks=[], rows=[])
+        return PlanView(
+            current_plan_id=None,
+            plans=[],
+            decisions=[],
+            objectives=[],
+            risks=[],
+            rows=[],
+            analytics=values["analytics"],
+        )
     referenced = {oid for item in plan.items for oid in item.objective_ids}
     significant = set(plan.significant_risk_objective_ids)
     return PlanView(
@@ -91,6 +100,7 @@ def plan_view(values: EngagementState) -> PlanView:
             r for r in values["risk_register"] if r.objective_id in significant and r.level is RiskLevel.significant
         ],
         rows=plan_rows(plan, values["audit_objectives"]),
+        analytics=values["analytics"],
     )
 
 
