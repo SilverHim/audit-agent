@@ -274,6 +274,8 @@ STATES = {
         ("rerun", "重跑", "Rerun"),
         ("manual_result", "人工结果", "Manual result"),
         ("dispute_resolution", "争议裁决", "Resolve dispute"),
+        ("more_evidence", "要求补充证据", "Request more evidence"),  # 需求 R369
+        ("awaiting_evidence", "等待证据", "Awaiting evidence"),
     )
 }
 
