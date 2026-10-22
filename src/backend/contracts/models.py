@@ -533,6 +533,7 @@ class TrailKind(StrEnum):
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
     presentation = "presentation"  # 判断呈递 (GEN-11): 审计师打开一条复核任务, 每次一行 (services/presentation)
+    archive = "archive"  # 签字后的底稿定稿
     run = "run"  # 程序执行的开始与结束, 每次执行各一行 (需求 R325, orchestration/trail)
 
 
@@ -2124,6 +2125,17 @@ class WorkpaperNote(Model):
     added_at: datetime  # 时间
 
 
+class WorkpaperAmendment(Model):
+    """归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充."""
+
+    text: str
+    reason: str
+    added_by: str
+    added_at: datetime
+    reviewed_by: str
+    reviewed_at: datetime
+
+
 class WorkpaperSignoff(Model):
     """底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."""
 
@@ -2213,6 +2225,7 @@ class Workpaper(Versioned):
     notes: list[WorkpaperNote] = []  # 补充说明, 按时间顺序
     signoff: WorkpaperSignoff | None = None  # 当前有效的签署, 未签署或须重新复核时为空
     last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署 (须重新复核时可见原签署), 没有为空
+    amendments: list[WorkpaperAmendment] = []  # 只能在最终版后追加, 原内容与原版本不改
     missing: list[str] = []  # 缺的必填项代号 (底稿配置的 required, 按配置顺序), 空为齐全
 
 

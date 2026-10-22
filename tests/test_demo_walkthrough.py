@@ -510,6 +510,7 @@ DEMO_TRAIL = {
     TrailKind.transition: 35,
     TrailKind.decision: 30,
     TrailKind.external_call: 4,
+    TrailKind.archive: 1,  # 签字后底稿归档定稿 (需求 R337)
 }
 
 

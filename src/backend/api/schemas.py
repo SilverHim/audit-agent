@@ -512,6 +512,13 @@ class WorkpaperNoteIn(Model):
     item: str | None = None  # 补齐的必填项代号 (须是该底稿可由补充说明补齐的), 只是补充时不给
 
 
+class WorkpaperAmendmentIn(Model):
+    """归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD."""
+
+    text: str = ""
+    reason: str = ""
+
+
 class WorkpaperSignoffIn(Model):
     """审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."""
 

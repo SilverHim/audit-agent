@@ -5115,6 +5115,72 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/amendments": {
+      "post": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Amend Workpaper",
+        "operationId": "workpapers-amend_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkpaperAmendmentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workpaper"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/data/schemas": {
       "get": {
         "tags": [
@@ -16238,6 +16304,7 @@
           "conversation_summary",
           "data",
           "presentation",
+          "archive",
           "run"
         ],
         "title": "TrailKind",
@@ -16670,6 +16737,14 @@
               }
             ]
           },
+          "amendments": {
+            "items": {
+              "$ref": "#/components/schemas/WorkpaperAmendment"
+            },
+            "type": "array",
+            "title": "Amendments",
+            "default": []
+          },
           "missing": {
             "items": {
               "type": "string"
@@ -16689,6 +16764,66 @@
         ],
         "title": "Workpaper",
         "description": "一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由\nservices.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.\n只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."
+      },
+      "WorkpaperAmendment": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "added_by": {
+            "type": "string",
+            "title": "Added By"
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Added At"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "reason",
+          "added_by",
+          "added_at",
+          "reviewed_by",
+          "reviewed_at"
+        ],
+        "title": "WorkpaperAmendment",
+        "description": "归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充."
+      },
+      "WorkpaperAmendmentIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WorkpaperAmendmentIn",
+        "description": "归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD."
       },
       "WorkpaperColumn": {
         "properties": {

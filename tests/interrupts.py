@@ -47,8 +47,8 @@ class CrashingTrail(FakeTrail):
         super().__init__()
         self.fail_next = False
 
-    async def record(self, entry: TrailEntry) -> str:
+    async def record(self, entry: TrailEntry, *, independent: bool = True) -> str:
         if self.fail_next and entry.kind is TrailKind.decision:
             self.fail_next = False
             raise RuntimeError(CRASH)
-        return await super().record(entry)
+        return await super().record(entry, independent=independent)

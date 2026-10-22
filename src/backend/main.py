@@ -1,5 +1,6 @@
 """应用入口与组装根: 注入 Store, 适配器与检查点, 编译主图, 挂路由 (C 负责, A 提供图与编排入口)."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import cast
@@ -121,10 +122,23 @@ def build_deps(settings: Settings) -> AgentDeps:
     return with_manual_owners(deps)  # 人工程序的 owner 最后找, 各处共用 (需求 R93)
 
 
+async def recover_archives(runner: GraphRunner) -> None:
+    """启动时补做签字后没做完的底稿归档 (需求 R337): 失败只记日志, 下次启动或读档案页再补."""
+    from backend.services.workpapers import finalize
+
+    for engagement in await runner.deps.engagement_store.list():
+        if engagement.locked:
+            try:
+                await finalize(runner.deps, engagement.id)
+            except Exception:
+                logging.getLogger(__name__).exception("底稿归档补做失败: %s", engagement.id)
+
+
 async def recover(runner: GraphRunner, data_service: DataService) -> None:
     """启动恢复: 先补做各项目没处理完的上传文件 (DataService.recover), 做完由它带动图继续; 其余项目再按 recover 规则
     处理 (GraphRunner.recover), 同一项目不重复拉起. 先处理文件: 图在等程序要的数据时 (需求 R272), 先拉起图会占着
     项目锁, 文件补做就被跳过."""
+    await recover_archives(runner)
     taken = await data_service.recover()
     await runner.recover(skip=taken)
 

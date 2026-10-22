@@ -112,7 +112,8 @@ async def test_rule_workpaper_after_first_run(walked: tuple[Walk, httpx.AsyncCli
     assert ObjectRef(kind="AuditException", id="X-REV-08-1-R03-1", version=2) in second.basis
     assert second.conclusion_draft is not None
     assert second.conclusion_draft.zh.endswith("例外 1 条, 待处理 0 条, 已由判断解释 1 条.")
-    assert rest == []
+    assert len(rest) == 1 and rest[0].status is WorkpaperStatus.final
+    assert rest[0].content == second.content
 
 
 @pytest.mark.external
@@ -121,7 +122,8 @@ async def test_judgment_workpaper_follows_reviews(walked: tuple[Walk, httpx.Asyn
     """验收 2: REV-03 的 WP-D-2 第 1 版列 3 份合同的建议与置信度, 待复核 3 项, 末句同 Q27; 三个复核决定各出一版,
     最后一版待复核 0 项."""
     w, _ = walked
-    versions = await history(w, "D-2")
+    *versions, final = await history(w, "D-2")
+    assert final.status is WorkpaperStatus.final and final.content == versions[-1].content
     drafts = [v.conclusion_draft.zh if v.conclusion_draft else "" for v in versions]
     assert drafts[0] == (
         "判断对象 3 个: CON-X01 建议接受, 置信度 0.84, 待复核; CON-X02 建议接受, 置信度 0.84, 待复核; "
@@ -148,7 +150,7 @@ async def test_unsigned_workpapers_do_not_block_and_lock_after_archive(walked: t
         *("G-1", "G-2", "X", "X-A", "X-B", "X-C", "Z-1", "Z-2", "Z-3"),
         "S",
     ]
-    assert {r["status"] for r in generated} == {"draft"}
+    assert {r["status"] for r in generated} == {"final"}
     posts = [
         ("D-3/conclusion", {"text": "x"}),
         ("D-3/notes", {"text": "x"}),
@@ -825,3 +827,81 @@ async def test_lead_unverified_adjustment_and_tieout_failure(walked: tuple[Walk,
     content = lead_content(spec, malformed, paper, paper.content.header)
     tieout = next(t for s in content.sections for t in s.tables if t.id == "lead_tieout").rows[0]
     assert (tieout["status"], tieout["difference_cents"]) == ("✗", 3243100)
+
+
+@pytest.mark.external
+@shared_loop
+async def test_post_archive_amendment_preserves_original_and_requires_reason(
+    walked: tuple[Walk, httpx.AsyncClient],
+) -> None:
+    """已归档数据的副本只追加补充, 理由必填, 原正文与旧版本冻结; 同一次重试不重复记."""
+    from tests.workpaper_cases import archived_copy
+
+    w, _ = walked
+    runner, store, trail = await archived_copy(w.x.runner, w.x.eid)
+    before = await store.get(w.x.eid, Workpaper, "WP-D-3")
+    assert before.status is WorkpaperStatus.final
+    base = f"/api/v1/engagements/{w.x.eid}/workpapers/D-3"
+    async with api_client(runner) as client:
+        empty = await client.post(f"{base}/amendments", json={"text": "Additional cross-reference."})
+        assert (empty.status_code, empty.json()["detail"]["code"]) == (422, "MISSING_FIELD")
+        payload = {
+            "text": "Additional cross-reference to D-4.",
+            "reason": "Complete the administrative cross-reference.",
+        }
+        changed = await client.post(f"{base}/amendments", json=payload)
+        again = await client.post(f"{base}/amendments", json=payload)
+        assert changed.status_code == 200 and again.json() == changed.json()
+        after = await store.get(w.x.eid, Workpaper, "WP-D-3")
+        assert after.version == before.version + 1 and after.status is WorkpaperStatus.final
+        assert after.content.sections[:-1] == before.content.sections
+        assert after.content.sections[-1].id == "amendments"
+        assert after.content.header == before.content.header
+        assert await store.get(w.x.eid, Workpaper, before.id, before.version) == before
+        addition = after.amendments[-1]
+        assert (addition.text, addition.reason, addition.added_by, addition.reviewed_by) == (
+            *payload.values(),
+            w.x.owner,
+            w.x.owner,
+        )
+        assert addition.added_at == addition.reviewed_at
+        assert (await client.post(f"{base}/conclusion", json={"text": "Cannot overwrite."})).status_code == 423
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.decision]
+    assert entry.payload["reason"] == payload["reason"]
+
+
+@pytest.mark.external
+@shared_loop
+async def test_archive_failure_rolls_back_and_read_catches_up_once(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """签字已成功而底稿归档失败时, 全部版本与归档留痕一起回滚; 读档案补做一次, 重读不再写."""
+    from backend.services.workpapers import finalize
+    from tests.workpaper_cases import archived_copy
+
+    class BrokenArchive(FakeTrail):
+        broken = True
+
+        async def record(self, entry, *, independent=True):
+            if self.broken and entry.kind is TrailKind.archive:
+                raise RuntimeError("构造的归档留痕失败")
+            return await super().record(entry, independent=independent)
+
+    w, _ = walked
+    trail = BrokenArchive()
+    runner, store, _ = await archived_copy(w.x.runner, w.x.eid, include_workpapers=False, trail=trail)
+    with pytest.raises(RuntimeError, match="归档留痕失败"):
+        await finalize(runner.deps, w.x.eid)
+    assert await store.latest(w.x.eid, Workpaper) == [] and trail.entries == []
+    trail.broken = False
+    async with api_client(runner) as client:
+        response = await client.get(f"/api/v1/engagements/{w.x.eid}/workpapers")
+        assert response.status_code == 200
+        assert {r["status"] for r in response.json() if r["availability"] == "generated"} == {"final"}
+        papers = await store.latest(w.x.eid, Workpaper)
+        count = len(store.rows_of(w.x.eid))
+        assert papers and all(p.status is WorkpaperStatus.final for p in papers)
+        assert await finalize(runner.deps, w.x.eid) == []
+        await client.get(f"/api/v1/engagements/{w.x.eid}/workpapers")
+        assert len(store.rows_of(w.x.eid)) == count
+    [entry] = [e for e in trail.entries if e.kind is TrailKind.archive]
+    assert entry.payload["count"] == len(papers)
+    assert all(p.signoff is None for p in papers)

@@ -60,7 +60,7 @@ from backend.contracts.data import (
     XeroConnection,
     table_changes,
 )
-from backend.contracts.errors import AbnTaken, EngagementLocked, VersionConflict
+from backend.contracts.errors import AbnTaken, DataRejected, EngagementLocked, VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import ContractExtraction
 from backend.contracts.models import (
@@ -146,6 +146,7 @@ from backend.contracts.models import (
     ReceiptChannel,
     Reliability,
     ReportSection,
+    ReportStatus,
     RepresentationClause,
     RepresentationStatus,
     ReviewRecord,
@@ -171,6 +172,7 @@ from backend.contracts.models import (
     User,
     Versioned,
     WorkingLanguage,
+    Workpaper,
     WrittenRepresentationLetter,
     initial_currency,
     with_currency,
@@ -1311,14 +1313,13 @@ class FakeOutputStore:
         return self.rows_of(eid) + staged
 
     async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
-        """同 (类型, id, version) 已存在则跳过并返回已存对象; 否则 version 须为已有最大值 +1, 不符抛 VersionConflict.
-
-        绑定的项目存储中该项目已 locked (含本事务刚置的) 时抛 EngagementLocked.
-        """
-        txn = self._txn(eid)
         engagement = await self.engagement_store.get(eid) if self.engagement_store is not None else None
         if engagement is not None and engagement.locked:
             raise EngagementLocked(eid)
+        return await self._append(eid, objs)
+
+    async def _append(self, eid: str, objs: Sequence[Versioned]) -> list[Versioned]:
+        txn = self._txn(eid)
         result: list[Versioned] = []
         new: list[Versioned] = []
         for obj in objs:
@@ -1339,6 +1340,31 @@ class FakeOutputStore:
             self.rows_of(eid).extend(new)
             self.commits.append(list(new))
         return result
+
+    async def put_signed_workpapers(
+        self, eid: str, objs: Sequence[Workpaper], *, actor: str, mode: Literal["archive", "amendment"]
+    ) -> list[Workpaper]:
+        from backend.contracts.models import Workpaper, WorkpaperStatus
+        from backend.services.workpaper_finalization import validate_signed_write
+
+        engagement = await self.engagement_store.get(eid) if self.engagement_store else None
+        if engagement is None:
+            raise LookupError(eid)
+        reports = await self.latest(eid, AuditReportVersion)
+        decisions = await self.latest(eid, GateDecision)
+        if (
+            not engagement.locked
+            or not any(r.status is ReportStatus.signed for r in reports)
+            or not any(d.gate is GateId.RPT_01 and d.decision == "approve" for d in decisions)
+        ):
+            raise EngagementLocked(eid)
+        for obj in objs:
+            if type(obj) is not Workpaper or obj.status is not WorkpaperStatus.final:
+                raise DataRejected("INVALID_VALUE", "只允许最终版底稿")
+            if await self.get(eid, Workpaper, obj.id, obj.version) is None:
+                validate_signed_write(await self.get(eid, Workpaper, obj.id), obj, actor, mode)
+        stored = await self._append(eid, objs)
+        return [cast(Workpaper, paper) for paper in stored]
 
     async def get(self, eid: str, kind: type[T], id: str, version: int | None = None) -> T | None:
         """version 为空取最新版本; 查不到返回 None."""

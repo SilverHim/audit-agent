@@ -5838,7 +5838,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'run';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'archive' | 'run';
 
 /**
  * UncorrectedItem
@@ -6078,9 +6078,61 @@ export type Workpaper = {
     signoff?: WorkpaperSignoff | null;
     last_signoff?: WorkpaperSignoff | null;
     /**
+     * Amendments
+     */
+    amendments?: Array<WorkpaperAmendment>;
+    /**
      * Missing
      */
     missing?: Array<string>;
+};
+
+/**
+ * WorkpaperAmendment
+ *
+ * 归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充.
+ */
+export type WorkpaperAmendment = {
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Added By
+     */
+    added_by: string;
+    /**
+     * Added At
+     */
+    added_at: string;
+    /**
+     * Reviewed By
+     */
+    reviewed_by: string;
+    /**
+     * Reviewed At
+     */
+    reviewed_at: string;
+};
+
+/**
+ * WorkpaperAmendmentIn
+ *
+ * 归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD.
+ */
+export type WorkpaperAmendmentIn = {
+    /**
+     * Text
+     */
+    text?: string;
+    /**
+     * Reason
+     */
+    reason?: string;
 };
 
 /**
@@ -9430,6 +9482,40 @@ export type WorkpapersSignWorkpaperResponses = {
 };
 
 export type WorkpapersSignWorkpaperResponse = WorkpapersSignWorkpaperResponses[keyof WorkpapersSignWorkpaperResponses];
+
+export type WorkpapersAmendWorkpaperData = {
+    body: WorkpaperAmendmentIn;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/amendments';
+};
+
+export type WorkpapersAmendWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersAmendWorkpaperError = WorkpapersAmendWorkpaperErrors[keyof WorkpapersAmendWorkpaperErrors];
+
+export type WorkpapersAmendWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Workpaper;
+};
+
+export type WorkpapersAmendWorkpaperResponse = WorkpapersAmendWorkpaperResponses[keyof WorkpapersAmendWorkpaperResponses];
 
 export type DataTableSchemasData = {
     body?: never;

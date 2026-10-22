@@ -9,7 +9,7 @@ from fastapi.responses import Response
 from backend.agents.base import AgentDeps
 from backend.api.deps import current_user, get_deps, get_runner, owned_engagement
 from backend.api.errors import catch_api
-from backend.api.schemas import WorkpaperConclusionIn, WorkpaperNoteIn, WorkpaperSignoffIn
+from backend.api.schemas import WorkpaperAmendmentIn, WorkpaperConclusionIn, WorkpaperNoteIn, WorkpaperSignoffIn
 from backend.contracts.errors import DataRejected
 from backend.contracts.models import Engagement, User, Workpaper
 from backend.contracts.views import WorkpaperDetail, WorkpaperIndexEntry
@@ -130,3 +130,15 @@ async def sign_workpaper(
     RPT-01. 复核范围不认识 422 (请求体校验); 底稿没有记录 404; 锁定 423; 忙 409."""
     async with catch_api():
         return await service.sign(engagement.id, ref, body.scope, body.opinion, user.id)
+
+
+@router.post("/workpapers/{ref}/amendments")
+async def amend_workpaper(
+    ref: str,
+    body: WorkpaperAmendmentIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    service: Annotated[WorkpaperService, Depends(get_workpapers)],
+) -> Workpaper:
+    async with catch_api():
+        return await service.amend(engagement.id, ref, body.text, body.reason, user.id)

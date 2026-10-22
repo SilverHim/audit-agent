@@ -16,3 +16,23 @@ async def d3_case() -> tuple[GraphRunner, FakeOutputStore, Workpaper]:
     )
     [paper] = [p for p in await refresh(runner.deps, engagement.id) if p.ref == "D-3"]
     return runner, store, paper
+
+
+async def archived_copy(runner: GraphRunner, eid: str, *, include_workpapers: bool = True, trail=None):
+    """复用已完成走通的只读材料另建存储, 测归档与补充不改共享结果、不再执行程序."""
+    from dataclasses import replace
+
+    from tests.fakes import FakeTrail, bind_stores
+
+    original = runner.deps
+    assert isinstance(original.output_store, FakeOutputStore)
+    engagement = await original.engagement_store.get(eid)
+    profile = await original.engagement_store.client_profile(engagement.client_id, engagement.client_profile_version)
+    engagements = FakeEngagementStore([profile], [engagement])
+    rows = [row for row in original.output_store.rows_of(eid) if include_workpapers or not isinstance(row, Workpaper)]
+    store = FakeOutputStore(rows, eid=eid)
+    bind_stores(engagements, store)
+    copied_trail = trail or FakeTrail()
+    copied_trail.output_store = store
+    deps = replace(original, engagement_store=engagements, output_store=store, trail=copied_trail)
+    return GraphRunner(runner.app, deps), store, copied_trail

@@ -304,7 +304,7 @@ def plan_sections(view: "View") -> list[WorkpaperSection]:
 def report_sections(view: "View") -> list[WorkpaperSection]:
     return [
         WorkpaperSection(
-            id=f"report_{report.id}",
+            id=f"report_{report.id}_{report.version}",
             title=words(f"报告修订 {report.revision}", f"Report revision {report.revision}"),
             generated_language=next((r.language for r in view.runs if r.id == report.run_id), None),
             paragraphs=[
