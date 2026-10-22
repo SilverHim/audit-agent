@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from backend.contracts.data import ExtractionRecord
 from backend.contracts.errors import DataRejected
 from backend.contracts.knowledge import ProcedureTemplate, RequiredItem
 from backend.contracts.models import (
@@ -29,6 +30,8 @@ from backend.contracts.models import (
     AuditPlan,
     AuditReportVersion,
     Confirmation,
+    Contract,
+    DocumentRef,
     Engagement,
     EngagementTerms,
     ExceptionDisposition,
@@ -45,12 +48,16 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProposedAction,
+    ReviewRecord,
     ReviewScope,
     ReviewStatus,
+    ReviewTask,
+    ReviewWithdrawal,
     RiskItem,
     RunPopulation,
     RunStatus,
     RunTrigger,
+    StepKind,
     TrailEntry,
     TrailKind,
     UncorrectedSchedule,
@@ -64,6 +71,7 @@ from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import render_text, workpaper_kind
 from backend.services.workpaper_content import build_content
+from backend.services.workpaper_judgments import model_judgments
 
 if TYPE_CHECKING:
     from backend.agents.base import AgentDeps
@@ -124,6 +132,12 @@ class Sources:
     judgments: list[Judgment] = field(default_factory=list)
     decisions: list[GateDecision] = field(default_factory=list)
     outputs: dict[str, list[Versioned]] = field(default_factory=dict)
+    contracts: list[Contract] = field(default_factory=list)
+    documents: list[DocumentRef] = field(default_factory=list)
+    extractions: list[ExtractionRecord] = field(default_factory=list)
+    tasks: list[ReviewTask] = field(default_factory=list)
+    reviews: list[ReviewRecord] = field(default_factory=list)
+    withdrawals: list[ReviewWithdrawal] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -263,16 +277,6 @@ def rule_draft(view: View) -> LocalizedText | None:
     return joined(parts)
 
 
-def model_judgments(judgments: Sequence[Judgment], runs: Sequence[ProcedureRun]) -> list[Judgment]:
-    """各对象模型给出的最后一次判断 (人工判断 -H 不算; 重跑过的取最后一次执行的), 按对象排序."""
-    latest: dict[str, Judgment] = {}
-    run_numbers = {r.id: r.run_no for r in runs}
-    for j in sorted(judgments, key=lambda j: (run_numbers.get(j.run_id, 0), j.created_at, j.version, j.id)):
-        if "-H" not in j.id:
-            latest[j.subject_id] = j
-    return [latest[s] for s in sorted(latest)]
-
-
 def judgment_draft(view: View) -> LocalizedText | None:
     """判断程序的结论草稿 (Q27 选项 1): 判断了几个对象, 各对象的建议, 置信度与复核状态, 待复核几项, 末句 "最终结论待
     审计师复核后确定". 没有判断为空."""
@@ -329,8 +333,18 @@ SATISFIED: dict[str, Check] = {
     "reviewed_on": lambda v, s, w: w.signoff is not None,
     "review_scope": lambda v, s, w: w.signoff is not None,
     "procedures": lambda v, s, w: bool(v.runs or v.decisions),  # 模板写明性质与范围, 执行记录写明时间
-    "results": lambda v, s, w: any(r.status is RunStatus.succeeded for r in v.runs) or bool(v.decisions),
-    "conclusions": lambda v, s, w: bool(w.conclusion or w.conclusion_draft),
+    "results": lambda v, s, w: (
+        (any(r.status is RunStatus.succeeded for r in v.runs) or bool(v.decisions))
+        and all(
+            j.evidence
+            and all(step.evidence for step in j.reasoning_chain if step.kind in {StepKind.fact, StepKind.standard})
+            for j in model_judgments(v.judgments, v.runs)
+        )
+    ),
+    "conclusions": lambda v, s, w: (
+        bool(w.conclusion or w.conclusion_draft)
+        and all(j.reasoning_chain for j in model_judgments(v.judgments, v.runs))
+    ),
     # 规则程序: 当前执行的被测总体都记录了; 判断程序: 有判断的对象
     "tested_items": lambda v, s, w: (
         bool(v.populations) and all(distinct_items(p) is not None for p in v.populations)
@@ -451,6 +465,12 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         judgments=await store.latest(eid, Judgment),
         decisions=await store.latest(eid, GateDecision),
         outputs=outputs,
+        contracts=await deps.financial_store.contracts(eid),
+        documents=await deps.financial_store.documents(eid),
+        extractions=await deps.data.extraction_versions(eid),
+        tasks=await store.latest(eid, ReviewTask),
+        reviews=await store.latest(eid, ReviewRecord),
+        withdrawals=await store.latest(eid, ReviewWithdrawal),
     )
     required = {pid: library.required_items(t.workpaper.ref) for pid, t in templates.items() if t.workpaper}
     workpapers = {w.id: w for w in papers}

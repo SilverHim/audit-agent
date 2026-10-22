@@ -2162,6 +2162,9 @@ class WorkpaperSection(Model):
     paragraphs: list[str | LocalizedText] = []
     tables: list[WorkpaperTable] = []
 
+    generated_language: WorkingLanguage | None = None  # 判断文字的生成语言, 导出不同时提示, 不翻译原文
+    children: list["WorkpaperSection"] = []  # 按判断对象分节, 保留通用根区块顺序
+
 
 class WorkpaperHeader(Model):
     """生成当时的项目信息与编制/复核情况; 渲染旧版本不再读项目或用户表."""

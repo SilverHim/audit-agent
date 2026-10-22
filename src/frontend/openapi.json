@@ -16712,6 +16712,29 @@
             "type": "array",
             "title": "Tables",
             "default": []
+          },
+          "generated_language": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "zh",
+                  "en"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated Language"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/WorkpaperSection"
+            },
+            "type": "array",
+            "title": "Children",
+            "default": []
           }
         },
         "additionalProperties": false,

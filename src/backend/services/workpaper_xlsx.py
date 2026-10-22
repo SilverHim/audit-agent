@@ -11,7 +11,14 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.worksheet import Worksheet
 
-from backend.contracts.models import LocalizedText, WorkingLanguage, Workpaper, WorkpaperTable, WorkpaperValue
+from backend.contracts.models import (
+    LocalizedText,
+    WorkingLanguage,
+    Workpaper,
+    WorkpaperSection,
+    WorkpaperTable,
+    WorkpaperValue,
+)
 from backend.services.currency import MINOR_DIGITS
 from backend.services.workpaper_labels import PENDING, SCOPES
 
@@ -136,6 +143,11 @@ def table(ws: Worksheet, start: int, data: WorkpaperTable, language: WorkingLang
     return at
 
 
+def flatten(parts: list[WorkpaperSection]) -> list[WorkpaperSection]:
+    """按展示顺序展开对象小节, 以实际最宽表设置列宽."""
+    return [part for root in parts for part in [root, *flatten(root.children)]]
+
+
 def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
     """生成一份 xlsx; 稳定的单元格内容取快照, 文件属性中的生成时刻由 openpyxl 记."""
     content = workpaper.content
@@ -145,7 +157,8 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
     ws = book.active
     assert isinstance(ws, Worksheet)
     ws.title = workpaper.ref
-    tables = [data for part in content.sections for data in part.tables]
+    parts = flatten(content.sections)
+    tables = [data for part in parts for data in part.tables]
     widest = max(tables, key=lambda data: len(data.columns), default=None)
     ncols = max(8, len(widest.columns) if widest else 0)
     for n in range(1, ncols + 1):
@@ -189,9 +202,18 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
         fill=PENDING_FILL if not header.reviewed_at else None,
     )
     at = 6
-    for part in content.sections:
+    for part in parts:
         span(ws, at, 1, ncols, text(part.title, language), bold=True, fill=SECTION_FILL)
         at += 1
+        if part.generated_language and part.generated_language != language:
+            generated = "英文" if part.generated_language == "en" else "中文"
+            message = (
+                f"判断文字为{generated}生成"
+                if zh
+                else f"Judgment text generated in {'English' if part.generated_language == 'en' else 'Chinese'}"
+            )
+            span(ws, at, 1, ncols, message, fill=PENDING_FILL)
+            at += 1
         for paragraph in part.paragraphs:
             span(ws, at, 1, ncols, text(paragraph, language))
             at += 1

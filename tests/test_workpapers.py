@@ -392,3 +392,93 @@ async def test_generic_workpaper_snapshots(walked: tuple[Walk, httpx.AsyncClient
         assert "{{" not in snapshot
     for data in tables.values():
         assert all(not ({"created_by", "approved_by", "posted_by"} & row.keys()) for row in data.rows)
+
+
+@pytest.mark.external
+@shared_loop
+async def test_judgment_and_extraction_snapshots(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """同一走通核对三份合同十一条原文、逐对象推理与复核, 两份银行回函的抽取字段."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from backend.services.workpaper_xlsx import render
+
+    w, _ = walked
+    first, *_, last = await history(w, "D-2")
+    details = next(s for s in last.content.sections if s.id == "details")
+    assert [s.title.en for s in details.children] == ["CON-X01", "CON-X02", "CON-X03"]
+    terms = [table for child in details.children for table in child.tables if table.id.startswith("terms_")]
+    assert sum(len(table.rows) for table in terms) == 11
+    assert all(row["quote"] and row["page"] >= 1 for table in terms for row in table.rows)
+    assert len(details.tables[0].rows) == 3
+    for child in details.children:
+        assert child.generated_language == "en"
+        reason = next(t for t in child.tables if t.id.startswith("reasoning_"))
+        assert reason.rows and any(row["kind"].en == "Fact" and row["evidence"] for row in reason.rows)
+        assert next(t for t in child.tables if t.id.startswith("confidence_")).rows[0]["confidence"] in {0.84, 0.82}
+        assert next(t for t in child.tables if t.id.startswith("critic_")).rows
+        reviews = next(t for t in child.tables if t.id.startswith("reviews_"))
+        assert reviews.rows[0]["decision"].en == "Confirm" and reviews.rows[0]["reviewer"] == w.x.owner
+    first_details = next(s for s in first.content.sections if s.id == "details")
+    assert {r["status"].en for r in first_details.tables[0].rows} == {"Awaiting auditor decision"}
+    extracted = (await history(w, "D-1"))[-1]
+    contracts = next(s for s in extracted.content.sections if s.id == "details").children
+    assert len(contracts) == 3 and sum(len(c.tables[1].rows) for c in contracts) == 11
+    confirmation = (await history(w, "C-2"))[-1]
+    fields = next(s for s in confirmation.content.sections if s.id == "details").tables[0]
+    assert len(fields.rows) == 2
+    assert {r["accrued_interest_cents"] for r in fields.rows} == {0, 4853}
+    for language in ("zh", "en"):
+        cells = [cell.value for row in load_workbook(BytesIO(render(last, language))).active for cell in row]
+        assert ("判断文字为英文生成" in cells) == (language == "zh")
+        assert all(row["quote"] in cells for table in terms for row in table.rows)
+
+
+@pytest.mark.external
+@shared_loop
+async def test_judgment_missing_reasoning_and_extraction_changes(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """缺推理与指针明确进入缺项; 人工抽取修改保留字段、版本、人、时间与理由."""
+    from dataclasses import replace
+
+    from backend.contracts.data import ExtractionRecord
+    from backend.services.workpaper_content import build_content
+    from backend.services.workpapers import load, refreshed, view_of
+
+    w, _ = walked
+    snapshot = await load(w.x.runner.deps, w.x.eid)
+    sources = snapshot.sources
+    original = next(j for j in sources.judgments if j.procedure_id == "REV-03")
+    changed = original.model_copy(update={"version": original.version + 1, "reasoning_chain": [], "evidence": []})
+    broken = replace(sources, judgments=[changed if j.id == original.id else j for j in sources.judgments])
+    paper = (await history(w, "D-2"))[-1]
+    new = refreshed(paper, snapshot.templates["REV-03"], snapshot.required["REV-03"], broken)
+    assert {"conclusions", "results"} <= set(new.missing)
+    note = ExtractionRecord(
+        target_type="contract",
+        target_id="CON-X01",
+        version=2,
+        data={"amount_cents": 1500},
+        field="amount_cents",
+        reason="Agreed to signed amendment.",
+        changed_by=w.x.owner,
+        changed_at=DECIDED_AT,
+    )
+    edited = replace(sources, extractions=[*sources.extractions, note])
+    contract_paper = (await history(w, "D-1"))[-1]
+    content = build_content(view_of(snapshot.templates["DOC-04"], edited), edited, contract_paper)
+    details = next(s for s in content.sections if s.id == "details")
+    edits = next(t for c in details.children for t in c.tables if t.id == "extraction_changes" and t.rows)
+    assert edits.rows == [
+        {
+            "source_id": "CON-X01",
+            "version": 2,
+            "field": "amount_cents",
+            "before": None,
+            "after": "AUD 15.00",
+            "changed_by": w.x.owner,
+            "changed_at": DECIDED_AT.isoformat(),
+            "reason": "Agreed to signed amendment.",
+        }
+    ]
+    assert contract_paper.content != content

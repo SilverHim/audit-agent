@@ -221,6 +221,15 @@ async def test_agreeing_records_both_and_withdrawing_one_updates_the_schedule() 
         [withdrawal] = await runner.deps.output_store.latest(d.eid, ReviewWithdrawal)
         assert (withdrawal.record_id, withdrawal.reason) == (record_id, None)
         assert keys.count(record_id) == 1 and keys.count(withdrawal.id) == 1
+        from backend.contracts.models import Workpaper
+
+        paper = await runner.deps.output_store.get(d.eid, Workpaper, "WP-G-2")
+        details = next(s for s in paper.content.sections if s.id == "details")
+        child = next(s for s in details.children if s.id == f"judgment_{XJ499}")
+        records = next(t for t in child.tables if t.id.startswith("reviews_"))
+        assert [r["status"].en for r in records.rows] == ["Withdrawn", "Decided"]
+        assert [r["decision"].en for r in records.rows] == ["Recognise misstatement", "Override"]
+        assert records.rows[0]["withdrawn_at"] == withdrawal.withdrawn_at.isoformat()
 
 
 async def test_disagreeing_is_listed_and_withdrawal_is_refused_after_fin01() -> None:
