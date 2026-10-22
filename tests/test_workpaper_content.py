@@ -83,7 +83,7 @@ async def test_content_is_pure_and_old_versions_stay_independent() -> None:
         for rule in rules
     ]
     await store.put(eid, [population.model_copy(update={"version": 2, "rules": rules})], actor="A6")
-    [revised] = await refresh(runner.deps, eid)
+    [revised] = [p for p in await refresh(runner.deps, eid) if p.ref == "D-3"]
     assert revised.status is WorkpaperStatus.needs_rereview and revised.signoff is None
     assert revised.content != first.content
     details = next(section for section in revised.content.sections if section.id == "details").tables[0]
@@ -100,7 +100,7 @@ async def test_missing_population_is_visible_and_marks_required_item() -> None:
     await store.put(
         eid, [population.model_copy(update={"version": 2, "rules": [missing, *population.rules[1:]]})], actor="A6"
     )
-    [revised] = await refresh(runner.deps, eid)
+    [revised] = [p for p in await refresh(runner.deps, eid) if p.ref == "D-3"]
     assert "tested_items" in revised.missing
     details = next(section for section in revised.content.sections if section.id == "details")
     assert any(
@@ -117,7 +117,7 @@ async def test_multiple_check_exceptions_keep_every_footnote() -> None:
     [original] = await store.latest(eid, AuditException)
     additional = original.model_copy(update={"id": "X-REV-08-1-R02-1", "rule_id": "R02"})
     await store.put(eid, [additional], actor="A6")
-    [changed] = await refresh(runner.deps, eid)
+    [changed] = [p for p in await refresh(runner.deps, eid) if p.ref == "D-3"]
     data = next(s for s in changed.content.sections if s.id == "details").tables[0]
     row = next(r for r in data.rows if r["invoice_no"] == "ORC1026")
     assert row["remarks"] == LocalizedText(zh="例外 a, b", en="Exception a, b")

@@ -31,6 +31,7 @@ from backend.services.workpaper_labels import (
     ROW_CHECKS,
     words,
 )
+from backend.services.workpaper_summaries import misstatement_section
 from backend.services.workpaper_tables import column, section, value
 
 if TYPE_CHECKING:
@@ -328,7 +329,11 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
     ]
     if template.id == "REV-03" and "GEN-02" in sources.program_refs:
         linked.append(sources.program_refs["GEN-02"])
-    specialized = decision_sections(view, sources, workpaper) or detail_sections(view, sources)
+    specialized = (
+        misstatement_section(view, sources)
+        if template.id == "FIN-04"
+        else (decision_sections(view, sources, workpaper) or detail_sections(view, sources))
+    )
     details = section(
         "details",
         tables=[table],

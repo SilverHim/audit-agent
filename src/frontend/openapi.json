@@ -16317,7 +16317,14 @@
             "title": "Area"
           },
           "procedure_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Procedure Id"
           },
           "status": {
@@ -16428,7 +16435,6 @@
           "id",
           "ref",
           "area",
-          "procedure_id",
           "basis"
         ],
         "title": "Workpaper",
@@ -16554,7 +16560,14 @@
             "default": "AUD"
           },
           "procedure_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Procedure Id"
           },
           "preparer": {
@@ -16612,7 +16625,6 @@
           "title",
           "client_name",
           "engagement_id",
-          "procedure_id",
           "preparer"
         ],
         "title": "WorkpaperHeader",
@@ -16848,6 +16860,25 @@
             "type": "array",
             "title": "Rows",
             "default": []
+          },
+          "link_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Column"
+          },
+          "links": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/LocalizedText"
+            },
+            "type": "object",
+            "title": "Links",
+            "default": {}
           }
         },
         "additionalProperties": false,

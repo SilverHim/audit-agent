@@ -6017,7 +6017,7 @@ export type Workpaper = {
     /**
      * Procedure Id
      */
-    procedure_id: string;
+    procedure_id?: string | null;
     status?: WorkpaperStatus;
     /**
      * Basis
@@ -6129,7 +6129,7 @@ export type WorkpaperHeader = {
     /**
      * Procedure Id
      */
-    procedure_id: string;
+    procedure_id?: string | null;
     preparer: LocalizedText;
     /**
      * Completed At
@@ -6277,6 +6277,16 @@ export type WorkpaperTable = {
     rows?: Array<{
         [key: string]: string | number | number | boolean | LocalizedText | null;
     }>;
+    /**
+     * Link Column
+     */
+    link_column?: string | null;
+    /**
+     * Links
+     */
+    links?: {
+        [key: string]: LocalizedText;
+    };
 };
 
 /**

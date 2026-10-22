@@ -740,13 +740,21 @@ async def test_failure_written_by_a1_agent_patch_by_agent() -> None:
         (["T-RUN-ACC-04-1-v1"], AgentId.A1),
         (["ACC-04"], AgentId.A1),
         (["WP-B-2"], AgentId.A2),
+        (["WP-S"], AgentId.A8),
+        (["WP-00"], AgentId.A8),
     ]
 
     passing = ActorStore(p0_pack())
     nodes = make_nodes(output_store=passing)
     nodes.agents["ACC-04"] = ScriptAgent(nodes.deps, lambda ctx: {"procedure_runs": [finished(ctx.run)]})
     await nodes.execute(p0_state(), "ACC-04")
-    assert passing.actors == [(["RUN-ACC-04-1"], AgentId.A2), (["ACC-04"], AgentId.A1), (["WP-B-2"], AgentId.A2)]
+    assert passing.actors == [
+        (["RUN-ACC-04-1"], AgentId.A2),
+        (["ACC-04"], AgentId.A1),
+        (["WP-B-2"], AgentId.A2),
+        (["WP-S"], AgentId.A8),
+        (["WP-00"], AgentId.A8),
+    ]
 
 
 async def test_cancelled_agent_writes_nothing() -> None:
