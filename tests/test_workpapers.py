@@ -141,7 +141,7 @@ async def test_unsigned_workpapers_do_not_block_and_lock_after_archive(walked: t
     listed = (await client.get(base)).json()
     assert [r["ref"] for r in listed] == [
         "00",
-        *("A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "C-1", "C-2", "C-3", "C-4", "D-1", "D-2", "D-3", "D-4"),
+        *("A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "C", "C-1", "C-2", "C-3", "C-4", "D", "D-1", "D-2", "D-3", "D-4"),
         *("G-1", "G-2", "X", "X-A", "X-B", "X-C", "Z-1", "Z-2", "Z-3"),
         "S",
     ]
@@ -721,3 +721,94 @@ async def test_summary_excludes_withdrawn_and_standards_show_missing_reason(
     table = standards_table(sources, papers)
     assert next(r for r in table.rows if r["standard"] == "ASA 320")["status"].en == "Missing selection rationale"
     assert next(r for r in table.rows if r["standard"] == "ASA 250")["status"].en == "Missing"
+
+
+@pytest.mark.external
+@shared_loop
+async def test_cash_and_revenue_lead_schedules(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """同一 Xero 走通的导引表: 审定数只加已验证分录, 不重述上年数, 期间不可比显式提示."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from backend.services.workpaper_summaries import system_refreshed
+    from backend.services.workpaper_xlsx import render
+    from backend.services.workpapers import load
+
+    w, _ = walked
+    snapshot = await load(w.x.runner.deps, w.x.eid)
+    papers = {p.ref: p for p in snapshot.workpapers.values()}
+    paper = papers["D"]
+    table = next(t for s in paper.content.sections for t in s.tables if t.id == "lead_schedule")
+    assert [r["account_code"] for r in table.rows] == ["200", "260", "270"]
+    sales, _, interest = table.rows
+    assert (
+        sales["unaudited_cents"],
+        sales["adjustments_cents"],
+        sales["audited_cents"],
+        sales["prior_cents"],
+        sales["change_cents"],
+    ) == (-3243100, 0, -3243100, -420000, -2823100)
+    assert (
+        interest["unaudited_cents"],
+        interest["adjustments_cents"],
+        interest["audited_cents"],
+        interest["uncorrected_cents"],
+    ) == (0, -4853, -4853, 0)
+    assert all(ref in sales["source_ref"] for ref in ("D-1", "D-2", "D-3", "D-4"))
+    period = next(s for s in paper.content.sections if s.id == "procedures").paragraphs[0]
+    assert "3 months" in period.en and "12 months" in period.en and "not directly comparable" in period.en
+    assert "not restated" in period.en
+    cash = next(t for s in papers["C"].content.sections for t in s.tables if t.id == "lead_schedule")
+    assert [r["account_code"] for r in cash.rows] == ["090", "091"]
+    sheet = load_workbook(BytesIO(render(paper, "en"))).active
+    rows = list(sheet.iter_rows())
+    first = next(row[0].row for row in rows if row[0].value == "200")
+    assert sheet.cell(first, 5).value == f"=C{first}+D{first}"
+    assert sheet.cell(first, 7).value == f"=E{first}-F{first}"
+    assert sheet.cell(first + 3, 3).value == f"=SUM(C{first}:C{first + 2})"
+    assert any(cell.value == "✓" for row in rows for cell in row)
+    for ref in ("C", "D"):
+        spec = next(s for s in w.x.runner.deps.library.workpapers.system if s.ref == ref)
+        assert system_refreshed(papers[ref], spec, snapshot.sources, papers) is None  # 没有导引表之间的版本循环.
+
+
+@pytest.mark.external
+@shared_loop
+async def test_lead_unverified_adjustment_and_tieout_failure(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """有分录但未验证时不计已更正额; 未更正利息按收入贷方方向单列, 试算表异常时勾稽不冒充通过."""
+    from dataclasses import replace
+
+    from backend.contracts.models import MisstatementStatus
+    from backend.services.workpaper_leads import lead_content
+    from backend.services.workpapers import load
+
+    w, _ = walked
+    snapshot = await load(w.x.runner.deps, w.x.eid)
+    sources = snapshot.sources
+    paper = snapshot.workpapers["WP-D"]
+    spec = next(s for s in w.x.runner.deps.library.workpapers.system if s.ref == "D")
+    errors = [
+        m.model_copy(
+            update={
+                "status": MisstatementStatus.uncorrected,
+                "corrected_cents": 0,
+                "residual_cents": None,
+                "verified_by_judgment_id": None,
+            }
+        )
+        if m.amount_cents == 4853
+        else m
+        for m in sources.misstatements
+    ]
+    unverified = replace(sources, misstatements=errors)
+    content = lead_content(spec, unverified, paper, paper.content.header)
+    table = next(t for s in content.sections for t in s.tables if t.id == "lead_schedule")
+    interest = next(r for r in table.rows if r["account_code"] == "270")
+    assert (interest["adjustments_cents"], interest["audited_cents"], interest["uncorrected_cents"]) == (0, 0, -4853)
+    assert "C-4" in interest["source_ref"] and "X-" in interest["source_ref"]
+    duplicate = next(r for r in sources.trial_balance if r.account_code == "200" and r.period == "current")
+    malformed = replace(sources, trial_balance=[*sources.trial_balance, duplicate])
+    content = lead_content(spec, malformed, paper, paper.content.header)
+    tieout = next(t for s in content.sections for t in s.tables if t.id == "lead_tieout").rows[0]
+    assert (tieout["status"], tieout["difference_cents"]) == ("✗", 3243100)

@@ -122,3 +122,18 @@ async def test_multiple_check_exceptions_keep_every_footnote() -> None:
     row = next(r for r in data.rows if r["invoice_no"] == "ORC1026")
     assert row["remarks"] == LocalizedText(zh="例外 a, b", en="Exception a, b")
     assert row["check_RUN-REV-08-1_R02"] == row["check_RUN-REV-08-1_R03"] == "✗"
+
+
+def test_legacy_account_resolution_requires_an_unambiguous_match() -> None:
+    """旧错报无独立代码时能读括号代码, 同名冲突或明确的无效代码不分摊到猜测科目."""
+    from backend.contracts.records import Account
+    from backend.services.workpaper_leads import account_code
+
+    accounts = {
+        code: Account(code=code, name="Interest income", type="revenue", category="other_income")
+        for code in ("010", "020")
+    }
+    assert account_code("Interest income", None, accounts) is None
+    assert account_code("Interest income (010)", None, accounts) == "010"
+    assert account_code("Interest income", "020", accounts) == "020"
+    assert account_code("Interest income (010)", "999", accounts) is None

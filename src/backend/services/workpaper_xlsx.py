@@ -230,6 +230,16 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
             positions[data.id] = (data, at + 1)
             at = table(ws, at, data, language, header.currency)
         at += 1
+    if "lead_schedule" in positions:
+        lead, first = positions["lead_schedule"]
+        lead_letters = {col.key: get_column_letter(n) for n, col in enumerate(lead.columns, 1)}
+        for row in range(first, first + len(lead.rows)):
+            ws[f"{lead_letters['audited_cents']}{row}"] = (
+                f"={lead_letters['unaudited_cents']}{row}+{lead_letters['adjustments_cents']}{row}"
+            )
+            ws[f"{lead_letters['change_cents']}{row}"] = (
+                f"={lead_letters['audited_cents']}{row}-{lead_letters['prior_cents']}{row}"
+            )
     if "misstatement_totals" in positions and "misstatements" in positions:
         totals, row = positions["misstatement_totals"]
         detail, first = positions["misstatements"]

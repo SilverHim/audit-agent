@@ -19,6 +19,7 @@ from backend.services.materiality import materiality_amounts
 from backend.services.staleness import current_misstatements, superseded_runs
 from backend.services.workpaper_files import relative_filename
 from backend.services.workpaper_labels import ASSERTIONS, CATEGORIES, NOT_AVAILABLE, PROCEDURE_NAMES, SCOPES, words
+from backend.services.workpaper_leads import lead_content
 from backend.services.workpaper_tables import column, section, unsigned
 
 if TYPE_CHECKING:
@@ -285,6 +286,8 @@ def system_content(
         reviewed_at=sign.signed_at if sign else None,
         review_scope=sign.scope if sign else None,
     )
+    if spec.categories:
+        return lead_content(spec, sources, paper, header)
     # 索引自己的行以这一版的状态为准, 不使用旧版签署信息.
     indexed = {
         **papers,
@@ -311,7 +314,7 @@ def system_content(
             ],
         )
         covered = {category for system in sources.library.workpapers.system for category in system.categories}
-        amounts = {r.account_code: r.balance_cents for r in sources.trial_balance}
+        amounts = {r.account_code: r.balance_cents for r in sources.trial_balance if r.period == "current"}
         body = body.model_copy(
             update={
                 "tables": [
@@ -358,7 +361,7 @@ def system_refreshed(
     basis = [
         ObjectRef(kind="Workpaper", id=p.id, version=p.version)
         for ref, p in sorted(papers.items())
-        if ref not in {"00", "S"}
+        if ref not in {"00", "S"} and (not spec.categories or p.procedure_id is not None)
     ]
     new = previous or Workpaper(id=f"WP-{spec.ref}", ref=spec.ref, area=spec.area or "", basis=basis)
     new = new.model_copy(update={"basis": basis, "missing": system_missing(new)})
