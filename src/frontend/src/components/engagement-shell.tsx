@@ -137,6 +137,7 @@ type NavItem = {
     | '/engagements/$eid/evidence'
     | '/engagements/$eid/report'
     | '/engagements/$eid/trail'
+    | '/engagements/$eid/workpapers'
   label: string
   icon: ReactNode
   count?: number
@@ -231,6 +232,11 @@ export function EngagementShell({
       label: t.nav.procedures,
       icon: <ListChecks className={icon} aria-hidden="true" />,
       count: overview?.procedures.length,
+    },
+    {
+      to: '/engagements/$eid/workpapers',
+      label: t.nav.workpapers,
+      icon: <ScrollText className={icon} aria-hidden="true" />,
     },
     { to: '/engagements/$eid/client', label: t.nav.client, icon: <Building2 className={icon} aria-hidden="true" /> },
     {

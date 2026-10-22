@@ -139,13 +139,16 @@ async def test_unsigned_workpapers_do_not_block_and_lock_after_archive(walked: t
     w, client = walked
     base = f"/api/v1/engagements/{w.x.eid}/workpapers"
     listed = (await client.get(base)).json()
-    assert [r["ref"] for r in listed] == [
+    assert [r["ref"] for r in listed] == w.x.runner.deps.library.workpaper_refs()
+    assert all("content" not in row for row in listed)
+    generated = [row for row in listed if row["availability"] == "generated"]
+    assert [r["ref"] for r in generated] == [
         "00",
         *("A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "C", "C-1", "C-2", "C-3", "C-4", "D", "D-1", "D-2", "D-3", "D-4"),
         *("G-1", "G-2", "X", "X-A", "X-B", "X-C", "Z-1", "Z-2", "Z-3"),
         "S",
     ]
-    assert {r["status"] for r in listed} == {"draft"}
+    assert {r["status"] for r in generated} == {"draft"}
     posts = [
         ("D-3/conclusion", {"text": "x"}),
         ("D-3/notes", {"text": "x"}),
@@ -666,6 +669,16 @@ async def test_system_workpaper_operations_are_versioned_and_stable() -> None:
     assert await refresh(runner.deps, EID) == []
     assert await store.get(EID, Workpaper, "WP-S", 1) == before
     assert (await store.get(EID, Workpaper, "WP-S")).status is WorkpaperStatus.signed
+    count = runner.lock_count(EID)
+    async with api_client(runner) as client:
+        assert (await client.get(BASE)).status_code == 200
+        assert runner.lock_count(EID) == count  # 快照已齐时读取不占项目写锁.
+        runner.acquire(EID)
+        try:
+            assert (await client.get(BASE)).status_code == 200
+            assert (await client.get(f"{BASE}/S")).status_code == 200
+        finally:
+            runner.release(EID)
 
 
 @pytest.mark.external

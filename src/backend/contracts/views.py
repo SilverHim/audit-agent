@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from backend.contracts.data import DataRequest, TableKind
+from backend.contracts.knowledge import RequiredItem
 from backend.contracts.models import (
     AcceptanceScorecard,
     AgentId,
@@ -26,6 +27,7 @@ from backend.contracts.models import (
     GateDecision,
     GateId,
     Judgment,
+    LocalizedText,
     MaterialityCandidates,
     Misstatement,
     MisstatementDraft,
@@ -41,6 +43,9 @@ from backend.contracts.models import (
     RiskItem,
     UncorrectedSchedule,
     WorkingLanguage,
+    Workpaper,
+    WorkpaperHeader,
+    WorkpaperStatus,
 )
 
 
@@ -326,3 +331,27 @@ class TaskPresentation(Model):
     sides: dict[SideRole, PresentedSide] = {}
     evidence: list[PresentedEvidence] = []  # 两方证据的并集; 没有 sides 时为空 (例外的证据在 target.evidence)
     failure: PresentedFailure | None = None  # failed 与 unattributed 任务的失败原因, 其余为空
+
+
+class WorkpaperIndexEntry(Model):
+    """档案列表的轻量行, 不返回整份内容; 缺项标签取详情的 required."""
+
+    ref: str
+    title: LocalizedText
+    procedure_id: str | None = None
+    availability: Literal["generated", "disabled", "unexecuted"]
+    status: WorkpaperStatus | None = None
+    version: int | None = None
+    header: WorkpaperHeader | None = None
+    missing: list[str] = []
+    pending_tasks: int = 0
+    unsigned: bool = True
+    file_name: str | None = None
+
+
+class WorkpaperDetail(Model):
+    """指定版本的内容与当前可选版本号, 不以当前材料重建历史."""
+
+    workpaper: Workpaper
+    versions: list[int]
+    required: list[RequiredItem]

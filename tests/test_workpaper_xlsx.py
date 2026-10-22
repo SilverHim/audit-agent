@@ -67,3 +67,51 @@ async def test_original_text_is_not_an_excel_formula() -> None:
     sheet = load_workbook(BytesIO(render(paper.model_copy(update={"content": content}), "en"))).active
     cell = next(cell for row in sheet for cell in row if cell.value == injected)
     assert cell.data_type == "s"
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+async def test_archive_api_versions_names_and_links(language: str, tmp_path) -> None:
+    """轻量项目验证下载接口的版本、权限边界、UTF-8 ZIP 与相对链接, 不重跑整条演示."""
+    import subprocess
+    import sys
+    from urllib.parse import unquote
+    from zipfile import ZipFile
+
+    from tests.fakes import api_client
+
+    runner, _, original = await d3_case()
+    eid = original.content.header.engagement_id
+    base = f"/api/v1/engagements/{eid}/workpapers"
+    async with api_client(runner) as client:
+        response = await client.put(f"/api/v1/engagements/{eid}/working-language", json={"language": language})
+        assert response.status_code == 200
+        changed = await client.post(f"{base}/D-3/conclusion", json={"text": "Reviewed the six invoices."})
+        assert changed.status_code == 200
+        detail = await client.get(f"{base}/D-3", params={"version": 1})
+        assert detail.json()["workpaper"]["content"] == original.content.model_dump(mode="json")
+        assert detail.json()["versions"] == [1, 2]
+        assert (await client.get(f"{base}/D-3", params={"version": 999})).status_code == 404
+        assert (await client.get(f"{base}/D-3", params={"version": 0})).status_code == 422
+        assert (await client.get(f"{base}/C-3")).status_code == 404
+        listed = (await client.get(base)).json()
+        assert all("content" not in row for row in listed)
+        row = next(r for r in listed if r["ref"] == "D-3")
+        file = await client.get(f"{base}/D-3/file")
+        assert file.status_code == 200
+        assert unquote(file.headers["Content-Disposition"].split("UTF-8''")[1]) == row["file_name"]
+        assert file.headers["Content-Type"].startswith("application/vnd.openxmlformats")
+        archived = await client.get(f"{base}/archive")
+        assert archived.status_code == 200 and archived.headers["Content-Type"] == "application/zip"
+        with ZipFile(BytesIO(archived.content)) as bundle:
+            expected = {r["file_name"] for r in listed if r["availability"] == "generated"}
+            assert set(bundle.namelist()) == expected
+            assert all(info.flag_bits & 0x800 for info in bundle.infolist())
+            index_name = next(name for name in bundle.namelist() if name.startswith("00 "))
+            sheet = load_workbook(BytesIO(bundle.read(index_name))).active
+            assert {cell.hyperlink.target for cells in sheet for cell in cells if cell.hyperlink} == expected
+            if sys.platform == "darwin":
+                path = tmp_path / "archive.zip"
+                path.write_bytes(archived.content)
+                extracted = tmp_path / "extracted"
+                subprocess.run(["ditto", "-x", "-k", str(path), str(extracted)], check=True, capture_output=True)
+                assert {p.name for p in extracted.iterdir()} == expected

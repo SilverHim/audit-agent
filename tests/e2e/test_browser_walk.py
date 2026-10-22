@@ -254,6 +254,7 @@ async def test_browser_walk_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", currency="NZD"
     )
     assert results["currency"] == "NZD", report
+    assert results["workpapers"] == {"edited": True, "previewed": True, "downloaded": True}, report
     assert results["issues"] == [], report
     assert results["reached_archive"] and results["gates"] == GATES, report
     assert_hard(data)

@@ -4698,9 +4698,205 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Workpaper"
+                    "$ref": "#/components/schemas/WorkpaperIndexEntry"
                   },
                   "title": "Response Workpapers-List Workpapers"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/archive": {
+      "get": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Download Archive",
+        "description": "整套最新快照的 Excel, 含索引. 条目显式 UTF-8, 索引使用相同相对文件名.",
+        "operationId": "workpapers-download_archive",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/{ref}": {
+      "get": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Get Workpaper",
+        "operationId": "workpapers-get_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkpaperDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/file": {
+      "get": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Download Workpaper",
+        "operationId": "workpapers-download_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
                 }
               }
             }
@@ -14162,6 +14358,60 @@
         "title": "RequestUnavailableIn",
         "description": "补交请求标 \"客户无此类资料\" (需求 R280)."
       },
+      "RequiredItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "$ref": "#/components/schemas/LocalizedText"
+          },
+          "standard": {
+            "type": "string",
+            "title": "Standard"
+          },
+          "paragraph": {
+            "type": "string",
+            "title": "Paragraph"
+          },
+          "supplementable": {
+            "type": "boolean",
+            "title": "Supplementable"
+          },
+          "kinds": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "rule",
+                "judgment"
+              ]
+            },
+            "type": "array",
+            "title": "Kinds",
+            "default": []
+          },
+          "refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Refs",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "standard",
+          "paragraph",
+          "supplementable"
+        ],
+        "title": "RequiredItem",
+        "description": "各类底稿必须记录的一项 (ASA 230 第 8, 9 段与各准则). kinds 与 refs 都为空即全部底稿, 否则为其并集\n(ProcedureLibrary.required_items)."
+      },
       "RerunIn": {
         "properties": {
           "procedure_ids": {
@@ -16517,6 +16767,36 @@
         "title": "WorkpaperContent",
         "description": "底稿内容的版本化快照 (R331): 全部数据与双语固定文字在生成时写入, Excel/在线预览只读本快照."
       },
+      "WorkpaperDetail": {
+        "properties": {
+          "workpaper": {
+            "$ref": "#/components/schemas/Workpaper"
+          },
+          "versions": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Versions"
+          },
+          "required": {
+            "items": {
+              "$ref": "#/components/schemas/RequiredItem"
+            },
+            "type": "array",
+            "title": "Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "workpaper",
+          "versions",
+          "required"
+        ],
+        "title": "WorkpaperDetail",
+        "description": "指定版本的内容与当前可选版本号, 不以当前材料重建历史."
+      },
       "WorkpaperHeader": {
         "properties": {
           "title": {
@@ -16629,6 +16909,106 @@
         ],
         "title": "WorkpaperHeader",
         "description": "生成当时的项目信息与编制/复核情况; 渲染旧版本不再读项目或用户表."
+      },
+      "WorkpaperIndexEntry": {
+        "properties": {
+          "ref": {
+            "type": "string",
+            "title": "Ref"
+          },
+          "title": {
+            "$ref": "#/components/schemas/LocalizedText"
+          },
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "disabled",
+              "unexecuted"
+            ],
+            "title": "Availability"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkpaperStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "header": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkpaperHeader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing",
+            "default": []
+          },
+          "pending_tasks": {
+            "type": "integer",
+            "title": "Pending Tasks",
+            "default": 0
+          },
+          "unsigned": {
+            "type": "boolean",
+            "title": "Unsigned",
+            "default": true
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ref",
+          "title",
+          "availability"
+        ],
+        "title": "WorkpaperIndexEntry",
+        "description": "档案列表的轻量行, 不返回整份内容; 缺项标签取详情的 required."
       },
       "WorkpaperNote": {
         "properties": {
