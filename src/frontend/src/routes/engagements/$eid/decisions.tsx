@@ -27,26 +27,34 @@ function Decisions() {
   const { eid } = Route.useParams()
   const { t } = useI18n()
   const overview = useEngagement(eid).data
-  const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid }, query: { status: 'pending' } }))
+  const tasks = useQuery(reviewsListReviewTasksOptions({ path: { eid } }))
   const exceptions = useQuery(reviewsListExceptionsOptions({ path: { eid } }))
   const deferrals = useDeferrals(eid)
   const [filter, setFilter] = useState<Filter>('all')
 
   const deferred = useMemo(() => new Set((deferrals.data ?? []).map(deferralKey)), [deferrals.data])
-  // 人工程序的任务不是复核决定, 单列一组, 指向人工程序页 (需求 R303)
-  const [reviewViews, manualViews] = useMemo(() => splitManual(tasks.data ?? []), [tasks.data])
-  const ranked = useMemo(() => {
-    const byId = new Map((exceptions.data ?? []).map((item) => [item.id, item]))
-    return rankTasks(reviewViews, byId, overview)
-  }, [reviewViews, exceptions.data, overview])
+  // 人工程序的任务不是复核决定, 单列一组, 指向人工程序页 (需求 R303); 已决定的任务都不列
+  const [pendingReviews, waitingReviews, pendingManual] = useMemo(() => {
+    const [reviewViews, manualViews] = splitManual(tasks.data ?? [])
+    return [
+      reviewViews.filter((view) => view.task.status === 'pending'),
+      reviewViews.filter((view) => view.task.status === 'awaiting_evidence'),
+      manualViews.filter((view) => view.task.status === 'pending'),
+    ]
+  }, [tasks.data])
+  const byId = useMemo(() => new Map((exceptions.data ?? []).map((item) => [item.id, item])), [exceptions.data])
+  const ranked = useMemo(() => rankTasks(pendingReviews, byId, overview), [pendingReviews, byId, overview])
+  // 等补充证据的任务 (需求 R369): 单列一组, 不算待处理, 链到数据管理页的补充证据请求
+  const waitingRanked = useMemo(() => rankTasks(waitingReviews, byId, overview), [waitingReviews, byId, overview])
 
   const gateKey = overview?.current_gate ? `gate:${overview.current_gate}` : null
   const gateState = gateKey ? (deferred.has(gateKey) ? 'deferred' : 'pending') : null
   const taskState = (id: string) => (deferred.has(`task:${id}`) ? 'deferred' : 'pending')
   const rows = ranked.map((item) => ({ item, state: taskState(item.view.task.id) }))
-  const manualRows = manualViews.map((view) => ({ view, state: taskState(view.task.id) }))
+  const waitingRows = waitingRanked.map((item) => ({ item, state: 'waiting' }))
+  const manualRows = pendingManual.map((view) => ({ view, state: taskState(view.task.id) }))
   const visible = (state: string) => filter === 'all' || filter === state
-  const states = [...rows, ...manualRows].map((row) => row.state)
+  const states = [...rows, ...waitingRows, ...manualRows].map((row) => row.state)
   const counts = {
     all: states.length + (gateState ? 1 : 0),
     pending: states.filter((state) => state === 'pending').length + (gateState === 'pending' ? 1 : 0),
@@ -161,6 +169,47 @@ function Decisions() {
               ) : (
                 <EmptyRow text={t.decisionsPage.none} />
               )}
+
+              {filter === 'all' && waitingRows.length ? (
+                <>
+                  <GroupHeader title={t.decisionsPage.waitingEvidence} count={waitingRows.length} />
+                  {waitingRows.map(({ item }) => {
+                    const judgment = isJudgment(item.view.target) ? item.view.target : null
+                    return (
+                      <div
+                        key={item.view.task.id}
+                        className={cn(COLS, 'min-h-14 items-center border-line-soft border-b px-4 py-3')}
+                      >
+                        <span className="flex min-w-0 flex-col">
+                          <Code className="font-semibold">{item.subject}</Code>
+                          {t.taskKinds[item.view.task.kind] ? (
+                            <span className="truncate text-[12.5px] text-[#4a5262]">
+                              {t.taskKinds[item.view.task.kind]}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-[13px]">
+                          <Code>{item.view.task.procedure_id}</Code>{' '}
+                          {procedureName(t, item.view.task.procedure_id, item.view.procedure_name)}
+                        </span>
+                        <Code className="text-right text-[13px]">{formatMoney(item.amount)}</Code>
+                        <VerdictCell judgment={judgment} />
+                        <span className="text-[13px]">{t.tiers[item.tier]}</span>
+                        <span>
+                          <StatusPill tone="accent">{t.status.awaitingEvidence}</StatusPill>
+                        </span>
+                        <Link
+                          to="/engagements/$eid/data"
+                          params={{ eid }}
+                          className="inline-flex min-h-9 items-center justify-self-end rounded-lg border border-input px-3 text-[13px] hover:bg-muted"
+                        >
+                          {t.decisionsPage.openRequest}
+                        </Link>
+                      </div>
+                    )
+                  })}
+                </>
+              ) : null}
 
               {manualRows.length ? (
                 <>

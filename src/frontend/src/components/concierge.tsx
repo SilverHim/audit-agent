@@ -26,6 +26,7 @@ import type {
 import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { RejudgeNotice } from '@/components/evidence-requests'
 import { ExceptionDetail } from '@/components/exception-detail'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -466,6 +467,8 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
         {header}
         <div className="flex flex-col gap-3 border-line-soft border-b px-4 py-4">
           <VerdictBanner judgment={target} />
+          {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+          <RejudgeNotice eid={eid} judgmentId={target.id} />
           <div className="flex flex-wrap gap-5">{facts}</div>
         </div>
         <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} lang={lang} />
@@ -482,6 +485,8 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       <div className="flex flex-col gap-3 border-line-soft border-b px-4 py-4">
         {/* 定论放最上面: 大字号分颜色, 是错报的同一行给金额与方向 (需求 R368) */}
         <VerdictBanner judgment={target} />
+        {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+        <RejudgeNotice eid={eid} judgmentId={target.id} />
         <div className="flex flex-wrap gap-5">
           {facts}
           <div className="flex flex-1 basis-[200px] flex-col gap-1.5">

@@ -142,8 +142,9 @@ export type ReviewChoice =
   | 'disagree_misstatement'
   | 'misstatement'
   | 'not_misstatement'
+  | 'more_evidence' // 要求补充证据 (需求 R369): 普通复核任务; 转补交请求并等证据, 不阻塞流程
 
-// 各选项提交的决定: 认定错报的带错报草稿; 与 AI 不同而 "不是错报" 的为推翻 (须写结论)
+// 各选项提交的决定: 认定错报的带错报草稿; 与 AI 不同而 "不是错报" 的为推翻 (须写结论); 要求补充证据只填理由
 export const CHOICE_DECISIONS: Record<ReviewChoice, Decision> = {
   agree_misstatement: 'misstatement',
   disagree_not_misstatement: 'override',
@@ -152,13 +153,15 @@ export const CHOICE_DECISIONS: Record<ReviewChoice, Decision> = {
   disagree_misstatement: 'misstatement',
   misstatement: 'misstatement',
   not_misstatement: 'override',
+  more_evidence: 'more_evidence',
 }
 
-// 按 AI 结论给的选项; 暂时判断不了时的 "要求补充证据" 待 R369
+// 按 AI 结论给的选项 (需求 R364, R369): 每种结论都可以要求补充证据; AI 暂时判断不了时排在前面, 其余排最后.
+// 后端 allowed_decisions 不含 more_evidence 时 (非普通任务) 由 reviewChoices 过滤掉
 const CHOICES: Record<AiVerdict, ReviewChoice[]> = {
-  misstatement: ['agree_misstatement', 'disagree_not_misstatement', 'amend_misstatement'],
-  clear: ['agree_clear', 'disagree_misstatement'],
-  undetermined: ['misstatement', 'not_misstatement'],
+  misstatement: ['agree_misstatement', 'disagree_not_misstatement', 'amend_misstatement', 'more_evidence'],
+  clear: ['agree_clear', 'disagree_misstatement', 'more_evidence'],
+  undetermined: ['more_evidence', 'misstatement', 'not_misstatement'],
 }
 
 // 预填 AI 草稿的选项 (agree 为默认选中的那项)
@@ -290,7 +293,8 @@ export function buildDisputeRecord(
   return { ...body, consulted: dispute.consulted, consultation_record: dispute.consulted ? consultation : null }
 }
 
-// 复核决定的请求体; 缺结论或错报字段, 重跑参数写不对时返回错误文案. 理由选填 (需求 R360), 空也照发空串
+// 复核决定的请求体; 缺结论或错报字段, 重跑参数写不对时返回错误文案. 理由选填 (需求 R360), 空也照发空串.
+// 要求补充证据 (需求 R369) 只要任务, 目标版本与理由, 没有其它专用字段, 落在最后的 base
 export function buildRecord(
   view: ReviewTaskView,
   decision: Decision,

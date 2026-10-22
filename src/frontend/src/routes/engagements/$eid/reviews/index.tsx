@@ -60,14 +60,23 @@ function ReviewQueue() {
     const [reviewable] = splitManual(tasks.data ?? [])
     return rankTasks(reviewable, byId, overview)
   }, [tasks.data, exceptions.data, overview])
+  // 等补充证据的任务 (需求 R369): 显示 "等待证据（不阻塞）", 不算待处理, 也不算已决定
   const isPending = (item: RankedTask) => item.view.task.status === 'pending'
-  const shown = ranked.filter((item) => filter === 'all' || (filter === 'pending' ? isPending(item) : !isPending(item)))
+  const isAwaiting = (item: RankedTask) => item.view.task.status === 'awaiting_evidence'
+  const shown = ranked.filter((item) =>
+    filter === 'all' ? true : filter === 'pending' ? isPending(item) : item.view.task.status === 'decided',
+  )
   const counts = {
     all: ranked.length,
     pending: ranked.filter(isPending).length,
-    decided: ranked.filter((item) => !isPending(item)).length,
+    decided: ranked.filter((item) => item.view.task.status === 'decided').length,
   }
-  const current = ranked.find((item) => item.view.task.id === selected) ?? ranked.find(isPending) ?? ranked[0] ?? null
+  const current =
+    ranked.find((item) => item.view.task.id === selected) ??
+    ranked.find(isPending) ??
+    ranked.find(isAwaiting) ??
+    ranked[0] ??
+    null
   const disabled = decisionsDisabled(overview)
 
   const confirmBatch = async () => {
@@ -160,6 +169,7 @@ function ReviewQueue() {
                         const judgment = isJudgment(item.view.target) ? item.view.target : null
                         const on = current?.view.task.id === item.view.task.id
                         const pending = isPending(item)
+                        const awaiting = isAwaiting(item)
                         return (
                           <div
                             key={item.view.task.id}
@@ -206,8 +216,12 @@ function ReviewQueue() {
                               {judgment ? judgment.confidence.toFixed(2) : '—'}
                             </Code>
                             <span>
-                              <StatusPill tone={pending ? 'warn' : 'ok'}>
-                                {pending ? t.queuePage.pending : t.queuePage.decided}
+                              <StatusPill tone={pending ? 'warn' : awaiting ? 'accent' : 'ok'}>
+                                {pending
+                                  ? t.queuePage.pending
+                                  : awaiting
+                                    ? t.status.awaitingEvidence
+                                    : t.queuePage.decided}
                               </StatusPill>
                             </span>
                           </div>
@@ -257,6 +271,7 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
   const judgment = isJudgment(item.view.target) ? item.view.target : null
   const lang = useContentLanguage(eid, judgment?.run_id)
   const pending = item.view.task.status === 'pending'
+  const awaiting = item.view.task.status === 'awaiting_evidence'
   return (
     <>
       <div className="flex flex-col gap-1">
@@ -295,6 +310,15 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
             className={buttonVariants({ size: 'lg' })}
           >
             {t.queuePage.review}
+          </Link>
+        ) : null}
+        {awaiting ? (
+          <Link
+            to="/engagements/$eid/data"
+            params={{ eid }}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            {t.evidenceRequests.openBlock}
           </Link>
         ) : null}
         <Link

@@ -220,6 +220,8 @@ export const en = {
     rerun: 'Run again',
     manual_result: 'Enter the result',
     dispute_resolution: 'Resolve the disagreement',
+    // 要求补充证据 (需求 R369): 普通复核任务; 复核卡片上的这个选项见 card.choices.more_evidence
+    more_evidence: 'Ask for more evidence',
   } as Record<string, string>,
   decisionHints: {
     confirm: "Adopt the AI's conclusion",
@@ -228,6 +230,7 @@ export const en = {
     rerun: 'Run the procedure again',
     manual_result: 'Give the result yourself',
     dispute_resolution: 'Choose which conclusion stands',
+    more_evidence: 'Create a request and wait for the evidence without blocking the process',
   } as Record<string, string>,
   taskKinds: {
     normal: '',
@@ -254,7 +257,14 @@ export const en = {
     read_reasoning: 'confidence 0.70 to 0.90',
     batch_eligible: 'confidence above 0.90, a low amount, and the AI found no misstatement',
   },
-  status: { pending: 'Pending auditor review', deferred: 'Deferred', decided: 'Decided', confirmed: 'Confirmed' },
+  status: {
+    pending: 'Pending auditor review',
+    deferred: 'Deferred',
+    decided: 'Decided',
+    confirmed: 'Confirmed',
+    // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
+    awaitingEvidence: 'Waiting for evidence (does not block)',
+  },
   checks: {
     abn_active: 'ABN is active',
     name_match: 'Registered name matches the client profile',
@@ -616,6 +626,11 @@ export const en = {
       disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
       misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
       not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
+      // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
+      more_evidence: {
+        label: 'Ask for more evidence, raising a request',
+        hint: 'The task waits for the evidence and does not block the process',
+      },
     },
   },
   judgment: {
@@ -786,6 +801,11 @@ export const en = {
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
       VERSION_MISMATCH: 'This was updated elsewhere. Refresh and try again.',
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
+      NOT_FOUND: 'This item no longer exists. Refresh and try again.',
+      TASK_NOT_PENDING: 'This review task is no longer waiting for you.',
+      DECISION_NOT_ALLOWED: 'This decision is not available for this task any more.',
+      INVALID_VALUE: 'The current state does not allow this. Refresh and try again.',
+      MISSING_FIELD: 'A required field is missing.',
       NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
       XERO_NOT_CONNECTED: 'Xero is not connected yet.',
       PROFILE_CHECK_STALE: 'The Xero organisation check has changed. Refresh and choose again.',
@@ -826,6 +846,9 @@ export const en = {
     },
     open: 'Open',
     perform: 'Perform',
+    // 等补充证据的任务 (需求 R369): 不算待处理, 单列一组, 链到补充证据请求
+    waitingEvidence: 'Waiting for evidence',
+    openRequest: 'View the request',
   },
   queuePage: {
     title: 'Review queue',
@@ -1529,6 +1552,8 @@ export const en = {
       external_copy: 'External copy',
       internal_original: 'Internal original',
       internal_copy: 'Internal copy',
+      // 登记管理层说明写出的文件 (需求 R369): 低于外部证据
+      management_representation: 'Management representation',
     } as Record<string, string>,
     channels: {
       systemArchive: 'Archived by the system',
@@ -1995,6 +2020,72 @@ export const en = {
     },
     formats: { table: 'Excel or CSV', document: 'PDF, Word or Excel' },
     awaitingIntro: 'All the data planning needs has been received. Confirm to start planning.',
+  },
+  // 补充证据请求 (后端需求 R369, 页面 R370): 数据管理页的区块, 复核队列与判断详情里的状态与链接
+  evidenceRequests: {
+    title: 'Supplementary evidence requests',
+    intro: (n: number) =>
+      `${n} review task${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} more evidence. The tasks wait without blocking the process.`,
+    closed: 'All supplementary evidence requests are resolved.',
+    separator: ', ',
+    statuses: {
+      open: 'Waiting for evidence',
+      received: 'Received',
+      unavailable: 'Unavailable',
+    } as Record<string, string>,
+    sources: {
+      client: 'Client',
+      bank: 'Bank',
+      other: 'Other third party',
+      management: 'Management',
+    } as Record<string, string>,
+    fields: {
+      description: 'What is needed',
+      requestedFrom: 'Ask',
+      relatedObjects: 'Related records',
+      documents: 'Evidence received',
+      unavailableReason: 'Why unavailable',
+    },
+    requestedAt: (at: string) => `Requested ${at}`,
+    relatedHint: 'Comma-separated, e.g. XJ-499, BA-091',
+    edit: 'Edit request',
+    unavailable: 'Mark unavailable',
+    upload: 'Upload evidence',
+    uploading: 'Uploading…',
+    save: 'Save',
+    cancel: 'Cancel',
+    editTitle: (id: string) => `Edit ${id}`,
+    editIntro: 'Change what is needed, who to ask or the related records before the evidence arrives.',
+    unavailableTitle: (id: string) => `Mark ${id} unavailable`,
+    unavailableIntro:
+      'The review task goes back to review and a scope limitation is recorded. The opinion is not changed automatically.',
+    saved: 'Evidence request saved',
+    uploaded: (n: number) => `${n} file${n === 1 ? '' : 's'} uploaded; the review task is back in review`,
+    unavailableDone: 'Marked unavailable; the review task is back in review',
+    awaitingHint: 'This task waits for supplementary evidence and does not block the rest of the process.',
+    openBlock: 'Open the evidence requests',
+    rejudged: (id: string) => `Rejudged from supplementary evidence request ${id}`,
+    errors: {
+      description: 'Say what evidence is needed',
+      noChange: 'Change at least one field',
+    },
+  },
+  // 登记管理层说明 (后端需求 R369, 页面 R370): 证据页的表单
+  managementRepresentation: {
+    title: 'Management representation',
+    intro:
+      'Record a written or oral representation from management as evidence. It is kept as a management representation, below external evidence.',
+    person: 'Person',
+    statedOn: 'Date or time stated',
+    statedOnHint: 'As management stated it, e.g. 2026-10-21',
+    content: 'What management stated',
+    register: 'Register representation',
+    registering: 'Registering…',
+    registered: 'Management representation registered',
+    locked: 'The engagement is signed and read-only.',
+    errors: {
+      required: (fields: string) => `Fill in ${fields}.`,
+    },
   },
   evidence: {
     open: 'Open',

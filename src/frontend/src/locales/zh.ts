@@ -209,6 +209,8 @@ export const zh: Messages = {
     rerun: '重新执行',
     manual_result: '人工给出结果',
     dispute_resolution: '裁决分歧',
+    // 要求补充证据 (需求 R369): 普通复核任务; 复核卡片上的这个选项见 card.choices.more_evidence
+    more_evidence: '要求补充证据',
   },
   decisionHints: {
     confirm: '采用 AI 的结论',
@@ -217,6 +219,7 @@ export const zh: Messages = {
     rerun: '重新执行该程序',
     manual_result: '由你直接给出结果',
     dispute_resolution: '决定采用哪个结论',
+    more_evidence: '生成补交请求并等待证据，不阻塞流程',
   },
   taskKinds: {
     normal: '',
@@ -243,7 +246,14 @@ export const zh: Messages = {
     read_reasoning: '置信度 0.70 至 0.90',
     batch_eligible: '置信度高于 0.90、金额较小且判为不是错报',
   },
-  status: { pending: '待人工处理', deferred: '稍后处理', decided: '已决定', confirmed: '已确认' },
+  status: {
+    pending: '待人工处理',
+    deferred: '稍后处理',
+    decided: '已决定',
+    confirmed: '已确认',
+    // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
+    awaitingEvidence: '等待证据（不阻塞）',
+  },
   checks: {
     abn_active: 'ABN 处于有效状态',
     name_match: '登记名称与客户资料一致',
@@ -561,6 +571,11 @@ export const zh: Messages = {
       disagree_misstatement: { label: '不同意，认定为错报', hint: '把定论改为是错报，填写错报的数据' },
       misstatement: { label: '认定为错报', hint: '填写错报的数据' },
       not_misstatement: { label: '不是错报', hint: '把定论改为不是错报，写出你的结论' },
+      // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
+      more_evidence: {
+        label: '要求补充证据，生成补交请求',
+        hint: '任务转等待证据，不阻塞流程',
+      },
     },
   },
   judgment: {
@@ -707,6 +722,11 @@ export const zh: Messages = {
       ENGAGEMENT_BUSY: '项目正在处理中，请稍后再试。',
       VERSION_MISMATCH: '数据已被更新，请刷新后重试。',
       ENGAGEMENT_LOCKED: '项目已签字，只能查看。',
+      NOT_FOUND: '这一项已不存在，请刷新后重试。',
+      TASK_NOT_PENDING: '这条复核任务已不在待处理。',
+      DECISION_NOT_ALLOWED: '这条任务已不能作该决定。',
+      INVALID_VALUE: '当前状态不允许该操作，请刷新后重试。',
+      MISSING_FIELD: '缺少必填项。',
       NOT_RERUNNABLE: '只能在等待复核、FIN-01 或 RPT-01 阶段决定时重跑。',
       XERO_NOT_CONNECTED: '还没有连接 Xero。',
       PROFILE_CHECK_STALE: 'Xero 组织信息的核对已变，请刷新后再选。',
@@ -739,6 +759,9 @@ export const zh: Messages = {
     cols: { item: '事项', procedure: '程序', amount: '金额', verdict: '定论', tier: '复核档位', status: '状态' },
     open: '处理',
     perform: '去执行',
+    // 等补充证据的任务 (需求 R369): 不算待处理, 单列一组, 链到补充证据请求
+    waitingEvidence: '等待证据的任务',
+    openRequest: '查看请求',
   },
   queuePage: {
     title: '复核队列',
@@ -1382,6 +1405,8 @@ export const zh: Messages = {
       external_copy: '外部副本',
       internal_original: '内部原件',
       internal_copy: '内部副本',
+      // 登记管理层说明写出的文件 (需求 R369): 低于外部证据
+      management_representation: '管理层说明',
     },
     // 没有上传人的文件在上传人一栏显示的来源 (需求 R306, 键见 en.ts 的 DocumentSource); 审计师上传的显示上传人
     channels: {
@@ -1811,6 +1836,60 @@ export const zh: Messages = {
     },
     formats: { table: 'Excel 或 CSV', document: 'PDF、Word 或 Excel' },
     awaitingIntro: '审计计划需要的数据已接入，确认后开始审计计划。',
+  },
+  // 补充证据请求 (后端需求 R369, 页面 R370): 数据管理页的区块, 复核队列与判断详情里的状态与链接
+  evidenceRequests: {
+    title: '补充证据请求',
+    intro: (n) => `有 ${n} 项复核任务需要补充证据。任务在等待证据期间不阻塞流程。`,
+    closed: '补充证据请求都已处理。',
+    separator: '、',
+    statuses: { open: '等待证据', received: '已收到', unavailable: '无法取得' },
+    sources: { client: '客户', bank: '银行', other: '其他第三方', management: '管理层' },
+    fields: {
+      description: '需要补充什么',
+      requestedFrom: '向谁要',
+      relatedObjects: '关联对象',
+      documents: '收到的证据',
+      unavailableReason: '无法取得的理由',
+    },
+    requestedAt: (at) => `${at} 提出`,
+    relatedHint: '逗号分隔，如 XJ-499、BA-091',
+    edit: '修改请求',
+    unavailable: '标为无法取得',
+    upload: '上传证据',
+    uploading: '上传中…',
+    save: '保存',
+    cancel: '取消',
+    editTitle: (id) => `修改 ${id}`,
+    editIntro: '在证据收到之前，可以改要什么、向谁要与关联对象。',
+    unavailableTitle: (id) => `将 ${id} 标为无法取得`,
+    unavailableIntro: '原复核任务回到待处理，另记一条审计范围受限；不会自动改变审计意见。',
+    saved: '已保存补充证据请求',
+    uploaded: (n) => `已上传 ${n} 份文件，原复核任务回到待处理`,
+    unavailableDone: '已标为无法取得，原复核任务回到待处理',
+    awaitingHint: '这条任务在等补充证据，不阻塞流程的其他部分。',
+    openBlock: '打开补充证据请求',
+    rejudged: (id) => `由补充证据请求 ${id} 重判`,
+    errors: {
+      description: '请填写需要补充什么',
+      noChange: '请至少改动一项',
+    },
+  },
+  // 登记管理层说明 (后端需求 R369, 页面 R370): 证据页的表单
+  managementRepresentation: {
+    title: '登记管理层说明',
+    intro: '把管理层书面或口头的说明登记为证据。可靠性为管理层说明，低于外部证据。',
+    person: '说明人',
+    statedOn: '说明日期或时间',
+    statedOnHint: '按管理层的说法填，如 2026-10-21',
+    content: '说明内容',
+    register: '登记管理层说明',
+    registering: '正在登记…',
+    registered: '已登记管理层说明',
+    locked: '项目已签字，只能查看。',
+    errors: {
+      required: (fields) => `请填写${fields}。`,
+    },
   },
   evidence: {
     open: '打开',

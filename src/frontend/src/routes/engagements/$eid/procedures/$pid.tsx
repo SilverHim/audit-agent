@@ -5,6 +5,7 @@ import { reviewsGetProcedureOptions, reviewsListReviewTasksOptions } from '@/cli
 import type { RuleOutcome } from '@/client/types.gen'
 import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList, standardLabel } from '@/components/evidence-link'
+import { RejudgeNotice } from '@/components/evidence-requests'
 import { ProcedureIntroView } from '@/components/procedure-intro'
 import { QueryState } from '@/components/query-state'
 import { RerunButton, StaleBadge } from '@/components/rerun'
@@ -132,6 +133,8 @@ function ProcedurePage() {
                       <div key={judgment.id} className="flex flex-col gap-2 rounded-[10px] border p-3.5 text-[14px]">
                         {/* 程序详情也把定论放最上面 (需求 R368): 大字号分颜色, 是错报的带金额与方向 */}
                         <VerdictBanner judgment={judgment} />
+                        {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+                        <RejudgeNotice eid={eid} judgmentId={judgment.id} />
                         <span className="flex flex-wrap items-center gap-2">
                           <Code className="font-semibold">{judgment.subject_id}</Code>
                           <Code className="text-muted-foreground">{judgment.confidence.toFixed(2)}</Code>
