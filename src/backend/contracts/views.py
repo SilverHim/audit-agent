@@ -268,6 +268,8 @@ class PlanView(Model):
     # 特别风险: 当前计划特别风险目标 (significant_risk_objective_ids) 下等级为 significant 的风险项, 按风险清单的顺序
     risks: list[RiskItem]
     rows: list[PlanRow]  # 程序表: 按审计目标在状态中的顺序分组, 组内按程序编号; 没有目标的排最后
+    # 初步分析结果 (需求 R372, Issue #64 验收 9): 闸门通过后计划页仍可看推荐重要性与三步复筛; 还没执行时为空
+    analytics: AnalyticsResult | None = None
 
 
 # ── 判断呈递 (GEN-11, 需求 R152) ─────────────────────────────

@@ -4552,6 +4552,7 @@ export type PlanView = {
      * Rows
      */
     rows: Array<PlanRow>;
+    analytics?: AnalyticsResult | null;
 };
 
 /**
