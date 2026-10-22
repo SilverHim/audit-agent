@@ -22,6 +22,14 @@ workpaper: {ref: G-4, area: G}  # 底稿索引号与所属区 (需求 R329, know
 #   报告主体股份的节点.
 # - 作废对 (C01 的分录与 C02 剔除): 同 CSH-02 的注释; WITH reversal, voided 两段写在 "作废对共用段" 起止标记之间, 与 CSH-02,
 #   GEN-05 逐字相同 (tests/test_knowledge.py 守住), 改口径时几处一起改.
+# 范围说明 (需求 R328)
+scope:
+  zh: >-
+    关系图中的关联方, 及其在 {{ period_start }} 至 {{ period_end }} 与期后 {{ subsequent_days }} 天内的分录,
+    流水与发票往来
+  en: >-
+    Related parties in the ownership graph and their journal entries, bank transactions and invoices from
+    {{ period_start }} to {{ period_end }} and in the {{ subsequent_days }} days after
 phase: P2_Executing
 cycle: Pervasive
 owner: A6

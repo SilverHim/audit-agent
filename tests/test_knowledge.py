@@ -2802,19 +2802,22 @@ def test_voided_pair_cte_is_one_text_everywhere() -> None:
     之间逐字相同 (CSH-02 D03, D04, GEN-05 的 R02, R09-R12, GEN-03 的 C01, C02 (需求 R139), GEN-07 的 S01-S03 (需求
     R177) 与 GEN-06 的 E01 (需求 R179)). 防只改一处使几个程序认的作废对不同."""
     marked = {
-        (t.id, rule.id): voided_cte(rule.sql)
+        (t.id, rule.id, kind): voided_cte(sql)
         for t in ProcedureLibrary(ROOT).all(include_disabled=True)
         for rule in t.rules
-        if "reversal AS (" in rule.sql
+        for kind, sql in (("sql", rule.sql), ("population", rule.population.sql if rule.population else ""))
+        if "reversal AS (" in sql
     }
     expected = {
-        ("CSH-02", "D03"),
-        ("CSH-02", "D04"),
-        *(("GEN-05", r) for r in ("R02", "R09", "R10", "R11", "R12")),
-        ("GEN-03", "C01"),
-        ("GEN-03", "C02"),
-        *(("GEN-07", r) for r in ("S01", "S02", "S03")),
-        ("GEN-06", "E01"),
+        ("CSH-02", "D03", "sql"),
+        ("CSH-02", "D04", "sql"),
+        *(("GEN-05", r, "sql") for r in ("R02", "R09", "R10", "R11", "R12")),
+        ("GEN-03", "C01", "sql"),
+        ("GEN-03", "C02", "sql"),
+        *(("GEN-07", r, "sql") for r in ("S01", "S02", "S03")),
+        ("GEN-06", "E01", "sql"),
+        *(("GEN-05", r, "population") for r in ("R02", "R09", "R10", "R11")),
+        *(("GEN-07", r, "population") for r in ("S02", "S03")),
     }
     assert expected <= set(marked)
     [text] = set(marked.values())  # 没带标记的为 None, 也算不同
@@ -3846,10 +3849,8 @@ def test_standards_cross_reference() -> None:
 
 # ── 需求 R327: 现有程序的范围说明, 被测总体与检查项名称 ──
 
+
 # R328 补这五条 (GEN-05, GEN-07 的范围说明, 总体与检查项; GEN-02, GEN-03, GEN-08 的范围说明), R328 合入后删去
-AWAITING_R328 = frozenset({"GEN-02", "GEN-03", "GEN-05", "GEN-07", "GEN-08"})
-
-
 def documentation_gaps(template: ProcedureTemplate) -> list[str]:
     """程序缺的说明: 没写 scope, emit exception 的规则没写 population 或 check (emit rows 的以返回行为总体, 不写)."""
     gaps = [] if template.scope is not None else ["scope"]
@@ -3861,10 +3862,9 @@ def documentation_gaps(template: ProcedureTemplate) -> list[str]:
 
 def test_every_procedure_has_scope_population_and_check() -> None:
     """验收 3: 每条程序 (含功能未启用的) 都写了 scope, 每条 emit exception 的规则都写了 population 与 check.
-    AWAITING_R328 的程序暂不查, 但须仍有缺项: R328 补齐后这一句不过, 提醒删去名单."""
+    R328 已补齐 GEN 程序, 所有程序统一检查."""
     gaps = {t.id: documentation_gaps(t) for t in knowledge_library(ROOT).all(include_disabled=True)}
-    assert {pid: found for pid, found in gaps.items() if found and pid not in AWAITING_R328} == {}
-    assert all(gaps[pid] for pid in AWAITING_R328)
+    assert {pid: found for pid, found in gaps.items() if found} == {}
 
 
 XERO_PARAMS = {  # Xero 演示 (本期 2026-07-01 至 09-30, 收入目标为特别风险) 的参数快照中 scope 用到的几项
@@ -3916,3 +3916,103 @@ def test_csh05_and_pln07_checks() -> None:
         ("PLN-07", "A02"): None,
         ("PLN-07", "A03"): None,
     }
+
+
+def gen_template(pid: str) -> ProcedureTemplate:
+    """仓库里的 GEN 程序模板 (含功能未启用的)."""
+    return next(t for t in ProcedureLibrary(ROOT).all(include_disabled=True) if t.id == pid)
+
+
+XERO_GEN05_PARAMS = {"period_start": date(2026, 7, 1), "period_end": "2026-09-30"}  # 参数快照读回后日期为文本
+SHARED = {"R01": ("R03", "R04", "R05", "R07", "R08"), "R02": ("R10", "R11")}  # 复用同一段总体的规则 (锚点)
+ANCHORED = ("R01", *SHARED["R01"])  # period_lines 锚点所在的规则与复用它的
+
+
+@pytest.mark.parametrize(
+    ("entry_nos", "scope", "r01"),
+    [
+        (
+            None,
+            LocalizedText(
+                zh="2026-07-01 至 2026-09-30 入账的全部分录",
+                en="All journal entries posted from 2026-07-01 to 2026-09-30",
+            ),
+            "2026-07-01 至 2026-09-30 入账的全部分录行",
+        ),
+        (
+            ["AJE-X01", "AJE-X05"],
+            LocalizedText(
+                zh="更正通知载入的凭证 AJE-X01, AJE-X05",
+                en="Entries AJE-X01, AJE-X05 loaded with the correction notice",
+            ),
+            "2026-07-01 至 2026-09-30 入账的全部分录行, 只含凭证 AJE-X01, AJE-X05",
+        ),
+    ],
+    ids=["initial", "incremental"],
+)
+def test_gen05_scope_checks_and_populations(entry_nos: list[str] | None, scope: LocalizedText, r01: str) -> None:
+    """需求 R328: GEN-05 的 scope 与 R01 的总体说明按参数快照渲染 (增量实例写明只含哪些凭证); R01-R13 都写了 check 与
+    population; 同口径的总体是同一段 (YAML 锚点): R03-R05, R07, R08 同 R01, R10, R11 同 R02; R06 与 R13 的口径相同但
+    R06 不按 entry_nos 筛, 是两段."""
+    template = gen_template("GEN-05")
+    params = XERO_GEN05_PARAMS | {"entry_nos": entry_nos}
+    assert template.scope is not None and render_text(template.scope, params) == scope
+    rules = {r.id: r for r in template.rules}
+    assert all(r.check is not None and r.population is not None for r in rules.values())
+    populations = {rid: r.population for rid, r in rules.items() if r.population}
+    assert render_text(populations["R01"].description, params).zh == r01
+    same = {rid: populations[rid] == populations[base] for base, rids in SHARED.items() for rid in rids}
+    assert all(same.values()) and populations["R06"] != populations["R13"]
+    assert "entry_nos" in populations["R13"].sql and "entry_nos" not in populations["R06"].sql
+
+
+def test_gen07_and_related_scopes() -> None:
+    """需求 R328: GEN-07 的 scope (Xero: 期后 31 天, 数据截至 10-17) 与 S01-S03 的 check, population (S03 同 S02);
+    GEN-08, GEN-03, GEN-02 只写 scope."""
+    gen07 = gen_template("GEN-07")
+    params = {"period_end": date(2026, 9, 30), "subsequent_days": 31, "data_as_of": date(2026, 10, 17)}
+    assert gen07.scope is not None and render_text(gen07.scope, params).zh == (
+        "期末 2026-09-30 之后 31 天内 (数据截至 2026-10-17)的银行流水与分录"
+    )
+    s01, s02, s03 = gen07.rules
+    assert all(r.check is not None and r.population is not None for r in gen07.rules)
+    assert s02.population == s03.population != s01.population
+    rendered = {
+        pid: render_text(scope, params).zh
+        for pid, params in (
+            ("GEN-08", {"max_depth": 3, "person_hops": 1}),
+            ("GEN-03", {"period_start": date(2026, 7, 1), "period_end": date(2026, 9, 30), "subsequent_days": 30}),
+            ("GEN-02", {}),
+        )
+        if (scope := gen_template(pid).scope) is not None
+    }
+    assert rendered == {
+        "GEN-08": "客户的股权结构, 向上穿透 3 层法人股东, 关联人员检索 1 轮",
+        "GEN-03": "关系图中的关联方, 及其在 2026-07-01 至 2026-09-30 与期后 30 天内的分录, 流水与发票往来",
+        "GEN-02": "GEN-05 尚未归因的分录例外, 每笔凭证一个判断对象",
+    }
+
+
+@pytest.mark.parametrize(
+    ("replacement", "problem"),
+    [
+        (  # 绑定参数: 复用这段的六条规则各报一次
+            "        FROM journal_entries j\n        WHERE :no_such_param IS NULL\n",
+            "; ".join(f"GEN-05.{r} 的总体 SQL 用了 params 以外的参数 no_such_param" for r in ANCHORED),
+        ),
+        ("        FROM journal_entries j, bank_accounts b\n", "GEN-05 读 bank_accounts"),  # 读的账表 (按程序报)
+    ],
+    ids=["params", "reads"],
+)
+def test_anchored_population_checked_for_every_rule(tmp_path: Path, replacement: str, problem: str) -> None:
+    """需求 R328 (协调者 10-21): 锚点复用的总体, 加载校验 (population_problems 的参数, read_problems 的账表) 按展开后的
+    SQL 照做. 在 knowledge 副本里只改 GEN-05 period_lines 锚点处的 SQL: 构造程序库即报错."""
+    root = tmp_path / "knowledge"
+    shutil.copytree(ROOT, root)
+    path = root / "procedures" / "GEN-05.yaml"
+    text = path.read_text(encoding="utf-8")
+    anchor = text.index("population: &period_lines")
+    tail = text[anchor:].replace("        FROM journal_entries j\n", replacement, 1)
+    path.write_text(text[:anchor] + tail, encoding="utf-8")
+    with pytest.raises(ValueError, match=re.escape(problem)):
+        ProcedureLibrary(root)

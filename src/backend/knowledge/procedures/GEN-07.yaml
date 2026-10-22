@@ -22,6 +22,15 @@ workpaper: {ref: G-5, area: G}  # 底稿索引号与所属区 (需求 R329, know
 #
 # S04 期末应收到截止日仍未收回: 本版不做 (Demo需求文档第 6 节). 要收款与发票的对应关系, 现有表没有 (收款分录的
 # source_doc 只写客户名, 不带发票号); 待载入器提供收款对应表 (设计稿第 9.3 节第 14 项) 后再加.
+# 范围与各规则总体的说明 (需求 R328, 写法同 REV-08): 窗口同通用口径. S01 的总体为窗口内的银行流水 (银行账户表里有
+# 的账户), 一笔一项; S02, S03 为窗口内剔除作废对的分录行, 一行一项, 用 YAML 锚点 window_lines 复用整段. 规则的命中
+# 条件 (金额门槛, 未入账, 资本性科目等) 是检验, 不算范围.
+scope:
+  zh: >-
+    期末 {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至 {{ data_as_of }}){% endif %}的银行流水与分录
+  en: >-
+    Bank transactions and journal entries in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %}
+    (data up to {{ data_as_of }}){% endif %}
 phase: P2_Executing
 cycle: Pervasive
 owner: A5
@@ -81,6 +90,29 @@ rules:
             AND j.debit_cents-j.credit_cents=t.amount_cents
             AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no))
       ORDER BY t.txn_date, t.id COLLATE "C"
+    check: {zh: 大额流水已入账, en: Significant bank transactions are recorded}
+    population:
+      description:
+        zh: >-
+          {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至
+          {{ data_as_of }}){% endif %}的银行流水
+        en: >-
+          Bank transactions in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %} (data up to
+          {{ data_as_of }}){% endif %}
+      sql: |
+        WITH bounds AS (
+          SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                       COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                   AS window_end
+        )
+        SELECT 'bank_transaction' AS source_type, t.id AS source_id, t.amount_cents, t.bank_account_id, t.txn_date,
+               t.description, t.reference
+        FROM bank_transactions t
+        JOIN bank_accounts b ON b.engagement_id=t.engagement_id AND b.id=t.bank_account_id
+        CROSS JOIN bounds w
+        WHERE t.engagement_id=:eid
+          AND t.txn_date>CAST(:period_end AS date) AND t.txn_date<=w.window_end
+        ORDER BY t.txn_date, t.id COLLATE "C"
   - id: S02
     name: 期后非常规分录
     severity: high
@@ -139,6 +171,40 @@ rules:
                regexp_replace(regexp_replace(p.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
                p.entry_no COLLATE "C"
+    check: {zh: 没有期后非常规分录, en: No unusual subsequent journal entries}
+    population: &window_lines
+      description:
+        zh: >-
+          {{ period_end }} 之后 {{ subsequent_days }} 天内{% if data_as_of %} (数据截至
+          {{ data_as_of }}){% endif %}的分录行, 剔除作废对
+        en: >-
+          Journal lines in the {{ subsequent_days }} days after {{ period_end }}{% if data_as_of %} (data up to
+          {{ data_as_of }}){% endif %}, excluding voided pairs
+      sql: |
+        -- 作废对共用段 起
+        WITH reversal AS (
+          SELECT DISTINCT r.entry_no,
+                 replace(CAST(:reversal_entry_no_template AS text), '{1}',
+                         substring(r.description FROM CAST(:reversal_reference_pattern AS text))) AS original_no
+          FROM journal_entries r
+          WHERE r.engagement_id=:eid AND CAST(:reversal_reference_pattern AS text) IS NOT NULL
+            AND r.description ~ CAST(:reversal_reference_pattern AS text)
+        ), voided AS (
+          SELECT entry_no FROM reversal UNION SELECT original_no FROM reversal WHERE original_no IS NOT NULL
+        -- 作废对共用段 止
+        ), bounds AS (
+          SELECT LEAST(CAST(:period_end AS date)+CAST(:subsequent_days AS int),
+                       COALESCE(CAST(:data_as_of AS date), CAST(:period_end AS date)+CAST(:subsequent_days AS int)))
+                   AS window_end
+        )
+        SELECT 'journal_entry' AS source_type, j.id AS source_id, abs(j.debit_cents)+abs(j.credit_cents) AS amount_cents,
+               j.entry_no, j.posting_date, j.account_code, j.debit_cents, j.credit_cents, j.description, j.source_doc
+        FROM journal_entries j
+        CROSS JOIN bounds w
+        WHERE j.engagement_id=:eid
+          AND j.posting_date>CAST(:period_end AS date) AND j.posting_date<=w.window_end
+          AND NOT EXISTS (SELECT 1 FROM voided v WHERE v.entry_no=j.entry_no)
+        ORDER BY j.posting_date, j.id COLLATE "C"
   - id: S03
     name: 期后资本性支出
     severity: medium
@@ -175,3 +241,5 @@ rules:
                regexp_replace(regexp_replace(j.entry_no, '([0-9]+)', '0000000000\1', 'g'), '0*([0-9]{10})', '\1', 'g')
                  COLLATE "C",
                j.entry_no COLLATE "C", j.id COLLATE "C"
+    check: {zh: 没有重大期后资本性支出, en: No significant subsequent capital expenditure}
+    population: *window_lines

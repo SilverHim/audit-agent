@@ -12,7 +12,7 @@ from backend.contracts.errors import RuleError
 from backend.contracts.models import AgentId, Decision, ProcedureRun, RunStatus, TaskKind
 from backend.contracts.services import RuleResult
 from backend.orchestration.nodes import GraphNodes
-from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps
+from tests.fakes import FakeRegistry, FakeRuleEngine, FakeTrail, make_ctx, make_deps, outside_populations
 from tests.test_knowledge import design_traits
 from tests.test_xero_fixtures import xero_context
 from tests.xero_fakes import XERO_RULES, make_xero_deps, xero_state
@@ -53,6 +53,37 @@ async def test_xero_records_the_rules_not_run_in_yaml_order() -> None:
         params["period_end"],
         params["entry_timestamps_reliable"],
     ) == (500000, 16216, 1622, date(2026, 9, 30), False)
+
+
+@pytest.mark.external
+async def test_xero_populations_are_period_lines() -> None:
+    """需求 R328 验收 1: Xero 上执行了的 7 条规则各记总体, 跳过的时间类规则与不可执行的 R04, R07 不记; 分录类规则一行
+    一项, 全部为本期 582 行 (215 笔, Xero演示数据集设计第 1 节), 剔除作废对的 R02, R09-R11 为 424 行 (少 33 对共 66
+    笔); R12 为本期 26 张发票, 一张一项. 例外仍为 7 条, 都落在其规则的总体里."""
+    deps = make_xero_deps(rules=FakeRuleEngine(XERO_RULES))
+    ctx = xero_context(deps, xero_state(), "GEN-05", [])
+    output = await FieldworkAgent(deps).outcome(ctx)
+    [run] = output.patch["procedure_runs"]
+    populations = output.populations or []
+    counts = {p.rule_id: (p.source_type, p.count) for p in populations}
+    lines, unvoided = ("journal_entry", 582), ("journal_entry", 424)
+    assert counts == {
+        "R02": unvoided,
+        "R03": lines,
+        "R05": lines,
+        "R09": unvoided,
+        "R10": unvoided,
+        "R11": unvoided,
+        "R12": ("sales_invoice", 26),
+    }
+    entries = {p.rule_id: len({i.fields["entry_no"] for i in p.items}) for p in populations if p.rule_id != "R12"}
+    assert entries == {"R02": 149, "R03": 215, "R05": 215, "R09": 149, "R10": 149, "R11": 149}
+    result = XERO_RULES["GEN-05"](run)
+    assert (len(result.exceptions), outside_populations(result)) == (7, [])
+    # 守卫本身: 清空 R09 的总体后, 它的两条例外都在总体之外
+    emptied = [p.model_copy(update={"items": []}) if p.rule_id == "R09" else p for p in result.populations]
+    outside = outside_populations(result.model_copy(update={"populations": emptied}))
+    assert outside == ["X-GEN-05-1-R09-1", "X-GEN-05-1-R09-2"]
 
 
 async def test_rule_error_becomes_failed_run_and_rerun_task_by_a1() -> None:
