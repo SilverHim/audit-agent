@@ -1,10 +1,12 @@
 import type {
   AgentId,
+  AnalyticsResult,
   AuditObjective,
   AuditPlan,
   Engine,
   GateDecision,
   GateDecisionIn,
+  GateView,
   PlanConfirmation,
   PlanRow,
   PlanStatus,
@@ -35,6 +37,17 @@ export type PlanTableRow = {
 // 当前计划 (后端第 0 节的取法, current_plan_id 指向它); 没有为 undefined
 export function currentPlan(view: PlanView): AuditPlan | undefined {
   return view.plans.find((plan) => plan.id === view.current_plan_id)
+}
+
+// 计划页的初步分析数据来源 (需求 R371, R372): 优先 GET /plan 的 analytics (新字段; 旧数据没有该键为 undefined,
+// 按没有处理); 为空时退回当前闸门的材料 (停在 PLN-01/03 时, 与闸门材料显示同一份结果)
+export function planAnalytics(
+  plan: Pick<PlanView, 'analytics'> | undefined,
+  gate: GateView | null | undefined,
+): AnalyticsResult | null {
+  const own = plan?.analytics
+  if (own) return own
+  return gate?.material.kind === 'PLN-01/03' ? (gate.material.analytics ?? null) : null
 }
 
 // 程序表: 后端已按 "风险或认定 → 程序" 排好, 这里只接上审计目标与总览的程序行

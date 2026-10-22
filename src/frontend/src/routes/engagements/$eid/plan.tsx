@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { type ReactNode, useEffect, useRef } from 'react'
 import { engagementsGetPlanOptions } from '@/client/@tanstack/react-query.gen'
-import type { AuditPlan, PlanStatus, PlanView } from '@/client/types.gen'
+import type { AnalyticsResult, AuditPlan, PlanStatus, PlanView } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
 import {
   GateDecisionCard,
@@ -18,7 +18,7 @@ import { GeneratedLanguage } from '@/components/working-language'
 import { useActorName } from '@/lib/actor'
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
-import { currentPlan, extentLabel, methodLabel, planTable, revisionHistory } from '@/lib/plan'
+import { currentPlan, extentLabel, methodLabel, planAnalytics, planTable, revisionHistory } from '@/lib/plan'
 import { reasonText } from '@/lib/reason'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
@@ -35,6 +35,17 @@ function Panel({ title, children }: { title: ReactNode; children: ReactNode }) {
       <h2 className="m-0 font-semibold text-base">{title}</h2>
       {children}
     </section>
+  )
+}
+
+// 计划页的初步分析面板 (需求 R372): 数据来源见 lib/plan.planAnalytics; 没有可显示内容时不渲染空面板
+export function PlanAnalyticsPanel({ eid, analytics }: { eid: string; analytics: AnalyticsResult | null }) {
+  const { t } = useI18n()
+  if (!analytics || !hasPlanningAnalytics(analytics)) return null
+  return (
+    <Panel title={t.planning.analytics}>
+      <PlanningAnalytics eid={eid} analytics={analytics} />
+    </Panel>
   )
 }
 
@@ -55,12 +66,14 @@ function Plan() {
     void refetch()
   }, [signal, refetch])
   const atGate = overview?.current_gate === 'PLN-15' && !overview.running
-  // 停在 PLN-01/03 时也读闸门材料: 计划页要显示推荐重要性与三步复筛 (需求 R372). 计划页自身的数据源 (GET /plan) 不含
-  // 初步分析, 过了这道闸门后后端没有单独取分析结果的接口, 所以只在停在这道闸门时显示
+  // 停在 PLN-01/03 时也读闸门材料: GET /plan 的 analytics 为空 (旧数据或纯规则结果) 时退回用闸门材料显示同一份
+  // 初步分析 (需求 R372)
   const atAnalyticsGate = overview?.current_gate === 'PLN-01/03'
   const gate = useGate(eid, atGate || atAnalyticsGate)
   const view = plan.data
   const current = view ? currentPlan(view) : undefined
+  // 初步分析: 优先计划接口带出的结果 (闸门通过之后也有); 为空时退回当前闸门材料 (需求 R372)
+  const analytics = planAnalytics(view, gate.data)
   const lang = contentLanguage(overview, current?.run_id) // 计划正文的语言: 起草它的那次执行的 (需求 R340)
   return (
     <>
@@ -80,13 +93,7 @@ function Plan() {
       />
       <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-5 px-4 py-6 sm:px-7">
         <QueryState isPending={plan.isPending} error={plan.error}>
-          {atAnalyticsGate &&
-          gate.data?.material.kind === 'PLN-01/03' &&
-          hasPlanningAnalytics(gate.data.material.analytics) ? (
-            <Panel title={t.planning.analytics}>
-              <PlanningAnalytics eid={eid} analytics={gate.data.material.analytics} />
-            </Panel>
-          ) : null}
+          <PlanAnalyticsPanel eid={eid} analytics={analytics} />
           {view && current ? (
             <>
               {overview?.stale_procedure_ids?.includes('PLN-15') && current.status === 'draft' ? (
