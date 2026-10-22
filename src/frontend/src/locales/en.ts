@@ -276,10 +276,14 @@ export const en = {
     gross_margin_prior: 'Gross margin, prior year',
     revenue_growth: 'Revenue growth',
   } as Record<string, string>,
-  bases: { revenue: 'Revenue', total_assets: 'Total assets', profit_before_tax: 'Profit before tax' } as Record<
-    string,
-    string
-  >,
+  bases: {
+    revenue: 'Revenue',
+    gross_profit: 'Gross profit',
+    profit_before_tax: 'Profit before tax',
+    total_expenses: 'Total expenses',
+    net_assets: 'Net assets',
+    total_assets: 'Total assets',
+  } as Record<string, string>,
   riskLevels: { low: 'Low', medium: 'Medium', high: 'High', significant: 'Significant' },
   opinions: { unqualified: 'Unqualified', qualified: 'Qualified', adverse: 'Adverse', disclaimer: 'Disclaimer' },
   reportSections: {
@@ -731,6 +735,33 @@ export const en = {
       revenue: 'Revenue',
       expense: 'Expenses',
       employee: 'of which employee expenses',
+    },
+    // 推荐重要性与三步复筛 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用
+    analysis: {
+      screening: 'Screening result',
+      threshold: (amount: string) => `Threshold ${amount}`,
+      hits: (n: number) => `${n} account${n === 1 ? '' : 's'} over the threshold`,
+      focus: 'Focus areas',
+      additions: 'Added by the model (not flagged by the rules)',
+      observations: 'Supplementary observations',
+      excluded: 'Excluded, with reasons',
+      amount: 'Amount',
+      riskOrAssertion: (value: string) => `Risk or assertion: ${value}`,
+      recommendation: {
+        title: 'Recommended materiality (AI)',
+        basis: 'Benchmark',
+        baseAmount: 'Benchmark amount',
+        percentage: 'Percentage',
+        threshold: 'Threshold',
+        confidence: 'Confidence',
+        rationale: 'Why this benchmark and percentage',
+        counterArgument: 'Counter-argument',
+        hint: 'A pre-selection from the preliminary analysis; you can still choose another basis and percentage at this gate.',
+      },
+      fallback: {
+        title: 'The model was not available: fell back to the rule result, current-period revenue × 0.5%.',
+        reason: (reason: string) => `Reason: ${reason}`,
+      },
     },
   },
   completion: {

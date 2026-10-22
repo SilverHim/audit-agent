@@ -8,6 +8,12 @@ import {
   gatesUpdateClientProfileMutation,
 } from '@/client/@tanstack/react-query.gen'
 import type {
+  AnalyticsAddition,
+  AnalyticsObservation,
+  AnalyticsRecommendation,
+  AnalyticsResult,
+  AnalyticsScreening,
+  AnalyticsScreeningItem,
   Annotation,
   AuditException,
   AuditPlan,
@@ -122,6 +128,234 @@ export function ExceptionList({ eid, items }: { eid: string; items: AuditExcepti
         </div>
       ))}
     </Panel>
+  )
+}
+
+// ── 初步分析三步结果 (需求 R371, R372): 推荐重要性, 门槛与命中科目数, 复筛的四组 ──
+
+// 按科目代码排; 不改入参 (接口给的顺序是规则与模型输出的顺序, 页面统一按代码看)
+function byAccountCode<T extends { account_code: string }>(items: T[] | undefined): T[] {
+  return [...(items ?? [])].sort((a, b) => a.account_code.localeCompare(b.account_code))
+}
+
+function observationCodes(item: AnalyticsObservation): string {
+  return item.account_codes[0] ?? ''
+}
+
+// 推荐重要性 (PLN-07 第 1 步, 需求 R371): 基准, 基准金额, 比例, 门槛, 置信度与理由; 只是闸门的预选, 审计师仍可改选.
+// 金额按项目记账币种, 比例与置信度按百分比显示
+function RecommendationNote({ eid, recommendation }: { eid: string; recommendation: AnalyticsRecommendation }) {
+  const { formatMoney } = useMoney()
+  const { t } = useI18n()
+  const words = t.planning.analysis.recommendation
+  const basis = t.bases[recommendation.basis] ?? recommendation.basis
+  return (
+    <section
+      className="flex flex-col gap-2 rounded-[10px] border bg-[#fafbfc] p-3.5"
+      data-testid="analytics-recommendation"
+    >
+      <span className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-[13.5px]">{words.title}</span>
+        <StatusPill tone="accent">{basis}</StatusPill>
+      </span>
+      <dl className="m-0 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-[13.5px]">
+        <dt className="text-muted-foreground">{words.basis}</dt>
+        <dd className="m-0">{basis}</dd>
+        <dt className="text-muted-foreground">{words.baseAmount}</dt>
+        <dd className="m-0 font-mono">{formatMoney(recommendation.base_amount_cents)}</dd>
+        <dt className="text-muted-foreground">{words.percentage}</dt>
+        <dd className="m-0 font-mono">{formatPct(recommendation.percentage)}</dd>
+        <dt className="text-muted-foreground">{words.threshold}</dt>
+        <dd className="m-0 font-mono">{formatMoney(recommendation.threshold_cents)}</dd>
+        <dt className="text-muted-foreground">{words.confidence}</dt>
+        <dd className="m-0 font-mono">{formatPct(recommendation.self_confidence)}</dd>
+      </dl>
+      <div className="flex flex-col gap-1">
+        <SectionLabel>{words.rationale}</SectionLabel>
+        <p className="m-0 text-[13.5px] leading-[1.6]">{recommendation.rationale}</p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <SectionLabel>{words.counterArgument}</SectionLabel>
+        <p className="m-0 text-[13.5px] leading-[1.6]">{recommendation.counter_argument}</p>
+      </div>
+      <PointerList eid={eid} pointers={recommendation.evidence ?? []} />
+      <span className="text-[12.5px] text-muted-foreground">{words.hint}</span>
+    </section>
+  )
+}
+
+// 大模型失败退回规则结果的提示 (需求 R371 验收 6): 写明退回哪种规则结果与原因
+function FallbackNote({ reason }: { reason?: string | null }) {
+  const { t } = useI18n()
+  const words = t.planning.analysis.fallback
+  return (
+    <Alert>
+      <AlertDescription className="flex flex-col gap-1">
+        <span className="font-medium text-foreground" data-testid="analytics-fallback">
+          {words.title}
+        </span>
+        {reason ? <span>{words.reason(reason)}</span> : null}
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+// 复筛的一行: 科目代码与名称, (有的) 变动金额, 理由, 风险或认定, 证据. 重点关注与已排除共用
+function ScreeningRow({ eid, item }: { eid: string; item: AnalyticsScreeningItem }) {
+  const { formatMoney } = useMoney()
+  const { t } = useI18n()
+  const words = t.planning.analysis
+  return (
+    <li className="flex flex-col gap-1 rounded-[10px] border px-3 py-2 text-[13.5px]">
+      <span className="flex flex-wrap items-baseline gap-2">
+        <Code className="font-semibold">{item.account_code}</Code>
+        <span>{item.account_name}</span>
+        {item.amount_cents != null ? (
+          <span className="text-muted-foreground">
+            {words.amount} <Code>{formatMoney(item.amount_cents)}</Code>
+          </span>
+        ) : null}
+      </span>
+      <span className="leading-[1.6]">{item.reason}</span>
+      <span className="text-[12.5px] text-muted-foreground">{words.riskOrAssertion(item.risk_or_assertion)}</span>
+      <PointerList eid={eid} pointers={item.evidence ?? []} />
+    </li>
+  )
+}
+
+// 大模型补充的科目 (规则没报出的): 科目代码与名称, 理由, 风险或认定
+function AdditionRow({ item }: { item: AnalyticsAddition }) {
+  const { t } = useI18n()
+  const words = t.planning.analysis
+  return (
+    <li className="flex flex-col gap-1 rounded-[10px] border px-3 py-2 text-[13.5px]">
+      <span className="flex flex-wrap items-baseline gap-2">
+        <Code className="font-semibold">{item.account_code}</Code>
+        <span>{item.account_name}</span>
+      </span>
+      <span className="leading-[1.6]">{item.reason}</span>
+      <span className="text-[12.5px] text-muted-foreground">{words.riskOrAssertion(item.risk_or_assertion)}</span>
+    </li>
+  )
+}
+
+// 补充观察 (对已命中科目的, 如两个科目之间的勾稽矛盾): 相关科目, 观察内容, 风险或认定, 证据
+function ObservationRow({ eid, item, names }: { eid: string; item: AnalyticsObservation; names: Map<string, string> }) {
+  const { t } = useI18n()
+  const words = t.planning.analysis
+  return (
+    <li className="flex flex-col gap-1 rounded-[10px] border px-3 py-2 text-[13.5px]">
+      <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        {item.account_codes.map((code) => (
+          <span key={code} className="flex flex-wrap items-baseline gap-1.5">
+            <Code className="font-semibold">{code}</Code>
+            {names.get(code) ? <span>{names.get(code)}</span> : null}
+          </span>
+        ))}
+      </span>
+      <span className="leading-[1.6]">{item.reason}</span>
+      <span className="text-[12.5px] text-muted-foreground">{words.riskOrAssertion(item.risk_or_assertion)}</span>
+      <PointerList eid={eid} pointers={item.evidence ?? []} />
+    </li>
+  )
+}
+
+function ScreeningGroup({ testId, title, children }: { testId: string; title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-1.5" data-testid={testId}>
+      <SectionLabel>{title}</SectionLabel>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">{children}</ul>
+    </section>
+  )
+}
+
+// 第 3 步复筛 (需求 R371): 门槛与命中科目数, 再分重点关注, 大模型补充, 补充观察与已排除四组; 空组不渲染.
+// 每组按科目代码排. 旧数据没有 screening 时整块不渲染
+function ScreeningBlocks({ eid, screening }: { eid: string; screening: AnalyticsScreening }) {
+  const { formatMoney } = useMoney()
+  const { t } = useI18n()
+  const words = t.planning.analysis
+  const focus = byAccountCode(screening.focus)
+  const additions = byAccountCode(screening.additions)
+  const excluded = byAccountCode(screening.excluded)
+  const observations = [...(screening.observations ?? [])].sort((a, b) =>
+    observationCodes(a).localeCompare(observationCodes(b)),
+  )
+  // 补充观察只有科目代码: 用重点/排除两组的科目名称补全, 观察里看得到 "711 累计折旧"
+  const names = new Map<string, string>()
+  for (const item of [...focus, ...excluded]) names.set(item.account_code, item.account_name)
+  const hits = screening.hit_account_codes?.length ?? 0
+  return (
+    <div className="flex flex-col gap-3" data-testid="analytics-screening">
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[13.5px]">
+        <span className="font-semibold">{words.screening}</span>
+        {screening.threshold_cents != null ? (
+          <span className="text-muted-foreground">{words.threshold(formatMoney(screening.threshold_cents))}</span>
+        ) : null}
+        <span className="text-muted-foreground">{words.hits(hits)}</span>
+      </div>
+      {focus.length ? (
+        <ScreeningGroup testId="analytics-focus" title={words.focus}>
+          {focus.map((item) => (
+            <ScreeningRow key={item.account_code} eid={eid} item={item} />
+          ))}
+        </ScreeningGroup>
+      ) : null}
+      {additions.length ? (
+        <ScreeningGroup testId="analytics-additions" title={words.additions}>
+          {additions.map((item) => (
+            <AdditionRow key={item.account_code} item={item} />
+          ))}
+        </ScreeningGroup>
+      ) : null}
+      {observations.length ? (
+        <ScreeningGroup testId="analytics-observations" title={words.observations}>
+          {observations.map((item) => (
+            <ObservationRow key={item.account_codes.join(':') || item.reason} eid={eid} item={item} names={names} />
+          ))}
+        </ScreeningGroup>
+      ) : null}
+      {excluded.length ? (
+        <ScreeningGroup testId="analytics-excluded" title={words.excluded}>
+          {excluded.map((item) => (
+            <ScreeningRow key={item.account_code} eid={eid} item={item} />
+          ))}
+        </ScreeningGroup>
+      ) : null}
+    </div>
+  )
+}
+
+// screening 有没有可显示的内容 (门槛, 命中科目或四组之一); 旧数据与纯规则路径没有
+function screeningShown(screening: AnalyticsScreening | undefined): boolean {
+  return Boolean(
+    screening &&
+      (screening.threshold_cents != null ||
+        (screening.hit_account_codes?.length ?? 0) > 0 ||
+        (screening.focus?.length ?? 0) > 0 ||
+        (screening.additions?.length ?? 0) > 0 ||
+        (screening.excluded?.length ?? 0) > 0 ||
+        (screening.observations?.length ?? 0) > 0),
+  )
+}
+
+// 这一步有没有可显示的结果: 退回规则的提示, 推荐卡片或任一复筛内容; 都没有时整块不渲染 (旧数据与纯规则路径)
+export function hasPlanningAnalytics(analytics: AnalyticsResult): boolean {
+  return Boolean(analytics.fallback || analytics.recommendation || screeningShown(analytics.screening))
+}
+
+// 初步分析的三步结果 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用. 推荐为空 (纯规则或退回规则) 时不显示
+// 推荐卡片; 退回规则时只显示退回提示; screening 为空时不显示复筛各块
+export function PlanningAnalytics({ eid, analytics }: { eid: string; analytics: AnalyticsResult }) {
+  const recommendation = analytics.recommendation ?? null
+  const screening = analytics.screening
+  if (!hasPlanningAnalytics(analytics)) return null
+  return (
+    <div className="flex flex-col gap-3" data-testid="planning-analytics">
+      {analytics.fallback ? <FallbackNote reason={analytics.fallback_reason} /> : null}
+      {recommendation ? <RecommendationNote eid={eid} recommendation={recommendation} /> : null}
+      {screeningShown(screening) && screening ? <ScreeningBlocks eid={eid} screening={screening} /> : null}
+    </div>
   )
 }
 
@@ -275,6 +509,8 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           <MonthlyTable rows={material.analytics.monthly ?? []} />
         </Panel>
         <ExceptionList eid={eid} items={material.analytics_exceptions} />
+        {/* 推荐重要性与三步复筛 (需求 R371, R372) */}
+        <PlanningAnalytics eid={eid} analytics={material.analytics} />
       </div>
     )
   }

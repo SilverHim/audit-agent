@@ -4,7 +4,13 @@ import { type ReactNode, useEffect, useRef } from 'react'
 import { engagementsGetPlanOptions } from '@/client/@tanstack/react-query.gen'
 import type { AuditPlan, PlanStatus, PlanView } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
-import { GateDecisionCard, PlanNarrative, useGate } from '@/components/gate-form'
+import {
+  GateDecisionCard,
+  hasPlanningAnalytics,
+  PlanNarrative,
+  PlanningAnalytics,
+  useGate,
+} from '@/components/gate-form'
 import { QueryState } from '@/components/query-state'
 import { StaleBadge } from '@/components/rerun'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -49,7 +55,10 @@ function Plan() {
     void refetch()
   }, [signal, refetch])
   const atGate = overview?.current_gate === 'PLN-15' && !overview.running
-  const gate = useGate(eid, atGate)
+  // 停在 PLN-01/03 时也读闸门材料: 计划页要显示推荐重要性与三步复筛 (需求 R372). 计划页自身的数据源 (GET /plan) 不含
+  // 初步分析, 过了这道闸门后后端没有单独取分析结果的接口, 所以只在停在这道闸门时显示
+  const atAnalyticsGate = overview?.current_gate === 'PLN-01/03'
+  const gate = useGate(eid, atGate || atAnalyticsGate)
   const view = plan.data
   const current = view ? currentPlan(view) : undefined
   const lang = contentLanguage(overview, current?.run_id) // 计划正文的语言: 起草它的那次执行的 (需求 R340)
@@ -71,6 +80,13 @@ function Plan() {
       />
       <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-5 px-4 py-6 sm:px-7">
         <QueryState isPending={plan.isPending} error={plan.error}>
+          {atAnalyticsGate &&
+          gate.data?.material.kind === 'PLN-01/03' &&
+          hasPlanningAnalytics(gate.data.material.analytics) ? (
+            <Panel title={t.planning.analytics}>
+              <PlanningAnalytics eid={eid} analytics={gate.data.material.analytics} />
+            </Panel>
+          ) : null}
           {view && current ? (
             <>
               {overview?.stale_procedure_ids?.includes('PLN-15') && current.status === 'draft' ? (
