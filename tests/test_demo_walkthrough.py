@@ -52,11 +52,14 @@ from backend.contracts.models import (
     OpinionType,
     PlanStatus,
     ProcedureRun,
+    ProposedAction,
+    ReviewTask,
     RunStatus,
     RunTrigger,
     TrailEntry,
     TrailKind,
     UncorrectedSchedule,
+    Verdict,
     WorkingLanguage,
 )
 from backend.contracts.views import GateView
@@ -483,10 +486,11 @@ DEMO_AGENTS = {
 }
 # 计划与报告各两稿 (退回一次); GEN-05 另有更正分录的增量执行 (需求 R194)
 DEMO_RUNS = {pid: 2 if pid in ("PLN-15", "RPT-03", "GEN-05") else 1 for pid in DEMO_AGENTS}
-# llm_call 留痕: (程序, 是否上传处理 (执行 ID 以 UPLOAD- 开头)) → 行数. 编排内 27 行, 上传处理 24 行; GEN-09 没有
-# (同 R119: REV-03, REV-02 为 L2 跳过, BA-091 的建议不触发主规则, 抽样未中; GEN-02 的 7 条, FIN-03 与 FIN-09 各 2 条
-# 为 L2 同样跳过)
+# llm_call 留痕: (程序, 是否上传处理 (执行 ID 以 UPLOAD- 开头)) → 行数. 编排内 29 行 (PLN-07 三步里第 1, 3 步各一次,
+# 需求 R371), 上传处理 24 行; GEN-09 没有 (同 R119: REV-03, REV-02 为 L2 跳过, BA-091 的建议不触发主规则, 抽样未中;
+# GEN-02 的 7 条, FIN-03 与 FIN-09 各 2 条为 L2 同样跳过)
 DEMO_LLM_CALLS = {
+    ("PLN-07", False): 2,
     ("PLN-15", False): 2,
     ("DOC-06", False): 2,
     ("REV-03", False): 3,
@@ -499,17 +503,18 @@ DEMO_LLM_CALLS = {
     ("DOC-CLASSIFY", True): 21,
     ("DOC-04", True): 3,
 }
-# 留痕各类的行数, 共 253. data: upload, classify, edit 各 21, sync 8 (第 8 为更正通知载入的总账), request_raised 5,
+# 留痕各类的行数, 共 256. data: upload, classify, edit 各 21, sync 8 (第 8 为更正通知载入的总账), request_raised 5,
 # import 4, request_received 4, check 2, demo_import 2, ready 1; decision: 闸门 7, 复核 17, 错报闭环 6 (FIN-03 2,
 # FIN-08 1, 更正通知 1, FIN-09 2); run: 执行 22 次 (DEMO_RUNS) 开始与结束各一行 (需求 R325); transition: 程序 30,
 # 项目阶段 5
 DEMO_TRAIL = {
     TrailKind.data: 89,
-    TrailKind.llm_call: 51,
+    TrailKind.llm_call: 53,
     TrailKind.run: 44,
     TrailKind.transition: 35,
     TrailKind.decision: 30,
     TrailKind.external_call: 4,
+    TrailKind.archive: 1,  # 签字后底稿归档定稿 (需求 R337)
 }
 
 
@@ -640,7 +645,7 @@ async def assert_loop(w: Walk) -> None:
 @shared_loop
 async def test_end_state(walked: Walk) -> None:
     """需求 R287 验收 4, R260 与 R195: 见 assert_end_state."""
-    assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals", "misstatement", "planning"]
+    assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals", "misstatement", "more_evidence", "planning"]
     await assert_end_state(walked)
 
 
@@ -749,14 +754,16 @@ async def test_plan_approved_before_fieldwork(walked: Walk) -> None:
 @shared_loop
 async def test_llm_reads_only_the_runtime_copy(walked: Walk) -> None:
     """大模型 FIXED_CALLS 次都读运行副本里各自的 fixture (各程序的次数见 FIXTURE_READS: RPT-03 无保留意见的两稿
-    unqualified-r1, unqualified-r2 与 PLN-15 两个修订 r1, r2 也在里面), 没有回落到 default.json 或找不到, 各文件一次,
-    attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本 (应用里按项目数据集选目录)."""
+    unqualified-r1, unqualified-r2, PLN-15 两个修订 r1, r2 与 PLN-07 三步的 basis, screen 也在里面), 没有回落到
+    default.json 或找不到, 各文件一次, attempt 1 无失败级别; 组装根的 mock 客户端对这个项目选的正是运行副本 (应用里按
+    项目数据集选目录)."""
     llm = walked.x.client
     reads = [(r.procedure_id, r.fixture_key, r.root) for r in llm.reads]
     assert [r for r in llm.reads if r.file != f"{r.procedure_id}/{r.fixture_key}.json"] == []
     assert Counter(pid for pid, *_ in reads) == FIXTURE_READS
     assert sorted(key for pid, key, _ in reads if pid == "RPT-03") == ["unqualified-r1", "unqualified-r2"]
     assert sorted(key for pid, key, _ in reads if pid == "PLN-15") == ["r1", "r2"]
+    assert sorted(key for pid, key, _ in reads if pid == "PLN-07") == ["basis", "screen"]
     assert len(set(reads)) == len(reads)
     calls = [e for e in entries(walked) if e.kind is TrailKind.llm_call]
     assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
@@ -797,3 +804,53 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
             )
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
         assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
+
+
+# ── 定论 (需求 R365) ──
+
+
+@shared_loop
+async def test_judgments_carry_a_verdict(walked: Walk) -> None:
+    """需求 R365 验收 1, 6: 走通里判断是否错报的判断都带定论, 与建议动作一一对应; XJ-499 的定论是 "是错报";
+    FIN-03/FIN-09 的错报更新判断不要求定论."""
+    deps, eid = walked.x.runner.deps, walked.x.eid
+    judgments = await deps.output_store.latest(eid, Judgment)
+    expected = {
+        ProposedAction.accept: Verdict.not_misstatement,
+        ProposedAction.close: Verdict.not_misstatement,
+        ProposedAction.misstatement: Verdict.misstatement,
+        ProposedAction.more_evidence: Verdict.undetermined,
+    }
+    # 只有大模型产出的判断带定论 (trail_ref 非空); 人推翻时另建的人工判断不要求定论
+    plain = [j for j in judgments if j.misstatement_update is None and j.trail_ref is not None]
+    assert plain and all(j.verdict is not None for j in plain)
+    assert all(expected[j.proposed_action] is j.verdict for j in plain)
+    [xj499] = [j for j in judgments if j.subject_id == "XJ-499"]
+    assert xj499.verdict is Verdict.misstatement
+    assert xj499.misstatement_draft is not None
+
+
+# ── 更正分录 (需求 R367) ──
+
+
+@shared_loop
+async def test_misstatements_carry_the_suggested_correction(walked: Walk) -> None:
+    """需求 R367 验收 5, 6: XJ-499 的判断附更正分录 (借 711 825.00, 贷 710 750.00, 贷 820 75.00); 认定的错报带上
+    更正分录; FIN-08 的沟通材料列出建议调整分录 (供管理层入账, 客户更正后由 FIN-09 核实)."""
+    deps, eid = walked.x.runner.deps, walked.x.eid
+    judgments = await deps.output_store.latest(eid, Judgment)
+    [xj499] = [j for j in judgments if j.subject_id == "XJ-499" and j.procedure_id == "GEN-02"]
+    assert xj499.misstatement_draft is not None
+    correction = xj499.misstatement_draft.correction
+    assert [(e.account_code, e.debit_cents, e.credit_cents) for e in correction] == [
+        ("711", 82500, 0),
+        ("710", 0, 75000),
+        ("820", 0, 7500),
+    ]
+    misstatements = await deps.output_store.latest(eid, Misstatement)
+    assert misstatements and all(m.correction for m in misstatements)
+    [xj499_mis] = [m for m in misstatements if m.judgment_id == xj499.id]
+    assert xj499_mis.correction == correction
+    [fin08] = await deps.output_store.latest(eid, ReviewTask, procedure_id="FIN-08")
+    listed = {row["id"]: row for row in fin08.manual_request.material["misstatements"]}
+    assert [entry["account_code"] for entry in listed[xj499_mis.id]["correction"]] == ["711", "710", "820"]

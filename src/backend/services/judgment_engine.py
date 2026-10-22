@@ -13,6 +13,8 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts import llm_outputs
 from backend.contracts.knowledge import ProcedureTemplate
 from backend.contracts.llm_outputs import (
+    AnalyticsBasisDraft,
+    AnalyticsScreeningDraft,
     AuditPlanDraft,
     ConfirmationExtraction,
     ContractExtraction,
@@ -54,6 +56,7 @@ from backend.contracts.models import (
     StepStatus,
     TrailEntry,
     TrailKind,
+    Verdict,
     drop_fields,
     mask_person_node_ids,
 )
@@ -73,7 +76,9 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
-from backend.services.currency import default_currency
+from backend.services.analytic_benchmarks import load_benchmarks, period_totals
+from backend.services.correction_entries import correction_problems
+from backend.services.currency import default_currency, format_money
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
@@ -120,8 +125,29 @@ JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
     "{schema}",
     "Rule findings and planning risks are not evidence sources: never put a finding ID or a risk ID in an evidence "
     "pointer. Cite the rows, document pages or fields that the finding is about; name a risk by its ID in the step "
-    "text.\n\n{schema}",
+    "text.\n\n"
+    "State the verdict first. When the judgment decides whether something is a misstatement (the schema has no "
+    "nature or fully_corrected field), the verdict field is required and must match proposed_action: accept and "
+    "close = not_misstatement, misstatement = misstatement, more_evidence = undetermined. The first sentence of the "
+    'conclusion must state that verdict in plain words (for example "Not a misstatement: ...", "Misstatement: '
+    'office equipment (710) is overstated by AUD 750.00 (existence).", "Undetermined: the bank statement for the '
+    'period is missing."); put the reasons after it and do not use double negatives. When the schema has nature or '
+    "fully_corrected, omit the verdict.\n\n"
+    "Write every amount in the engagement's accounting currency with its usual decimals (for example AUD 750.00), "
+    "never in cents and never with the Chinese unit 分; a conclusion on a misstatement must state the misstatement "
+    "amount in that form, matching misstatement_draft.\n\n"
+    "{schema}",
 )
+
+
+# 定论与建议动作的对应 (需求 R365): 两个方向都必须一致, 不一致判为输出不合格
+VERDICT_ACTIONS: dict[Verdict, frozenset[ProposedAction]] = {
+    Verdict.not_misstatement: frozenset({ProposedAction.accept, ProposedAction.close}),
+    Verdict.misstatement: frozenset({ProposedAction.misstatement}),
+    Verdict.undetermined: frozenset({ProposedAction.more_evidence}),
+}
+# 结论里写成 "分" 或 cents 的金额 (需求 R365): 要按记账币种写成 1,234.56 这样的金额
+CENTS_WORDS = re.compile(r"\d[\d,.]*\s*(?:cents?|分)", re.IGNORECASE)
 # 没通过校验后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:
 
@@ -229,6 +255,25 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     errors = chain_semantics(draft.reasoning_chain)
     if draft.proposed_action is ProposedAction.misstatement and draft.misstatement_draft is None:
         errors.append("建议认定错报, 但没有错报草稿")
+    return errors
+
+
+def verdict_semantics(draft: JudgmentDraft, currency: str, *, required: bool) -> list[str]:
+    """定论 (需求 R365) 的语义校验, 返回错误 (空为通过): 判断是否错报的程序须给定论 (required), 定论与建议动作对应;
+    结论的金额按记账币种写 (不写成 分 或 cents), 判为错报时结论里须出现与错报草稿一致的金额."""
+    errors: list[str] = []
+    if draft.verdict is None:
+        if required:
+            errors.append("缺少定论 verdict (not_misstatement / misstatement / undetermined)")
+    elif draft.proposed_action not in VERDICT_ACTIONS[draft.verdict]:
+        errors.append(f"定论 {draft.verdict.value} 与建议动作 {draft.proposed_action.value} 不一致")
+    if CENTS_WORDS.search(draft.conclusion):
+        errors.append("结论里的金额写成了 分 或 cents, 应按记账币种写成金额 (如 AUD 1,234.56)")
+    draft_misstatement = draft.misstatement_draft
+    if draft.proposed_action is ProposedAction.misstatement and draft_misstatement is not None:
+        amount = format_money(abs(draft_misstatement.amount_cents), currency)
+        if amount not in draft.conclusion:
+            errors.append(f"结论里的金额与错报草稿不一致: 须按记账币种写出 {amount}")
     return errors
 
 
@@ -662,7 +707,7 @@ class OutputValidator:
         return errors, notes
 
     async def _judgment(
-        self, eid: str, draft: JudgmentDraft, ctx: ValidationContext
+        self, eid: str, draft: JudgmentDraft, ctx: ValidationContext, *, require_verdict: bool = True
     ) -> tuple[JudgmentDraft, Level | None, list[int], list[str]]:
         """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误).
         准则片段按 ctx.standards_of 核对 (见 PointerResolver)."""
@@ -679,11 +724,26 @@ class OutputValidator:
         ):
             errors.append(f"错报金额 {md.amount_cents} 不等于引用行的金额, 两条引用行之差或归因例外的金额")
             return draft, "reference", unsupported, errors
-        if md is not None and md.account_code is not None and not await self.financial.accounts(eid, [md.account_code]):
-            errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
-            return draft, "reference", unsupported, errors
+        if md is not None:
+            codes = sorted({e.account_code for e in md.correction} | ({md.account_code} if md.account_code else set()))
+            accounts = await self.financial.accounts(eid, codes) if codes else []
+            known = {account.code for account in accounts}
+            missing = [code for code in codes if code not in known]
+            if md.account_code is not None and md.account_code in missing:
+                errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
+            others = [code for code in missing if code != md.account_code]
+            if others:
+                errors.append(f"更正分录的科目代码 {', '.join(others)} 不在本项目科目表中")  # 需求 R367
+            if missing:
+                return draft, "reference", unsupported, errors
+            correction = correction_problems(md, accounts, required=True)
+            if correction:
+                return draft, "semantic", unsupported, errors + correction
         semantic = judgment_semantics(draft)
-        return draft, "semantic" if semantic else None, unsupported, errors + semantic
+        if semantic:
+            return draft, "semantic", unsupported, errors + semantic
+        verdict = verdict_semantics(draft, ctx.currency, required=require_verdict)
+        return draft, "semantic" if verdict else None, unsupported, errors + verdict
 
     async def _critic(
         self, eid: str, output: CriticIndependent, ctx: ValidationContext
@@ -796,7 +856,7 @@ async def check_classification(
 ) -> CheckResult:
     """错报分类草稿 (FIN-03): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级另查错报
     性质 (nature_semantics)."""
-    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx, require_verdict=False)
     nature = nature_semantics(output.nature) if level != "reference" else []
     return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
 
@@ -808,7 +868,7 @@ async def check_verification(
     另查是否完整更正与其他科目 (verification_semantics). ctx 缺 expected_residual_cents 或 entry_account_codes 时抛
     ValueError (verification_context)."""
     residual, codes = verification_context(ctx)
-    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx, require_verdict=False)
     extra = verification_semantics(output, residual, codes) if level != "reference" else []
     return CheckResult(draft, "semantic" if extra else level, unsupported, errors + extra)
 
@@ -865,6 +925,125 @@ async def check_going_concern(
     return CheckResult(advice, "semantic" if semantic else None, resolved.unsupported, errors + semantic)
 
 
+async def check_analytics_basis(
+    validator: OutputValidator, eid: str, output: AnalyticsBasisDraft, ctx: ValidationContext
+) -> CheckResult:
+    """PLN-07 第 1 步的基准与比例 (需求 R371): 基准须在配置的清单内, 比例须在该基准的范围内, 基准金额须为正 (ASA 320
+    A5: 税前利润波动或亏损时不宜以它作基准); 证据指针须可解析, 且至少一个. 清单不在清单内或超出范围判语义失败."""
+    config = load_benchmarks(validator.library.root)
+    benchmark = config.get(output.basis)
+    semantic: list[str] = []
+    if benchmark is None:
+        semantic.append(f"基准 {output.basis} 不在配置的基准清单内")
+    elif not benchmark.contains(output.percentage):
+        semantic.append(
+            f"{output.basis} 的比例 {output.percentage} 不在 {benchmark.pct_min}-{benchmark.pct_max} 范围内"
+        )
+    totals = await period_totals(validator.financial, eid, "current")
+    base_cents = totals.get(output.basis)
+    if base_cents is None:
+        semantic.append(f"基准 {output.basis} 没有对应的汇总金额")
+    elif base_cents <= 0:
+        semantic.append(f"基准 {output.basis} 的本期金额 {base_cents} 不为正, 不能作重要性基准")
+    if not output.rationale.strip() or not output.counter_argument.strip():
+        semantic.append("理由与反方论证不能为空")
+    resolver = PointerResolver(validator, eid, ctx.standards_of, ctx.client_profile)
+    resolved = await resolver.resolve_chain([], output.evidence)
+    checked = output.model_copy(update={"evidence": resolved.evidence})
+    reference = list(resolved.errors)
+    if not output.evidence:
+        reference.append("没有证据指针")
+    elif resolved.valid == 0:
+        reference.append("没有一个能解析的证据指针")
+    if reference:
+        return CheckResult(checked, "reference", errors=reference + semantic)
+    return CheckResult(checked, "semantic" if semantic else None, errors=semantic)
+
+
+async def check_analytics_screening(
+    validator: OutputValidator, eid: str, output: AnalyticsScreeningDraft, ctx: ValidationContext
+) -> CheckResult:
+    """PLN-07 第 3 步的复筛 (需求 R371): 每个规则命中科目恰好一条 decision, 科目在科目表内; additions 不重复且不在
+    命中里; observations 的科目在科目表内; reason 与 risk_or_assertion 不为空; decisions 的证据指针须可解析. 没给
+    ctx.analytics_hits 时抛 ValueError (调用方漏传)."""
+    if ctx.analytics_hits is None:
+        raise ValueError("复筛输出的校验须给出第 2 步的命中科目 (ValidationContext.analytics_hits)")
+    hits = list(ctx.analytics_hits)
+    accounts = await validator.financial.accounts(eid)
+    known = {account.code for account in accounts}
+    semantic: list[str] = []
+
+    decisions = [decision.account_code for decision in output.decisions]
+    duplicates = sorted({code for code in decisions if decisions.count(code) > 1})
+    if duplicates:
+        semantic.append(f"同一命中科目有多条 decision: {', '.join(duplicates)}")
+    missing = sorted(set(hits) - set(decisions))
+    if missing:
+        semantic.append(f"规则命中的科目没有 decision: {', '.join(missing)}")
+    extra = sorted(set(decisions) - set(hits))
+    if extra:
+        semantic.append(f"decision 的科目不是规则命中: {', '.join(extra)}")
+
+    addition_codes = [addition.account_code for addition in output.additions]
+    repeated_additions = sorted({code for code in addition_codes if addition_codes.count(code) > 1})
+    if repeated_additions:
+        semantic.append(f"additions 重复: {', '.join(repeated_additions)}")
+    hit_additions = sorted(set(addition_codes) & set(hits))
+    if hit_additions:
+        semantic.append(f"additions 不能是规则命中的科目: {', '.join(hit_additions)}")
+    semantic += [f"decision 的科目 {code} 不在本项目科目表中" for code in sorted(set(decisions) - known)]
+    semantic += [f"addition 的科目 {code} 不在本项目科目表中" for code in sorted(set(addition_codes) - known)]
+    observation_codes = [code for observation in output.observations for code in observation.account_codes]
+    semantic += [f"observation 的科目 {code} 不在本项目科目表中" for code in sorted(set(observation_codes) - known)]
+    semantic += [
+        f"decision {decision.account_code} 的理由或风险/认定为空"
+        for decision in output.decisions
+        if not decision.reason.strip() or not decision.risk_or_assertion.strip()
+    ]
+    semantic += [
+        f"addition {addition.account_code} 的理由或风险/认定为空"
+        for addition in output.additions
+        if not addition.reason.strip() or not addition.risk_or_assertion.strip()
+    ]
+    semantic += [
+        f"observation {', '.join(observation.account_codes) or '(无科目)'} 的理由或风险/认定为空"
+        for observation in output.observations
+        if not observation.reason.strip() or not observation.risk_or_assertion.strip()
+    ]
+
+    resolver = PointerResolver(validator, eid, ctx.standards_of, ctx.client_profile)
+    reference: list[str] = []
+    resolved_decisions = []
+    for decision in output.decisions:
+        pointers = []
+        for pointer in decision.evidence:
+            resolved, reason = await resolver.resolve(pointer)
+            if resolved is None:
+                reference.append(f"decision {decision.account_code} 的指针 {pointer.source_id}: {reason}")
+            else:
+                pointers.append(resolved)
+        if not decision.evidence:
+            reference.append(f"decision {decision.account_code} 没有证据指针")
+        resolved_decisions.append(decision.model_copy(update={"evidence": pointers}))
+    resolved_observations = []
+    for observation in output.observations:
+        pointers = []
+        for pointer in observation.evidence:
+            resolved, reason = await resolver.resolve(pointer)
+            if resolved is None:
+                reference.append(
+                    f"observation {', '.join(observation.account_codes) or '(无科目)'} 的指针 {pointer.source_id}: "
+                    f"{reason}"
+                )
+            else:
+                pointers.append(resolved)
+        resolved_observations.append(observation.model_copy(update={"evidence": pointers}))
+    checked = output.model_copy(update={"decisions": resolved_decisions, "observations": resolved_observations})
+    if reference:
+        return CheckResult(checked, "reference", errors=reference + semantic)
+    return CheckResult(checked, "semantic" if semantic else None, errors=semantic)
+
+
 async def check_critic(
     validator: OutputValidator, eid: str, output: CriticIndependent, ctx: ValidationContext
 ) -> CheckResult:
@@ -897,6 +1076,8 @@ for _model, _check in (
     (CriticIndependent, check_critic),
     (AuditPlanDraft, check_plan),
     (GoingConcernAdvice, check_going_concern),
+    (AnalyticsBasisDraft, check_analytics_basis),
+    (AnalyticsScreeningDraft, check_analytics_screening),
     (CriticVerdictOut, structure_only),
     (DocumentClassification, structure_only),
     (SheetRecognition, structure_only),
@@ -987,8 +1168,9 @@ class JudgmentEngine:
         # 校验同按这一语言 (如报告两段的标题, 需求 R341), 调用方给的 ctx.language 也不算
         outbound["output_language"] = run.language
         # 记账币种 (需求 R366): 模板过滤器 money 缺省按它写金额; 取项目当前的值, 调用方给的同名变量不算
-        outbound["currency"] = await self.currency(eid)
-        ctx = ctx.model_copy(update={"language": run.language})
+        currency = await self.currency(eid)
+        outbound["currency"] = currency
+        ctx = ctx.model_copy(update={"language": run.language, "currency": currency})
         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -1123,6 +1305,7 @@ class JudgmentEngine:
             evidence=draft.evidence,
             counter_argument=draft.counter_argument,
             proposed_action=draft.proposed_action,
+            verdict=draft.verdict,
             misstatement_draft=draft.misstatement_draft,
             exception_ids=[x.id for x in ctx.rule_findings],
             autonomy_level=ctx.autonomy_level or template.autonomy_level,

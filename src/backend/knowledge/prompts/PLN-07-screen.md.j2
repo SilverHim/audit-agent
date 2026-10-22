@@ -1,0 +1,76 @@
+{#
+PLN-07 第 3 步: 复筛 → AnalyticsScreeningDraft (需求 R371; 执行见 agents/risk_assessor.RiskAssessorAgent.analytics)。
+功能 planning 打开时每个项目调用一次, 只在第 1 步与第 2 步成功后调用。
+变量 (均为 JSON 形式, 日期为 ISO 字符串):
+  entity         ClientProfile: legal_name, entity_type, industry_anzsic, listed, notes
+  recommendation {basis, percentage, base_amount_cents, threshold_cents, rationale}
+  period         {start, end}: 本期审计期间
+  rule_hits      规则命中的全部科目, 每项: exception_id, account_code, account_name, amount_cents, current_cents,
+                 prior_cents, opening_cents, change_pct, basis (balance_sheet 或 profit_or_loss), evidence
+                 (证据指针列表)
+  trial_balance  两期逐科目明细: source_type, source_id, code, name, type, category, current_cents, prior_cents
+  monthly        A03 月度走势: month, revenue_cents, expense_cents, employee_expense_cents
+#}
+You assist a registered company auditor with the screening step of the preliminary analytical procedures for {{ entity.legal_name }} for the period {{ period.start }} to {{ period.end }}.
+
+## Task
+
+The auditor selected the materiality benchmark and percentage below. The rule then tested every account movement against:
+
+- threshold = benchmark amount × percentage = {{ recommendation.threshold_cents }} cents
+- movement |current − opening| at least 20% of the absolute opening balance
+- balance sheet accounts compared with the opening balance; profit or loss accounts compared with the prior period only when the two periods are of equal length
+
+The rule reported the accounts listed under "Rule hits". For every one of them decide:
+
+- `focus`: keep it as a focus area for the audit; or
+- `exclude`: exclude it from the focus areas, with the reason why the movement is explained or not significant.
+
+Both verdicts stay in the workpaper; an excluded account is not deleted. Then, separately:
+
+- `additions`: accounts that the rule did not report but that deserve attention. They must not be one of the rule hits and must not repeat.
+- `observations`: a supplementary observation about one or more accounts already reported (including rule hits), for example two account balances that contradict each other. Use this rather than putting a rule hit in `additions`.
+
+## Selection
+
+- Benchmark: `{{ recommendation.basis }}` at {{ recommendation.percentage }} of {{ recommendation.base_amount_cents }} cents.
+- Threshold: {{ recommendation.threshold_cents }} cents.
+- The model's reason for the benchmark: {{ recommendation.rationale }}
+
+## Rule hits ({{ rule_hits | length }})
+
+{% for hit in rule_hits %}
+- `{{ hit.account_code }}` {{ hit.account_name }}: movement {{ hit.amount_cents }} cents (current {{ hit.current_cents }}, prior {{ hit.prior_cents }}, opening {{ hit.opening_cents }}{% if hit.change_pct is not none %}, change {{ hit.change_pct }}{% endif %}, {{ hit.basis }}); rule exception {{ hit.exception_id }}; evidence {{ hit.evidence | tojson }}
+{% endfor %}
+
+Trial balance by account (cents; debit positive, credit negative):
+{% for row in trial_balance %}
+- {{ row.source_id }} {{ row.name }} ({{ row.type }}, {{ row.category or "uncategorised" }}): current {{ row.current_cents if row.current_cents is not none else "no balance" }}, prior {{ row.prior_cents if row.prior_cents is not none else "no balance" }}
+{% endfor %}
+
+Monthly trend for the current period (A03; cents):
+{% for m in monthly %}
+- {{ m.month }}: revenue {{ m.revenue_cents }}, expenses {{ m.expense_cents }}, of which employee expenses {{ m.employee_expense_cents }}
+{% endfor %}
+
+## Evidence
+
+For each decision cite the rule hit's trial balance row with the evidence pointers given above (copy `source_type`, `source_id`, `locator`; the validator fills `type` and `reliability`). For an observation about a trial balance account cite its `trial_balance` row the same way. Never invent an ID, account code, document or standard paragraph. A decision with no resolvable evidence is not accepted.
+
+## Output (AnalyticsScreeningDraft)
+
+- `decisions`: exactly one entry for every rule hit above, with `account_code`, `verdict` ("focus" or "exclude"), `reason`, `risk_or_assertion`, `evidence`.
+- `additions`: entries with `account_code`, `reason`, `risk_or_assertion` for accounts not in the rule hits; empty if none.
+- `observations`: entries with `account_codes`, `reason`, `risk_or_assertion`, `evidence` for supplementary observations about reported accounts; empty if none.
+
+## Rules
+
+- Use every rule hit exactly once; do not add a decision for an account that is not a rule hit.
+- `additions` must not contain a rule hit, an unknown account code, or the same account twice.
+- State the verdict's reason fully; do not write only "significant" or "not significant".
+- `risk_or_assertion` names the risk or the financial statement assertion at stake (for example "Existence of cash", "Completeness of payables", "Valuation of receivables").
+- Every fact must come from the inputs. Amounts are cents in the inputs; describe money in Australian dollars in free text (for example AUD 825.00).
+- Plain text inside each field; no Markdown.
+
+{% from "_output_language.md.j2" import narrative_language with context %}
+{{ narrative_language() }}

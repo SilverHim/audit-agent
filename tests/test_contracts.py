@@ -195,7 +195,7 @@ def test_new_enum_values() -> None:
     ]
     assert [k.value for k in TaskKind] == ["normal", "unattributed", "failed", "dispute", "manual"]
     assert [c.value for c in CriticTrigger] == ["main", "internal_copy", "assumption", "unsupported", "sample"]
-    assert [k.value for k in TrailKind][-3:] == ["data", "presentation", "run"]
+    assert [k.value for k in TrailKind][-3:] == ["presentation", "archive", "run"]
     assert [s.value for s in ProcedureStatus] == [
         "planned",
         "executing",
@@ -885,6 +885,7 @@ R19_FIELDS = {  # R19 的错报字段 (另有 status, 原固定为 uncorrected)
 }
 LIFECYCLE_DEFAULTS = {  # 本条新加的字段与缺省 (验收 1)
     "account_code": None,
+    "correction": [],  # 更正分录建议 (需求 R367)
     "status": MisstatementStatus.identified,
     "objective_id": None,
     "fraud_indicative": None,

@@ -239,5 +239,6 @@
   "counter_argument": "A completion certificate dated after 30 September 2026, or evidence that the Module was not deployed by 17 September 2026, would move the transfer date after the period end.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.85
 }

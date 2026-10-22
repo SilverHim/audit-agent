@@ -33,7 +33,7 @@ from backend.services.procedure_library import highest_risk
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CONTRACTS,
-    NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
     NUMBAT_D02_ROWS,
     NUMBAT_D03_ROWS,
     NUMBAT_OBJECTIVES,
@@ -186,7 +186,8 @@ async def test_exceptions_and_judgments_match_dataset() -> None:
     judgments = {j.id: j for j in demo.state["judgments"]}
     assert sorted(judgments) == sorted(JUDGMENT_IDS)
     cutoff = judgments["J-REV-02-1-SI-2026-0612"]
-    assert cutoff.proposed_action is ProposedAction.misstatement and cutoff.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+    assert cutoff.proposed_action is ProposedAction.misstatement
+    assert cutoff.misstatement_draft == NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION
     assert cutoff.exception_ids == ["X-REV-08-1-R01-1"]
     assert judgments["J-REV-02-1-SI-2026-0618"].proposed_action is ProposedAction.accept
     cash = judgments["J-CSH-02-1-BA-01"]

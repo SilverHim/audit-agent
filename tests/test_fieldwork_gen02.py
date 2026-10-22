@@ -470,6 +470,29 @@ def test_xj499_is_a_misstatement_of_office_equipment(fixed: Fixed) -> None:
         "amount_cents": 75000,
         "direction": "overstated",
         "account_code": "710",  # 需求 R156 (第 7 批): AI 草稿从上下文得到科目代码时填
+        "correction": [  # 需求 R367: 冲回原分录, 借 711, 贷 710 与 820
+            {
+                "account_code": "711",
+                "account_name": "Less Accumulated Depreciation on Office Equipment",
+                "debit_cents": 82500,
+                "credit_cents": 0,
+                "description": "Reverse the depreciation credited to accumulated depreciation.",
+            },
+            {
+                "account_code": "710",
+                "account_name": "Office Equipment",
+                "debit_cents": 0,
+                "credit_cents": 75000,
+                "description": "Reverse the office equipment debited by manual journal XJ-499.",
+            },
+            {
+                "account_code": "820",
+                "account_name": "GST",
+                "debit_cents": 0,
+                "credit_cents": 7500,
+                "description": "Reverse the GST claimed on the depreciation entry.",
+            },
+        ],
     }
     for text in (
         "no prior period trial balance",

@@ -42,6 +42,7 @@ from backend.contracts.models import (
     AutonomyLevel,
     ClientProfile,
     Contract,
+    CorrectionEntry,
     Decision,
     DocumentRef,
     DocumentType,
@@ -117,7 +118,7 @@ DEMO_FEATURES = parse_features(
 )
 # 演示配置走一遍各程序读固定输出 (演示运行副本) 的次数: 上传文件分类 21 份 (承接 2, 外勤 19), 合同 3, 回函 2, REV-03
 # 三份合同, REV-02 六张发票, CSH-02 一户, GEN-02 七笔凭证 (需求 R146), RPT-03 两稿, PLN-15 两个修订 (需求 R317),
-# FIN-03 与 FIN-09 对第 1 轮两条错报各一次 (需求 R195); 每次都一次通过
+# PLN-07 三步的 basis 与 screen (需求 R371), FIN-03 与 FIN-09 对第 1 轮两条错报各一次 (需求 R195); 每次都一次通过
 FIXTURE_READS = {
     "DOC-CLASSIFY": 21,
     "DOC-04": 3,
@@ -128,6 +129,7 @@ FIXTURE_READS = {
     "GEN-02": 7,
     "RPT-03": 2,
     "PLN-15": 2,
+    "PLN-07": 2,
     "FIN-03": 2,
     "FIN-09": 2,
 }
@@ -1163,6 +1165,21 @@ XERO17_BA091_DRAFT = MisstatementDraft(
     assertion="Completeness",
     amount_cents=4853,
     direction="understated",
+    account_code="270",
+    correction=[
+        CorrectionEntry(
+            account_code="620",
+            account_name="Prepayments",
+            debit_cents=4853,
+            description="Recognise the interest receivable accrued to 30 September 2026.",
+        ),
+        CorrectionEntry(
+            account_code="270",
+            account_name="Interest Income",
+            credit_cents=4853,
+            description="Recognise the interest income accrued to 30 September 2026.",
+        ),
+    ],
 )
 # RPT-01 第一次退回的批注 (需求 R119 来由: 本路径没有持续经营段, 挂在形成意见的基础段)
 XERO17_ANNOTATION = Annotation(
@@ -1198,6 +1215,27 @@ XERO_XJ499_DRAFT = MisstatementDraft(
     assertion="Existence",
     amount_cents=75000,
     direction="overstated",
+    account_code="710",
+    correction=[
+        CorrectionEntry(
+            account_code="711",
+            account_name="Less Accumulated Depreciation on Office Equipment",
+            debit_cents=82500,
+            description="Reverse the depreciation credited to accumulated depreciation.",
+        ),
+        CorrectionEntry(
+            account_code="710",
+            account_name="Office Equipment",
+            credit_cents=75000,
+            description="Reverse the office equipment debited by manual journal XJ-499.",
+        ),
+        CorrectionEntry(
+            account_code="820",
+            account_name="GST",
+            credit_cents=7500,
+            description="Reverse the GST claimed on the depreciation entry.",
+        ),
+    ],
 )
 # 审计师调阅报销单 E003 后推翻 XJ-575 的判断 (设计稿第 4 节第 17 行, 第 7.2 节第 13 步): 录入时把姓写错, 改为接受
 XERO_XJ575_REASON = (

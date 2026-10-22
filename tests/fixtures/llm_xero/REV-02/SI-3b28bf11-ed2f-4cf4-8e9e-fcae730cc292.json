@@ -126,5 +126,6 @@
   "counter_argument": "A service record showing that the billed service continued after 30 September 2026, or no record of the service at all, would change the conclusion.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.85
 }

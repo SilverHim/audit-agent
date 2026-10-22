@@ -8,19 +8,36 @@ from fastapi.responses import FileResponse
 
 from backend.agents.base import AgentDeps
 from backend.agents.ingest import extracted_from
-from backend.api.deps import current_user, get_data_service, get_deps, owned_engagement
+from backend.api.deps import (
+    current_user,
+    get_data_service,
+    get_decisions,
+    get_deps,
+    owned_engagement,
+)
 from backend.api.errors import api_error, catch_api
-from backend.api.schemas import ConfirmationView, DocumentDetailsIn, DocumentTypeIn, RegistryExtractView
+from backend.api.schemas import (
+    ConfirmationView,
+    DocumentDetailsIn,
+    DocumentTypeIn,
+    EvidenceRequestIn,
+    EvidenceUnavailableIn,
+    ManagementRepresentationIn,
+    RegistryExtractView,
+)
 from backend.contracts.data import ContractVersion, ExtractionEdit, ExtractionRecord
 from backend.contracts.models import (
     Confirmation,
     Contract,
     DocumentRef,
     Engagement,
+    EvidenceRequest,
+    ScopeLimitation,
     SourceType,
     User,
 )
-from backend.services import data_import
+from backend.orchestration.decisions import GraphDecisionSubmit
+from backend.services import data_import, evidence_followup
 from backend.services.data_service import DataService
 
 router = APIRouter(prefix="/engagements/{eid}", tags=["evidence"])
@@ -239,3 +256,76 @@ async def edit_confirmation(
     与当前相同 422 INVALID_VALUE; 锁定 423; 忙 409."""
     async with catch_api():
         return await service.edit_confirmation(engagement.id, confirmation_id, body, user.id)
+
+
+# ── 补充证据闭环 (需求 R369, Issue #65) ──
+
+
+@router.get("/evidence-requests")
+async def list_evidence_requests(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> list[EvidenceRequest]:
+    """补充证据请求, 按发出顺序; 任务与请求的状态供前端显示 (等待证据, 已收到, 无法取得)."""
+    return await deps.output_store.latest(engagement.id, EvidenceRequest)
+
+
+@router.get("/scope-limitations")
+async def list_scope_limitations(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> list[ScopeLimitation]:
+    """审计范围受限的记录 (需求 R369), 按记录顺序."""
+    return await deps.output_store.latest(engagement.id, ScopeLimitation)
+
+
+@router.patch("/evidence-requests/{request_id}")
+async def edit_evidence_request(
+    request_id: str,
+    body: EvidenceRequestIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
+) -> EvidenceRequest:
+    """审计师在发出前修改补充证据请求 (要什么, 向谁要, 关联对象); 只改给了的项. 请求不存在 404; 已收到或无法取得 409;
+    锁定 423; 忙 409."""
+    async with catch_api():
+        return await decisions.edit_evidence_request(
+            engagement.id,
+            request_id,
+            description=body.description,
+            requested_from=body.requested_from,
+            related_object_ids=body.related_object_ids,
+            actor=user.id,
+        )
+
+
+@router.post("/evidence-requests/{request_id}/unavailable")
+async def evidence_unavailable(
+    request_id: str,
+    body: EvidenceUnavailableIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
+) -> EvidenceRequest:
+    """标补充证据无法取得 (需求 R369): 原复核任务回待处理, 另记一条审计范围受限. 理由选填. 请求不存在 404; 已结 409;
+    锁定 423; 忙 409."""
+    async with catch_api():
+        return await decisions.mark_evidence_unavailable(engagement.id, request_id, body.reason, actor=user.id)
+
+
+@router.post("/management-representations")
+async def register_management_representation(
+    body: ManagementRepresentationIn,
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    user: Annotated[User, Depends(current_user)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> DocumentRef:
+    """登记管理层的书面或口头说明为证据 (需求 R369): 说明人, 时间与内容, 存成证据文件, 可靠性为管理层说明 (低于外部
+    证据); 判断可以引用它. 锁定 423."""
+    async with catch_api():
+        if engagement.locked:
+            raise api_error("ENGAGEMENT_LOCKED", engagement.id)
+        return await evidence_followup.register_representation(
+            deps, engagement.id, person=body.person, stated_on=body.stated_on, content=body.content, actor=user.id
+        )

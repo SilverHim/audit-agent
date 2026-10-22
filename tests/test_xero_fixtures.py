@@ -42,6 +42,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     ConfirmationResult,
+    CorrectionEntry,
     CriticReasonCode,
     CriticVerdict,
     DocumentType,
@@ -148,11 +149,16 @@ def strings(value: Any) -> Iterator[str]:
 
 def fixture_model(library: ProcedureLibrary, procedure_id: str, fixture_key: str) -> type[BaseModel]:
     """该 fixture 应符合的输出模型: 模板 llm.output_model (上传分类取 agents/ingest 的模板); GEN-09 的第二轮
-    ({对象}-r2) 为 VERDICT_SPEC 的."""
+    ({对象}-r2) 为 VERDICT_SPEC 的; PLN-07 的 basis 与 screen 各用一个输出模型 (需求 R371)."""
     if procedure_id in INTAKE_TEMPLATES:
         return output_model(INTAKE_TEMPLATES[procedure_id])
     if procedure_id == GEN09 and fixture_key.endswith("-r2"):
         model = getattr(llm_outputs, VERDICT_SPEC.output_model)
+        assert isinstance(model, type) and issubclass(model, BaseModel)
+        return model
+    if procedure_id == "PLN-07":
+        name = "AnalyticsScreeningDraft" if fixture_key == "screen" else "AnalyticsBasisDraft"
+        model = getattr(llm_outputs, name)
         assert isinstance(model, type) and issubclass(model, BaseModel)
         return model
     return output_model(library.load(procedure_id))
@@ -759,7 +765,25 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
         ["X-CSH-02-1-D04-1"],
     )
     assert j.misstatement_draft == MisstatementDraft(
-        type="factual", account="Interest income", assertion="Completeness", amount_cents=4853, direction="understated"
+        type="factual",
+        account="Interest income",
+        assertion="Completeness",
+        amount_cents=4853,
+        direction="understated",
+        correction=[  # 需求 R367: 借 620 Prepayments, 贷 270 Interest Income
+            CorrectionEntry(
+                account_code="620",
+                account_name="Prepayments",
+                debit_cents=4853,
+                description="Recognise the interest receivable accrued to 30 September 2026.",
+            ),
+            CorrectionEntry(
+                account_code="270",
+                account_name="Interest Income",
+                credit_cents=4853,
+                description="Recognise the interest income accrued to 30 September 2026.",
+            ),
+        ],
     )
     unaccrued = sentence_with(j.conclusion, "48.53 earned")
     assert all(text in unaccrued for text in ("30 September 2026", "not yet credited")), unaccrued

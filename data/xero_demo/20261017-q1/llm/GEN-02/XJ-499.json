@@ -196,7 +196,31 @@
     "assertion": "Existence",
     "amount_cents": 75000,
     "direction": "overstated",
-    "account_code": "710"
+    "account_code": "710",
+    "correction": [
+      {
+        "account_code": "711",
+        "account_name": "Less Accumulated Depreciation on Office Equipment",
+        "debit_cents": 82500,
+        "credit_cents": 0,
+        "description": "Reverse the depreciation credited to accumulated depreciation."
+      },
+      {
+        "account_code": "710",
+        "account_name": "Office Equipment",
+        "debit_cents": 0,
+        "credit_cents": 75000,
+        "description": "Reverse the office equipment debited by manual journal XJ-499."
+      },
+      {
+        "account_code": "820",
+        "account_name": "GST",
+        "debit_cents": 0,
+        "credit_cents": 7500,
+        "description": "Reverse the GST claimed on the depreciation entry."
+      }
+    ]
   },
+  "verdict": "misstatement",
   "self_confidence": 0.85
 }

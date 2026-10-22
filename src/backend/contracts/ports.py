@@ -70,6 +70,7 @@ from backend.contracts.models import (
     User,
     Versioned,
     WorkingLanguage,
+    Workpaper,
 )
 from backend.contracts.records import (
     Account,
@@ -169,6 +170,13 @@ class AuditOutputStore(Protocol):
         同 (id, version) 已存在: 不比较内容, 跳过并返回已存对象; 否则 version 须为已有最大值 +1
         (新 id 为 1), 不符抛 VersionConflict; 项目 locked 抛 EngagementLocked.
         """
+        ...
+
+    async def put_signed_workpapers(
+        self, eid: str, objs: Sequence[Workpaper], *, actor: str, mode: Literal["archive", "amendment"]
+    ) -> list[Workpaper]:
+        """锁定且报告已签字的项目的受限例外: 只追加 final 底稿. archive 仅作定稿; amendment 仅追加带理由且已由提交人
+        确认的补充, 其余字段与旧内容不改. 一般 put 仍拒绝锁定项目. 同版本重试与连续版本规则同 put."""
         ...
 
     async def get(self, eid: str, kind: type[T], id: str, version: int | None = None) -> T | None: ...

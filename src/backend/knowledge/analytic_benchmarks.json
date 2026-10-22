@@ -1,0 +1,53 @@
+{
+  "source": "ASA 320 paragraphs A4-A8. A5 lists the benchmarks an auditor may select, including profit before tax, total revenue, gross profit, total expenses, equity and total assets, and notes that revenue or gross profit are appropriate when profit before tax is volatile. A7 requires materiality for the period covered when that period is shorter than a year. A8 gives only two examples of percentages: 5% of profit before tax, and 1% of revenue or total expenses. The ranges below are therefore common audit practice, not percentages prescribed by ASA 320.",
+  "bases": [
+    {
+      "basis": "revenue",
+      "pct_min": 0.005,
+      "pct_max": 0.01,
+      "example_pct": 0.01,
+      "source": "ASA 320 A8 (1% of revenue is the only example); the 0.5%-1% range is common practice",
+      "convention": true
+    },
+    {
+      "basis": "gross_profit",
+      "pct_min": 0.01,
+      "pct_max": 0.05,
+      "example_pct": null,
+      "source": "ASA 320 A5 (a listed benchmark when profit before tax is volatile); no percentage is given in A8; the 1%-5% range is common practice",
+      "convention": true
+    },
+    {
+      "basis": "profit_before_tax",
+      "pct_min": 0.03,
+      "pct_max": 0.1,
+      "example_pct": 0.05,
+      "source": "ASA 320 A8 (5% of profit before tax is the only example); the 3%-10% range is common practice",
+      "convention": true
+    },
+    {
+      "basis": "total_expenses",
+      "pct_min": 0.005,
+      "pct_max": 0.02,
+      "example_pct": 0.01,
+      "source": "ASA 320 A8 (1% of total expenses is one of the two examples); the 0.5%-2% range is common practice",
+      "convention": true
+    },
+    {
+      "basis": "net_assets",
+      "pct_min": 0.01,
+      "pct_max": 0.05,
+      "example_pct": null,
+      "source": "ASA 320 A5 (equity is a listed benchmark); no percentage is given in A8; the 1%-5% range is common practice",
+      "convention": true
+    },
+    {
+      "basis": "total_assets",
+      "pct_min": 0.005,
+      "pct_max": 0.02,
+      "example_pct": null,
+      "source": "ASA 320 A5 (total assets is a listed benchmark); no percentage is given in A8; the 0.5%-2% range is common practice",
+      "convention": true
+    }
+  ]
+}

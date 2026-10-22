@@ -69,7 +69,7 @@ from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
-    NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
@@ -249,7 +249,10 @@ async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> N
     }
     by_id = {j.id: j for j in judgments}
     cutoff = by_id["J-REV-02-1-SI-2026-0612"]
-    assert (cutoff.proposed_action, cutoff.misstatement_draft) == (ProposedAction.misstatement, NUMBAT_CUTOFF_DRAFT)
+    assert (cutoff.proposed_action, cutoff.misstatement_draft) == (
+        ProposedAction.misstatement,
+        NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
+    )
     assert cutoff.exception_ids == ["X-REV-08-1-R01-1"]
     cash = by_id["J-CSH-02-1-BA-01"]
     assert (cash.proposed_action, cash.exception_ids) == (
@@ -389,6 +392,9 @@ async def test_everything_adds_exception_and_scorecard_pointers(demo: Started) -
 
 # R55 读到的 15 个 fixture 文件, 按程序计数
 FIXTURE_COUNTS = {"CSH-02": 1, "DOC-04": 3, "DOC-06": 2, "GEN-09": 2, "REV-02": 2, "REV-03": 3, "RPT-03": 2}
+# 只有功能打开才调大模型的程序 (需求 R371: PLN-07 在 planning 打开时才有 basis/screen 两次调用). Numbat 的回归用基线
+# 功能集, 这两个 fixture 由 tests/test_fieldwork_pln07.py 的混合流程用例读到, 这里的基线走通不比对
+FEATURE_FIXTURES = frozenset({"PLN-07"})
 
 
 @shared_loop
@@ -406,12 +412,13 @@ def assert_fixtures_used_once(
     entries: Sequence[TrailEntry], enabled: Iterable[str], root: Path | None = None
 ) -> list[tuple[str, str]]:
     """验收 5: fixture 根 (缺省为 LLM_FIXTURES_ROOT, 即 tests/fixtures/llm) 下, 启用程序的每个文件都在流程中被读到
-    一次, 一次通过四级校验 (attempt 1, 无失败级别). 未启用程序的目录不比对 (后接入的程序可以先放 fixture).
-    entries 为该项目的全部留痕; enabled 为本次启用的程序编号 (见 enabled_programs). 返回比对的 (程序, fixture_key)."""
-    ids = set(enabled)
+    一次, 一次通过四级校验 (attempt 1, 无失败级别). 未启用程序的目录不比对 (后接入的程序可以先放 fixture); 只有功能
+    打开才调大模型的程序 (FEATURE_FIXTURES) 也不比对, 它们的 fixture 由各功能的用例读. entries 为该项目的全部留痕;
+    enabled 为本次启用的程序编号 (见 enabled_programs). 返回比对的 (程序, fixture_key)."""
+    ids = set(enabled) - FEATURE_FIXTURES
     root = root if root is not None else get_settings().LLM_FIXTURES_ROOT
     files = sorted((p.parent.name, p.stem) for p in root.glob("*/*.json") if p.parent.name in ids)
-    calls = [e for e in entries if e.kind is TrailKind.llm_call]
+    calls = [e for e in entries if e.kind is TrailKind.llm_call and e.procedure_id not in FEATURE_FIXTURES]
     assert sorted((e.procedure_id, e.payload["fixture_key"]) for e in calls) == files
     assert all(e.payload["attempt"] == 1 and e.payload["level_failed"] is None for e in calls)
     return files

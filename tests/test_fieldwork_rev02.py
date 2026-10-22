@@ -32,7 +32,7 @@ from backend.orchestration.nodes import GraphNodes
 from tests.fakes import (
     NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
-    NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
     NUMBAT_OBJECTIVES,
     NUMBAT_RECORDS,
     NUMBAT_RISKS,
@@ -540,7 +540,8 @@ async def test_si0612_fixture_is_cutoff_misstatement() -> None:
     CON-001 第 5.1 条 (第 2 页) 与两条准则."""
     agent, ctx, _ = setup(real=True)
     [j] = [j for j in (await agent.run(ctx))["judgments"] if j.subject_id == "SI-2026-0612"]
-    assert j.proposed_action is ProposedAction.misstatement and j.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+    assert j.proposed_action is ProposedAction.misstatement
+    assert j.misstatement_draft == NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION
     assert [(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence] == [
         ("sales_invoice", "SI-2026-0612", "posting_date", None),
         ("delivery_note", "DN-2026-0612", "signed_date", None),

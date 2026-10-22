@@ -21,6 +21,7 @@ from backend.contracts.models import (
     AuditPlan,
     AuditReportVersion,
     ClientProfile,
+    EvidenceRequest,
     GateDecision,
     GateEdit,
     GateId,
@@ -36,6 +37,7 @@ from backend.contracts.models import (
     RerunRequest,
     RiskItem,
     RiskLevel,
+    ScopeLimitation,
     UncorrectedSchedule,
     Versioned,
 )
@@ -698,6 +700,8 @@ async def fin01_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
     if schedule is None:
         raise LookupError(f"{eid} 停在 FIN-01 闸门, 但没有未更正错报汇总表")
     misstatements = current_results(values).misstatements
+    requests = [r for r in await deps.output_store.latest(eid, EvidenceRequest) if r.status == "open"]
+    limitations = await deps.output_store.latest(eid, ScopeLimitation)
     runs = await deps.output_store.latest(eid, ProcedureRun)
     superseded = superseded_runs(await deps.output_store.latest(eid, RerunRequest))
     stale = stale_procedures(values["procedure_pack"], runs, await deps.data.changes(eid), deps.library, superseded)
@@ -706,6 +710,8 @@ async def fin01_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
         misstatements=misstatements,
         not_executed=await not_executed(deps, eid, values),
         stale_procedure_ids=stale,
+        open_evidence_requests=requests,
+        scope_limitations=limitations,
     )
 
 

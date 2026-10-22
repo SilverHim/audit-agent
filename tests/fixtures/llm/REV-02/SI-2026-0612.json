@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoice SI-2026-0612 belongs to the year ending 30 June 2027: control passed when the customer signed delivery note DN-2026-0612 on 3 July 2026, after the 30 June 2026 year end. Revenue for the year ended 30 June 2026 is overstated by $142,000.",
+  "conclusion": "Invoice SI-2026-0612 belongs to the year ending 30 June 2027: control passed when the customer signed delivery note DN-2026-0612 on 3 July 2026, after the 30 June 2026 year end. Revenue for the year ended 30 June 2026 is overstated by AUD 142,000.00.",
   "reasoning_chain": [
     {
       "kind": "fact",
@@ -156,7 +156,24 @@
     "account": "Revenue",
     "assertion": "Cutoff",
     "amount_cents": 14200000,
-    "direction": "overstated"
+    "direction": "overstated",
+    "correction": [
+      {
+        "account_code": "4100",
+        "account_name": "Sales revenue",
+        "debit_cents": 14200000,
+        "credit_cents": 0,
+        "description": "Reverse revenue recognised in the wrong period."
+      },
+      {
+        "account_code": "1100",
+        "account_name": "Trade receivables",
+        "debit_cents": 0,
+        "credit_cents": 14200000,
+        "description": "Reverse the receivable for the invoice."
+      }
+    ]
   },
+  "verdict": "misstatement",
   "self_confidence": 0.9
 }

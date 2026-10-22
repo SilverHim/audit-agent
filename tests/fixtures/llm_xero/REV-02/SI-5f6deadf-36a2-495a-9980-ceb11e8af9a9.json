@@ -150,5 +150,6 @@
   "counter_argument": "A service record showing that part of the billed support was provided after 30 September 2026 would split the revenue between periods.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.9
 }

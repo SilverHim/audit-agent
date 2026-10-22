@@ -313,10 +313,35 @@ async def test_xero_journal_programs_live(xero_case: Any, live_budget: Budget) -
     assert_hard(data)
 
 
-MISSTATED_499 = {"type": "factual", "assertion": "Existence", "amount_cents": 75000, "direction": "overstated"}
+MISSTATED_499 = {
+    "type": "factual",
+    "assertion": "Existence",
+    "amount_cents": 75000,
+    "direction": "overstated",
+    "correction": [
+        {
+            "account_code": "711",
+            "account_name": "Less Accumulated Depreciation on Office Equipment",
+            "debit_cents": 82500,
+            "description": "Reverse the depreciation credited to accumulated depreciation.",
+        },
+        {
+            "account_code": "710",
+            "account_name": "Office Equipment",
+            "credit_cents": 75000,
+            "description": "Reverse the office equipment debited by manual journal XJ-499.",
+        },
+        {
+            "account_code": "820",
+            "account_name": "GST",
+            "credit_cents": 7500,
+            "description": "Reverse the GST claimed on the depreciation entry.",
+        },
+    ],
+}
 WRONG_JOURNALS = [  # GEN-02 固定输出的改动 (凭证 → 覆盖的字段), 硬性与软性应报出的
     pytest.param(
-        {"XJ-499": {"proposed_action": "accept", "misstatement_draft": None}},
+        {"XJ-499": {"proposed_action": "accept", "verdict": "not_misstatement", "misstatement_draft": None}},
         [
             "GEN-02 XJ-499 proposed_action: 'accept', 预期 'misstatement'",
             "GEN-02 XJ-499 amount_cents: None, 预期 75000",
@@ -332,10 +357,29 @@ WRONG_JOURNALS = [  # GEN-02 固定输出的改动 (凭证 → 覆盖的字段),
             "XJ-499": {"misstatement_draft": MISSTATED_499 | {"account": "Depreciation", "account_code": None}},
             "XJ-397": {  # 草稿金额取它自己 840 贷方行, 能过引用级校验
                 "proposed_action": "misstatement",
+                "verdict": "misstatement",
                 "misstatement_draft": MISSTATED_499
-                | {"account": "Historical Adjustment", "account_code": "840", "amount_cents": 1921221},
+                | {
+                    "account": "Historical Adjustment",
+                    "account_code": "840",
+                    "amount_cents": 1921221,
+                    "correction": [
+                        {
+                            "account_code": "840",
+                            "account_name": "Historical Adjustment",
+                            "debit_cents": 1921221,
+                            "description": "Reverse the conversion balance recorded without basis.",
+                        },
+                        {
+                            "account_code": "610",
+                            "account_name": "Accounts Receivable",
+                            "credit_cents": 1921221,
+                            "description": "Reverse the receivable for the invoice.",
+                        },
+                    ],
+                },
             },
-            "XJ-575": {"proposed_action": "accept"},
+            "XJ-575": {"proposed_action": "accept", "verdict": "not_misstatement"},
         },
         [
             "GEN-02 XJ-397 misstatement: True, 预期 False",

@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from backend.contracts.errors import VersionConflict
 from backend.contracts.knowledge import ProcedureTemplate
@@ -27,6 +27,7 @@ from backend.contracts.models import (
     ReviewTask,
     ReviewTier,
     SourceType,
+    StepKind,
     StepStatus,
     TargetType,
     TaskKind,
@@ -118,7 +119,7 @@ BATCH_ABOVE = 0.90  # 置信度高于它才可能批量确认; 不超过它 (且
 # 对象且模板 manual_result_allowed 时另加 manual_result (见 ReviewQueue.allowed). manual 任务 (人工程序) 只能提交结果.
 # unattributed 任务 (带规则例外的对象判断失败) 与 failed 一样可以重跑, 也可以由审计师自己下结论 (需求 R347)
 ALLOWED: dict[TaskKind, frozenset[Decision]] = {
-    TaskKind.normal: frozenset({Decision.confirm, Decision.override, Decision.misstatement}),
+    TaskKind.normal: frozenset({Decision.confirm, Decision.override, Decision.misstatement, Decision.more_evidence}),
     TaskKind.unattributed: frozenset({Decision.override, Decision.misstatement, Decision.rerun}),
     TaskKind.failed: frozenset({Decision.rerun}),
     TaskKind.dispute: frozenset({Decision.dispute_resolution}),
@@ -384,3 +385,34 @@ class ReviewQueue:
             created_at=now,
             manual_request=request,
         )
+
+
+# 补充证据请求 (需求 R369, Issue #65): 从判断里取缺的证据, 整理成结构化请求.
+EVIDENCE_SOURCE_WORDS = (
+    ("bank", ("bank statement", "bank confirmation", "银行对账单", "银行回函", "银行")),
+    ("management", ("management representation", "management explanation", "管理层说明", "管理层")),
+    ("other", ("third party", "third-party", "第三方", "registry", "登记处")),
+)
+
+
+def evidence_source(judgment: Judgment) -> Literal["client", "bank", "other", "management"]:
+    """向谁要 (需求 R369): 看判断的局限步骤与反方论证里写的文件与对象, 认出银行 (对账单/回函) 为 bank,
+    管理层说明为 management, 其他第三方 (登记处等) 为 other, 其余向客户要."""
+    texts = " ".join(
+        [step.text for step in judgment.reasoning_chain if step.kind is StepKind.limitation]
+        + [judgment.counter_argument]
+        + [judgment.conclusion]
+    ).lower()
+    for source, words in EVIDENCE_SOURCE_WORDS:
+        if any(word in texts for word in words):
+            return source  # type: ignore[return-value]
+    return "client"
+
+
+def evidence_description(judgment: Judgment) -> str:
+    """要什么 (需求 R369): 优先取局限步骤 (缺的证据), 没有时取反方论证; 都没有时用结论末句. 原文照录, 审计师可改."""
+    limitations = [step.text for step in judgment.reasoning_chain if step.kind is StepKind.limitation]
+    if limitations:
+        return " ".join(limitations)
+    counter = judgment.counter_argument.strip()
+    return counter or judgment.conclusion

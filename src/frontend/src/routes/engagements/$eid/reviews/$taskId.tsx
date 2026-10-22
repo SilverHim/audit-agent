@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { cn } from 'cn'
 import { MessageCircle } from 'lucide-react'
 import { useMemo } from 'react'
 import { toast } from 'sonner'
@@ -36,6 +37,7 @@ function ReviewTaskPage() {
   }, [tasks.data, exceptions.data, overview, taskId])
   const deferred = (deferrals.data ?? []).some((item) => deferralKey(item) === `task:${taskId}`)
   const pending = ranked?.view.task.status === 'pending'
+  const awaiting = ranked?.view.task.status === 'awaiting_evidence'
 
   return (
     <>
@@ -88,6 +90,21 @@ function ReviewTaskPage() {
                     )
                   }
                 />
+              ) : awaiting ? (
+                <div className="flex flex-col gap-3">
+                  {/* 等补充证据 (需求 R369): 不算待处理, 不阻塞流程; 补充证据请求在数据管理页 */}
+                  <StatusPill tone="accent" className="self-start">
+                    {t.status.awaitingEvidence}
+                  </StatusPill>
+                  <span className="text-[13px] text-muted-foreground">{t.evidenceRequests.awaitingHint}</span>
+                  <Link
+                    to="/engagements/$eid/data"
+                    params={{ eid }}
+                    className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'self-start')}
+                  >
+                    {t.evidenceRequests.openBlock}
+                  </Link>
+                </div>
               ) : (
                 <div className="flex flex-col gap-3">
                   <StatusPill tone="ok" className="self-start">

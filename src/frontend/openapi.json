@@ -2631,6 +2631,302 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/evidence-requests": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Evidence Requests",
+        "description": "补充证据请求, 按发出顺序; 任务与请求的状态供前端显示 (等待证据, 已收到, 无法取得).",
+        "operationId": "evidence-list_evidence_requests",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EvidenceRequest"
+                  },
+                  "title": "Response Evidence-List Evidence Requests"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/scope-limitations": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Scope Limitations",
+        "description": "审计范围受限的记录 (需求 R369), 按记录顺序.",
+        "operationId": "evidence-list_scope_limitations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScopeLimitation"
+                  },
+                  "title": "Response Evidence-List Scope Limitations"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/evidence-requests/{request_id}": {
+      "patch": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Evidence Request",
+        "description": "审计师在发出前修改补充证据请求 (要什么, 向谁要, 关联对象); 只改给了的项. 请求不存在 404; 已收到或无法取得 409;\n锁定 423; 忙 409.",
+        "operationId": "evidence-edit_evidence_request",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceRequestIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/evidence-requests/{request_id}/unavailable": {
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Evidence Unavailable",
+        "description": "标补充证据无法取得 (需求 R369): 原复核任务回待处理, 另记一条审计范围受限. 理由选填. 请求不存在 404; 已结 409;\n锁定 423; 忙 409.",
+        "operationId": "evidence-evidence_unavailable",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceUnavailableIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/management-representations": {
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Register Management Representation",
+        "description": "登记管理层的书面或口头说明为证据 (需求 R369): 说明人, 时间与内容, 存成证据文件, 可靠性为管理层说明 (低于外部\n证据); 判断可以引用它. 锁定 423.",
+        "operationId": "evidence-register_management_representation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementRepresentationIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRef"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/data/imports": {
       "post": {
         "tags": [
@@ -5115,6 +5411,72 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/workpapers/{ref}/amendments": {
+      "post": {
+        "tags": [
+          "workpapers"
+        ],
+        "summary": "Amend Workpaper",
+        "operationId": "workpapers-amend_workpaper",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ref"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkpaperAmendmentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workpaper"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/data/schemas": {
       "get": {
         "tags": [
@@ -5608,6 +5970,133 @@
         "title": "AgentId",
         "description": "智能体编号."
       },
+      "AnalyticsAddition": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsAddition",
+        "description": "PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注."
+      },
+      "AnalyticsObservation": {
+        "properties": {
+          "account_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Account Codes"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_codes",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsObservation",
+        "description": "PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,\n与 additions 一起作为 \"大模型补充\" 呈报."
+      },
+      "AnalyticsRecommendation": {
+        "properties": {
+          "basis": {
+            "type": "string",
+            "enum": [
+              "revenue",
+              "gross_profit",
+              "profit_before_tax",
+              "total_expenses",
+              "net_assets",
+              "total_assets"
+            ],
+            "title": "Basis"
+          },
+          "base_amount_cents": {
+            "type": "integer",
+            "title": "Base Amount Cents"
+          },
+          "percentage": {
+            "type": "number",
+            "title": "Percentage"
+          },
+          "threshold_cents": {
+            "type": "integer",
+            "title": "Threshold Cents"
+          },
+          "rationale": {
+            "type": "string",
+            "title": "Rationale"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          },
+          "counter_argument": {
+            "type": "string",
+            "title": "Counter Argument"
+          },
+          "self_confidence": {
+            "type": "number",
+            "title": "Self Confidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "basis",
+          "base_amount_cents",
+          "percentage",
+          "threshold_cents",
+          "rationale",
+          "counter_argument",
+          "self_confidence"
+        ],
+        "title": "AnalyticsRecommendation",
+        "description": "PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.\n\n仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果\n不随闸门选择自动改变."
+      },
       "AnalyticsResult": {
         "properties": {
           "id": {
@@ -5640,6 +6129,42 @@
             "type": "array",
             "title": "Monthly",
             "default": []
+          },
+          "recommendation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnalyticsRecommendation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "screening": {
+            "$ref": "#/components/schemas/AnalyticsScreening",
+            "default": {
+              "hit_account_codes": [],
+              "focus": [],
+              "additions": [],
+              "excluded": [],
+              "observations": []
+            }
+          },
+          "fallback": {
+            "type": "boolean",
+            "title": "Fallback",
+            "default": false
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
           }
         },
         "additionalProperties": false,
@@ -5650,7 +6175,115 @@
           "exception_ids"
         ],
         "title": "AnalyticsResult",
-        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."
+        "description": "PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.\n\n功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有\n这些键, 读回 recommendation 为空, screening 为空, fallback 为假."
+      },
+      "AnalyticsScreening": {
+        "properties": {
+          "threshold_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold Cents"
+          },
+          "hit_account_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hit Account Codes",
+            "default": []
+          },
+          "focus": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsScreeningItem"
+            },
+            "type": "array",
+            "title": "Focus",
+            "default": []
+          },
+          "additions": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsAddition"
+            },
+            "type": "array",
+            "title": "Additions",
+            "default": []
+          },
+          "excluded": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsScreeningItem"
+            },
+            "type": "array",
+            "title": "Excluded",
+            "default": []
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/AnalyticsObservation"
+            },
+            "type": "array",
+            "title": "Observations",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AnalyticsScreening",
+        "description": "PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.\n\n规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371)."
+      },
+      "AnalyticsScreeningItem": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "risk_or_assertion": {
+            "type": "string",
+            "title": "Risk Or Assertion"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/EvidencePointer"
+            },
+            "type": "array",
+            "title": "Evidence",
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "reason",
+          "risk_or_assertion"
+        ],
+        "title": "AnalyticsScreeningItem",
+        "description": "PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由."
       },
       "Annotation": {
         "properties": {
@@ -7759,6 +8392,22 @@
             "type": "array",
             "title": "Stale Procedure Ids",
             "default": []
+          },
+          "open_evidence_requests": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRequest"
+            },
+            "type": "array",
+            "title": "Open Evidence Requests",
+            "default": []
+          },
+          "scope_limitations": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeLimitation"
+            },
+            "type": "array",
+            "title": "Scope Limitations",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -8410,6 +9059,41 @@
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
       },
+      "CorrectionEntry": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "debit_cents": {
+            "type": "integer",
+            "title": "Debit Cents",
+            "default": 0
+          },
+          "credit_cents": {
+            "type": "integer",
+            "title": "Credit Cents",
+            "default": 0
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "description"
+        ],
+        "title": "CorrectionEntry",
+        "description": "AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.\n\n一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0."
+      },
       "CorrectionNotice": {
         "properties": {
           "id": {
@@ -8978,7 +9662,8 @@
           "misstatement",
           "rerun",
           "manual_result",
-          "dispute_resolution"
+          "dispute_resolution",
+          "more_evidence"
         ],
         "title": "Decision",
         "description": "复核决定."
@@ -10260,6 +10945,193 @@
         "title": "EvidencePointer",
         "description": "证据指针: 结论依据的是哪条证据 (source_id) 的哪一处 (locator), 前端据此打开原文."
       },
+      "EvidenceRequest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "judgment_id": {
+            "type": "string",
+            "title": "Judgment Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "related_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Object Ids",
+            "default": []
+          },
+          "requested_from": {
+            "type": "string",
+            "enum": [
+              "client",
+              "bank",
+              "other",
+              "management"
+            ],
+            "title": "Requested From",
+            "default": "client"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "received",
+              "unavailable"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "document_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Document Ids",
+            "default": []
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "rejudged_judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejudged Judgment Id"
+          },
+          "requested_by": {
+            "type": "string",
+            "title": "Requested By"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "task_id",
+          "judgment_id",
+          "procedure_id",
+          "subject_id",
+          "description",
+          "requested_by",
+          "requested_at"
+        ],
+        "title": "EvidenceRequest",
+        "description": "补充证据请求 (需求 R369, Issue #65): 复核时要求补充证据, 由数据管理智能体发出, 等待期间不卡流程.\n\n按判断里缺的证据整理成结构化请求: description 要什么, related_object_ids 关联对象 (凭证号, 发票, 合同, 银行账户),\nrequested_from 向谁要 (客户, 银行或其他第三方, 管理层). 审计师发出前可改 (PATCH); 按请求上传文件后置 received,\n记 document_ids 与重判后的判断 ID; 拿不到时置 unavailable 并记范围受限."
+      },
+      "EvidenceRequestIn": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requested_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "client",
+                  "bank",
+                  "other",
+                  "management"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested From"
+          },
+          "related_object_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Object Ids"
+          }
+        },
+        "type": "object",
+        "title": "EvidenceRequestIn",
+        "description": "修改补充证据请求 (需求 R369): 只给要改的项, 审计师在发出前改."
+      },
       "EvidenceType": {
         "type": "string",
         "enum": [
@@ -10273,6 +11145,24 @@
         ],
         "title": "EvidenceType",
         "description": "证据种类."
+      },
+      "EvidenceUnavailableIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "EvidenceUnavailableIn",
+        "description": "补充证据无法取得 (需求 R369): 理由选填."
       },
       "ExceptionDisposition": {
         "type": "string",
@@ -11349,6 +12239,16 @@
           "proposed_action": {
             "$ref": "#/components/schemas/ProposedAction"
           },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "misstatement_draft": {
             "anyOf": [
               {
@@ -11837,6 +12737,30 @@
         "title": "LocalizedText",
         "description": "中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)\n与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."
       },
+      "ManagementRepresentationIn": {
+        "properties": {
+          "person": {
+            "type": "string",
+            "title": "Person"
+          },
+          "stated_on": {
+            "type": "string",
+            "title": "Stated On"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "person",
+          "stated_on",
+          "content"
+        ],
+        "title": "ManagementRepresentationIn",
+        "description": "登记管理层说明为证据 (需求 R369)."
+      },
       "ManualRequest": {
         "properties": {
           "instructions": {
@@ -12205,6 +13129,14 @@
             ],
             "title": "Account Code"
           },
+          "correction": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionEntry"
+            },
+            "type": "array",
+            "title": "Correction",
+            "default": []
+          },
           "status": {
             "$ref": "#/components/schemas/MisstatementStatus",
             "default": "identified"
@@ -12426,6 +13358,14 @@
               }
             ],
             "title": "Account Code"
+          },
+          "correction": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionEntry"
+            },
+            "type": "array",
+            "title": "Correction",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -14264,7 +15204,8 @@
           "external_original",
           "external_copy",
           "internal_original",
-          "internal_copy"
+          "internal_copy",
+          "management_representation"
         ],
         "title": "Reliability",
         "description": "证据可靠性, 影响置信度权重."
@@ -14835,6 +15776,17 @@
                 "type": "null"
               }
             ]
+          },
+          "evidence_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Request Id"
           }
         },
         "additionalProperties": false,
@@ -15142,6 +16094,89 @@
         ],
         "title": "RunTrigger",
         "description": "一次执行的起因."
+      },
+      "ScopeLimitation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "judgment_id": {
+            "type": "string",
+            "title": "Judgment Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "assertion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Assertion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "recorded_by": {
+            "type": "string",
+            "title": "Recorded By"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "request_id",
+          "judgment_id",
+          "procedure_id",
+          "subject_id",
+          "recorded_by",
+          "recorded_at"
+        ],
+        "title": "ScopeLimitation",
+        "description": "审计范围受限 (需求 R369): 补充证据请求无法取得时记一条, 列入错报汇总与 FIN-01 材料 (不自动改意见)."
       },
       "ServiceOrganisation": {
         "properties": {
@@ -15950,7 +16985,8 @@
         "type": "string",
         "enum": [
           "pending",
-          "decided"
+          "decided",
+          "awaiting_evidence"
         ],
         "title": "TaskStatus",
         "description": "复核任务状态."
@@ -16238,6 +17274,7 @@
           "conversation_summary",
           "data",
           "presentation",
+          "archive",
           "run"
         ],
         "title": "TrailKind",
@@ -16532,6 +17569,16 @@
         ],
         "title": "ValidationError"
       },
+      "Verdict": {
+        "type": "string",
+        "enum": [
+          "not_misstatement",
+          "misstatement",
+          "undetermined"
+        ],
+        "title": "Verdict",
+        "description": "判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应."
+      },
       "WorkingLanguageIn": {
         "properties": {
           "language": {
@@ -16670,6 +17717,14 @@
               }
             ]
           },
+          "amendments": {
+            "items": {
+              "$ref": "#/components/schemas/WorkpaperAmendment"
+            },
+            "type": "array",
+            "title": "Amendments",
+            "default": []
+          },
           "missing": {
             "items": {
               "type": "string"
@@ -16689,6 +17744,66 @@
         ],
         "title": "Workpaper",
         "description": "一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由\nservices.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.\n只在 Store (不是编排状态的字段). 依据变了时已签署的改为 needs_rereview, 签署移到 last_signoff."
+      },
+      "WorkpaperAmendment": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "added_by": {
+            "type": "string",
+            "title": "Added By"
+          },
+          "added_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Added At"
+          },
+          "reviewed_by": {
+            "type": "string",
+            "title": "Reviewed By"
+          },
+          "reviewed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "reason",
+          "added_by",
+          "added_at",
+          "reviewed_by",
+          "reviewed_at"
+        ],
+        "title": "WorkpaperAmendment",
+        "description": "归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充."
+      },
+      "WorkpaperAmendmentIn": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "WorkpaperAmendmentIn",
+        "description": "归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD."
       },
       "WorkpaperColumn": {
         "properties": {

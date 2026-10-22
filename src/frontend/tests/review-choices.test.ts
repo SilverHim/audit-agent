@@ -1,5 +1,5 @@
 // 复核选项按 AI 结论给 (lib/review 的 reviewChoices, defaultChoice, 需求 R364, Issue #67) 与批量确认的范围 (taskTier)
-// 的测试, bun test 运行. 数据是合成的: 任务与判断只填用到的字段.
+// 的测试, bun test 运行. 数据是合成的: 任务与判断只填用到的字段. 另测要求补充证据的选项与提交体 (需求 R369).
 import { describe, expect, test } from 'bun:test'
 import type { EngagementOverview, ReviewTaskView } from '../src/client/types.gen'
 import {
@@ -12,6 +12,7 @@ import {
   taskTier,
 } from '../src/lib/review'
 import { en } from '../src/locales/en'
+import { zh } from '../src/locales/zh'
 
 const DRAFT = {
   type: 'factual',
@@ -21,11 +22,31 @@ const DRAFT = {
   direction: 'overstated',
   account_code: '710',
 }
+// AI 建议的更正分录 (需求 R367, R368): 随 "同意/修改后认定" 的草稿带出并提交
+const CORRECTION = [
+  {
+    account_code: '711',
+    account_name: 'Less Accumulated Depreciation on Office Equipment',
+    debit_cents: 75000,
+    credit_cents: 0,
+    description: 'Reverse the depreciation credited to accumulated depreciation.',
+  },
+]
 const NORMAL = ['confirm', 'override', 'misstatement']
 
-type Options = { kind?: string; draft?: object | null; update?: string; allowed?: string[]; tier?: string }
+type Options = {
+  kind?: string
+  draft?: object | null
+  update?: string
+  allowed?: string[]
+  tier?: string
+  verdict?: string | null
+}
 
-function view(action: string, { kind = 'normal', draft = null, update, allowed = NORMAL, tier }: Options = {}) {
+function view(
+  action: string,
+  { kind = 'normal', draft = null, update, allowed = NORMAL, tier, verdict }: Options = {},
+) {
   return {
     task: { id: 'T-1', kind, procedure_id: 'GEN-02', target_version: 2, status: 'pending' },
     target: {
@@ -33,6 +54,7 @@ function view(action: string, { kind = 'normal', draft = null, update, allowed =
       subject_id: 'XJ-499',
       conclusion: 'synthetic',
       proposed_action: action,
+      verdict: verdict ?? null,
       misstatement_draft: draft,
     },
     allowed_decisions: allowed,
@@ -65,6 +87,28 @@ describe('reviewChoices', () => {
     expect(reviewChoices(view('misstatement', { kind: 'dispute', allowed: ['dispute_resolution'] }))).toBeNull()
     expect(reviewChoices(view('accept', { update: 'classification' }))).toBeNull()
   })
+
+  test('定论优先于建议动作 (需求 R368): verdict 是判断的定论, 为空时才回退到 proposed_action', () => {
+    // 定论与建议动作不一致时按定论给选项 (契约里两者一一对应, 这里挡不一致的数据)
+    expect(reviewChoices(view('accept', { verdict: 'misstatement', draft: DRAFT }))).toEqual([
+      'agree_misstatement',
+      'disagree_not_misstatement',
+      'amend_misstatement',
+    ])
+    expect(reviewChoices(view('misstatement', { verdict: 'not_misstatement' }))).toEqual([
+      'agree_clear',
+      'disagree_misstatement',
+    ])
+    expect(reviewChoices(view('accept', { verdict: 'undetermined' }))).toEqual(['misstatement', 'not_misstatement'])
+  })
+
+  test('verdict 为空 (旧数据与人工判断) 时按 proposed_action 回退, 不崩', () => {
+    expect(
+      reviewChoices(view('misstatement', { verdict: null, draft: DRAFT }))?.map((item) => CHOICE_DECISIONS[item]),
+    ).toEqual(['misstatement', 'override', 'misstatement'])
+    expect(reviewChoices(view('accept', { verdict: null }))).toEqual(['agree_clear', 'disagree_misstatement'])
+    expect(reviewChoices(view('more_evidence', { verdict: null }))).toEqual(['misstatement', 'not_misstatement'])
+  })
 })
 
 describe('defaultChoice', () => {
@@ -81,6 +125,69 @@ describe('defaultChoice', () => {
     for (const task of [view('accept'), view('more_evidence'), view('misstatement')]) {
       expect(defaultChoice(task, reviewChoices(task))).toBeNull()
     }
+  })
+})
+
+describe('AI 建议的更正分录', () => {
+  test('"同意/修改后认定" 的草稿带出判断的更正分录, 提交时一并给后端 (需求 R367, R368)', () => {
+    const draft = { ...DRAFT, correction: CORRECTION }
+    const task = view('misstatement', { draft })
+    const form = draftFromMisstatement(emptyDraft(), draft as never)
+    expect(form.correction).toEqual(CORRECTION)
+    const body = buildRecord(task, 'misstatement', form, en)
+    expect(body).toMatchObject({ decision: 'misstatement', misstatement_draft: draft })
+  })
+
+  test('没有 AI 更正分录时不提交 correction 字段 (人工填的草稿与旧数据)', () => {
+    const form = draftFromMisstatement(emptyDraft(), DRAFT as never)
+    expect(form.correction).toEqual([])
+    const body = buildRecord(view('misstatement', { draft: DRAFT }), 'misstatement', form, en)
+    expect(body).toMatchObject({ decision: 'misstatement' })
+    expect((body as { misstatement_draft?: { correction?: unknown } }).misstatement_draft?.correction).toBeUndefined()
+  })
+})
+
+describe('要求补充证据 (需求 R369)', () => {
+  // 后端对普通复核任务的 allowed_decisions 含 more_evidence
+  const MORE = [...NORMAL, 'more_evidence']
+
+  test('普通复核任务每种 AI 定论下都可选要求补充证据; 暂时判断不了时排在最前', () => {
+    for (const action of ['misstatement', 'accept', 'close', 'more_evidence']) {
+      const choices = reviewChoices(view(action, { allowed: MORE, draft: action === 'misstatement' ? DRAFT : null }))
+      expect(choices).toContain('more_evidence')
+      expect(CHOICE_DECISIONS.more_evidence).toBe('more_evidence')
+    }
+    expect(reviewChoices(view('more_evidence', { allowed: MORE }))?.[0]).toBe('more_evidence')
+    expect(reviewChoices(view('misstatement', { allowed: MORE, draft: DRAFT }))?.at(-1)).toBe('more_evidence')
+  })
+
+  test('后端不允许时 (非普通任务) 不给该选项', () => {
+    expect(reviewChoices(view('accept', { allowed: NORMAL }))).not.toContain('more_evidence')
+    expect(reviewChoices(view('accept', { kind: 'dispute', allowed: MORE }))).toBeNull()
+  })
+
+  test('提交体只要任务, 目标版本与理由; 理由选填, 空也照发空串', () => {
+    const task = view('accept', { allowed: MORE })
+    expect(buildRecord(task, 'more_evidence', { ...emptyDraft(), reason: '  need the bank statement  ' }, en)).toEqual({
+      task_id: 'T-1',
+      target_version: 2,
+      decision: 'more_evidence',
+      reason: 'need the bank statement',
+    })
+    expect(buildRecord(task, 'more_evidence', emptyDraft(), en)).toEqual({
+      task_id: 'T-1',
+      target_version: 2,
+      decision: 'more_evidence',
+      reason: '',
+    })
+  })
+
+  test('选项文案按判断用语给, 说明任务转等待证据不阻塞流程 (中英文齐)', () => {
+    expect(en.card.choices.more_evidence.label).toContain('more evidence')
+    expect(en.card.choices.more_evidence.hint).toContain('does not block')
+    expect(zh.card.choices.more_evidence.label).toContain('补充证据')
+    expect(zh.card.choices.more_evidence.hint).toContain('不阻塞')
+    expect(zh.decisions.more_evidence).toBe('要求补充证据')
   })
 })
 

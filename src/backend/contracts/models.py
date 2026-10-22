@@ -168,7 +168,8 @@ class Reliability(StrEnum):
     external_original = "external_original"  # 外部原件, 最高
     external_copy = "external_copy"  # 外部副本
     internal_original = "internal_original"  # 内部原件
-    internal_copy = "internal_copy"  # 内部副本, 最低
+    internal_copy = "internal_copy"  # 内部副本
+    management_representation = "management_representation"  # 管理层说明 (需求 R369), 低于外部证据, 最低
 
 
 class StepKind(StrEnum):
@@ -195,6 +196,14 @@ class ProposedAction(StrEnum):
     close = "close"  # 关闭事项
     misstatement = "misstatement"  # 认定为错报
     more_evidence = "more_evidence"  # 补充证据
+
+
+class Verdict(StrEnum):
+    """判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应."""
+
+    not_misstatement = "not_misstatement"  # 不是错报 (建议接受或关闭)
+    misstatement = "misstatement"  # 是错报
+    undetermined = "undetermined"  # 暂时判断不了 (需要补充证据)
 
 
 class ReviewStatus(StrEnum):
@@ -300,6 +309,7 @@ class TaskStatus(StrEnum):
 
     pending = "pending"  # 待决
     decided = "decided"  # 已决定
+    awaiting_evidence = "awaiting_evidence"  # 等补充证据 (需求 R369): 不算待你处理, 不阻塞流程
 
 
 class TargetType(StrEnum):
@@ -319,6 +329,7 @@ class Decision(StrEnum):
     rerun = "rerun"  # 重跑
     manual_result = "manual_result"  # 人工给出结果
     dispute_resolution = "dispute_resolution"  # 仲裁争议 (只用于 dispute 任务)
+    more_evidence = "more_evidence"  # 要求补充证据 (需求 R369): 普通复核任务; 转补交请求并等证据, 不卡流程
 
 
 class GateId(StrEnum):
@@ -533,6 +544,7 @@ class TrailKind(StrEnum):
     conversation_summary = "conversation_summary"  # 审计助理对话历史的压缩摘要
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
     presentation = "presentation"  # 判断呈递 (GEN-11): 审计师打开一条复核任务, 每次一行 (services/presentation)
+    archive = "archive"  # 签字后的底稿定稿
     run = "run"  # 程序执行的开始与结束, 每次执行各一行 (需求 R325, orchestration/trail)
 
 
@@ -577,6 +589,9 @@ SourceType = Literal[
 ]
 # 重要性基准: 收入, 总资产, 税前利润
 MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
+# PLN-07 初步分析可选的重要性基准 (需求 R371): 清单与比例范围在 knowledge/analytic_benchmarks.json. 比 PLN-01/03 闸门
+# 可选的三个基准多毛利, 总费用与净资产 (ASA 320 A5 的基准举例); 闸门仍只接受 MaterialityBasis 的三个
+AnalyticBasis = Literal["revenue", "gross_profit", "profit_before_tax", "total_expenses", "net_assets", "total_assets"]
 # 重要性候选本期不适用的原因 (需求 R351): 税前亏损 (以税前利润为基准时), 其余基准金额不为正
 MaterialityInapplicable = Literal["loss", "not_positive"]
 # 证据文件处理状态: 已接收, 已分类 (不需抽取的类型停在这里), 已抽取, 需人工处理; staged 为智能导入的批次里上传而
@@ -621,6 +636,29 @@ class ReasoningStep(Model):
     status: StepStatus = StepStatus.supported  # 有无证据支撑
 
 
+class CorrectionEntry(Model):
+    """AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.
+
+    一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    debit_cents: int = 0  # 借方金额, 单位分
+    credit_cents: int = 0  # 贷方金额, 单位分
+    description: str  # 摘要与说明
+
+    @model_validator(mode="after")
+    def one_side(self) -> Self:
+        """一行只能记借方或贷方的一方, 金额为正, 另一方为 0."""
+        if self.debit_cents < 0 or self.credit_cents < 0:
+            raise ValueError("更正分录的金额不能为负")
+        if bool(self.debit_cents) == bool(self.credit_cents):
+            raise ValueError("更正分录的一行只能记借方或贷方, 且金额须大于 0")
+        if not self.account_code.strip() or not self.account_name.strip() or not self.description.strip():
+            raise ValueError("更正分录的科目代码, 科目名称与摘要不能为空")
+        return self
+
+
 class MisstatementDraft(Model):
     """判断建议认定错报时附带的错报草稿."""
 
@@ -631,6 +669,9 @@ class MisstatementDraft(Model):
     direction: Direction  # 高估或低估
     # 科目代码 (需求 R156): AI 草稿能从上下文得到时填, 审计师提交认定时可填或改; 非空时须在本项目科目表中
     account_code: str | None = None
+    # 更正分录建议 (需求 R367, Issue #66): AI 判为错报时给出, 借贷平衡, 科目在科目表, 与错报科目金额方向一致;
+    # 审计师认定时可改; 随错报进 FIN-08 的建议调整分录 (旧数据为空)
+    correction: list[CorrectionEntry] = []
 
     @field_validator("account_code")
     @classmethod
@@ -701,6 +742,8 @@ class Judgment(Versioned):
     evidence: list[EvidencePointer]  # 结论引用的全部证据
     counter_argument: str  # 反方论证: 结论可能错在哪里
     proposed_action: ProposedAction  # 建议动作
+    # 定论 (需求 R365): 判断是不是错报, 与建议动作一一对应; FIN-03/FIN-09 的错报更新判断与旧数据为空
+    verdict: Verdict | None = None
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
     # 对已有错报的更新载荷 (需求 R156): FIN-03 分类与 FIN-09 验证的判断, 以及取代它们的人工判断携带, 判断置 confirmed
     # 时按它写出错报新版本 (复核决定的事务内, 或 A8 自动确认的片段中, 需求 R159); 其余为空
@@ -1375,12 +1418,78 @@ class MonthlyFigures(Model):
     employee_expense_cents: int  # 员工费用: employee_expense_categories 的借减贷 (含在 expense_cents 里)
 
 
+class AnalyticsRecommendation(Model):
+    """PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.
+
+    仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果
+    不随闸门选择自动改变."""
+
+    basis: AnalyticBasis  # 基准
+    base_amount_cents: int  # 基准金额 (本期试算表), 单位分
+    percentage: float  # 基准的比例
+    threshold_cents: int  # 门槛 = 基准金额 × 比例, 单位分
+    rationale: str  # 选择基准与比例的理由
+    evidence: list[EvidencePointer] = []  # 依据的证据
+    counter_argument: str  # 反方论证
+    self_confidence: float  # 模型自报的置信度 0-1
+
+
+class AnalyticsScreeningItem(Model):
+    """PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    amount_cents: int | None = None  # 变动金额, 单位分 (取规则例外的金额)
+    reason: str  # 重点关注或排除的理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据
+
+
+class AnalyticsAddition(Model):
+    """PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    reason: str  # 补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+
+
+class AnalyticsObservation(Model):
+    """PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,
+    与 additions 一起作为 "大模型补充" 呈报."""
+
+    account_codes: list[str]  # 相关的科目代码, 可以包含规则命中的科目
+    reason: str  # 观察到的内容与补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据
+
+
+class AnalyticsScreening(Model):
+    """PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.
+
+    规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371)."""
+
+    threshold_cents: int | None = None  # 第 2 步实际用的门槛 (基准金额 × 比例), 单位分; 退回规则时为本期收入 × 0.5%
+    hit_account_codes: list[str] = []  # 规则命中的全部科目代码, 按规则结果的顺序
+    focus: list[AnalyticsScreeningItem] = []  # 重点关注: 最终输出之一
+    additions: list[AnalyticsAddition] = []  # 大模型补充的新科目: 最终输出之一
+    excluded: list[AnalyticsScreeningItem] = []  # 已排除: 不删除, 列出并写理由
+    observations: list[AnalyticsObservation] = []  # 大模型对已命中科目的补充观察, 与 additions 一起作 "大模型补充"
+
+
 class AnalyticsResult(Versioned):
-    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势."""
+    """PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
+
+    功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有
+    这些键, 读回 recommendation 为空, screening 为空, fallback 为假."""
 
     ratios: dict[str, float]  # 比率: gross_margin_current, gross_margin_prior, revenue_growth, 四位小数
     exception_ids: list[str]  # 变动超阈值的例外
     monthly: list[MonthlyFigures] = []  # A03 的月度数, 审计期间每月一行 (没有分录的月份为 0), 按月升序; 没有 A03 行为空
+    recommendation: AnalyticsRecommendation | None = None  # 第 1 步的推荐重要性 (功能 planning); 退回规则时为空
+    screening: AnalyticsScreening = AnalyticsScreening()  # 第 3 步的复筛结果; 纯规则路径与退回规则时为空
+    fallback: bool = False  # 大模型失败或输出不合格且重试用尽, 退回本期收入 × 0.5% 的规则结果
+    fallback_reason: str | None = None  # 退回规则的原因; 未退回为空
 
 
 class MaterialityCandidate(Model):
@@ -1523,6 +1632,7 @@ class ReviewTask(Versioned):
     status: TaskStatus = TaskStatus.pending  # 待决或已决定
     created_at: datetime  # 创建时间
     manual_request: ManualRequest | None = None  # manual 任务的请求, 其余类型为空
+    evidence_request_id: str | None = None  # 要求补充证据的任务关联的请求 (需求 R369), 其余为空
 
     @model_validator(mode="after")
     def request_matches_kind(self) -> Self:
@@ -1639,6 +1749,44 @@ class RerunRequest(Versioned):
     requested_at: datetime  # 请求时间
 
 
+class EvidenceRequest(Versioned):
+    """补充证据请求 (需求 R369, Issue #65): 复核时要求补充证据, 由数据管理智能体发出, 等待期间不卡流程.
+
+    按判断里缺的证据整理成结构化请求: description 要什么, related_object_ids 关联对象 (凭证号, 发票, 合同, 银行账户),
+    requested_from 向谁要 (客户, 银行或其他第三方, 管理层). 审计师发出前可改 (PATCH); 按请求上传文件后置 received,
+    记 document_ids 与重判后的判断 ID; 拿不到时置 unavailable 并记范围受限."""
+
+    task_id: str  # 来源复核任务
+    judgment_id: str  # 要补证据的判断
+    procedure_id: str  # 判断所属程序
+    subject_id: str  # 判断对象
+    description: str  # 要什么文件或资料
+    related_object_ids: list[str] = []  # 关联对象 (凭证号, 发票, 合同, 银行账户等)
+    requested_from: Literal["client", "bank", "other", "management"] = "client"  # 向谁要
+    status: Literal["open", "received", "unavailable"] = "open"  # 待补, 已收到, 无法取得
+    document_ids: list[str] = []  # 按请求上传并登记的文件 (需求 R369)
+    unavailable_reason: str | None = None  # 无法取得的原因 (选填)
+    rejudged_judgment_id: str | None = None  # 证据到了重判后的判断 (新版本)
+    requested_by: str  # 发出请求的审计师
+    requested_at: datetime  # 发出时刻
+    resolved_at: datetime | None = None  # 收到或标无法取得的时刻
+    resolved_by: str | None = None
+
+
+class ScopeLimitation(Versioned):
+    """审计范围受限 (需求 R369): 补充证据请求无法取得时记一条, 列入错报汇总与 FIN-01 材料 (不自动改意见)."""
+
+    request_id: str  # 无法取得的请求
+    judgment_id: str  # 关联判断
+    procedure_id: str
+    subject_id: str  # 受限的对象
+    assertion: Assertion | None = None  # 涉及的认定, 判断草稿有科目时带
+    amount_cents: int | None = None  # 涉及的金额 (判断草稿或归因例外的金额)
+    reason: str | None = None  # 无法取得的原因
+    recorded_by: str
+    recorded_at: datetime
+
+
 class ReviewWithdrawal(Versioned):
     """撤回一条复核决定 (需求 R363): FIN-01 通过前, 图停在 P2 等复核或 FIN-01 闸门时, 审计师撤回执行阶段程序 normal
     任务上的 confirm, override 或 misstatement 决定. 撤回后任务回到待决, 判断回到待复核, 该决定认定的错报作废
@@ -1680,6 +1828,8 @@ class Misstatement(Versioned):
     amount_cents: int  # 金额, 单位分
     direction: Direction  # 高估或低估
     account_code: str | None = None  # 科目代码, 由认定时的草稿带入
+    # 更正分录建议 (需求 R367): 认定时由错报草稿带入, 随 FIN-08 的沟通材料给管理层; 旧数据与人工未填时为空
+    correction: list[CorrectionEntry] = []
     status: MisstatementStatus = MisstatementStatus.identified  # 生命周期状态
     # 分类 (A8, FIN-03): 所属审计目标, 舞弊迹象与理由, 本期或上期未更正结转, 作分类的判断
     objective_id: str | None = None
@@ -2124,6 +2274,17 @@ class WorkpaperNote(Model):
     added_at: datetime  # 时间
 
 
+class WorkpaperAmendment(Model):
+    """归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充."""
+
+    text: str
+    reason: str
+    added_by: str
+    added_at: datetime
+    reviewed_by: str
+    reviewed_at: datetime
+
+
 class WorkpaperSignoff(Model):
     """底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围)."""
 
@@ -2213,6 +2374,7 @@ class Workpaper(Versioned):
     notes: list[WorkpaperNote] = []  # 补充说明, 按时间顺序
     signoff: WorkpaperSignoff | None = None  # 当前有效的签署, 未签署或须重新复核时为空
     last_signoff: WorkpaperSignoff | None = None  # 失效的上一次签署 (须重新复核时可见原签署), 没有为空
+    amendments: list[WorkpaperAmendment] = []  # 只能在最终版后追加, 原内容与原版本不改
     missing: list[str] = []  # 缺的必填项代号 (底稿配置的 required, 按配置顺序), 空为齐全
 
 

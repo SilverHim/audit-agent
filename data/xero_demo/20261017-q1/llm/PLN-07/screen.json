@@ -1,0 +1,169 @@
+{
+  "decisions": [
+    {
+      "account_code": "090",
+      "verdict": "focus",
+      "reason": "The bank account fell by AUD 2,197.24 after opening balances were converted from the prior system. The movement arises from the opening conversion and the account is the main operating bank account, so existence and cutoff of cash remain a focus area.",
+      "risk_or_assertion": "Existence and cut-off of cash at bank",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "090",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "091",
+      "verdict": "focus",
+      "reason": "The savings account shows AUD 11,581.23 with no prior-period balance. This is consistent with an opening conversion balance rather than a trading movement, so it should be vouched to the bank confirmation and opening conversion file.",
+      "risk_or_assertion": "Existence and rights of cash at bank",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "091",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "610",
+      "verdict": "focus",
+      "reason": "Trade receivables increased by AUD 1,019.95 from a nil opening balance, and the balance is larger than current-period revenue of AUD 324,310.00. The increase may reflect cut-off or existence risk rather than ordinary growth.",
+      "risk_or_assertion": "Existence, valuation and cut-off of trade receivables",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "610",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "710",
+      "verdict": "focus",
+      "reason": "Office equipment of AUD 750.00 was recorded with no opening balance. The cost should be vouched to the purchase invoice and the fixed asset register; accumulated depreciation on the same equipment (711) exceeds its cost, which is a separate supplementary observation.",
+      "risk_or_assertion": "Existence and valuation of property, plant and equipment",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "710",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "711",
+      "verdict": "focus",
+      "reason": "Accumulated depreciation of AUD 825.00 was recorded with no opening balance and exceeds the AUD 750.00 cost recorded in 710. The account is not merely a normal depreciation movement; it indicates a possible posting or depreciation calculation error.",
+      "risk_or_assertion": "Valuation of property, plant and equipment",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "711",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "800",
+      "verdict": "focus",
+      "reason": "Accounts payable of AUD 4,005.16 arose from a nil opening balance and is large relative to the activity in the period. Completeness and occurrence of payables, including unrecorded supplier invoices at period end, should be tested.",
+      "risk_or_assertion": "Completeness and occurrence of trade payables",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "800",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "820",
+      "verdict": "exclude",
+      "reason": "The GST balance moved from AUD 791.20 to a net liability of AUD 1,191.97 after the first BAS periods. The movement is explained by normal GST activity and does not by itself indicate a misstatement; completeness of the GST liability will still be reviewed with the year-end tax reconciliation.",
+      "risk_or_assertion": "Completeness of GST liabilities (monitored at year end)",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "820",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "825",
+      "verdict": "exclude",
+      "reason": "PAYG withholding of AUD 7,535.00 arises from wages processed in the period and has a nil opening balance. The balance is consistent with the payroll activity and the September payment; it is excluded from current focus and will be covered by the payroll liability reconciliation.",
+      "risk_or_assertion": "Completeness of PAYG withholding liabilities (monitored at year end)",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "825",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "840",
+      "verdict": "focus",
+      "reason": "The historical adjustment account carries AUD 19,212.21 with no prior-period balance. This is an opening conversion balance rather than a trading movement and directly affects the existence of cash and the completeness of opening equity, so it remains a focus area.",
+      "risk_or_assertion": "Existence of cash and completeness of opening equity",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "840",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    }
+  ],
+  "additions": [
+    {
+      "account_code": "960",
+      "reason": "Retained earnings of AUD 7,912.00 is an opening conversion balance with no prior-period comparative in the trial balance. It is not reported by rule A01 but should be agreed to the prior year signed accounts or the conversion file before it is used as the opening equity balance.",
+      "risk_or_assertion": "Completeness and existence of opening retained earnings"
+    }
+  ],
+  "observations": [
+    {
+      "account_codes": ["710", "711"],
+      "reason": "Accumulated depreciation (711) is AUD 825.00 while the related office equipment cost (710) is only AUD 750.00. Accumulated depreciation cannot exceed the cost of the asset, so this is a supplementary inconsistency to investigate even though both accounts are already rule hits.",
+      "risk_or_assertion": "Valuation of property, plant and equipment",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "710",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "711",
+          "locator": "balance_cents",
+          "reliability": "internal_original"
+        }
+      ]
+    }
+  ]
+}

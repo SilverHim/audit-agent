@@ -12,6 +12,7 @@ import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { CurrencySettings } from '@/components/currency-settings'
 import { DataReadyButton } from '@/components/data-ready'
 import { MarkedRequests } from '@/components/data-requests'
+import { EvidenceRequests } from '@/components/evidence-requests'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
@@ -164,6 +165,9 @@ function DataPage() {
         ) : null}
 
         <MarkedRequests requests={(requests.data ?? []).filter((item) => item.status === 'unavailable')} />
+
+        {/* 补充证据请求 (需求 R369): 等证据的请求可改, 可上传证据, 可标无法取得; 收到后刷新复核队列 */}
+        <EvidenceRequests eid={eid} />
 
         <Documents
           eid={eid}

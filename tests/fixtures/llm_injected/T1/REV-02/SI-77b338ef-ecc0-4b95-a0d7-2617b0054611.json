@@ -243,7 +243,24 @@
     "account": "Sales (200)",
     "assertion": "Cutoff",
     "amount_cents": 650000,
-    "direction": "overstated"
+    "direction": "overstated",
+    "correction": [
+      {
+        "account_code": "200",
+        "account_name": "Sales",
+        "debit_cents": 650000,
+        "credit_cents": 0,
+        "description": "Reverse revenue recognised before control passed."
+      },
+      {
+        "account_code": "610",
+        "account_name": "Accounts Receivable",
+        "debit_cents": 0,
+        "credit_cents": 650000,
+        "description": "Reverse the receivable for the invoice."
+      }
+    ]
   },
+  "verdict": "misstatement",
   "self_confidence": 0.85
 }

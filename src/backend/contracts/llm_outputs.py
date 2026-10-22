@@ -7,6 +7,7 @@ from pydantic import Field, field_validator, model_validator
 
 from backend.contracts.data import Confidence, TablePlan
 from backend.contracts.models import (
+    AnalyticBasis,
     CriticReasonType,
     DocumentType,
     EqrRecommendation,
@@ -25,6 +26,7 @@ from backend.contracts.models import (
     Shareholding,
     TermsFacts,
     TermType,
+    Verdict,
 )
 
 
@@ -36,6 +38,8 @@ class JudgmentDraft(Model):
     evidence: list[EvidencePointer]  # 引用的证据
     counter_argument: str  # 反方论证
     proposed_action: ProposedAction  # 建议动作
+    # 定论 (需求 R365): 是不是错报, 与建议动作一一对应; 判断是否错报的程序必填, FIN-03/FIN-09 的错报更新判断不填
+    verdict: Verdict | None = None
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
     self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1, 计入置信度的 llm 分项
 
@@ -227,3 +231,56 @@ class CriticVerdictOut(Model):
         if (self.critic_verdict == "inconsistent") != (self.critic_reason_type is not None):
             raise ValueError("critic_reason_type is required when inconsistent and must be null when consistent")
         return self
+
+
+class AnalyticsBasisDraft(Model):
+    """PLN-07 第 1 步 (需求 R371): 大模型从配置的基准清单与比例范围中选基准与比例.
+
+    结构级只限定 basis 的取值在 AnalyticBasis 内; 是否在配置清单内, 比例是否在该基准的范围内, 基准金额是否为正, 以及
+    证据指针能否解析, 由 OutputValidator 的语义与引用两级校验 (judgment_engine.check_analytics_basis)."""
+
+    basis: AnalyticBasis  # 基准
+    percentage: float = Field(gt=0, le=1)  # 基准的比例
+    rationale: str  # 选择基准与比例的理由 (依据 ASA 320 A4-A8)
+    evidence: list[EvidencePointer]  # 依据的证据指针: 试算表行或客户画像字段
+    counter_argument: str  # 反方论证
+    self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1
+
+
+class AnalyticsScreeningDecision(Model):
+    """PLN-07 第 3 步对一条规则命中科目的结论 (需求 R371)."""
+
+    account_code: str  # 规则命中科目的代码
+    verdict: Literal["focus", "exclude"]  # 重点关注或排除
+    reason: str  # 理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据指针
+
+
+class AnalyticsAdditionDraft(Model):
+    """PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371)."""
+
+    account_code: str  # 科目代码
+    reason: str  # 补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+
+
+class AnalyticsObservationDraft(Model):
+    """PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如科目之间的勾稽矛盾. account_codes 可以包含规则命中的科目,
+    不是 additions (additions 只能是不在命中里的新科目)."""
+
+    account_codes: list[str]  # 相关的科目代码
+    reason: str  # 观察到的内容与补充关注的理由
+    risk_or_assertion: str  # 对应的风险或认定
+    evidence: list[EvidencePointer] = []  # 依据的证据指针
+
+
+class AnalyticsScreeningDraft(Model):
+    """PLN-07 第 3 步 (需求 R371): 逐个复筛规则命中科目, 并补充规则没报出的科目或观察.
+
+    引用与语义校验见 judgment_engine.check_analytics_screening: 每个命中科目恰好一条 decision; 科目在科目表内; additions
+    不重复且不在命中里; observations 的科目在科目表内; decisions 的证据指针可解析."""
+
+    decisions: list[AnalyticsScreeningDecision]  # 每个规则命中科目一条
+    additions: list[AnalyticsAdditionDraft] = []  # 规则没报出但补充关注的科目
+    observations: list[AnalyticsObservationDraft] = []  # 对已命中科目的补充观察

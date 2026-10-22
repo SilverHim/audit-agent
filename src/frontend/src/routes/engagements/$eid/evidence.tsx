@@ -3,9 +3,12 @@ import { createFileRoute } from '@tanstack/react-router'
 import { evidenceListConfirmationsOptions, evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { EvidenceLink } from '@/components/evidence-link'
+import { ManagementRepresentationForm } from '@/components/management-representation'
 import { QueryState } from '@/components/query-state'
 import { SubTabs } from '@/components/sub-tabs'
+import { decisionsDisabled } from '@/lib/engagement'
 import { useI18n } from '@/lib/i18n'
+import { useEngagement } from '@/lib/use-engagement'
 import { useMoney } from '@/lib/use-money'
 
 export const Route = createFileRoute('/engagements/$eid/evidence')({ component: Evidence })
@@ -14,6 +17,7 @@ function Evidence() {
   const { formatMoney } = useMoney()
   const { eid } = Route.useParams()
   const { t } = useI18n()
+  const overview = useEngagement(eid).data
   const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
   const confirmations = useQuery(evidenceListConfirmationsOptions({ path: { eid } }))
   return (
@@ -39,6 +43,10 @@ function Evidence() {
                   >
                     <span className="min-w-0 flex-1 truncate font-medium">{document.file_name}</span>
                     <StatusPill tone="neutral">{t.evidencePage.docTypes[document.type] ?? document.type}</StatusPill>
+                    {/* 可靠性: 登记管理层说明写出的文件为 "管理层说明" (需求 R370) */}
+                    <span className="text-[13px] text-muted-foreground">
+                      {t.data.reliabilities[document.reliability] ?? document.reliability}
+                    </span>
                     <span className="text-[13px] text-muted-foreground">
                       {t.evidencePage.pages(document.page_count)}
                     </span>
@@ -61,6 +69,9 @@ function Evidence() {
             )}
           </QueryState>
         </section>
+
+        {/* 登记管理层说明为证据 (需求 R369, R370): 说明人, 时间与内容 */}
+        <ManagementRepresentationForm eid={eid} disabled={decisionsDisabled(overview)} />
 
         <section className="flex flex-col gap-3 rounded-xl border bg-card p-5">
           <h2 className="m-0 font-semibold text-base">{t.evidencePage.confirmations}</h2>

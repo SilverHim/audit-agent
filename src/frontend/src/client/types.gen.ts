@@ -230,9 +230,104 @@ export type AdjustmentEntryView = {
 export type AgentId = 'A1' | 'A2' | 'A3' | 'A4' | 'A5' | 'A6' | 'A7' | 'A8' | 'A9' | 'A10';
 
 /**
+ * AnalyticsAddition
+ *
+ * PLN-07 第 3 步大模型补充的, 规则没有报出的科目 (需求 R371); 与重点关注分开标注.
+ */
+export type AnalyticsAddition = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+};
+
+/**
+ * AnalyticsObservation
+ *
+ * PLN-07 第 3 步对已命中科目的补充观察 (需求 R371): 例如两个科目之间的勾稽矛盾. 不是规则没报出的新科目, 单独列出,
+ * 与 additions 一起作为 "大模型补充" 呈报.
+ */
+export type AnalyticsObservation = {
+    /**
+     * Account Codes
+     */
+    account_codes: Array<string>;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+};
+
+/**
+ * AnalyticsRecommendation
+ *
+ * PLN-07 第 1 步的推荐重要性 (需求 R371): 大模型从配置的基准清单与比例范围中选出的基准与比例.
+ *
+ * 仅作 PLN-01/03 闸门的预选: 审计师仍可在闸门改选; 改了之后按现有流程把 PLN-07 当过期或在下次重算时重跑, 本结果
+ * 不随闸门选择自动改变.
+ */
+export type AnalyticsRecommendation = {
+    /**
+     * Basis
+     */
+    basis: 'revenue' | 'gross_profit' | 'profit_before_tax' | 'total_expenses' | 'net_assets' | 'total_assets';
+    /**
+     * Base Amount Cents
+     */
+    base_amount_cents: number;
+    /**
+     * Percentage
+     */
+    percentage: number;
+    /**
+     * Threshold Cents
+     */
+    threshold_cents: number;
+    /**
+     * Rationale
+     */
+    rationale: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
+    /**
+     * Counter Argument
+     */
+    counter_argument: string;
+    /**
+     * Self Confidence
+     */
+    self_confidence: number;
+};
+
+/**
  * AnalyticsResult
  *
  * PLN-07 初步分析结果: 毛利率, 收入增长率等比率, 超阈值例外与月度趋势.
+ *
+ * 功能 planning 打开时另有推荐重要性与三步复筛结果 (需求 R371); 关闭时两者为空, 与原来的纯规则结果相同. 旧数据没有
+ * 这些键, 读回 recommendation 为空, screening 为空, fallback 为假.
  */
 export type AnalyticsResult = {
     /**
@@ -257,6 +352,82 @@ export type AnalyticsResult = {
      * Monthly
      */
     monthly?: Array<MonthlyFigures>;
+    recommendation?: AnalyticsRecommendation | null;
+    screening?: AnalyticsScreening;
+    /**
+     * Fallback
+     */
+    fallback?: boolean;
+    /**
+     * Fallback Reason
+     */
+    fallback_reason?: string | null;
+};
+
+/**
+ * AnalyticsScreening
+ *
+ * PLN-07 第 3 步的复筛结果: 重点关注, 大模型补充 (新科目 additions 与对已命中科目的 observations), 已排除.
+ *
+ * 规则命中的全部科目都在 focus 与 excluded 中各出现一次, hit_account_codes 另按规则顺序列出 (需求 R371).
+ */
+export type AnalyticsScreening = {
+    /**
+     * Threshold Cents
+     */
+    threshold_cents?: number | null;
+    /**
+     * Hit Account Codes
+     */
+    hit_account_codes?: Array<string>;
+    /**
+     * Focus
+     */
+    focus?: Array<AnalyticsScreeningItem>;
+    /**
+     * Additions
+     */
+    additions?: Array<AnalyticsAddition>;
+    /**
+     * Excluded
+     */
+    excluded?: Array<AnalyticsScreeningItem>;
+    /**
+     * Observations
+     */
+    observations?: Array<AnalyticsObservation>;
+};
+
+/**
+ * AnalyticsScreeningItem
+ *
+ * PLN-07 第 3 步对一条规则命中科目的复筛结论 (需求 R371): 重点关注或排除, 都写理由.
+ */
+export type AnalyticsScreeningItem = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Amount Cents
+     */
+    amount_cents?: number | null;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Risk Or Assertion
+     */
+    risk_or_assertion: string;
+    /**
+     * Evidence
+     */
+    evidence?: Array<EvidencePointer>;
 };
 
 /**
@@ -1300,6 +1471,14 @@ export type CompletionMaterial = {
      * Stale Procedure Ids
      */
     stale_procedure_ids?: Array<string>;
+    /**
+     * Open Evidence Requests
+     */
+    open_evidence_requests?: Array<EvidenceRequest>;
+    /**
+     * Scope Limitations
+     */
+    scope_limitations?: Array<ScopeLimitation>;
 };
 
 /**
@@ -1651,6 +1830,36 @@ export type ConversationTurn = {
 };
 
 /**
+ * CorrectionEntry
+ *
+ * AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.
+ *
+ * 一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0.
+ */
+export type CorrectionEntry = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Debit Cents
+     */
+    debit_cents?: number;
+    /**
+     * Credit Cents
+     */
+    credit_cents?: number;
+    /**
+     * Description
+     */
+    description: string;
+};
+
+/**
  * CorrectionNotice
  *
  * 更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
@@ -1964,7 +2173,7 @@ export type DatasetSummary = {
  *
  * 复核决定.
  */
-export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result' | 'dispute_resolution';
+export type Decision = 'confirm' | 'override' | 'misstatement' | 'rerun' | 'manual_result' | 'dispute_resolution' | 'more_evidence';
 
 /**
  * DeclaredHolding
@@ -2614,11 +2823,123 @@ export type EvidencePointer = {
 };
 
 /**
+ * EvidenceRequest
+ *
+ * 补充证据请求 (需求 R369, Issue #65): 复核时要求补充证据, 由数据管理智能体发出, 等待期间不卡流程.
+ *
+ * 按判断里缺的证据整理成结构化请求: description 要什么, related_object_ids 关联对象 (凭证号, 发票, 合同, 银行账户),
+ * requested_from 向谁要 (客户, 银行或其他第三方, 管理层). 审计师发出前可改 (PATCH); 按请求上传文件后置 received,
+ * 记 document_ids 与重判后的判断 ID; 拿不到时置 unavailable 并记范围受限.
+ */
+export type EvidenceRequest = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Task Id
+     */
+    task_id: string;
+    /**
+     * Judgment Id
+     */
+    judgment_id: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    /**
+     * Description
+     */
+    description: string;
+    /**
+     * Related Object Ids
+     */
+    related_object_ids?: Array<string>;
+    /**
+     * Requested From
+     */
+    requested_from?: 'client' | 'bank' | 'other' | 'management';
+    /**
+     * Status
+     */
+    status?: 'open' | 'received' | 'unavailable';
+    /**
+     * Document Ids
+     */
+    document_ids?: Array<string>;
+    /**
+     * Unavailable Reason
+     */
+    unavailable_reason?: string | null;
+    /**
+     * Rejudged Judgment Id
+     */
+    rejudged_judgment_id?: string | null;
+    /**
+     * Requested By
+     */
+    requested_by: string;
+    /**
+     * Requested At
+     */
+    requested_at: string;
+    /**
+     * Resolved At
+     */
+    resolved_at?: string | null;
+    /**
+     * Resolved By
+     */
+    resolved_by?: string | null;
+};
+
+/**
+ * EvidenceRequestIn
+ *
+ * 修改补充证据请求 (需求 R369): 只给要改的项, 审计师在发出前改.
+ */
+export type EvidenceRequestIn = {
+    /**
+     * Description
+     */
+    description?: string | null;
+    /**
+     * Requested From
+     */
+    requested_from?: 'client' | 'bank' | 'other' | 'management' | null;
+    /**
+     * Related Object Ids
+     */
+    related_object_ids?: Array<string> | null;
+};
+
+/**
  * EvidenceType
  *
  * 证据种类.
  */
 export type EvidenceType = 'voucher' | 'invoice' | 'delivery' | 'bank' | 'contract' | 'external' | 'standard';
+
+/**
+ * EvidenceUnavailableIn
+ *
+ * 补充证据无法取得 (需求 R369): 理由选填.
+ */
+export type EvidenceUnavailableIn = {
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
 
 /**
  * ExceptionDisposition
@@ -3234,6 +3555,7 @@ export type Judgment = {
      */
     counter_argument: string;
     proposed_action: ProposedAction;
+    verdict?: Verdict | null;
     misstatement_draft?: MisstatementDraft | null;
     misstatement_update?: MisstatementUpdate | null;
     /**
@@ -3456,6 +3778,26 @@ export type LocalizedText = {
      * En
      */
     en: string;
+};
+
+/**
+ * ManagementRepresentationIn
+ *
+ * 登记管理层说明为证据 (需求 R369).
+ */
+export type ManagementRepresentationIn = {
+    /**
+     * Person
+     */
+    person: string;
+    /**
+     * Stated On
+     */
+    stated_on: string;
+    /**
+     * Content
+     */
+    content: string;
 };
 
 /**
@@ -3695,6 +4037,10 @@ export type Misstatement = {
      * Account Code
      */
     account_code?: string | null;
+    /**
+     * Correction
+     */
+    correction?: Array<CorrectionEntry>;
     status?: MisstatementStatus;
     /**
      * Objective Id
@@ -3783,6 +4129,10 @@ export type MisstatementDraft = {
      * Account Code
      */
     account_code?: string | null;
+    /**
+     * Correction
+     */
+    correction?: Array<CorrectionEntry>;
 };
 
 /**
@@ -4811,7 +5161,7 @@ export type RegistryExtraction = {
  *
  * 证据可靠性, 影响置信度权重.
  */
-export type Reliability = 'external_original' | 'external_copy' | 'internal_original' | 'internal_copy';
+export type Reliability = 'external_original' | 'external_copy' | 'internal_original' | 'internal_copy' | 'management_representation';
 
 /**
  * ReportBundle
@@ -5107,6 +5457,10 @@ export type ReviewTask = {
      */
     created_at: string;
     manual_request?: ManualRequest | null;
+    /**
+     * Evidence Request Id
+     */
+    evidence_request_id?: string | null;
 };
 
 /**
@@ -5271,6 +5625,55 @@ export type RunStatus = 'running' | 'succeeded' | 'failed';
  * 一次执行的起因.
  */
 export type RunTrigger = 'initial' | 'rerun' | 'incremental';
+
+/**
+ * ScopeLimitation
+ *
+ * 审计范围受限 (需求 R369): 补充证据请求无法取得时记一条, 列入错报汇总与 FIN-01 材料 (不自动改意见).
+ */
+export type ScopeLimitation = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number;
+    /**
+     * Request Id
+     */
+    request_id: string;
+    /**
+     * Judgment Id
+     */
+    judgment_id: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    /**
+     * Subject Id
+     */
+    subject_id: string;
+    assertion?: Assertion | null;
+    /**
+     * Amount Cents
+     */
+    amount_cents?: number | null;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Recorded By
+     */
+    recorded_by: string;
+    /**
+     * Recorded At
+     */
+    recorded_at: string;
+};
 
 /**
  * ServiceOrganisation
@@ -5693,7 +6096,7 @@ export type TaskPresentation = {
  *
  * 复核任务状态.
  */
-export type TaskStatus = 'pending' | 'decided';
+export type TaskStatus = 'pending' | 'decided' | 'awaiting_evidence';
 
 /**
  * TermType
@@ -5838,7 +6241,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'run';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'archive' | 'run';
 
 /**
  * UncorrectedItem
@@ -6012,6 +6415,13 @@ export type ValidationError = {
 };
 
 /**
+ * Verdict
+ *
+ * 判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应.
+ */
+export type Verdict = 'not_misstatement' | 'misstatement' | 'undetermined';
+
+/**
  * WorkingLanguageIn
  *
  * 改项目的工作语言 (需求 R339). 取值同 EngagementCreate.working_language, 在路由里查
@@ -6078,9 +6488,61 @@ export type Workpaper = {
     signoff?: WorkpaperSignoff | null;
     last_signoff?: WorkpaperSignoff | null;
     /**
+     * Amendments
+     */
+    amendments?: Array<WorkpaperAmendment>;
+    /**
      * Missing
      */
     missing?: Array<string>;
+};
+
+/**
+ * WorkpaperAmendment
+ *
+ * 归档后的追加记录 (ASA 230 第 16 段), 提交人同时确认这条补充.
+ */
+export type WorkpaperAmendment = {
+    /**
+     * Text
+     */
+    text: string;
+    /**
+     * Reason
+     */
+    reason: string;
+    /**
+     * Added By
+     */
+    added_by: string;
+    /**
+     * Added At
+     */
+    added_at: string;
+    /**
+     * Reviewed By
+     */
+    reviewed_by: string;
+    /**
+     * Reviewed At
+     */
+    reviewed_at: string;
+};
+
+/**
+ * WorkpaperAmendmentIn
+ *
+ * 归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD.
+ */
+export type WorkpaperAmendmentIn = {
+    /**
+     * Text
+     */
+    text?: string;
+    /**
+     * Reason
+     */
+    reason?: string;
 };
 
 /**
@@ -8088,6 +8550,168 @@ export type EvidenceEditConfirmationResponses = {
 
 export type EvidenceEditConfirmationResponse = EvidenceEditConfirmationResponses[keyof EvidenceEditConfirmationResponses];
 
+export type EvidenceListEvidenceRequestsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/evidence-requests';
+};
+
+export type EvidenceListEvidenceRequestsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListEvidenceRequestsError = EvidenceListEvidenceRequestsErrors[keyof EvidenceListEvidenceRequestsErrors];
+
+export type EvidenceListEvidenceRequestsResponses = {
+    /**
+     * Response Evidence-List Evidence Requests
+     *
+     * Successful Response
+     */
+    200: Array<EvidenceRequest>;
+};
+
+export type EvidenceListEvidenceRequestsResponse = EvidenceListEvidenceRequestsResponses[keyof EvidenceListEvidenceRequestsResponses];
+
+export type EvidenceListScopeLimitationsData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/scope-limitations';
+};
+
+export type EvidenceListScopeLimitationsErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceListScopeLimitationsError = EvidenceListScopeLimitationsErrors[keyof EvidenceListScopeLimitationsErrors];
+
+export type EvidenceListScopeLimitationsResponses = {
+    /**
+     * Response Evidence-List Scope Limitations
+     *
+     * Successful Response
+     */
+    200: Array<ScopeLimitation>;
+};
+
+export type EvidenceListScopeLimitationsResponse = EvidenceListScopeLimitationsResponses[keyof EvidenceListScopeLimitationsResponses];
+
+export type EvidenceEditEvidenceRequestData = {
+    body: EvidenceRequestIn;
+    path: {
+        /**
+         * Request Id
+         */
+        request_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/evidence-requests/{request_id}';
+};
+
+export type EvidenceEditEvidenceRequestErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEditEvidenceRequestError = EvidenceEditEvidenceRequestErrors[keyof EvidenceEditEvidenceRequestErrors];
+
+export type EvidenceEditEvidenceRequestResponses = {
+    /**
+     * Successful Response
+     */
+    200: EvidenceRequest;
+};
+
+export type EvidenceEditEvidenceRequestResponse = EvidenceEditEvidenceRequestResponses[keyof EvidenceEditEvidenceRequestResponses];
+
+export type EvidenceEvidenceUnavailableData = {
+    body: EvidenceUnavailableIn;
+    path: {
+        /**
+         * Request Id
+         */
+        request_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/evidence-requests/{request_id}/unavailable';
+};
+
+export type EvidenceEvidenceUnavailableErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceEvidenceUnavailableError = EvidenceEvidenceUnavailableErrors[keyof EvidenceEvidenceUnavailableErrors];
+
+export type EvidenceEvidenceUnavailableResponses = {
+    /**
+     * Successful Response
+     */
+    200: EvidenceRequest;
+};
+
+export type EvidenceEvidenceUnavailableResponse = EvidenceEvidenceUnavailableResponses[keyof EvidenceEvidenceUnavailableResponses];
+
+export type EvidenceRegisterManagementRepresentationData = {
+    body: ManagementRepresentationIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/management-representations';
+};
+
+export type EvidenceRegisterManagementRepresentationErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type EvidenceRegisterManagementRepresentationError = EvidenceRegisterManagementRepresentationErrors[keyof EvidenceRegisterManagementRepresentationErrors];
+
+export type EvidenceRegisterManagementRepresentationResponses = {
+    /**
+     * Successful Response
+     */
+    200: DocumentRef;
+};
+
+export type EvidenceRegisterManagementRepresentationResponse = EvidenceRegisterManagementRepresentationResponses[keyof EvidenceRegisterManagementRepresentationResponses];
+
 export type DataStartImportData = {
     body: BodyDataStartImport;
     path: {
@@ -9430,6 +10054,40 @@ export type WorkpapersSignWorkpaperResponses = {
 };
 
 export type WorkpapersSignWorkpaperResponse = WorkpapersSignWorkpaperResponses[keyof WorkpapersSignWorkpaperResponses];
+
+export type WorkpapersAmendWorkpaperData = {
+    body: WorkpaperAmendmentIn;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/amendments';
+};
+
+export type WorkpapersAmendWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersAmendWorkpaperError = WorkpapersAmendWorkpaperErrors[keyof WorkpapersAmendWorkpaperErrors];
+
+export type WorkpapersAmendWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Workpaper;
+};
+
+export type WorkpapersAmendWorkpaperResponse = WorkpapersAmendWorkpaperResponses[keyof WorkpapersAmendWorkpaperResponses];
 
 export type DataTableSchemasData = {
     body?: never;

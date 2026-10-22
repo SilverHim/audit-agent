@@ -358,6 +358,8 @@ def system_content(
 def system_refreshed(
     previous: Workpaper | None, spec: SystemWorkpaper, sources: "Sources", papers: dict[str, Workpaper]
 ) -> Workpaper | None:
+    if previous is not None and previous.status == "final":
+        return None
     basis = [
         ObjectRef(kind="Workpaper", id=p.id, version=p.version)
         for ref, p in sorted(papers.items())

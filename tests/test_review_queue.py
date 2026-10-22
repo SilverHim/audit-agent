@@ -92,7 +92,9 @@ def test_normal_and_unattributed_decisions() -> None:
     """normal 不变; unattributed (带规则例外的对象判断失败) 另可 rerun, 同 failed 任务 (需求 R347 验收 1)."""
     normal = make_task("REV-02", TaskKind.normal, subject_id=None)
     unattributed = make_task("REV-02", TaskKind.unattributed, subject_id="INV-1")
-    assert QUEUE.allowed(normal) == frozenset({Decision.confirm, Decision.override, Decision.misstatement})
+    assert QUEUE.allowed(normal) == frozenset(
+        {Decision.confirm, Decision.override, Decision.misstatement, Decision.more_evidence}
+    )
     assert QUEUE.allowed(unattributed) == frozenset({Decision.override, Decision.misstatement, Decision.rerun})
     assert frozenset({TaskKind.failed, TaskKind.unattributed}) == RERUNNABLE
 

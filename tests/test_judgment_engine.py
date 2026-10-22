@@ -18,6 +18,7 @@ from backend.contracts.models import (
     StepKind,
     StepStatus,
     TrailKind,
+    Verdict,
 )
 from backend.contracts.services import JudgmentContext
 from backend.core.config import get_settings
@@ -32,8 +33,10 @@ from backend.services.judgment_engine import (
 from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
+    NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
     FakeFinancialStore,
@@ -56,7 +59,7 @@ def setup(replies: dict[str, list[str]], library: ProcedureLibrary | None = None
     """判断引擎: 假大模型按脚本回答, 财务数据存储有 Numbat 的合同与数据行; library 为改过 rules.json 的副本时用它."""
     llm = ScriptedLLM(replies)
     trail = FakeTrail()
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS)
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=NUMBAT_ACCOUNTS)
     if library is None:
         return make_deps(FakeRegistry(), trail, financial_store=financial, llm=llm).judgments, llm
     return JudgmentEngine(llm, OutputValidator(financial, library, trail), trail, library), llm
@@ -101,8 +104,17 @@ def rev03_context() -> JudgmentContext:
     )
 
 
+VERDICT_OF = {
+    ProposedAction.accept: Verdict.not_misstatement,
+    ProposedAction.close: Verdict.not_misstatement,
+    ProposedAction.misstatement: Verdict.misstatement,
+    ProposedAction.more_evidence: Verdict.undetermined,
+}
+
+
 def rev03_draft(**changes: Any) -> JudgmentDraft:
-    """REV-03 对 CON-001 的草稿: 签收时转移控制权, accept, 只引合同条款与准则."""
+    """REV-03 对 CON-001 的草稿: 签收时转移控制权, accept, 只引合同条款与准则; 定论随建议动作."""
+    action = changes.get("proposed_action", ProposedAction.accept)
     draft = JudgmentDraft(
         conclusion="控制权在客户签收发运单时转移 (第 5.1 条).",
         reasoning_chain=[
@@ -112,7 +124,8 @@ def rev03_draft(**changes: Any) -> JudgmentDraft:
         ],
         evidence=[CLAUSE, STANDARD],
         counter_argument="若另有验收条款, 结论不成立.",
-        proposed_action=ProposedAction.accept,
+        proposed_action=action,
+        verdict=VERDICT_OF[action],
         self_confidence=0.9,
     )
     return draft.model_copy(update=changes)
@@ -143,7 +156,9 @@ async def test_rev02_judgment_fields() -> None:
     assert j.exception_ids == ["X-REV-08-1-R01-1"] and j.autonomy_level is AutonomyLevel.L2
     assert j.review_status is ReviewStatus.pending and j.performed_by == "U-1" and j.version == 1
     assert j.trail_ref == outcome.trail_ids[-1]
-    assert j.proposed_action is ProposedAction.misstatement and j.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+    assert j.proposed_action is ProposedAction.misstatement
+    assert j.misstatement_draft == NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION
+    assert j.verdict is Verdict.misstatement  # 定论随草稿 (需求 R365)
     assert [p.reliability for p in j.evidence][:2] == ["internal_original", "internal_original"]  # 已按来源改写
     prompt = llm.requests[0].messages[0].content
     assert "X-REV-08-1-R01-1: rule R01" in prompt and "AASB15-P38 (AASB 15 para 38)" in prompt

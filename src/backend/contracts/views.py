@@ -24,6 +24,7 @@ from backend.contracts.models import (
     EngagementTerms,
     Engine,
     EvidencePointer,
+    EvidenceRequest,
     GateDecision,
     GateId,
     Judgment,
@@ -41,6 +42,7 @@ from backend.contracts.models import (
     ReviewTask,
     ReviewTier,
     RiskItem,
+    ScopeLimitation,
     UncorrectedSchedule,
     WorkingLanguage,
     Workpaper,
@@ -211,6 +213,9 @@ class CompletionMaterial(Model):
     misstatements: list[Misstatement]  # 当前结果的错报 (过期重跑取代的执行引出的不在其中, services.staleness)
     not_executed: list[NotExecuted] = []  # 未执行 (无数据) 的程序, 按程序编号 (需求 R280)
     stale_procedure_ids: list[str] = []  # 过期而未重跑的程序 (提示审计师, 不拦截 FIN-01, Q5)
+    # 补充证据闭环 (需求 R369): 尚未有结果的补充证据请求与审计范围受限的记录, 只列出不拦截 FIN-01
+    open_evidence_requests: list[EvidenceRequest] = []
+    scope_limitations: list[ScopeLimitation] = []
 
 
 class ReportMaterial(Model):

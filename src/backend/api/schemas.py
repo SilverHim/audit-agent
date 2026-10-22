@@ -3,6 +3,8 @@
 from datetime import date, datetime
 from typing import Any, Literal
 
+from pydantic import BaseModel
+
 from backend.contracts.data import DocumentDetailsEdit, ExtractionRecord, TableKind, XeroProfileDecision
 from backend.contracts.errors import AbnLookupReason
 from backend.contracts.llm_outputs import RegistryExtraction
@@ -512,6 +514,13 @@ class WorkpaperNoteIn(Model):
     item: str | None = None  # 补齐的必填项代号 (须是该底稿可由补充说明补齐的), 只是补充时不给
 
 
+class WorkpaperAmendmentIn(Model):
+    """归档后补充: 服务层将缺失或空白理由映射为 MISSING_FIELD."""
+
+    text: str = ""
+    reason: str = ""
+
+
 class WorkpaperSignoffIn(Model):
     """审计师签署底稿 (POST /workpapers/{ref}/signoff, 需求 R330)."""
 
@@ -562,3 +571,25 @@ class LlmTestResult(Model):
     model: str | None
     latency_ms: int
     message: str
+
+
+class EvidenceRequestIn(BaseModel):
+    """修改补充证据请求 (需求 R369): 只给要改的项, 审计师在发出前改."""
+
+    description: str | None = None
+    requested_from: Literal["client", "bank", "other", "management"] | None = None
+    related_object_ids: list[str] | None = None
+
+
+class EvidenceUnavailableIn(BaseModel):
+    """补充证据无法取得 (需求 R369): 理由选填."""
+
+    reason: str | None = None
+
+
+class ManagementRepresentationIn(BaseModel):
+    """登记管理层说明为证据 (需求 R369)."""
+
+    person: str  # 说明人
+    stated_on: str  # 说明的日期或时间 (原文)
+    content: str  # 说明内容

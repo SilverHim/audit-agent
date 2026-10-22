@@ -25,10 +25,11 @@ from backend.adapters.xero_dataset import client_profile as xero_client_profile
 from backend.adapters.xero_supplements import DemoTable, Supplements
 from backend.contracts import records
 from backend.contracts.data import ContractVersion, DataInput, TableKind
-from backend.contracts.errors import AbnTaken, VersionConflict
+from backend.contracts.errors import AbnTaken, DataRejected, EngagementLocked, VersionConflict
 from backend.contracts.models import (
     AgentId,
     AuditObjective,
+    AuditReportVersion,
     ClientEntry,
     ClientProfile,
     Contract,
@@ -39,17 +40,22 @@ from backend.contracts.models import (
     DocumentStatus,
     DocumentType,
     Engagement,
+    GateDecision,
+    GateId,
     LlmSettings,
     LlmSlot,
     Phase,
     ProfileRecord,
     ProfileSource,
     Reliability,
+    ReportStatus,
     RiskItem,
     SourceType,
     User,
     Versioned,
     WorkingLanguage,
+    Workpaper,
+    WorkpaperStatus,
     initial_currency,
     with_currency,
 )
@@ -305,31 +311,61 @@ class PostgresFinancialDataStore(Store):
 
 class PostgresAuditOutputStore(Store):
     async def put(self, eid: str, objs: Sequence[Versioned], *, actor: str) -> list[Versioned]:
-        result = []
         async with transaction(self.engine, eid) as conn:
             await writable(conn, eid)
-            for obj in objs:
-                t = m.OUTPUTS[type(obj).__name__]
-                previous = await self.get(eid, type(obj), obj.id, obj.version)
-                if previous is not None:
-                    result.append(previous)
-                    continue
-                latest = await self.get(eid, type(obj), obj.id)
-                if obj.version != (latest.version + 1 if latest else 1):
-                    raise VersionConflict(f"{obj.id}: expected {(latest.version + 1) if latest else 1}")
-                await conn.execute(
-                    insert(t).values(
-                        engagement_id=eid,
-                        id=obj.id,
-                        version=obj.version,
-                        kind=type(obj).__name__,
-                        data=obj.model_dump(mode="json"),
-                        created_by=actor,
-                        created_at=now(),
-                    )
+            return await self._append(conn, eid, objs, actor)
+
+    async def _append(self, conn: AsyncConnection, eid: str, objs: Sequence[Versioned], actor: str) -> list[Versioned]:
+        result: list[Versioned] = []
+        for obj in objs:
+            t = m.OUTPUTS[type(obj).__name__]
+            previous = await self.get(eid, type(obj), obj.id, obj.version)
+            if previous is not None:
+                result.append(previous)
+                continue
+            latest = await self.get(eid, type(obj), obj.id)
+            if obj.version != (latest.version + 1 if latest else 1):
+                raise VersionConflict(f"{obj.id}: expected {(latest.version + 1) if latest else 1}")
+            await conn.execute(
+                insert(t).values(
+                    engagement_id=eid,
+                    id=obj.id,
+                    version=obj.version,
+                    kind=type(obj).__name__,
+                    data=obj.model_dump(mode="json"),
+                    created_by=actor,
+                    created_at=now(),
                 )
-                result.append(obj.model_copy(deep=True))
+            )
+            result.append(obj.model_copy(deep=True))
         return result
+
+    async def put_signed_workpapers(
+        self, eid: str, objs: Sequence[Workpaper], *, actor: str, mode: Literal["archive", "amendment"]
+    ) -> list[Workpaper]:
+        from backend.services.workpaper_finalization import validate_signed_write
+
+        async with transaction(self.engine, eid) as conn:
+            row = (
+                await conn.execute(text("SELECT locked FROM engagements WHERE id=:eid FOR NO KEY UPDATE"), {"eid": eid})
+            ).first()
+            if row is None:
+                raise LookupError(eid)
+            reports = await self.latest(eid, AuditReportVersion)
+            decisions = await self.latest(eid, GateDecision)
+            if (
+                not row.locked
+                or not any(r.status is ReportStatus.signed for r in reports)
+                or not any(d.gate is GateId.RPT_01 and d.decision == "approve" for d in decisions)
+            ):
+                raise EngagementLocked(eid)
+            for obj in objs:
+                if type(obj) is not Workpaper or obj.status is not WorkpaperStatus.final:
+                    raise DataRejected("INVALID_VALUE", "只允许最终版底稿")
+                if await self.get(eid, Workpaper, obj.id, obj.version) is None:
+                    validate_signed_write(await self.get(eid, Workpaper, obj.id), obj, actor, mode)
+            stored = await self._append(conn, eid, objs, actor)
+            return [cast(Workpaper, paper) for paper in stored]
 
     async def get(self, eid: str, kind: type[T], id: str, version: int | None = None) -> T | None:
         t = m.OUTPUTS[kind.__name__]

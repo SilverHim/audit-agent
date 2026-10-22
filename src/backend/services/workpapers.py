@@ -65,6 +65,7 @@ from backend.contracts.models import (
     UncorrectedSchedule,
     Versioned,
     Workpaper,
+    WorkpaperAmendment,
     WorkpaperNote,
     WorkpaperSignoff,
     WorkpaperStatus,
@@ -79,6 +80,7 @@ from backend.services.staleness import current_misstatements, superseded_runs
 from backend.services.workpaper_content import build_content
 from backend.services.workpaper_decisions import decision_draft
 from backend.services.workpaper_files import relative_filename
+from backend.services.workpaper_finalization import amendment_content
 from backend.services.workpaper_judgments import model_judgments
 from backend.services.workpaper_summaries import system_content, system_missing, system_refreshed
 from backend.services.workpaper_tables import unsigned as unsigned
@@ -203,6 +205,9 @@ def view_of(template: ProcedureTemplate, sources: Sources) -> View:
     )
     if template.id == "PLN-03":
         outputs.extend(sources.risks)
+    if template.id == "RPT-01" and decisions:
+        targets = {d.target_id for d in decisions}
+        outputs.extend(o for o in sources.outputs.get("report_versions", []) if o.id in targets)
     outputs = list({(type(o).__name__, o.id, o.version): o for o in outputs}.values())
     return View(template, runs, current, populations, exceptions, judgments, decisions, outputs, sources.currency)
 
@@ -583,8 +588,10 @@ def plan_refresh(snapshot: Snapshot) -> list[tuple[Workpaper, str]]:
 async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
     """只写实际变化的派生快照, 不存在或锁定的项目不刷新. 签字后的定稿由归档路径完成."""
     engagement = await deps.engagement_store.get(eid)
-    if engagement is None or engagement.locked:
+    if engagement is None:
         return []
+    if engagement.locked:
+        return await finalize(deps, eid)
     planned = plan_refresh(await load(deps, eid))
     written: list[Workpaper] = []
     if planned:
@@ -594,6 +601,73 @@ async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
                 assert isinstance(stored, Workpaper)
                 written.append(stored)
     return written
+
+
+def signed_report(snapshot: Snapshot) -> AuditReportVersion | None:
+    approved = any(d.gate is GateId.RPT_01 and d.decision is GateVerdict.approve for d in snapshot.sources.decisions)
+    if not approved:
+        return None
+    reports = [
+        r
+        for r in snapshot.sources.outputs.get("report_versions", [])
+        if isinstance(r, AuditReportVersion) and r.status == "signed"
+    ]
+    return max(reports, key=lambda r: r.revision, default=None)
+
+
+async def finalize(deps: "AgentDeps", eid: str) -> list[Workpaper]:
+    """签字事务之后补齐最后的决定快照, 一次事务定稿全部底稿并写一条归档留痕. 不改变报告签字事务."""
+    engagement = await deps.engagement_store.get(eid)
+    if engagement is None or not engagement.locked:
+        return []
+    snapshot = await load(deps, eid)
+    report = signed_report(snapshot)
+    if report is None or (
+        snapshot.workpapers and all(p.status is WorkpaperStatus.final for p in snapshot.workpapers.values())
+    ):
+        return []
+    changes = {p.id: p for p, _ in plan_refresh(snapshot)}
+    all_papers = {**snapshot.workpapers, **changes}
+    finals = {}
+    for key, paper in all_papers.items():
+        previous = snapshot.workpapers.get(key)
+        if previous and previous.status is WorkpaperStatus.final:
+            finals[paper.ref] = previous
+            continue
+        version = paper.version if key in changes or previous is None else paper.version + 1
+        finals[paper.ref] = paper.model_copy(update={"status": WorkpaperStatus.final, "version": version})
+    # 索引与准则对照展示已定稿的状态, 不把行政定稿本身当成需要重签的实质依据变化.
+    for ref in ("S", "00"):
+        if ref in finals:
+            spec = next(w for w in deps.library.workpapers.system if w.ref == ref)
+            paper = finals[ref]
+            finals[ref] = paper.model_copy(update={"content": system_content(spec, snapshot.sources, finals, paper)})
+    written = [
+        p
+        for p in finals.values()
+        if not (snapshot.workpapers.get(p.id) and snapshot.workpapers[p.id].status is WorkpaperStatus.final)
+    ]
+    async with deps.output_store.transaction(eid):
+        stored = await deps.output_store.put_signed_workpapers(eid, written, actor="A8", mode="archive")
+        await deps.trail.record(
+            TrailEntry(
+                engagement_id=eid,
+                kind=TrailKind.archive,
+                actor="A8",
+                procedure_id="RPT-01",
+                summary=f"底稿归档定稿 {len(finals)} 份",
+                idempotency_key=f"{eid}:workpapers:archive",
+                payload={
+                    "action": "workpaper_archive",
+                    "count": len(finals),
+                    "report_id": report.id,
+                    "report_version": report.version,
+                    "at": datetime.now(UTC).isoformat(),
+                },
+            ),
+            independent=False,
+        )
+    return stored
 
 
 def workpaper_trail(
@@ -626,6 +700,23 @@ class WorkpaperService:
         if engagement is None:
             raise LookupError(f"Engagement {eid} not found")
         snapshot = await load(self.deps, eid)
+        if (
+            engagement.locked
+            and not self.runner.is_running(eid)
+            and signed_report(snapshot) is not None
+            and (
+                not snapshot.workpapers
+                or any(p.status is not WorkpaperStatus.final for p in snapshot.workpapers.values())
+            )
+        ):
+            self.runner.acquire(eid)
+            try:
+                await finalize(self.deps, eid)
+            except Exception:
+                logger.exception("底稿归档补做失败: %s", eid)
+            finally:
+                self.runner.release(eid)
+            return await load(self.deps, eid)
         if not engagement.locked and not self.runner.is_running(eid) and plan_refresh(snapshot):
             self.runner.acquire(eid)
             try:
@@ -797,3 +888,42 @@ class WorkpaperService:
             summary = f"审计师签署底稿 {ref} ({SCOPES[scope]})"
             trail = workpaper_trail(eid, new, actor, "workpaper_signoff", summary, scope=scope.value, opinion=opinion)
             return await self._write(eid, snapshot, new, actor, trail)
+
+    async def amend(self, eid: str, ref: str, text: str, reason: str, actor: str) -> Workpaper:
+        """只在定稿后追加补充, 原文及字段不覆盖; 理由必须填写, 相同末条重试不重复追加."""
+        text, reason = text.strip(), reason.strip()
+        if not text or not reason:
+            raise DataRejected("MISSING_FIELD", "text, reason")
+        await self.ready(eid)
+        self.runner.acquire(eid)
+        try:
+            previous = await self.deps.output_store.get(eid, Workpaper, workpaper_id(ref))
+            if previous is None:
+                raise LookupError(ref)
+            if previous.status is not WorkpaperStatus.final:
+                raise DataRejected("NOT_EDITABLE", "底稿尚未归档")
+            if previous.amendments and (
+                previous.amendments[-1].text,
+                previous.amendments[-1].reason,
+                previous.amendments[-1].added_by,
+            ) == (text, reason, actor):
+                return previous
+            now = datetime.now(UTC)
+            addition = WorkpaperAmendment(
+                text=text, reason=reason, added_by=actor, added_at=now, reviewed_by=actor, reviewed_at=now
+            )
+            new = previous.model_copy(
+                update={"version": previous.version + 1, "amendments": [*previous.amendments, addition]}
+            )
+            new = new.model_copy(update={"content": amendment_content(new)})
+            async with self.deps.output_store.transaction(eid):
+                [stored] = await self.deps.output_store.put_signed_workpapers(eid, [new], actor=actor, mode="amendment")
+                await self.deps.trail.record(
+                    workpaper_trail(
+                        eid, new, actor, "workpaper_amendment", f"归档后补充底稿 {ref}", text=text, reason=reason
+                    ),
+                    independent=False,
+                )
+            return stored
+        finally:
+            self.runner.release(eid)

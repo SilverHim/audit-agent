@@ -1,0 +1,23 @@
+{
+  "basis": "revenue",
+  "percentage": 0.01,
+  "rationale": "The company is loss-making in the current period (profit before tax is negative), so profit before tax is not an appropriate benchmark under ASA 320 A5; revenue is stable and is the most relevant measure of the activity of the business. A percentage of 1% is the example given in ASA 320 A8 for revenue and sits at the top of the configured revenue range.",
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "200",
+      "locator": "balance_cents",
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "client_profile",
+      "source_id": "CLIENT-XERO-3C1332BB-Q1",
+      "locator": "industry_anzsic",
+      "reliability": "internal_copy"
+    }
+  ],
+  "counter_argument": "A percentage at the lower end of the range (0.5%) would be more conservative and would flag more accounts for attention, but with revenue of AUD 3,243,100.00 the 1% threshold of AUD 32,431.00 is already low relative to the size and number of movements, and 0.5% would produce the same nine accounts while adding no discrimination.",
+  "self_confidence": 0.86
+}

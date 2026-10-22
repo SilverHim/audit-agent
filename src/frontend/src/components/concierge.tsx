@@ -26,11 +26,13 @@ import type {
 import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
+import { RejudgeNotice } from '@/components/evidence-requests'
 import { ExceptionDetail } from '@/components/exception-detail'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { UpdateFields, UpdatePayload } from '@/components/update-fields'
+import { CorrectionList, ProposalVerdict, VerdictBanner } from '@/components/verdict'
 import { GeneratedLanguage, useContentLanguage } from '@/components/working-language'
 import { invalidateEngagement } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
@@ -77,6 +79,7 @@ import {
 } from '@/lib/review'
 import { useOverview } from '@/lib/use-engagement'
 import { useMoney } from '@/lib/use-money'
+import { correctionEntries } from '@/lib/verdict'
 import type { WorkingLanguage } from '@/lib/working-language'
 
 // 对话流的组成部件: 消息, 判断卡片, 人工决定卡片
@@ -305,15 +308,14 @@ function SideColumn({
       </div>
       {proposals ? (
         <div className="flex flex-col gap-1" data-testid={`presented-${which}-proposal`}>
-          <span className={cn('font-semibold', side.proposed_action === 'misstatement' && 'text-risk')}>
-            {side.proposed_action ? t.proposed[side.proposed_action] : t.card.sides.none}
-          </span>
+          <ProposalVerdict action={side.proposed_action} />
           {draft ? (
             <Code className="text-[12.5px] text-secondary-foreground">
               {draft.account} · {t.assertions[draft.assertion]} · {formatMoney(draft.amount_cents)} ·{' '}
               {t.directions[draft.direction]}
             </Code>
           ) : null}
+          <CorrectionList entries={correctionEntries(draft)} />
         </div>
       ) : null}
       {side.conclusion ? (
@@ -457,20 +459,18 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
       </div>
     </>
   )
-  const proposed = (
-    <div className="flex basis-[140px] flex-col gap-0.5">
-      <span className="text-[12px] text-muted-foreground">{t.judgment.proposed}</span>
-      <span className={cn('font-semibold', target.proposed_action === 'misstatement' && 'text-risk')}>
-        {t.proposed[target.proposed_action]}
-      </span>
-    </div>
-  )
+  const corrections = correctionEntries(target.misstatement_draft)
   // 争议任务的呈递回来后两方并排: 结论, 推理链, 置信度与 (须时) 建议都从呈递取, 不再从队列的判断上重复显示
   if (layout === 'dispute' && presentation) {
     return (
       <article className="overflow-hidden rounded-[14px] border bg-card" data-testid="dispute-presentation">
         {header}
-        <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">{facts}</div>
+        <div className="flex flex-col gap-3 border-line-soft border-b px-4 py-4">
+          <VerdictBanner judgment={target} />
+          {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+          <RejudgeNotice eid={eid} judgmentId={target.id} />
+          <div className="flex flex-wrap gap-5">{facts}</div>
+        </div>
         <DisputeBody eid={eid} presentation={presentation} proposals={showSideProposals(collab, view)} lang={lang} />
       </article>
     )
@@ -482,22 +482,31 @@ export function JudgmentCard({ eid, ranked }: { eid: string; ranked: RankedTask 
   return (
     <article className="overflow-hidden rounded-[14px] border bg-card">
       {header}
-      <div className="flex flex-wrap gap-5 border-line-soft border-b px-4 py-4">
-        {facts}
-        {proposed}
-        <div className="flex flex-1 basis-[200px] flex-col gap-1.5">
-          <span className="text-[12px] text-muted-foreground">{t.judgment.confidence}</span>
-          <div className="flex items-center gap-2.5">
-            <span className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-              <span className="bg-primary" style={{ width: `${Math.round(target.confidence * 100)}%` }} />
-            </span>
-            <Code className="font-semibold">{target.confidence.toFixed(2)}</Code>
+      <div className="flex flex-col gap-3 border-line-soft border-b px-4 py-4">
+        {/* 定论放最上面: 大字号分颜色, 是错报的同一行给金额与方向 (需求 R368) */}
+        <VerdictBanner judgment={target} />
+        {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+        <RejudgeNotice eid={eid} judgmentId={target.id} />
+        <div className="flex flex-wrap gap-5">
+          {facts}
+          <div className="flex flex-1 basis-[200px] flex-col gap-1.5">
+            <span className="text-[12px] text-muted-foreground">{t.judgment.confidence}</span>
+            <div className="flex items-center gap-2.5">
+              <span className="flex h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                <span className="bg-primary" style={{ width: `${Math.round(target.confidence * 100)}%` }} />
+              </span>
+              <Code className="font-semibold">{target.confidence.toFixed(2)}</Code>
+            </div>
+            <Code className="text-[11.5px] text-muted-foreground">{parts}</Code>
           </div>
-          <Code className="text-[11.5px] text-muted-foreground">{parts}</Code>
         </div>
       </div>
+      {corrections.length ? (
+        <CorrectionList entries={corrections} className="border-line-soft border-b px-4 py-4" />
+      ) : null}
       <div className="flex flex-col gap-1.5 border-line-soft border-b px-4 py-4">
-        <SectionLabel>{t.judgment.conclusion}</SectionLabel>
+        {/* AI 的叙述文字: 定论下面是理由 (需求 R368) */}
+        <SectionLabel>{t.judgment.reason}</SectionLabel>
         <p className="m-0 text-[15px] leading-[1.65]" lang={lang}>
           {target.conclusion}
         </p>
@@ -649,15 +658,14 @@ function SideCard({ side, proposal }: { side: DisputeSide; proposal: SideProposa
   return (
     <div className="flex flex-col gap-1 rounded-[10px] border px-3.5 py-3" data-testid={`dispute-side-${side}`}>
       <span className="text-[12px] text-muted-foreground">{t.card.sides[side]}</span>
-      <span className={cn('font-semibold', action === 'misstatement' && 'text-risk')}>
-        {action ? t.proposed[action] : t.card.sides.none}
-      </span>
+      <ProposalVerdict action={action} />
       {draft ? (
         <Code className="text-[12.5px] text-secondary-foreground">
           {draft.account} · {t.assertions[draft.assertion]} · {formatMoney(draft.amount_cents)} ·{' '}
           {t.directions[draft.direction]}
         </Code>
       ) : null}
+      <CorrectionList entries={correctionEntries(draft)} />
     </div>
   )
 }
@@ -711,9 +719,10 @@ export function ReviewDecisionCard({
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
-  // 改了错报字段的 "同意" 即 "修改后认定为错报"
+  // 改了错报字段的 "同意" 即 "修改后认定为错报"; AI 建议的更正分录按原金额与方向校验, 改过数据后不再带, 重新
+  // "复制建议数据" 会再带出 (需求 R367, R368)
   const setFigures = (patch: Partial<ReviewDraft>) => {
-    set(patch)
+    setDraft((current) => ({ ...current, ...patch, correction: [] }))
     if (choice === 'agree_misstatement') setChoice('amend_misstatement')
   }
   // 选 "同意" 时错报字段回到 AI 草稿; 选 "不是错报" (推翻) 时结论为空则预填一句, 可改
@@ -811,6 +820,10 @@ export function ReviewDecisionCard({
         </>
       }
     >
+      {/* 复核卡也把 AI 的定论放最上面 (需求 R368): 是错报的同一行给金额与方向, 下面列出建议的更正分录 */}
+      {judgment ? <VerdictBanner judgment={judgment} /> : null}
+      {judgment ? <CorrectionList entries={correctionEntries(judgment.misstatement_draft)} /> : null}
+
       <fieldset className="m-0 flex flex-wrap gap-2.5 border-0 p-0">
         <legend className="sr-only">{t.card.decision}</legend>
         {choices

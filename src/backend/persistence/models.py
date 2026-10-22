@@ -281,6 +281,9 @@ OUTPUT_KINDS = {
         "ComplianceCheck",
         "GovernanceCommunication",
         "IndependenceDeclaration",
+        # 补充证据闭环 (需求 R369): 补齐请求与范围受限, kind 为字符串列, 不需迁移
+        "EvidenceRequest",
+        "ScopeLimitation",
     ],
 }
 OUTPUTS = {}

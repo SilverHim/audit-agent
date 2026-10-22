@@ -220,6 +220,8 @@ export const en = {
     rerun: 'Run again',
     manual_result: 'Enter the result',
     dispute_resolution: 'Resolve the disagreement',
+    // 要求补充证据 (需求 R369): 普通复核任务; 复核卡片上的这个选项见 card.choices.more_evidence
+    more_evidence: 'Ask for more evidence',
   } as Record<string, string>,
   decisionHints: {
     confirm: "Adopt the AI's conclusion",
@@ -228,13 +230,8 @@ export const en = {
     rerun: 'Run the procedure again',
     manual_result: 'Give the result yourself',
     dispute_resolution: 'Choose which conclusion stands',
+    more_evidence: 'Create a request and wait for the evidence without blocking the process',
   } as Record<string, string>,
-  proposed: {
-    accept: 'Accept',
-    close: 'Close',
-    misstatement: 'Misstatement',
-    more_evidence: 'More evidence',
-  },
   taskKinds: {
     normal: '',
     unattributed: 'Exception not linked to a subject',
@@ -260,7 +257,14 @@ export const en = {
     read_reasoning: 'confidence 0.70 to 0.90',
     batch_eligible: 'confidence above 0.90, a low amount, and the AI found no misstatement',
   },
-  status: { pending: 'Pending auditor review', deferred: 'Deferred', decided: 'Decided', confirmed: 'Confirmed' },
+  status: {
+    pending: 'Pending auditor review',
+    deferred: 'Deferred',
+    decided: 'Decided',
+    confirmed: 'Confirmed',
+    // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
+    awaitingEvidence: 'Waiting for evidence (does not block)',
+  },
   checks: {
     abn_active: 'ABN is active',
     name_match: 'Registered name matches the client profile',
@@ -272,10 +276,14 @@ export const en = {
     gross_margin_prior: 'Gross margin, prior year',
     revenue_growth: 'Revenue growth',
   } as Record<string, string>,
-  bases: { revenue: 'Revenue', total_assets: 'Total assets', profit_before_tax: 'Profit before tax' } as Record<
-    string,
-    string
-  >,
+  bases: {
+    revenue: 'Revenue',
+    gross_profit: 'Gross profit',
+    profit_before_tax: 'Profit before tax',
+    total_expenses: 'Total expenses',
+    net_assets: 'Net assets',
+    total_assets: 'Total assets',
+  } as Record<string, string>,
   riskLevels: { low: 'Low', medium: 'Medium', high: 'High', significant: 'Significant' },
   opinions: { unqualified: 'Unqualified', qualified: 'Qualified', adverse: 'Adverse', disclaimer: 'Disclaimer' },
   reportSections: {
@@ -350,6 +358,12 @@ export const en = {
       misstatements: 'Pick at least one misstatement',
       entries: 'Pick at least one adjustment entry',
     },
+  },
+  // AI 建议的更正分录 (需求 R367, R368): 判断卡片, 复核卡片与错报列表共用; 每行只记借方或贷方一方
+  correctionEntry: {
+    title: 'AI-suggested correcting entry',
+    debit: 'Debit',
+    credit: 'Credit',
   },
   // FIN-08 的登记 (人工任务页, 结果模型 ManagementResponses): 每条错报一行
   fin08: {
@@ -603,28 +617,36 @@ export const en = {
       a7_upheld: "Adopt the independent review's conclusion",
       neither: 'Neither; give your own conclusion',
     } as Record<string, string>,
-    // 判断的复核选项, 按 AI 的结论给 (lib/review 的 reviewChoices, 需求 R364)
+    // 判断的复核选项, 按 AI 的定论给 (lib/review 的 reviewChoices, 需求 R364, R368); 文案用定论的说法
     notMisstatementConclusion: 'On review, this is not a misstatement.',
     choices: {
       agree_misstatement: {
         label: 'Agree, record the misstatement',
-        hint: "The AI's amount, account, direction and assertion are filled in; you can edit them",
+        hint: "The AI's verdict and figures are filled in; you can edit them",
       },
       disagree_not_misstatement: { label: 'Disagree, not a misstatement', hint: 'Give your conclusion' },
       amend_misstatement: { label: 'Record the misstatement with changes', hint: "Change the AI's figures first" },
-      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's conclusion" },
+      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's verdict" },
       disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
       misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
       not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
+      // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
+      more_evidence: {
+        label: 'Ask for more evidence, raising a request',
+        hint: 'The task waits for the evidence and does not block the process',
+      },
     },
   },
   judgment: {
     subject: 'Subject',
     amount: 'Amount',
-    proposed: 'Proposed action',
+    // 定论 (需求 R368): 判断是不是错报, 与建议动作一一对应; 显示在判断卡, 复核卡, 程序详情与列表的最上面
+    verdict: 'Verdict',
+    verdicts: { not_misstatement: 'Not a misstatement', misstatement: 'Misstatement', undetermined: 'Cannot tell yet' },
     confidence: 'Confidence',
     parts: { evidence: 'evidence', rule: 'rule', llm: 'model' } as Record<string, string>,
-    conclusion: 'Conclusion',
+    // AI 的叙述文字: 定论下面是理由 (需求 R368)
+    reason: 'Reason',
     reasoning: (n: number) => `Reasoning · ${n} step${n === 1 ? '' : 's'}`,
     counter: 'Counter-argument',
     fromSteps: (steps: string) => `from steps ${steps}`,
@@ -714,6 +736,33 @@ export const en = {
       expense: 'Expenses',
       employee: 'of which employee expenses',
     },
+    // 推荐重要性与三步复筛 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用
+    analysis: {
+      screening: 'Screening result',
+      threshold: (amount: string) => `Threshold ${amount}`,
+      hits: (n: number) => `${n} account${n === 1 ? '' : 's'} over the threshold`,
+      focus: 'Focus areas',
+      additions: 'Added by the model (not flagged by the rules)',
+      observations: 'Supplementary observations',
+      excluded: 'Excluded, with reasons',
+      amount: 'Amount',
+      riskOrAssertion: (value: string) => `Risk or assertion: ${value}`,
+      recommendation: {
+        title: 'Recommended materiality (AI)',
+        basis: 'Benchmark',
+        baseAmount: 'Benchmark amount',
+        percentage: 'Percentage',
+        threshold: 'Threshold',
+        confidence: 'Confidence',
+        rationale: 'Why this benchmark and percentage',
+        counterArgument: 'Counter-argument',
+        hint: 'A pre-selection from the preliminary analysis; you can still choose another basis and percentage at this gate.',
+      },
+      fallback: {
+        title: 'The model was not available: fell back to the rule result, current-period revenue × 0.5%.',
+        reason: (reason: string) => `Reason: ${reason}`,
+      },
+    },
   },
   completion: {
     candidate: 'Candidate opinion',
@@ -783,6 +832,11 @@ export const en = {
       ENGAGEMENT_BUSY: 'The engagement is busy. Try again shortly.',
       VERSION_MISMATCH: 'This was updated elsewhere. Refresh and try again.',
       ENGAGEMENT_LOCKED: 'The engagement is signed and read-only.',
+      NOT_FOUND: 'This item no longer exists. Refresh and try again.',
+      TASK_NOT_PENDING: 'This review task is no longer waiting for you.',
+      DECISION_NOT_ALLOWED: 'This decision is not available for this task any more.',
+      INVALID_VALUE: 'The current state does not allow this. Refresh and try again.',
+      MISSING_FIELD: 'A required field is missing.',
       NOT_RERUNNABLE: 'Reruns are available while waiting for review, or at the FIN-01 or RPT-01 decision.',
       XERO_NOT_CONNECTED: 'Xero is not connected yet.',
       PROFILE_CHECK_STALE: 'The Xero organisation check has changed. Refresh and choose again.',
@@ -817,12 +871,15 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      proposed: 'Proposed',
+      verdict: 'Verdict',
       tier: 'Review tier',
       status: 'Status',
     },
     open: 'Open',
     perform: 'Perform',
+    // 等补充证据的任务 (需求 R369): 不算待处理, 单列一组, 链到补充证据请求
+    waitingEvidence: 'Waiting for evidence',
+    openRequest: 'View the request',
   },
   queuePage: {
     title: 'Review queue',
@@ -834,7 +891,7 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      proposed: 'Proposed',
+      verdict: 'Verdict',
       confidence: 'Confidence',
       status: 'Status',
     },
@@ -1526,6 +1583,8 @@ export const en = {
       external_copy: 'External copy',
       internal_original: 'Internal original',
       internal_copy: 'Internal copy',
+      // 登记管理层说明写出的文件 (需求 R369): 低于外部证据
+      management_representation: 'Management representation',
     } as Record<string, string>,
     channels: {
       systemArchive: 'Archived by the system',
@@ -1992,6 +2051,72 @@ export const en = {
     },
     formats: { table: 'Excel or CSV', document: 'PDF, Word or Excel' },
     awaitingIntro: 'All the data planning needs has been received. Confirm to start planning.',
+  },
+  // 补充证据请求 (后端需求 R369, 页面 R370): 数据管理页的区块, 复核队列与判断详情里的状态与链接
+  evidenceRequests: {
+    title: 'Supplementary evidence requests',
+    intro: (n: number) =>
+      `${n} review task${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} more evidence. The tasks wait without blocking the process.`,
+    closed: 'All supplementary evidence requests are resolved.',
+    separator: ', ',
+    statuses: {
+      open: 'Waiting for evidence',
+      received: 'Received',
+      unavailable: 'Unavailable',
+    } as Record<string, string>,
+    sources: {
+      client: 'Client',
+      bank: 'Bank',
+      other: 'Other third party',
+      management: 'Management',
+    } as Record<string, string>,
+    fields: {
+      description: 'What is needed',
+      requestedFrom: 'Ask',
+      relatedObjects: 'Related records',
+      documents: 'Evidence received',
+      unavailableReason: 'Why unavailable',
+    },
+    requestedAt: (at: string) => `Requested ${at}`,
+    relatedHint: 'Comma-separated, e.g. XJ-499, BA-091',
+    edit: 'Edit request',
+    unavailable: 'Mark unavailable',
+    upload: 'Upload evidence',
+    uploading: 'Uploading…',
+    save: 'Save',
+    cancel: 'Cancel',
+    editTitle: (id: string) => `Edit ${id}`,
+    editIntro: 'Change what is needed, who to ask or the related records before the evidence arrives.',
+    unavailableTitle: (id: string) => `Mark ${id} unavailable`,
+    unavailableIntro:
+      'The review task goes back to review and a scope limitation is recorded. The opinion is not changed automatically.',
+    saved: 'Evidence request saved',
+    uploaded: (n: number) => `${n} file${n === 1 ? '' : 's'} uploaded; the review task is back in review`,
+    unavailableDone: 'Marked unavailable; the review task is back in review',
+    awaitingHint: 'This task waits for supplementary evidence and does not block the rest of the process.',
+    openBlock: 'Open the evidence requests',
+    rejudged: (id: string) => `Rejudged from supplementary evidence request ${id}`,
+    errors: {
+      description: 'Say what evidence is needed',
+      noChange: 'Change at least one field',
+    },
+  },
+  // 登记管理层说明 (后端需求 R369, 页面 R370): 证据页的表单
+  managementRepresentation: {
+    title: 'Management representation',
+    intro:
+      'Record a written or oral representation from management as evidence. It is kept as a management representation, below external evidence.',
+    person: 'Person',
+    statedOn: 'Date or time stated',
+    statedOnHint: 'As management stated it, e.g. 2026-10-21',
+    content: 'What management stated',
+    register: 'Register representation',
+    registering: 'Registering…',
+    registered: 'Management representation registered',
+    locked: 'The engagement is signed and read-only.',
+    errors: {
+      required: (fields: string) => `Fill in ${fields}.`,
+    },
   },
   evidence: {
     open: 'Open',

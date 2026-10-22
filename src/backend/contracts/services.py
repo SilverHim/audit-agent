@@ -77,6 +77,8 @@ class ValidationContext(Model):
     # 输出的语言 (需求 R341): JudgmentEngine.call_llm 按执行记录的 language 填, 调用方不填; RPT-03 按它取两段的标题
     # (templates/report.yaml). 不经 call_llm 直接校验时缺省 en
     language: WorkingLanguage = "en"
+    # 记账币种 (需求 R365, R366): 判断草稿的结论里的金额须按它写; call_llm 按项目当前币种填, 直接校验时缺省澳元
+    currency: str = "AUD"
     # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页, 画像还须同字段), 否则该步
     # unsupported
     allowed_evidence: list[EvidencePointer] | None = None
@@ -94,6 +96,9 @@ class ValidationContext(Model):
     # (错报没有科目代码时为全部). 其余输出不用, 为空; FIN-09 缺任一项时 call_llm 在调用大模型之前抛 ValueError
     expected_residual_cents: int | None = None
     entry_account_codes: list[str] | None = None
+    # PLN-07 第 3 步 (AnalyticsScreeningDraft, 需求 R371): 第 2 步规则命中的科目代码, 每个须恰好一条 decision. 其余输出
+    # 不用, 为空; 直接校验 screen 输出而没给时 check_analytics_screening 抛 ValueError
+    analytics_hits: list[str] | None = None
     # 判断与 GEN-09 第一轮引用的准则片段须在该程序 YAML 的 standards 内 (GEN-09 为被复核的程序, 需求 R301), 否则该指针
     # 同未登记的片段一样解析不了 (所在步骤 unsupported); 为 None 不核对 (抽取, 分类, 报告与 GEN-09 第二轮等不按引用级
     # 解析准则片段的输出). 必填, 不给缺省值: 新调用方漏传时类型检查即报, 不会静默不核对

@@ -71,6 +71,7 @@ LISTED_FIELDS = {
     "direction",
     "type",
     "fraud_indicative",
+    "correction",  # 更正分录建议 (需求 R367): 随沟通材料给管理层, 作为建议调整分录
 }
 # 随材料给审计师的更正请求 (ASA 450 第 8, 9 段), 照此与管理层沟通; 按本次执行的生成语言取 (需求 R357)
 CORRECTION_REQUEST: dict[WorkingLanguage, str] = {

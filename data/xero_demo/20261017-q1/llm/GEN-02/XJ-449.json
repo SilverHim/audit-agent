@@ -214,5 +214,6 @@
   "counter_argument": "A service record for ORC1005, or evidence that CR1005 was issued for a different Bank West invoice, would show revenue is understated.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.8
 }

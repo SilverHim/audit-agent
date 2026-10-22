@@ -3,12 +3,14 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 import { reviewsGetProcedureOptions, reviewsListReviewTasksOptions } from '@/client/@tanstack/react-query.gen'
 import type { RuleOutcome } from '@/client/types.gen'
-import { Code, PageHeader, StatusPill } from '@/components/chrome'
+import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList, standardLabel } from '@/components/evidence-link'
+import { RejudgeNotice } from '@/components/evidence-requests'
 import { ProcedureIntroView } from '@/components/procedure-intro'
 import { QueryState } from '@/components/query-state'
 import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
+import { VerdictBanner } from '@/components/verdict'
 import { GeneratedLanguage } from '@/components/working-language'
 import { useI18n } from '@/lib/i18n'
 import { procedureName } from '@/lib/review'
@@ -128,10 +130,13 @@ function ProcedurePage() {
                   data.judgments.map((judgment) => {
                     const task = tasks.data?.find((item) => item.task.target_id === judgment.id)
                     return (
-                      <div key={judgment.id} className="flex flex-col gap-1.5 rounded-[10px] border p-3.5 text-[14px]">
+                      <div key={judgment.id} className="flex flex-col gap-2 rounded-[10px] border p-3.5 text-[14px]">
+                        {/* 程序详情也把定论放最上面 (需求 R368): 大字号分颜色, 是错报的带金额与方向 */}
+                        <VerdictBanner judgment={judgment} />
+                        {/* 由补充证据请求重判的判断给出重判来源 (需求 R370) */}
+                        <RejudgeNotice eid={eid} judgmentId={judgment.id} />
                         <span className="flex flex-wrap items-center gap-2">
                           <Code className="font-semibold">{judgment.subject_id}</Code>
-                          <span>{t.proposed[judgment.proposed_action]}</span>
                           <Code className="text-muted-foreground">{judgment.confidence.toFixed(2)}</Code>
                           {superseded.has(judgment.run_id) ? (
                             <StatusPill tone="neutral">{t.rerun.history}</StatusPill>
@@ -148,9 +153,13 @@ function ProcedurePage() {
                             </Link>
                           ) : null}
                         </span>
-                        <p className="m-0" lang={contentLanguage(overview, judgment.run_id)}>
-                          {judgment.conclusion}
-                        </p>
+                        <div className="flex flex-col gap-1">
+                          {/* 叙述文字是定论的理由 (需求 R368) */}
+                          <SectionLabel>{t.judgment.reason}</SectionLabel>
+                          <p className="m-0" lang={contentLanguage(overview, judgment.run_id)}>
+                            {judgment.conclusion}
+                          </p>
+                        </div>
                         <PointerList eid={eid} pointers={judgment.evidence} />
                       </div>
                     )

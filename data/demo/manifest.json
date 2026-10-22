@@ -57,7 +57,7 @@
     },
     {
       "path": "llm/CSH-02/BA-01.json",
-      "sha256": "0e190f02b98105f9bb73aba65276f1183199d08e05265c8f579bca273ef96658"
+      "sha256": "44fd095159a7ef23fd59807b00e66de31e7aaea281620772dd9a0f18be3c1078"
     },
     {
       "path": "llm/DOC-04/CON-001.json",
@@ -189,23 +189,23 @@
     },
     {
       "path": "llm/REV-02/SI-2026-0612.json",
-      "sha256": "0bf36fb2a0446484be725e6de86ae9490893f992b9b3a8a44f5887dcdffbe01d"
+      "sha256": "e1192e26422854779add631fbfc64f13bfd273fa709ae5c0b25607bd6a3329e5"
     },
     {
       "path": "llm/REV-02/SI-2026-0618.json",
-      "sha256": "779b832cdbcef0bc3907bccc6225b6edf7c1d7637cf2cc2e19b1919279c6ade0"
+      "sha256": "e4aafc55f8b71b99e031d8c686ae840a067dd3c773f88f8bc3c432d0cfdd89c8"
     },
     {
       "path": "llm/REV-03/CON-001.json",
-      "sha256": "1e2efa4838e20c15b3fef5d7d40ef4eb494ff79c172a025126449a96029f326b"
+      "sha256": "cae8174730dd44b9f5dbf814d3c6a788a46a3f0887b173f90c4b319ca9a6b6a1"
     },
     {
       "path": "llm/REV-03/CON-002.json",
-      "sha256": "7eb586e6b00b1d066ee16a5cd0c6d25e0d774bbdba7527c06fd70a800ccd33c4"
+      "sha256": "e03778fbbbea50a61ff8c0a982df7568eba15dc959b5fc4719bc98fd50806244"
     },
     {
       "path": "llm/REV-03/CON-003.json",
-      "sha256": "c0062c68aba9058b7809877944eb2f9a4badf66b5da87cd78d07d6ee8a3f6191"
+      "sha256": "c43ebc87051822397b7c15964c558c33bdbe3ac57829c47e7340450e4e3ee155"
     },
     {
       "path": "llm/RPT-03/qualified-r1.json",
