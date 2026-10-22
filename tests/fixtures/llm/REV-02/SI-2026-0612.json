@@ -156,7 +156,23 @@
     "account": "Revenue",
     "assertion": "Cutoff",
     "amount_cents": 14200000,
-    "direction": "overstated"
+    "direction": "overstated",
+    "correction": [
+      {
+        "account_code": "4100",
+        "account_name": "Sales revenue",
+        "debit_cents": 14200000,
+        "credit_cents": 0,
+        "description": "Reverse revenue recognised in the wrong period."
+      },
+      {
+        "account_code": "1100",
+        "account_name": "Trade receivables",
+        "debit_cents": 0,
+        "credit_cents": 14200000,
+        "description": "Reverse the receivable for the invoice."
+      }
+    ]
   },
   "verdict": "misstatement",
   "self_confidence": 0.9

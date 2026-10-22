@@ -885,6 +885,7 @@ R19_FIELDS = {  # R19 的错报字段 (另有 status, 原固定为 uncorrected)
 }
 LIFECYCLE_DEFAULTS = {  # 本条新加的字段与缺省 (验收 1)
     "account_code": None,
+    "correction": [],  # 更正分录建议 (需求 R367)
     "status": MisstatementStatus.identified,
     "objective_id": None,
     "fraud_indicative": None,

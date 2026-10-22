@@ -374,6 +374,22 @@ def accrued_draft(amount: int) -> str:
             "assertion": "Completeness",
             "amount_cents": amount,
             "direction": "understated",
+            "correction": [
+                {
+                    "account_code": "1300",
+                    "account_name": "Prepayments",
+                    "debit_cents": amount,
+                    "credit_cents": 0,
+                    "description": "Recognise the interest receivable accrued to period end.",
+                },
+                {
+                    "account_code": "4200",
+                    "account_name": "Interest income",
+                    "debit_cents": 0,
+                    "credit_cents": amount,
+                    "description": "Recognise the interest income accrued to period end.",
+                },
+            ],
         },
         "self_confidence": 0.8,
     }

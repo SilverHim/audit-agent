@@ -1651,6 +1651,36 @@ export type ConversationTurn = {
 };
 
 /**
+ * CorrectionEntry
+ *
+ * AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.
+ *
+ * 一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0.
+ */
+export type CorrectionEntry = {
+    /**
+     * Account Code
+     */
+    account_code: string;
+    /**
+     * Account Name
+     */
+    account_name: string;
+    /**
+     * Debit Cents
+     */
+    debit_cents?: number;
+    /**
+     * Credit Cents
+     */
+    credit_cents?: number;
+    /**
+     * Description
+     */
+    description: string;
+};
+
+/**
  * CorrectionNotice
  *
  * 更正通知 (需求 R162): 停在等待更正 (await_correction) 时审计师告诉系统管理层的更正结果, 是 DecisionSubmit 收的
@@ -3696,6 +3726,10 @@ export type Misstatement = {
      * Account Code
      */
     account_code?: string | null;
+    /**
+     * Correction
+     */
+    correction?: Array<CorrectionEntry>;
     status?: MisstatementStatus;
     /**
      * Objective Id
@@ -3784,6 +3818,10 @@ export type MisstatementDraft = {
      * Account Code
      */
     account_code?: string | null;
+    /**
+     * Correction
+     */
+    correction?: Array<CorrectionEntry>;
 };
 
 /**

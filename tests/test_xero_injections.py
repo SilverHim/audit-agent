@@ -24,6 +24,7 @@ from backend.contracts.models import (
     AuditException,
     Confirmation,
     ConfirmationResult,
+    CorrectionEntry,
     CriticVerdict,
     Direction,
     EvidencePointer,
@@ -190,7 +191,25 @@ def same_judgments(left: EngagementState, right: EngagementState, ids: set[str],
 
 T1_ORC1026 = f"J-REV-02-1-{ORC1026}"
 T1_DRAFT = MisstatementDraft(
-    type="factual", account="Sales (200)", assertion="Cutoff", amount_cents=650000, direction="overstated"
+    type="factual",
+    account="Sales (200)",
+    assertion="Cutoff",
+    amount_cents=650000,
+    direction="overstated",
+    correction=[  # 需求 R367: 借 200 Sales, 贷 610 应收
+        CorrectionEntry(
+            account_code="200",
+            account_name="Sales",
+            debit_cents=650000,
+            description="Reverse revenue recognised before control passed.",
+        ),
+        CorrectionEntry(
+            account_code="610",
+            account_name="Accounts Receivable",
+            credit_cents=650000,
+            description="Reverse the receivable for the invoice.",
+        ),
+    ],
 )
 
 
@@ -275,6 +294,20 @@ T2_DRAFT = MisstatementDraft(
     amount_cents=50000,
     direction="overstated",
     account_code="200",
+    correction=[  # 需求 R367: 借 200 Sales, 贷 610 应收
+        CorrectionEntry(
+            account_code="200",
+            account_name="Sales",
+            debit_cents=50000,
+            description="Reverse revenue recognised with no supporting service record.",
+        ),
+        CorrectionEntry(
+            account_code="610",
+            account_name="Accounts Receivable",
+            credit_cents=50000,
+            description="Reverse the receivable for the invoice.",
+        ),
+    ],
 )
 T2_VOUCHERS = ["XJ-397", "XJ-405", "XJ-449", "XJ-499", "XJ-575", "XJ-601"]  # T2 上 GEN-02 的判断对象 (T0 另有 XJ-430)
 T2_UNAFFECTED = {f"J-GEN-02-1-{no}" for no in ("XJ-397", "XJ-449", "XJ-499", "XJ-575", "XJ-601")}

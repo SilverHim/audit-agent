@@ -8476,6 +8476,41 @@
         "title": "ConversationTurn",
         "description": "历史中的一轮问答, 取自 conversation 留痕."
       },
+      "CorrectionEntry": {
+        "properties": {
+          "account_code": {
+            "type": "string",
+            "title": "Account Code"
+          },
+          "account_name": {
+            "type": "string",
+            "title": "Account Name"
+          },
+          "debit_cents": {
+            "type": "integer",
+            "title": "Debit Cents",
+            "default": 0
+          },
+          "credit_cents": {
+            "type": "integer",
+            "title": "Credit Cents",
+            "default": 0
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_code",
+          "account_name",
+          "description"
+        ],
+        "title": "CorrectionEntry",
+        "description": "AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.\n\n一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0."
+      },
       "CorrectionNotice": {
         "properties": {
           "id": {
@@ -12281,6 +12316,14 @@
             ],
             "title": "Account Code"
           },
+          "correction": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionEntry"
+            },
+            "type": "array",
+            "title": "Correction",
+            "default": []
+          },
           "status": {
             "$ref": "#/components/schemas/MisstatementStatus",
             "default": "identified"
@@ -12502,6 +12545,14 @@
               }
             ],
             "title": "Account Code"
+          },
+          "correction": {
+            "items": {
+              "$ref": "#/components/schemas/CorrectionEntry"
+            },
+            "type": "array",
+            "title": "Correction",
+            "default": []
           }
         },
         "additionalProperties": false,

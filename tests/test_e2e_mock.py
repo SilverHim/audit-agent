@@ -69,7 +69,7 @@ from backend.services.procedure_library import ProcedureLibrary
 from tests.fakes import (
     ENGAGEMENT,
     NUMBAT_CANDIDATES,
-    NUMBAT_CUTOFF_DRAFT,
+    NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
     NUMBAT_FEATURES,
     NUMBAT_PROFILE,
     NUMBAT_RECORDS,
@@ -249,7 +249,10 @@ async def assert_results(s: Started, eid: str = EID, approver: str = "U-1") -> N
     }
     by_id = {j.id: j for j in judgments}
     cutoff = by_id["J-REV-02-1-SI-2026-0612"]
-    assert (cutoff.proposed_action, cutoff.misstatement_draft) == (ProposedAction.misstatement, NUMBAT_CUTOFF_DRAFT)
+    assert (cutoff.proposed_action, cutoff.misstatement_draft) == (
+        ProposedAction.misstatement,
+        NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION,
+    )
     assert cutoff.exception_ids == ["X-REV-08-1-R01-1"]
     cash = by_id["J-CSH-02-1-BA-01"]
     assert (cash.proposed_action, cash.exception_ids) == (

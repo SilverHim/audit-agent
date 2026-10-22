@@ -377,7 +377,7 @@
     },
     {
       "path": "llm/CSH-02/BA-091.json",
-      "sha256": "158a9cae6073c05d90d4aab5219e5880994f65fff85f4f4b1448a3f844cfbbbe",
+      "sha256": "1a44148dfffa30ac1f77b144cf21e1c23090c5ed3d467d477aef053be823683f",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []
@@ -769,7 +769,7 @@
     },
     {
       "path": "llm/GEN-02/XJ-499.json",
-      "sha256": "c87805ad38b44a0900f375124189ebeecbd9353df0d38bb9815ff0e00d8a4b2b",
+      "sha256": "c066d2929ba85797e10a65b8ae529a847c02b15a3312ed0288eb71ffb53f9969",
       "synthetic": true,
       "generator": "data/generate_xero_demo.py",
       "xero_refs": []

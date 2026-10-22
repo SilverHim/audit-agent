@@ -53,6 +53,7 @@ from backend.contracts.models import (
     PlanStatus,
     ProcedureRun,
     ProposedAction,
+    ReviewTask,
     RunStatus,
     RunTrigger,
     TrailEntry,
@@ -824,3 +825,29 @@ async def test_judgments_carry_a_verdict(walked: Walk) -> None:
     [xj499] = [j for j in judgments if j.subject_id == "XJ-499"]
     assert xj499.verdict is Verdict.misstatement
     assert xj499.misstatement_draft is not None
+
+
+# ── 更正分录 (需求 R367) ──
+
+
+@shared_loop
+async def test_misstatements_carry_the_suggested_correction(walked: Walk) -> None:
+    """需求 R367 验收 5, 6: XJ-499 的判断附更正分录 (借 711 825.00, 贷 710 750.00, 贷 820 75.00); 认定的错报带上
+    更正分录; FIN-08 的沟通材料列出建议调整分录 (供管理层入账, 客户更正后由 FIN-09 核实)."""
+    deps, eid = walked.x.runner.deps, walked.x.eid
+    judgments = await deps.output_store.latest(eid, Judgment)
+    [xj499] = [j for j in judgments if j.subject_id == "XJ-499" and j.procedure_id == "GEN-02"]
+    assert xj499.misstatement_draft is not None
+    correction = xj499.misstatement_draft.correction
+    assert [(e.account_code, e.debit_cents, e.credit_cents) for e in correction] == [
+        ("711", 82500, 0),
+        ("710", 0, 75000),
+        ("820", 0, 7500),
+    ]
+    misstatements = await deps.output_store.latest(eid, Misstatement)
+    assert misstatements and all(m.correction for m in misstatements)
+    [xj499_mis] = [m for m in misstatements if m.judgment_id == xj499.id]
+    assert xj499_mis.correction == correction
+    [fin08] = await deps.output_store.latest(eid, ReviewTask, procedure_id="FIN-08")
+    listed = {row["id"]: row for row in fin08.manual_request.material["misstatements"]}
+    assert [entry["account_code"] for entry in listed[xj499_mis.id]["correction"]] == ["711", "710", "820"]

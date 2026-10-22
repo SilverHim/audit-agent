@@ -91,6 +91,7 @@ from backend.contracts.models import (
     Confirmation,
     ConfirmationResult,
     Contract,
+    CorrectionEntry,
     CurrencySource,
     Decision,
     DeclarationForm,
@@ -595,6 +596,35 @@ NUMBAT_ACCOUNTS = [  # 销售分录行的两个科目 (第 3 节, data/demo/acco
     Account(code="1100", name="Trade receivables", type="asset", category="receivables", category_basis="name"),
     Account(code="4100", name="Sales revenue", type="revenue", category="revenue", category_basis="name"),
 ]
+# data/demo/accounts.csv 的全部科目: 假财务存储的缺省科目表 (判断的更正分录要能查到科目, 需求 R367)
+NUMBAT_CHART = [
+    Account(code=code, name=name, type=type_)
+    for code, name, type_ in [
+        ("1010", "Cash at bank - Operating", "asset"),
+        ("1020", "Cash at bank - Savings", "asset"),
+        ("1100", "Trade receivables", "asset"),
+        ("1150", "Allowance for expected credit losses", "asset"),
+        ("1200", "Inventory", "asset"),
+        ("1300", "Prepayments", "asset"),
+        ("1500", "Plant and equipment - cost", "asset"),
+        ("1510", "Plant and equipment - accumulated depreciation", "asset"),
+        ("2100", "Trade payables", "liability"),
+        ("2200", "Accrued expenses", "liability"),
+        ("2300", "Employee provisions", "liability"),
+        ("2400", "Income tax payable", "liability"),
+        ("3100", "Share capital", "equity"),
+        ("3200", "Retained earnings", "equity"),
+        ("4100", "Sales revenue", "revenue"),
+        ("4200", "Interest income", "revenue"),
+        ("5100", "Cost of goods sold", "expense"),
+        ("6100", "Salaries and wages", "expense"),
+        ("6200", "Rent", "expense"),
+        ("6300", "Freight outwards", "expense"),
+        ("6400", "Depreciation", "expense"),
+        ("6500", "Other operating expenses", "expense"),
+        ("8100", "Income tax expense", "expense"),
+    ]
+]
 NUMBAT_TRIAL_BALANCE = [  # 本期试算表中两个银行账户的总账科目 (合成数据集设计第 3.1 节); 其余科目用到时再补
     TrialBalanceRow(period="current", account_code="1010", balance_cents=125840000),
     TrialBalanceRow(period="current", account_code="1020", balance_cents=40000000),
@@ -851,7 +881,7 @@ class FakeFinancialStore:
     ) -> None:
         self.document_refs = list(documents or [])  # 已登记的证据文件, 各项目共用
         self.employee_rows = list(employees or [])  # 工资册 (可预置; FakeDataStore.write_tables 写入时替换), 各项目共用
-        self.account_rows = list(accounts or [])  # 科目表, 各项目共用
+        self.account_rows = list(NUMBAT_CHART if accounts is None else accounts)  # 科目表, 各项目共用
         self.trial_balance_rows = list(trial_balance or [])  # 试算表的行, 两期混在一起, 各项目共用
         self.records = dict(records or {})  # 明细行, (行类型, 行 ID) -> 行, 各项目共用
         self.record_calls: list[tuple[str, str]] = []  # record 的每次调用 (行类型, 行 ID)
@@ -3904,6 +3934,20 @@ def numbat_cash_agents(deps: AgentDeps) -> dict[str, ProcedureAgent[Any]]:
     return {"DOC-06": ScriptA3(deps, doc06), "CSH-02": ScriptA6(deps, csh02)}
 
 
+NUMBAT_CUTOFF_CORRECTION = [  # 更正分录建议 (需求 R367): 借收入 4100, 贷应收 1100
+    CorrectionEntry(
+        account_code="4100",
+        account_name="Sales revenue",
+        debit_cents=14200000,
+        description="Reverse revenue recognised in the wrong period.",
+    ),
+    CorrectionEntry(
+        account_code="1100",
+        account_name="Trade receivables",
+        credit_cents=14200000,
+        description="Reverse the receivable for the invoice.",
+    ),
+]
 NUMBAT_CUTOFF_DRAFT = MisstatementDraft(  # 合成数据集设计第 7 节第 9 行: SI-2026-0612 收入高估
     type=MisstatementType.factual,
     account="Revenue",
@@ -4522,3 +4566,7 @@ class LayeredMockLLM:
     async def complete(self, req: LLMRequest, output_model: type[T_out]) -> LLMResponse[T_out]:
         found = self.locate(req)  # 选中的根里 {fixture_key}.json 要么就是它, 要么不存在, MockLLMClient 读的即它
         return await (found[0] if found is not None else self.clients[0]).complete(req, output_model)
+
+
+# 带更正分录的同一份错报草稿 (需求 R367): 固定输出与判断引擎产出的草稿都带它
+NUMBAT_CUTOFF_DRAFT_WITH_CORRECTION = NUMBAT_CUTOFF_DRAFT.model_copy(update={"correction": NUMBAT_CUTOFF_CORRECTION})

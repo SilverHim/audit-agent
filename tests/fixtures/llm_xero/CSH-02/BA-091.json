@@ -169,7 +169,23 @@
     "account": "Interest income",
     "assertion": "Completeness",
     "amount_cents": 4853,
-    "direction": "understated"
+    "direction": "understated",
+    "correction": [
+      {
+        "account_code": "620",
+        "account_name": "Prepayments",
+        "debit_cents": 4853,
+        "credit_cents": 0,
+        "description": "Recognise the interest receivable accrued to 30 September 2026."
+      },
+      {
+        "account_code": "270",
+        "account_name": "Interest Income",
+        "debit_cents": 0,
+        "credit_cents": 4853,
+        "description": "Recognise the interest income accrued to 30 September 2026."
+      }
+    ]
   },
   "verdict": "misstatement",
   "self_confidence": 0.85

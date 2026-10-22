@@ -42,6 +42,7 @@ from backend.contracts.models import (
     AuditException,
     AutonomyLevel,
     ConfirmationResult,
+    CorrectionEntry,
     CriticReasonCode,
     CriticVerdict,
     DocumentType,
@@ -759,7 +760,25 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
         ["X-CSH-02-1-D04-1"],
     )
     assert j.misstatement_draft == MisstatementDraft(
-        type="factual", account="Interest income", assertion="Completeness", amount_cents=4853, direction="understated"
+        type="factual",
+        account="Interest income",
+        assertion="Completeness",
+        amount_cents=4853,
+        direction="understated",
+        correction=[  # 需求 R367: 借 620 Prepayments, 贷 270 Interest Income
+            CorrectionEntry(
+                account_code="620",
+                account_name="Prepayments",
+                debit_cents=4853,
+                description="Recognise the interest receivable accrued to 30 September 2026.",
+            ),
+            CorrectionEntry(
+                account_code="270",
+                account_name="Interest Income",
+                credit_cents=4853,
+                description="Recognise the interest income accrued to 30 September 2026.",
+            ),
+        ],
     )
     unaccrued = sentence_with(j.conclusion, "48.53 earned")
     assert all(text in unaccrued for text in ("30 September 2026", "not yet credited")), unaccrued

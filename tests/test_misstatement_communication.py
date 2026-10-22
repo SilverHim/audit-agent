@@ -127,6 +127,7 @@ def listed(m: Misstatement, source: Judgment) -> dict[str, Any]:
         "direction": m.direction.value,
         "type": m.type.value,
         "fraud_indicative": m.fraud_indicative,
+        "correction": [entry.model_dump(mode="json") for entry in m.correction],
         "source_conclusion": source.conclusion,
         "source_run_id": source.run_id,
     }

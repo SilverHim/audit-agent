@@ -93,6 +93,7 @@ from backend.orchestration.runner import (
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions, rewinds
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
+from backend.services.correction_entries import correction_problems
 from backend.services.data_quality import OnHand
 from backend.services.features import COLLAB, MISSTATEMENT
 from backend.services.judgment_engine import document_pointer
@@ -281,14 +282,26 @@ def check_dispute_draft(record: ReviewRecord, target: Judgment) -> None:
 
 
 async def check_account_code(financial: FinancialDataStore, eid: str, record: ReviewRecord) -> None:
-    """决定所附错报草稿的科目代码 (需求 R156): 非空时须在本项目科目表中 (FinancialDataStore.accounts), 否则
-    INVALID_VALUE. misstatement 决定与附草稿的仲裁都查; 没带草稿或代码为空不查. 在 check_review_values 之后,
-    决定 ID 之前 (第 7 节校验表). 例: 科目表没有 999 → INVALID_VALUE "错报草稿的科目代码 999 不在本项目科目表中"."""
+    """决定所附错报草稿的科目与更正分录 (需求 R156, R367): 科目代码非空时须在本项目科目表中
+    (FinancialDataStore.accounts);
+    带了更正分录时另查借贷平衡, 科目都在科目表且名称一致, 错报科目上的净额与方向与错报一致 (services.correction_entries.
+    correction_problems). misstatement 决定与附草稿的仲裁都查; 没带草稿不查; 更正分录为空合法 (人工提交不强制, 由 AI
+    建议在前端带出). 在 check_review_values 之后, 决定 ID 之前 (第 7 节校验表). 例: 科目表没有 999 → INVALID_VALUE
+    "错报草稿的科目代码 999 不在本项目科目表中"."""
     draft = record.misstatement_draft
-    if draft is None or draft.account_code is None:
+    if draft is None:
         return
-    if not await financial.accounts(eid, [draft.account_code]):
-        raise DecisionRejected("INVALID_VALUE", f"错报草稿的科目代码 {draft.account_code} 不在本项目科目表中")
+    codes = {entry.account_code for entry in draft.correction}
+    if draft.account_code is not None:
+        codes.add(draft.account_code)
+    accounts = await financial.accounts(eid, sorted(codes)) if codes else []
+    known = {account.code for account in accounts}
+    missing = [code for code in sorted(codes) if code not in known]
+    if missing:
+        raise DecisionRejected("INVALID_VALUE", f"错报草稿的科目代码 {', '.join(missing)} 不在本项目科目表中")
+    problems = correction_problems(draft, accounts)
+    if problems:
+        raise DecisionRejected("INVALID_VALUE", "; ".join(problems))
 
 
 def check_update_payload(

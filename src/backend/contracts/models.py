@@ -630,6 +630,29 @@ class ReasoningStep(Model):
     status: StepStatus = StepStatus.supported  # 有无证据支撑
 
 
+class CorrectionEntry(Model):
+    """AI 建议的更正分录一行 (需求 R367, Issue #66): 科目 (代码与名称), 借方或贷方金额, 摘要与说明.
+
+    一行只记一方: debit_cents 或 credit_cents 有一个为正, 另一个为 0."""
+
+    account_code: str  # 科目代码
+    account_name: str  # 科目名称
+    debit_cents: int = 0  # 借方金额, 单位分
+    credit_cents: int = 0  # 贷方金额, 单位分
+    description: str  # 摘要与说明
+
+    @model_validator(mode="after")
+    def one_side(self) -> Self:
+        """一行只能记借方或贷方的一方, 金额为正, 另一方为 0."""
+        if self.debit_cents < 0 or self.credit_cents < 0:
+            raise ValueError("更正分录的金额不能为负")
+        if bool(self.debit_cents) == bool(self.credit_cents):
+            raise ValueError("更正分录的一行只能记借方或贷方, 且金额须大于 0")
+        if not self.account_code.strip() or not self.account_name.strip() or not self.description.strip():
+            raise ValueError("更正分录的科目代码, 科目名称与摘要不能为空")
+        return self
+
+
 class MisstatementDraft(Model):
     """判断建议认定错报时附带的错报草稿."""
 
@@ -640,6 +663,9 @@ class MisstatementDraft(Model):
     direction: Direction  # 高估或低估
     # 科目代码 (需求 R156): AI 草稿能从上下文得到时填, 审计师提交认定时可填或改; 非空时须在本项目科目表中
     account_code: str | None = None
+    # 更正分录建议 (需求 R367, Issue #66): AI 判为错报时给出, 借贷平衡, 科目在科目表, 与错报科目金额方向一致;
+    # 审计师认定时可改; 随错报进 FIN-08 的建议调整分录 (旧数据为空)
+    correction: list[CorrectionEntry] = []
 
     @field_validator("account_code")
     @classmethod
@@ -1691,6 +1717,8 @@ class Misstatement(Versioned):
     amount_cents: int  # 金额, 单位分
     direction: Direction  # 高估或低估
     account_code: str | None = None  # 科目代码, 由认定时的草稿带入
+    # 更正分录建议 (需求 R367): 认定时由错报草稿带入, 随 FIN-08 的沟通材料给管理层; 旧数据与人工未填时为空
+    correction: list[CorrectionEntry] = []
     status: MisstatementStatus = MisstatementStatus.identified  # 生命周期状态
     # 分类 (A8, FIN-03): 所属审计目标, 舞弊迹象与理由, 本期或上期未更正结转, 作分类的判断
     objective_id: str | None = None

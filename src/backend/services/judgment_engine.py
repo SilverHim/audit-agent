@@ -74,6 +74,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
+from backend.services.correction_entries import correction_problems
 from backend.services.currency import default_currency, format_money
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
@@ -720,9 +721,21 @@ class OutputValidator:
         ):
             errors.append(f"错报金额 {md.amount_cents} 不等于引用行的金额, 两条引用行之差或归因例外的金额")
             return draft, "reference", unsupported, errors
-        if md is not None and md.account_code is not None and not await self.financial.accounts(eid, [md.account_code]):
-            errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
-            return draft, "reference", unsupported, errors
+        if md is not None:
+            codes = sorted({e.account_code for e in md.correction} | ({md.account_code} if md.account_code else set()))
+            accounts = await self.financial.accounts(eid, codes) if codes else []
+            known = {account.code for account in accounts}
+            missing = [code for code in codes if code not in known]
+            if md.account_code is not None and md.account_code in missing:
+                errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
+            others = [code for code in missing if code != md.account_code]
+            if others:
+                errors.append(f"更正分录的科目代码 {', '.join(others)} 不在本项目科目表中")  # 需求 R367
+            if missing:
+                return draft, "reference", unsupported, errors
+            correction = correction_problems(md, accounts, required=True)
+            if correction:
+                return draft, "semantic", unsupported, errors + correction
         semantic = judgment_semantics(draft)
         if semantic:
             return draft, "semantic", unsupported, errors + semantic

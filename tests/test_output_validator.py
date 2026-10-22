@@ -30,6 +30,7 @@ from backend.contracts.llm_outputs import (
 from backend.contracts.models import (
     AuditException,
     Confirmation,
+    CorrectionEntry,
     Decision,
     DocumentRef,
     DocumentType,
@@ -83,6 +84,7 @@ from backend.services.review_queue import ReviewQueue
 from tests.fakes import (
     ENGAGEMENT,
     NOW,
+    NUMBAT_ACCOUNTS,
     NUMBAT_CONTRACTS,
     NUMBAT_CUTOFF_DRAFT,
     NUMBAT_RECORDS,
@@ -106,7 +108,7 @@ FIXTURES = get_settings().LLM_FIXTURES_ROOT
 def make_validator(
     trail: FakeTrail | None = None, documents: list[DocumentRef] | None = None
 ) -> tuple[OutputValidator, FakeFinancialStore]:
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS) + (documents or []), NUMBAT_RECORDS)
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS) + (documents or []), NUMBAT_RECORDS, accounts=NUMBAT_ACCOUNTS)
     return OutputValidator(financial, LIBRARY, trail or FakeTrail()), financial
 
 
@@ -157,6 +159,24 @@ VERDICT_OF = {
 }
 
 
+def numbats_correction(amount: int) -> list[CorrectionEntry]:
+    """Numbat 的收入截止错报的更正分录: 借收入 4100, 贷应收 1100, 金额同错报."""
+    return [
+        CorrectionEntry(
+            account_code="4100",
+            account_name="Sales revenue",
+            debit_cents=amount,
+            description="Reverse revenue recognised in the wrong period.",
+        ),
+        CorrectionEntry(
+            account_code="1100",
+            account_name="Trade receivables",
+            credit_cents=amount,
+            description="Reverse the receivable for the invoice.",
+        ),
+    ]
+
+
 def cutoff_draft(**changes: Any) -> JudgmentDraft:
     """REV-02 对 SI-2026-0612 的草稿 (合成数据集设计第 7 节第 9 行): 控制权 2026-07-03 转移, 收入高估;
     定论随建议动作."""
@@ -177,7 +197,12 @@ def cutoff_draft(**changes: Any) -> JudgmentDraft:
         misstatement_draft=NUMBAT_CUTOFF_DRAFT,
         self_confidence=0.9,
     )
-    return draft.model_copy(update=changes)
+    draft = draft.model_copy(update=changes)
+    md = draft.misstatement_draft
+    if md is not None and md.account_code in (None, "4100"):  # 改错报金额时, 默认的 Numbat 更正分录金额随之
+        correction = numbats_correction(abs(md.amount_cents))
+        draft = draft.model_copy(update={"misstatement_draft": md.model_copy(update={"correction": correction})})
+    return draft
 
 
 def with_step[M: JudgmentDraft | GoingConcernAdvice](draft: M, index: int, **changes: Any) -> M:
@@ -392,7 +417,10 @@ async def test_pointer_type_and_reliability_come_from_source() -> None:
     assert [(p.type, p.reliability) for p in report.output.evidence] == expected
     # 其余字段不动
     assert [p.source_id for p in report.output.evidence] == ["SI-2026-0612", "DN-2026-0612", CON001.id, "AASB15-P38"]
-    assert report.output.evidence[2].page == 2 and report.output.misstatement_draft == NUMBAT_CUTOFF_DRAFT
+    assert report.output.evidence[2].page == 2
+    assert report.output.misstatement_draft is not None
+    # 草稿的更正分录由 cutoff_draft 另加 (需求 R367), 与共享常量的错报字段相同
+    assert report.output.misstatement_draft.model_copy(update={"correction": []}) == NUMBAT_CUTOFF_DRAFT
 
 
 @pytest.mark.parametrize(
@@ -759,7 +787,7 @@ async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_lin
     不引用不计 (不放宽校验). 不过时回传重试, 同一输出共调 MAX_ATTEMPTS 次 (需求 R348)."""
     records = dict(NUMBAT_RECORDS) | {("sales_invoice", SI_T.id): SI_T.model_dump()}
     records |= {("journal_entry", x.id): x.model_dump() for x in XJ_T}
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), records)
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), records, accounts=NUMBAT_ACCOUNTS)
     trail = FakeTrail()
     invoice = INVOICE.model_copy(update={"source_id": SI_T.id})
     line = EvidencePointer(
@@ -837,9 +865,29 @@ SALES = Account(code="200", name="Sales", type="revenue", category="revenue", ca
 async def test_misstatement_account_code_must_be_in_the_chart(code: str | None, passes: bool) -> None:
     """R156 验收 9: REV-02 草稿带科目表有的 account_code 200 通过; 9999 → 引用级失败 (可重试, 需求 R348); 不带代码
     不查 (现有 fixture 照旧). GEN-02 XJ-499 的 Xero fixture (710) 经真实科目表通过见 test_fieldwork_gen02."""
-    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=[SALES])
+    financial = FakeFinancialStore(list(NUMBAT_CONTRACTS), NUMBAT_RECORDS, accounts=[SALES, *NUMBAT_ACCOUNTS])
     validator = OutputValidator(financial, LIBRARY, FakeTrail())
-    draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": code}))
+    md = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": code})
+    if code == "200":  # 更正分录的错报科目随代码, 借 200 Sales, 贷 1100 应收
+        md = md.model_copy(
+            update={
+                "correction": [
+                    CorrectionEntry(
+                        account_code="200",
+                        account_name="Sales",
+                        debit_cents=14200000,
+                        description="Reverse revenue recognised in the wrong period.",
+                    ),
+                    CorrectionEntry(
+                        account_code="1100",
+                        account_name="Trade receivables",
+                        credit_cents=14200000,
+                        description="Reverse the receivable for the invoice.",
+                    ),
+                ]
+            }
+        )
+    draft = cutoff_draft(misstatement_draft=md)
     report = await validator.validate(EID, REV02, respond(draft), ValidationContext(standards_of=None))
     if passes:
         assert report.level_failed is None and report.output.misstatement_draft.account_code == code
@@ -2068,3 +2116,61 @@ async def test_conclusion_amount_must_match_the_misstatement_draft() -> None:
     report = await check(cutoff_draft(conclusion="SI-2026-0612 本期收入高估 AUD 14,200.00, 属下期."))
     assert report.level_failed == "semantic"
     assert any("AUD 142,000.00" in error for error in report.errors)
+
+
+# ── 更正分录 (需求 R367) ──
+
+
+def with_correction(*entries: CorrectionEntry) -> JudgmentDraft:
+    """草稿换成给定的更正分录 (绕过 cutoff_draft 的重建, 用来构造不合格的更正)."""
+    md = NUMBAT_CUTOFF_DRAFT.model_copy(update={"account_code": "4100", "correction": list(entries)})
+    return cutoff_draft().model_copy(update={"misstatement_draft": md})
+
+
+def entry(code: str, name: str, debit: int = 0, credit: int = 0) -> CorrectionEntry:
+    return CorrectionEntry(
+        account_code=code,
+        account_name=name,
+        debit_cents=debit,
+        credit_cents=credit,
+        description="Adjust the misstatement.",
+    )
+
+
+async def test_correction_must_balance() -> None:
+    """更正分录借贷不平判语义失败 (需求 R367)."""
+    draft = with_correction(
+        entry("4100", "Sales revenue", debit=14200000), entry("1100", "Trade receivables", credit=100)
+    )
+    report = await check(draft)
+    assert report.level_failed == "semantic" and report.retryable
+    assert any("借贷不平" in error for error in report.errors)
+
+
+async def test_correction_accounts_must_be_in_the_chart() -> None:
+    """更正分录的科目不在科目表判引用级失败."""
+    draft = with_correction(
+        entry("9999", "No such account", debit=14200000), entry("1100", "Trade receivables", credit=14200000)
+    )
+    report = await check(draft)
+    assert report.level_failed == "reference"
+    assert any("9999" in error for error in report.errors)
+
+
+async def test_correction_net_amount_and_direction_must_match_the_misstatement() -> None:
+    """错报科目上的净额须等于错报金额, 方向须与错报相反 (需求 R367)."""
+    short = with_correction(entry("4100", "Sales revenue", debit=100), entry("1100", "Trade receivables", credit=100))
+    assert any("净额" in error for error in (await check(short)).errors)
+    wrong_way = with_correction(
+        entry("4100", "Sales revenue", credit=14200000), entry("1100", "Trade receivables", debit=14200000)
+    )
+    report = await check(wrong_way)
+    assert report.level_failed == "semantic" and any("方向与错报方向不符" in error for error in report.errors)
+
+
+async def test_correction_is_required_for_an_ai_misstatement() -> None:
+    """AI 判为错报而没给更正分录判语义失败 (人工提交可不带, 见决定校验)."""
+    draft = cutoff_draft().model_copy(update={"misstatement_draft": NUMBAT_CUTOFF_DRAFT})
+    report = await check(draft)
+    assert report.level_failed == "semantic"
+    assert any("没有更正分录建议" in error for error in report.errors)
