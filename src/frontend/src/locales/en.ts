@@ -229,12 +229,6 @@ export const en = {
     manual_result: 'Give the result yourself',
     dispute_resolution: 'Choose which conclusion stands',
   } as Record<string, string>,
-  proposed: {
-    accept: 'Accept',
-    close: 'Close',
-    misstatement: 'Misstatement',
-    more_evidence: 'More evidence',
-  },
   taskKinds: {
     normal: '',
     unattributed: 'Exception not linked to a subject',
@@ -350,6 +344,12 @@ export const en = {
       misstatements: 'Pick at least one misstatement',
       entries: 'Pick at least one adjustment entry',
     },
+  },
+  // AI 建议的更正分录 (需求 R367, R368): 判断卡片, 复核卡片与错报列表共用; 每行只记借方或贷方一方
+  correctionEntry: {
+    title: 'AI-suggested correcting entry',
+    debit: 'Debit',
+    credit: 'Credit',
   },
   // FIN-08 的登记 (人工任务页, 结果模型 ManagementResponses): 每条错报一行
   fin08: {
@@ -603,16 +603,16 @@ export const en = {
       a7_upheld: "Adopt the independent review's conclusion",
       neither: 'Neither; give your own conclusion',
     } as Record<string, string>,
-    // 判断的复核选项, 按 AI 的结论给 (lib/review 的 reviewChoices, 需求 R364)
+    // 判断的复核选项, 按 AI 的定论给 (lib/review 的 reviewChoices, 需求 R364, R368); 文案用定论的说法
     notMisstatementConclusion: 'On review, this is not a misstatement.',
     choices: {
       agree_misstatement: {
         label: 'Agree, record the misstatement',
-        hint: "The AI's amount, account, direction and assertion are filled in; you can edit them",
+        hint: "The AI's verdict and figures are filled in; you can edit them",
       },
       disagree_not_misstatement: { label: 'Disagree, not a misstatement', hint: 'Give your conclusion' },
       amend_misstatement: { label: 'Record the misstatement with changes', hint: "Change the AI's figures first" },
-      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's conclusion" },
+      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's verdict" },
       disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
       misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
       not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
@@ -621,10 +621,13 @@ export const en = {
   judgment: {
     subject: 'Subject',
     amount: 'Amount',
-    proposed: 'Proposed action',
+    // 定论 (需求 R368): 判断是不是错报, 与建议动作一一对应; 显示在判断卡, 复核卡, 程序详情与列表的最上面
+    verdict: 'Verdict',
+    verdicts: { not_misstatement: 'Not a misstatement', misstatement: 'Misstatement', undetermined: 'Cannot tell yet' },
     confidence: 'Confidence',
     parts: { evidence: 'evidence', rule: 'rule', llm: 'model' } as Record<string, string>,
-    conclusion: 'Conclusion',
+    // AI 的叙述文字: 定论下面是理由 (需求 R368)
+    reason: 'Reason',
     reasoning: (n: number) => `Reasoning · ${n} step${n === 1 ? '' : 's'}`,
     counter: 'Counter-argument',
     fromSteps: (steps: string) => `from steps ${steps}`,
@@ -817,7 +820,7 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      proposed: 'Proposed',
+      verdict: 'Verdict',
       tier: 'Review tier',
       status: 'Status',
     },
@@ -834,7 +837,7 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      proposed: 'Proposed',
+      verdict: 'Verdict',
       confidence: 'Confidence',
       status: 'Status',
     },

@@ -218,12 +218,6 @@ export const zh: Messages = {
     manual_result: '由你直接给出结果',
     dispute_resolution: '决定采用哪个结论',
   },
-  proposed: {
-    accept: '接受',
-    close: '关闭',
-    misstatement: '认定为错报',
-    more_evidence: '补充证据',
-  },
   taskKinds: {
     normal: '',
     unattributed: '未归属到具体对象的异常',
@@ -334,6 +328,12 @@ export const zh: Messages = {
       entries: '请至少勾选一笔更正分录',
     },
   },
+  // AI 建议的更正分录 (需求 R367, R368): 判断卡片, 复核卡片与错报列表共用; 每行只记借方或贷方一方
+  correctionEntry: {
+    title: 'AI 建议的更正分录',
+    debit: '借方',
+    credit: '贷方',
+  },
   fin08: {
     hint: '材料中的每条错报各登记一行',
     fields: {
@@ -370,7 +370,7 @@ export const zh: Messages = {
     },
   },
   reason: { label: '理由（选填）', none: '未填理由' },
-  directions: { overstated: '多计', understated: '少计' },
+  directions: { overstated: '高估', understated: '低估' },
   trailKinds: {
     all: '全部',
     llm_call: '模型调用',
@@ -554,22 +554,25 @@ export const zh: Messages = {
     },
     notMisstatementConclusion: '经复核，这不是错报。',
     choices: {
-      agree_misstatement: { label: '同意，认定为错报', hint: '金额、科目、方向与认定按 AI 的草稿带出，可以修改' },
+      agree_misstatement: { label: '同意，认定为错报', hint: '按 AI 的定论与草稿带出金额、科目、方向与认定，可以修改' },
       disagree_not_misstatement: { label: '不同意，不是错报', hint: '写出你的结论' },
       amend_misstatement: { label: '修改后认定为错报', hint: '先改动 AI 草稿的数据' },
-      agree_clear: { label: '同意，不是错报', hint: '采用 AI 的结论' },
-      disagree_misstatement: { label: '不同意，认定为错报', hint: '填写错报的数据' },
+      agree_clear: { label: '同意，不是错报', hint: '采用 AI 的定论' },
+      disagree_misstatement: { label: '不同意，认定为错报', hint: '把定论改为是错报，填写错报的数据' },
       misstatement: { label: '认定为错报', hint: '填写错报的数据' },
-      not_misstatement: { label: '不是错报', hint: '写出你的结论' },
+      not_misstatement: { label: '不是错报', hint: '把定论改为不是错报，写出你的结论' },
     },
   },
   judgment: {
     subject: '对象',
     amount: '金额',
-    proposed: '建议处理',
+    // 定论 (需求 R368): 判断是不是错报, 与建议动作一一对应; 显示在判断卡, 复核卡, 程序详情与列表的最上面
+    verdict: '定论',
+    verdicts: { not_misstatement: '不是错报', misstatement: '是错报', undetermined: '暂时判断不了' },
     confidence: '置信度',
     parts: { evidence: '证据', rule: '规则', llm: '模型' },
-    conclusion: '结论',
+    // AI 的叙述文字: 定论下面是理由 (需求 R368)
+    reason: '理由',
     reasoning: (n) => `推理链 · ${n} 步`,
     counter: '反方论证',
     fromSteps: (steps) => `依据第 ${steps} 步`,
@@ -733,7 +736,7 @@ export const zh: Messages = {
     manual: '人工程序',
     noStage: '当前没有待作出的阶段决定。',
     none: '当前筛选条件下没有事项。',
-    cols: { item: '事项', procedure: '程序', amount: '金额', proposed: '建议处理', tier: '复核档位', status: '状态' },
+    cols: { item: '事项', procedure: '程序', amount: '金额', verdict: '定论', tier: '复核档位', status: '状态' },
     open: '处理',
     perform: '去执行',
   },
@@ -747,7 +750,7 @@ export const zh: Messages = {
       item: '事项',
       procedure: '程序',
       amount: '金额',
-      proposed: '建议处理',
+      verdict: '定论',
       confidence: '置信度',
       status: '状态',
     },

@@ -1,10 +1,12 @@
 import type { CorrectionNotice, Misstatement, MisstatementStatus } from '@/client/types.gen'
 import { Code, StatusPill, type Tone } from '@/components/chrome'
+import { CorrectionList } from '@/components/verdict'
 import { useActorName } from '@/lib/actor'
 import { useI18n } from '@/lib/i18n'
 import { remainingCents, separateCode, verifiedEntries } from '@/lib/misstatements'
 import { reasonText } from '@/lib/reason'
 import { useMoney } from '@/lib/use-money'
+import { correctionEntries } from '@/lib/verdict'
 
 // 错报的生命周期 (需求 R163): 错报页与 FIN-01 闸门材料共用. 每条显示状态, 类型, 科目代码, 管理层回复原文, 已更正额与
 // 剩余额, 已验证的更正凭证号; 有舞弊迹象的加醒目标记与理由; 未更正的写依据 (拒绝或停止等待)
@@ -25,6 +27,8 @@ function MisstatementItem({ item }: { item: Misstatement }) {
   const status = item.status ?? 'identified'
   const verified = verifiedEntries(item)
   const code = separateCode(item)
+  // AI 建议的更正分录 (需求 R367, R368): 随错报显示, 每行科目代码与名称, 借方或贷方金额, 摘要
+  const corrections = correctionEntries(item)
   return (
     <li
       className="flex flex-col gap-2 rounded-lg border px-3.5 py-2.5 text-[14px]"
@@ -83,6 +87,7 @@ function MisstatementItem({ item }: { item: Misstatement }) {
           </>
         ) : null}
       </dl>
+      {corrections.length ? <CorrectionList entries={corrections} className="border-t pt-2" /> : null}
     </li>
   )
 }

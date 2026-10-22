@@ -1,6 +1,7 @@
 import type {
   Assertion,
   AuditException,
+  CorrectionEntry,
   Decision,
   Direction,
   DisputeResolution,
@@ -14,6 +15,7 @@ import type {
   ReviewTaskView,
 } from '@/client/types.gen'
 import { moneyToCents } from '@/lib/money'
+import { effectiveVerdict } from '@/lib/verdict'
 import type { Messages } from '@/locales/en'
 
 // 复核任务的公共计算: 对象, 金额, 复核档位, 决定请求体. 对话和队列共用, 保证口径一致
@@ -118,16 +120,18 @@ export function rankTasks(
     })
 }
 
-// AI 对判断对象的结论 (需求 R364, Issue #67): 判为错报 (proposed_action misstatement), 不是错报 (accept, close), 暂时
-// 判断不了 (more_evidence). 复核卡片按它给选项; 不是判断, 不是 normal 任务, 或判断带错报更新载荷 (FIN-03 分类, FIN-09
-// 验证, 对象是已有的错报) 时为 null, 卡片照后端的 allowed_decisions 逐项给
+// AI 对判断对象的定论 (需求 R364, R368): 判为错报 (misstatement), 不是错报 (not_misstatement), 暂时判断不了
+// (undetermined). 定论取判断的 verdict, 为空时按 proposed_action 回退 (旧数据, 见 lib/verdict.effectiveVerdict);
+// 复核卡片按它给选项. 不是判断, 不是 normal 任务, 或判断带错报更新载荷 (FIN-03 分类, FIN-09 验证, 对象是已有的错报)
+// 时为 null, 卡片照后端的 allowed_decisions 逐项给
 export type AiVerdict = 'misstatement' | 'clear' | 'undetermined'
 
 export function aiVerdict(view: ReviewTaskView): AiVerdict | null {
   const target = view.target
   if (!isJudgment(target) || view.task.kind !== 'normal' || view.misstatement_update_kind) return null
-  if (target.proposed_action === 'misstatement') return 'misstatement'
-  return target.proposed_action === 'more_evidence' ? 'undetermined' : 'clear'
+  const verdict = effectiveVerdict(target)
+  if (verdict === 'misstatement') return 'misstatement'
+  return verdict === 'undetermined' ? 'undetermined' : 'clear'
 }
 
 export type ReviewChoice =
@@ -183,6 +187,7 @@ export type ReviewDraft = {
   direction: Direction
   kind: MisstatementType
   params: string
+  correction: CorrectionEntry[] // AI 建议的更正分录 (需求 R367, R368), 随 "同意/修改后认定" 的草稿提交
 }
 
 export function emptyDraft(): ReviewDraft {
@@ -196,11 +201,13 @@ export function emptyDraft(): ReviewDraft {
     direction: 'overstated',
     kind: 'factual',
     params: '',
+    correction: [],
   }
 }
 
-// 错报草稿填进表单, 科目代码一并带入 (需求 R163; 草稿没有时清空). 预填的只有: AI 判为错报时 "同意" 与 "修改后认定"
-// 两项按判断的草稿 (需求 R364), 功能 collab 打开时仲裁采纳的一方建议错报 (见 attachRule); 其余由人点 "复制建议数据"
+// 错报草稿填进表单, 科目代码与 AI 建议的更正分录一并带入 (需求 R163, R367; 草稿没有时清空). 预填的只有: AI 判为错报
+// 时 "同意" 与 "修改后认定" 两项按判断的草稿 (需求 R364), 功能 collab 打开时仲裁采纳的一方建议错报 (见 attachRule);
+// 其余由人点 "复制建议数据"
 export function draftFromMisstatement(draft: ReviewDraft, proposed: MisstatementDraft): ReviewDraft {
   return {
     ...draft,
@@ -210,6 +217,7 @@ export function draftFromMisstatement(draft: ReviewDraft, proposed: Misstatement
     amount: (proposed.amount_cents / 100).toFixed(2),
     direction: proposed.direction,
     kind: proposed.type,
+    correction: proposed.correction ?? [],
   }
 }
 
@@ -320,7 +328,8 @@ export function buildRecord(
   return base
 }
 
-// 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案. 科目代码可空 (空为不填; 后端查它在本项目科目表中)
+// 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案. 科目代码可空 (空为不填; 后端查它在本项目科目表中).
+// AI 建议的更正分录随草稿提交, 由后端按借贷平衡与科目核对 (需求 R367); 改了错报数据后表单已清空, 不提交
 export function misstatementDraft(input: ReviewDraft, t: Messages): MisstatementDraft | string {
   const cents = moneyToCents(input.amount)
   if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
@@ -331,6 +340,7 @@ export function misstatementDraft(input: ReviewDraft, t: Messages): Misstatement
     amount_cents: cents,
     direction: input.direction,
     account_code: input.accountCode || null,
+    ...(input.correction.length ? { correction: input.correction } : {}),
   }
 }
 

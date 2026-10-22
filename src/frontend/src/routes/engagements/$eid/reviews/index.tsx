@@ -11,6 +11,7 @@ import { Code, PageHeader, SectionLabel, StatusPill } from '@/components/chrome'
 import { PointerList } from '@/components/evidence-link'
 import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { VerdictBanner, VerdictCell } from '@/components/verdict'
 import { GeneratedLanguage, useContentLanguage } from '@/components/working-language'
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { apiMessage, isApiCode } from '@/lib/errors'
@@ -139,7 +140,7 @@ function ReviewQueue() {
                   <span />
                   <span>{t.queuePage.cols.item}</span>
                   <span className="text-right">{t.queuePage.cols.amount}</span>
-                  <span>{t.queuePage.cols.proposed}</span>
+                  <span>{t.queuePage.cols.verdict}</span>
                   <span className="text-right">{t.queuePage.cols.confidence}</span>
                   <span>{t.queuePage.cols.status}</span>
                 </div>
@@ -199,14 +200,8 @@ function ReviewQueue() {
                               </span>
                             </button>
                             <Code className="text-right text-[13px]">{formatMoney(item.amount)}</Code>
-                            <span
-                              className={cn(
-                                'text-[13px]',
-                                judgment?.proposed_action === 'misstatement' && 'font-semibold text-risk',
-                              )}
-                            >
-                              {judgment ? t.proposed[judgment.proposed_action] : '—'}
-                            </span>
+                            {/* 定论取代原来的"建议处理"列 (需求 R368): 颜色与判断卡一致, 是错报的带金额与方向 */}
+                            <VerdictCell judgment={judgment} />
                             <Code className="text-right text-[13px]">
                               {judgment ? judgment.confidence.toFixed(2) : '—'}
                             </Code>
@@ -275,9 +270,10 @@ function SideBySide({ eid, item }: { eid: string; item: RankedTask }) {
       </div>
       {judgment ? (
         <>
+          <VerdictBanner judgment={judgment} />
           <div className="flex flex-col gap-1.5">
             <span className="flex flex-wrap items-center gap-2">
-              <SectionLabel>{t.judgment.conclusion}</SectionLabel>
+              <SectionLabel>{t.judgment.reason}</SectionLabel>
               <GeneratedLanguage eid={eid} runId={judgment.run_id} />
             </span>
             <p className="m-0 text-[14px] leading-[1.65]" lang={lang}>

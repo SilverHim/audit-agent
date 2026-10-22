@@ -7,6 +7,7 @@ import { reviewsListExceptionsOptions, reviewsListReviewTasksOptions } from '@/c
 import { Code, PageHeader, StatusPill } from '@/components/chrome'
 import { QueryState } from '@/components/query-state'
 import { buttonVariants } from '@/components/ui/button'
+import { VerdictCell } from '@/components/verdict'
 import { useI18n } from '@/lib/i18n'
 import { deferralKey, useDeferrals } from '@/lib/new-api'
 import { isJudgment, manualInstructions, procedureName, rankTasks, splitManual } from '@/lib/review'
@@ -103,7 +104,7 @@ function Decisions() {
                 <span>{t.decisionsPage.cols.item}</span>
                 <span>{t.decisionsPage.cols.procedure}</span>
                 <span className="text-right">{t.decisionsPage.cols.amount}</span>
-                <span>{t.decisionsPage.cols.proposed}</span>
+                <span>{t.decisionsPage.cols.verdict}</span>
                 <span>{t.decisionsPage.cols.tier}</span>
                 <span>{t.decisionsPage.cols.status}</span>
                 <span />
@@ -149,14 +150,8 @@ function Decisions() {
                         {procedureName(t, item.view.task.procedure_id, item.view.procedure_name)}
                       </span>
                       <Code className="text-right text-[13px]">{formatMoney(item.amount)}</Code>
-                      <span
-                        className={cn(
-                          'text-[13px]',
-                          judgment?.proposed_action === 'misstatement' && 'font-semibold text-risk',
-                        )}
-                      >
-                        {judgment ? t.proposed[judgment.proposed_action] : '—'}
-                      </span>
+                      {/* 定论取代原来的"建议处理"列 (需求 R368): 颜色与判断卡一致, 是错报的带金额与方向 */}
+                      <VerdictCell judgment={judgment} />
                       <span className="text-[13px]">{t.tiers[item.tier]}</span>
                       <span>{statusPill(state)}</span>
                       <OpenLink eid={eid} focus={`task:${item.view.task.id}`} label={t.decisionsPage.open} />
