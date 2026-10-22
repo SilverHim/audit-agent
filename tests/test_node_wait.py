@@ -291,8 +291,8 @@ def stable(value: Any) -> Any:
 
 
 def store_state(store: FakeOutputStore) -> list[Any]:
-    """Store 全部对象, 不计写入顺序."""
-    return [stable(r) for r in sorted(store.rows, key=lambda r: (type(r).__name__, r.id, r.version))]
+    """主流程的持久记录, 不计写入顺序. 派生底稿含各次执行的日期文字, 单独验证其版本与恢复行为."""
+    return [stable(r) for r in sorted(store.workflow_rows, key=lambda r: (type(r).__name__, r.id, r.version))]
 
 
 async def graph_state(case: Case) -> Any:

@@ -371,3 +371,24 @@ async def test_currency_change_requires_rereview_and_preserves_prior_draft() -> 
     assert changed.conclusion_draft is not None and "NZD 9,900.00" in changed.conclusion_draft.zh
     assert await store.get(EID, Workpaper, "WP-D-3", 1) == original
     assert await refresh(runner.deps, EID) == []
+
+
+@pytest.mark.external
+@shared_loop
+async def test_generic_workpaper_snapshots(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """共用走通核对普通规则与登记程序, 识别字段和检查结果进入快照, 不复制原始录入人员."""
+    w, _ = walked
+    papers = {ref: (await history(w, ref))[0] for ref in ("C-3", "A-4", "G-1", "B-2")}
+    tables = {
+        ref: next(s for s in paper.content.sections if s.id == "details").tables[0] for ref, paper in papers.items()
+    }
+    assert len(tables["C-3"].rows) == 2
+    assert len(tables["B-2"].rows) == 3
+    assert {row["status"] for row in tables["B-2"].rows} == {"✓"}
+    assert len(tables["G-1"].rows) == 608
+    assert {row["source_id"] for row in tables["A-4"].rows} >= {"090", "091", "840"}
+    for paper in papers.values():
+        snapshot = paper.content.model_dump_json()
+        assert "{{" not in snapshot
+    for data in tables.values():
+        assert all(not ({"created_by", "approved_by", "posted_by"} & row.keys()) for row in data.rows)
