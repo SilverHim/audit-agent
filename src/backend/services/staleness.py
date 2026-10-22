@@ -30,6 +30,7 @@ from backend.contracts.models import (
     ProcedureRun,
     ProcedureStatus,
     RerunRequest,
+    ReviewStatus,
     RunTrigger,
 )
 from backend.contracts.state import EngagementState
@@ -176,9 +177,14 @@ class CurrentResults(NamedTuple):
 
 
 def superseded_judgments(state: EngagementState) -> set[str]:
-    """被过期重跑取代的执行的判断 (含人工判断 -H, 其 run_id 是任务所属的执行)."""
+    """被取代的判断: 过期重跑取代的执行的判断 (含人工判断 -H, 其 run_id 是任务所属的执行), 以及被补充证据重判明确标为
+    superseded 且 superseded_by 非空的旧判断 (需求 R369; 撤回时 human 判断的 superseded_by 会被清空, 不在其中)."""
     superseded = superseded_runs(state["rerun_requests"])
-    return {j.id for j in state["judgments"] if j.run_id in superseded}
+    return {
+        j.id
+        for j in state["judgments"]
+        if j.run_id in superseded or (j.review_status is ReviewStatus.superseded and j.superseded_by)
+    }
 
 
 def released(exceptions: Iterable[AuditException], judgments: set[str]) -> list[AuditException]:
@@ -202,8 +208,9 @@ def current_results(state: EngagementState) -> CurrentResults:
     R21 的部分重跑 (rerun_subject_ids) 不在其中: 只重判上一轮失败的对象, 那些对象上一轮没有判断, 旧执行的其余
     对象仍是当前结果."""
     superseded = superseded_runs(state["rerun_requests"])
+    replaced = {j.id for j in state["judgments"] if j.review_status is ReviewStatus.superseded and j.superseded_by}
     return CurrentResults(
-        judgments=[j for j in state["judgments"] if j.run_id not in superseded],
+        judgments=[j for j in state["judgments"] if j.run_id not in superseded and j.id not in replaced],
         exceptions=released(current_exceptions(state["exceptions"], superseded), superseded_judgments(state)),
         misstatements=current_misstatements(
             state["misstatements"], state["judgments"], state["exceptions"], superseded

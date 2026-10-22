@@ -78,6 +78,7 @@ from backend.orchestration.inputs import input_versions
 from backend.orchestration.nodes import (
     confirmations_from_store,
     done_status,
+    next_run_no,
     rerun_subjects,
     save_outputs,
     waiting_status,
@@ -1515,6 +1516,98 @@ class GraphDecisionSubmit:
             }
             await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
         return request
+
+    async def rejudge_after_evidence(self, eid: str, request_id: str, *, actor: str) -> EvidenceRequest:
+        """补充证据到达后只重判该对象 (需求 R369, Issue #65 验收 4).
+
+        图须停在 P2 的等复核 (await_events) 位置; 请求须为 received 且尚未重判. 通过后一个事务内写: 证据请求记重判后的
+        判断 ID; 原复核任务关闭; 原判断出新版本 (superseded, superseded_by 为新判断 ID); 该程序新版本 (executing,
+        rerun_subject_ids 只含该对象); 重跑请求 (superseded_run_ids 为空, 不取代整次执行的其余对象). 提交后写重跑与
+        证据留痕, 再以 fan_in 身份写检查点: after_fan_in 只重派发该对象, 判断公共流程生成新判断 (run_no + 1) 与新复核
+        任务; 旧判断不再计入当前结果 (services.staleness.current_results 排除 superseded_by 非空的判断). 图不在可重判
+        位置时抛 NOT_RERUNNABLE, 由调用方保留请求为已收到、任务回待处理, 等审计师复核.
+        """
+        async with self._deciding(eid) as (_, snapshot):
+            if not at_rerun_point(snapshot):
+                raise DecisionRejected("NOT_RERUNNABLE", "图不在等复核位置, 证据已登记, 由审计师带新证据复核")
+            values = fill_defaults(snapshot.values)
+            if values["phase"] is not Phase.P2_Executing:
+                raise DecisionRejected("NOT_RERUNNABLE", "图不在执行阶段, 证据已登记, 由审计师带新证据复核")
+            store = self.deps.output_store
+            request = await store.get(eid, EvidenceRequest, request_id)
+            if request is None:
+                raise LookupError(f"补充证据请求 {request_id} 不存在")
+            if request.status != "received":
+                raise DecisionRejected("INVALID_VALUE", f"{request_id} 不是已收到证据的请求")
+            if request.rejudged_judgment_id is not None:
+                return request
+            task = await store.get(eid, ReviewTask, request.task_id)
+            procedure = await store.get(eid, Procedure, request.procedure_id)
+            if task is None or procedure is None:
+                raise LookupError(f"补充证据请求 {request_id} 的任务或程序不存在")
+            if procedure.status is ProcedureStatus.executing:
+                raise DecisionRejected("INVALID_VALUE", f"{procedure.id} 正在重跑")
+            runs = await store.latest(eid, ProcedureRun)
+            new_judgment_id = f"J-{procedure.id}-{next_run_no(procedure.id, runs)}-{request.subject_id}"
+            closed_task = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.decided})
+            old_judgment = await store.get(eid, Judgment, request.judgment_id)
+            replaced = (
+                old_judgment.model_copy(
+                    update={
+                        "version": old_judgment.version + 1,
+                        "review_status": ReviewStatus.superseded,
+                        "superseded_by": new_judgment_id,
+                    }
+                )
+                if old_judgment is not None
+                else None
+            )
+            updated_procedure = procedure.model_copy(
+                update={
+                    "version": procedure.version + 1,
+                    "status": ProcedureStatus.executing,
+                    "rerun_subject_ids": [request.subject_id],
+                }
+            )
+            reports = await store.latest(eid, AuditReportVersion)
+            rerun = RerunRequest(
+                id=f"RR-EV-{request.id}",
+                procedure_ids=[procedure.id],
+                superseded_run_ids=[],
+                closed_task_ids=[task.id],
+                data_version=(await self.deps.data.readiness(eid)).data_version,
+                report_revision=max((r.revision for r in reports), default=None),
+                requested_by=actor,
+                requested_at=self.now(),
+            )
+            updated_request = request.model_copy(
+                update={"version": request.version + 1, "rejudged_judgment_id": new_judgment_id}
+            )
+            created: list[Versioned] = [updated_procedure, closed_task, updated_request]
+            if replaced is not None:
+                created.append(replaced)
+            async with store.transaction(eid):
+                await store.put(eid, [rerun], actor=actor)
+                saved = await store.put(eid, created, actor=AgentId.A1)
+                if saved != created:
+                    clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                    raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+            await self.deps.trail.record(rerun_trail(eid, rerun))
+            await self.deps.trail.record(
+                evidence_trail(eid, updated_request, "rejudged", actor, judgment_id=new_judgment_id)
+            )
+            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
+            pack = values["procedure_pack"]
+            patch: StatePatch = {
+                "rerun_requests": [rerun],
+                "procedure_pack": latest_in_order(pack, await store.latest(eid, Procedure)),
+                "review_tasks": [closed_task],
+                "confirmations": await confirmations_from_store(store, eid),
+            }
+            if replaced is not None:
+                patch["judgments"] = [replaced]
+            await self.app.aupdate_state(GraphRunner.config(eid), patch, as_node="fan_in")
+            return updated_request
 
     async def withdraw_review(
         self, eid: str, withdrawal_id: str, record_id: str, *, reason: str | None, withdrawn_by: str
