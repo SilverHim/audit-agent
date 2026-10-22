@@ -11415,6 +11415,16 @@
           "proposed_action": {
             "$ref": "#/components/schemas/ProposedAction"
           },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Verdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "misstatement_draft": {
             "anyOf": [
               {
@@ -16598,6 +16608,16 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "Verdict": {
+        "type": "string",
+        "enum": [
+          "not_misstatement",
+          "misstatement",
+          "undetermined"
+        ],
+        "title": "Verdict",
+        "description": "判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应."
       },
       "WorkingLanguageIn": {
         "properties": {

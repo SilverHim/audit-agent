@@ -245,5 +245,6 @@
     "amount_cents": 650000,
     "direction": "overstated"
   },
+  "verdict": "misstatement",
   "self_confidence": 0.85
 }

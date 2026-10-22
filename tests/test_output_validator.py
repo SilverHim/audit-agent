@@ -54,12 +54,14 @@ from backend.contracts.models import (
     TermType,
     TrailEntry,
     TrailKind,
+    Verdict,
 )
 from backend.contracts.ports import LLMResponse
 from backend.contracts.records import Account, JournalEntry, SalesInvoice
 from backend.contracts.services import JudgmentContext, ValidationContext
 from backend.core.config import get_settings
 from backend.orchestration.decisions import override_effects
+from backend.services.currency import format_money
 from backend.services.judgment_engine import (
     DOCUMENT_EVIDENCE,
     MAX_ATTEMPTS,
@@ -147,10 +149,20 @@ STANDARD = EvidencePointer(
 )
 
 
+VERDICT_OF = {
+    ProposedAction.accept: Verdict.not_misstatement,
+    ProposedAction.close: Verdict.not_misstatement,
+    ProposedAction.misstatement: Verdict.misstatement,
+    ProposedAction.more_evidence: Verdict.undetermined,
+}
+
+
 def cutoff_draft(**changes: Any) -> JudgmentDraft:
-    """REV-02 对 SI-2026-0612 的草稿 (合成数据集设计第 7 节第 9 行): 控制权 2026-07-03 转移, 收入高估."""
+    """REV-02 对 SI-2026-0612 的草稿 (合成数据集设计第 7 节第 9 行): 控制权 2026-07-03 转移, 收入高估;
+    定论随建议动作."""
+    action = changes.get("proposed_action", ProposedAction.misstatement)
     draft = JudgmentDraft(
-        conclusion="SI-2026-0612 控制权在 2026-07-03 签收时转移, 属下期, 本期收入高估 142,000.00.",
+        conclusion="SI-2026-0612 控制权在 2026-07-03 签收时转移, 属下期, 本期收入高估 AUD 142,000.00.",
         reasoning_chain=[
             ReasoningStep(kind=StepKind.fact, text="发票 2026-06-28 入账.", evidence=[INVOICE]),
             ReasoningStep(kind=StepKind.fact, text="客户 2026-07-03 签收发运单.", evidence=[DELIVERY]),
@@ -160,7 +172,8 @@ def cutoff_draft(**changes: Any) -> JudgmentDraft:
         ],
         evidence=[INVOICE, DELIVERY, CLAUSE, STANDARD],
         counter_argument="若客户在 2026-06-30 前已取得控制权, 结论不成立.",
-        proposed_action=ProposedAction.misstatement,
+        proposed_action=action,
+        verdict=VERDICT_OF[action],
         misstatement_draft=NUMBAT_CUTOFF_DRAFT,
         self_confidence=0.9,
     )
@@ -677,7 +690,11 @@ async def test_each_source_is_looked_up_once() -> None:
 
 
 def misstated(amount: int, pointers: list[EvidencePointer] | None = None) -> JudgmentDraft:
-    draft = cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount}))
+    conclusion = f"SI-2026-0612 控制权在 2026-07-03 签收时转移, 属下期, 本期收入高估 {format_money(amount)}."
+    draft = cutoff_draft(
+        conclusion=conclusion,
+        misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount}),
+    )
     if pointers is None:
         return draft
     return with_step(draft, 0, evidence=pointers).model_copy(update={"evidence": [*draft.evidence, *pointers]})
@@ -750,7 +767,10 @@ async def test_misstatement_amount_from_cited_revenue_line(amount: int, cite_lin
     )
     cited = [invoice, line] if cite_line else [invoice]
     draft = with_step(
-        cutoff_draft(misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount})),
+        cutoff_draft(
+            conclusion=f"SI-2026-0612 控制权在 2026-07-03 签收时转移, 属下期, 本期收入高估 {format_money(amount)}.",
+            misstatement_draft=NUMBAT_CUTOFF_DRAFT.model_copy(update={"amount_cents": amount}),
+        ),
         0,
         evidence=cited,
     )
@@ -2017,3 +2037,34 @@ async def test_chinese_text_with_english_quotes_passes_four_levels(
             counter,
         )
         assert QUOTES[procedure] in draft.conclusion
+
+
+# ── 定论与金额写法 (需求 R365) ──
+
+
+async def test_verdict_must_match_the_proposed_action() -> None:
+    """定论与建议动作不一致判语义失败, 可重试."""
+    report = await check(cutoff_draft(verdict=Verdict.not_misstatement))
+    assert report.level_failed == "semantic" and report.retryable
+    assert "定论 not_misstatement 与建议动作 misstatement 不一致" in report.errors
+
+
+async def test_verdict_is_required_when_judging_a_misstatement() -> None:
+    """判断是否错报的程序不给 verdict 判语义失败."""
+    report = await check(cutoff_draft().model_copy(update={"verdict": None}))
+    assert report.level_failed == "semantic"
+    assert any("缺少定论 verdict" in error for error in report.errors)
+
+
+async def test_conclusion_write_the_amount_in_cents_fails_validation() -> None:
+    """结论把金额写成分或 cents 判语义失败, 按记账币种写金额."""
+    report = await check(cutoff_draft(conclusion="SI-2026-0612 本期收入高估 14200000 分, 属下期."))
+    assert report.level_failed == "semantic"
+    assert any("分 或 cents" in error for error in report.errors)
+
+
+async def test_conclusion_amount_must_match_the_misstatement_draft() -> None:
+    """判为错报时结论里的金额须与错报草稿一致 (按记账币种格式化)."""
+    report = await check(cutoff_draft(conclusion="SI-2026-0612 本期收入高估 AUD 14,200.00, 属下期."))
+    assert report.level_failed == "semantic"
+    assert any("AUD 142,000.00" in error for error in report.errors)

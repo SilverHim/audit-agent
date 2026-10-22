@@ -77,6 +77,8 @@ class ValidationContext(Model):
     # 输出的语言 (需求 R341): JudgmentEngine.call_llm 按执行记录的 language 填, 调用方不填; RPT-03 按它取两段的标题
     # (templates/report.yaml). 不经 call_llm 直接校验时缺省 en
     language: WorkingLanguage = "en"
+    # 记账币种 (需求 R365, R366): 判断草稿的结论里的金额须按它写; call_llm 按项目当前币种填, 直接校验时缺省澳元
+    currency: str = "AUD"
     # GEN-09 第一轮给独立复核的证据指针: 其推理链只能引用这些 (按来源比对, 文件还须同页, 画像还须同字段), 否则该步
     # unsupported
     allowed_evidence: list[EvidencePointer] | None = None

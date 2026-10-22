@@ -52,11 +52,13 @@ from backend.contracts.models import (
     OpinionType,
     PlanStatus,
     ProcedureRun,
+    ProposedAction,
     RunStatus,
     RunTrigger,
     TrailEntry,
     TrailKind,
     UncorrectedSchedule,
+    Verdict,
     WorkingLanguage,
 )
 from backend.contracts.views import GateView
@@ -798,3 +800,27 @@ async def test_walkthrough_on_real_storage(tmp_path: Path) -> None:
             )
         calls = [e for e in await deps.trail.list(w.x.eid, limit=10_000) if e.kind is TrailKind.llm_call]
         assert {(e.payload["attempt"], e.payload["level_failed"]) for e in calls} == {(1, None)}
+
+
+# ── 定论 (需求 R365) ──
+
+
+@shared_loop
+async def test_judgments_carry_a_verdict(walked: Walk) -> None:
+    """需求 R365 验收 1, 6: 走通里判断是否错报的判断都带定论, 与建议动作一一对应; XJ-499 的定论是 "是错报";
+    FIN-03/FIN-09 的错报更新判断不要求定论."""
+    deps, eid = walked.x.runner.deps, walked.x.eid
+    judgments = await deps.output_store.latest(eid, Judgment)
+    expected = {
+        ProposedAction.accept: Verdict.not_misstatement,
+        ProposedAction.close: Verdict.not_misstatement,
+        ProposedAction.misstatement: Verdict.misstatement,
+        ProposedAction.more_evidence: Verdict.undetermined,
+    }
+    # 只有大模型产出的判断带定论 (trail_ref 非空); 人推翻时另建的人工判断不要求定论
+    plain = [j for j in judgments if j.misstatement_update is None and j.trail_ref is not None]
+    assert plain and all(j.verdict is not None for j in plain)
+    assert all(expected[j.proposed_action] is j.verdict for j in plain)
+    [xj499] = [j for j in judgments if j.subject_id == "XJ-499"]
+    assert xj499.verdict is Verdict.misstatement
+    assert xj499.misstatement_draft is not None

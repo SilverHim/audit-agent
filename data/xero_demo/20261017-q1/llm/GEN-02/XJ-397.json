@@ -312,5 +312,6 @@
   "counter_argument": "Bank statements showing different balances on 16 July 2026, or a director's statement that part of the 840 balance is not a loan, would show the conversion entry is wrong.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.8
 }

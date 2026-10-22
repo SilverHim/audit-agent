@@ -171,5 +171,6 @@
     "amount_cents": 4853,
     "direction": "understated"
   },
+  "verdict": "misstatement",
   "self_confidence": 0.85
 }

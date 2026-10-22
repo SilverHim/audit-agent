@@ -3234,6 +3234,7 @@ export type Judgment = {
      */
     counter_argument: string;
     proposed_action: ProposedAction;
+    verdict?: Verdict | null;
     misstatement_draft?: MisstatementDraft | null;
     misstatement_update?: MisstatementUpdate | null;
     /**
@@ -6010,6 +6011,13 @@ export type ValidationError = {
         [key: string]: unknown;
     };
 };
+
+/**
+ * Verdict
+ *
+ * 判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应.
+ */
+export type Verdict = 'not_misstatement' | 'misstatement' | 'undetermined';
 
 /**
  * WorkingLanguageIn

@@ -25,6 +25,7 @@ from backend.contracts.models import (
     Shareholding,
     TermsFacts,
     TermType,
+    Verdict,
 )
 
 
@@ -36,6 +37,8 @@ class JudgmentDraft(Model):
     evidence: list[EvidencePointer]  # 引用的证据
     counter_argument: str  # 反方论证
     proposed_action: ProposedAction  # 建议动作
+    # 定论 (需求 R365): 是不是错报, 与建议动作一一对应; 判断是否错报的程序必填, FIN-03/FIN-09 的错报更新判断不填
+    verdict: Verdict | None = None
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
     self_confidence: float = Field(ge=0, le=1)  # 模型自报的置信度 0-1, 计入置信度的 llm 分项
 

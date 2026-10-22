@@ -126,5 +126,6 @@
   "counter_argument": "A record showing that the service, or part of it, was provided after 30 September 2026 would move the revenue to the next period.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.85
 }

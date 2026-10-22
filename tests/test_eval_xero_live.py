@@ -316,7 +316,7 @@ async def test_xero_journal_programs_live(xero_case: Any, live_budget: Budget) -
 MISSTATED_499 = {"type": "factual", "assertion": "Existence", "amount_cents": 75000, "direction": "overstated"}
 WRONG_JOURNALS = [  # GEN-02 固定输出的改动 (凭证 → 覆盖的字段), 硬性与软性应报出的
     pytest.param(
-        {"XJ-499": {"proposed_action": "accept", "misstatement_draft": None}},
+        {"XJ-499": {"proposed_action": "accept", "verdict": "not_misstatement", "misstatement_draft": None}},
         [
             "GEN-02 XJ-499 proposed_action: 'accept', 预期 'misstatement'",
             "GEN-02 XJ-499 amount_cents: None, 预期 75000",
@@ -332,10 +332,11 @@ WRONG_JOURNALS = [  # GEN-02 固定输出的改动 (凭证 → 覆盖的字段),
             "XJ-499": {"misstatement_draft": MISSTATED_499 | {"account": "Depreciation", "account_code": None}},
             "XJ-397": {  # 草稿金额取它自己 840 贷方行, 能过引用级校验
                 "proposed_action": "misstatement",
+                "verdict": "misstatement",
                 "misstatement_draft": MISSTATED_499
                 | {"account": "Historical Adjustment", "account_code": "840", "amount_cents": 1921221},
             },
-            "XJ-575": {"proposed_action": "accept"},
+            "XJ-575": {"proposed_action": "accept", "verdict": "not_misstatement"},
         },
         [
             "GEN-02 XJ-397 misstatement: True, 预期 False",

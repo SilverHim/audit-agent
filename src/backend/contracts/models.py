@@ -197,6 +197,14 @@ class ProposedAction(StrEnum):
     more_evidence = "more_evidence"  # 补充证据
 
 
+class Verdict(StrEnum):
+    """判断的定论 (需求 R365): 开门见山说清是不是错报, 与建议动作一一对应."""
+
+    not_misstatement = "not_misstatement"  # 不是错报 (建议接受或关闭)
+    misstatement = "misstatement"  # 是错报
+    undetermined = "undetermined"  # 暂时判断不了 (需要补充证据)
+
+
 class ReviewStatus(StrEnum):
     """判断的复核状态."""
 
@@ -702,6 +710,8 @@ class Judgment(Versioned):
     evidence: list[EvidencePointer]  # 结论引用的全部证据
     counter_argument: str  # 反方论证: 结论可能错在哪里
     proposed_action: ProposedAction  # 建议动作
+    # 定论 (需求 R365): 判断是不是错报, 与建议动作一一对应; FIN-03/FIN-09 的错报更新判断与旧数据为空
+    verdict: Verdict | None = None
     misstatement_draft: MisstatementDraft | None = None  # 建议认定错报时必填
     # 对已有错报的更新载荷 (需求 R156): FIN-03 分类与 FIN-09 验证的判断, 以及取代它们的人工判断携带, 判断置 confirmed
     # 时按它写出错报新版本 (复核决定的事务内, 或 A8 自动确认的片段中, 需求 R159); 其余为空

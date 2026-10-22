@@ -367,6 +367,7 @@ def accrued_draft(amount: int) -> str:
         "evidence": [field, standard],
         "counter_argument": "A GL entry outside the search window recording this interest would show it was accrued.",
         "proposed_action": "misstatement",
+        "verdict": "misstatement",
         "misstatement_draft": {
             "type": "factual",
             "account": "Interest income",

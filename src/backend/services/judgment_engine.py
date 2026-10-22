@@ -54,6 +54,7 @@ from backend.contracts.models import (
     StepStatus,
     TrailEntry,
     TrailKind,
+    Verdict,
     drop_fields,
     mask_person_node_ids,
 )
@@ -73,7 +74,7 @@ from backend.contracts.services import (
     ValidationContext,
     ValidationReport,
 )
-from backend.services.currency import default_currency
+from backend.services.currency import default_currency, format_money
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
@@ -120,8 +121,29 @@ JUDGMENT_SYSTEM = SYSTEM_PROMPT.replace(
     "{schema}",
     "Rule findings and planning risks are not evidence sources: never put a finding ID or a risk ID in an evidence "
     "pointer. Cite the rows, document pages or fields that the finding is about; name a risk by its ID in the step "
-    "text.\n\n{schema}",
+    "text.\n\n"
+    "State the verdict first. When the judgment decides whether something is a misstatement (the schema has no "
+    "nature or fully_corrected field), the verdict field is required and must match proposed_action: accept and "
+    "close = not_misstatement, misstatement = misstatement, more_evidence = undetermined. The first sentence of the "
+    'conclusion must state that verdict in plain words (for example "Not a misstatement: ...", "Misstatement: '
+    'office equipment (710) is overstated by AUD 750.00 (existence).", "Undetermined: the bank statement for the '
+    'period is missing."); put the reasons after it and do not use double negatives. When the schema has nature or '
+    "fully_corrected, omit the verdict.\n\n"
+    "Write every amount in the engagement's accounting currency with its usual decimals (for example AUD 750.00), "
+    "never in cents and never with the Chinese unit 分; a conclusion on a misstatement must state the misstatement "
+    "amount in that form, matching misstatement_draft.\n\n"
+    "{schema}",
 )
+
+
+# 定论与建议动作的对应 (需求 R365): 两个方向都必须一致, 不一致判为输出不合格
+VERDICT_ACTIONS: dict[Verdict, frozenset[ProposedAction]] = {
+    Verdict.not_misstatement: frozenset({ProposedAction.accept, ProposedAction.close}),
+    Verdict.misstatement: frozenset({ProposedAction.misstatement}),
+    Verdict.undetermined: frozenset({ProposedAction.more_evidence}),
+}
+# 结论里写成 "分" 或 cents 的金额 (需求 R365): 要按记账币种写成 1,234.56 这样的金额
+CENTS_WORDS = re.compile(r"\d[\d,.]*\s*(?:cents?|分)", re.IGNORECASE)
 # 没通过校验后追加的用户消息
 RETRY_PROMPT = """Your previous reply failed validation:
 
@@ -229,6 +251,25 @@ def judgment_semantics(draft: JudgmentDraft) -> list[str]:
     errors = chain_semantics(draft.reasoning_chain)
     if draft.proposed_action is ProposedAction.misstatement and draft.misstatement_draft is None:
         errors.append("建议认定错报, 但没有错报草稿")
+    return errors
+
+
+def verdict_semantics(draft: JudgmentDraft, currency: str, *, required: bool) -> list[str]:
+    """定论 (需求 R365) 的语义校验, 返回错误 (空为通过): 判断是否错报的程序须给定论 (required), 定论与建议动作对应;
+    结论的金额按记账币种写 (不写成 分 或 cents), 判为错报时结论里须出现与错报草稿一致的金额."""
+    errors: list[str] = []
+    if draft.verdict is None:
+        if required:
+            errors.append("缺少定论 verdict (not_misstatement / misstatement / undetermined)")
+    elif draft.proposed_action not in VERDICT_ACTIONS[draft.verdict]:
+        errors.append(f"定论 {draft.verdict.value} 与建议动作 {draft.proposed_action.value} 不一致")
+    if CENTS_WORDS.search(draft.conclusion):
+        errors.append("结论里的金额写成了 分 或 cents, 应按记账币种写成金额 (如 AUD 1,234.56)")
+    draft_misstatement = draft.misstatement_draft
+    if draft.proposed_action is ProposedAction.misstatement and draft_misstatement is not None:
+        amount = format_money(abs(draft_misstatement.amount_cents), currency)
+        if amount not in draft.conclusion:
+            errors.append(f"结论里的金额与错报草稿不一致: 须按记账币种写出 {amount}")
     return errors
 
 
@@ -662,7 +703,7 @@ class OutputValidator:
         return errors, notes
 
     async def _judgment(
-        self, eid: str, draft: JudgmentDraft, ctx: ValidationContext
+        self, eid: str, draft: JudgmentDraft, ctx: ValidationContext, *, require_verdict: bool = True
     ) -> tuple[JudgmentDraft, Level | None, list[int], list[str]]:
         """判断草稿的引用与语义两级. 返回 (改写指针后的草稿, 未通过的级别, 不受支持的步骤, 错误).
         准则片段按 ctx.standards_of 核对 (见 PointerResolver)."""
@@ -683,7 +724,10 @@ class OutputValidator:
             errors.append(f"错报草稿的科目代码 {md.account_code} 不在本项目科目表中")  # 需求 R156
             return draft, "reference", unsupported, errors
         semantic = judgment_semantics(draft)
-        return draft, "semantic" if semantic else None, unsupported, errors + semantic
+        if semantic:
+            return draft, "semantic", unsupported, errors + semantic
+        verdict = verdict_semantics(draft, ctx.currency, required=require_verdict)
+        return draft, "semantic" if verdict else None, unsupported, errors + verdict
 
     async def _critic(
         self, eid: str, output: CriticIndependent, ctx: ValidationContext
@@ -796,7 +840,7 @@ async def check_classification(
 ) -> CheckResult:
     """错报分类草稿 (FIN-03): 判断草稿的各级 (_judgment, 建议动作与错报草稿只按通用规则), 引用级通过后语义级另查错报
     性质 (nature_semantics)."""
-    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx, require_verdict=False)
     nature = nature_semantics(output.nature) if level != "reference" else []
     return CheckResult(draft, "semantic" if nature else level, unsupported, errors + nature)
 
@@ -808,7 +852,7 @@ async def check_verification(
     另查是否完整更正与其他科目 (verification_semantics). ctx 缺 expected_residual_cents 或 entry_account_codes 时抛
     ValueError (verification_context)."""
     residual, codes = verification_context(ctx)
-    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx)
+    draft, level, unsupported, errors = await validator._judgment(eid, output, ctx, require_verdict=False)
     extra = verification_semantics(output, residual, codes) if level != "reference" else []
     return CheckResult(draft, "semantic" if extra else level, unsupported, errors + extra)
 
@@ -987,8 +1031,9 @@ class JudgmentEngine:
         # 校验同按这一语言 (如报告两段的标题, 需求 R341), 调用方给的 ctx.language 也不算
         outbound["output_language"] = run.language
         # 记账币种 (需求 R366): 模板过滤器 money 缺省按它写金额; 取项目当前的值, 调用方给的同名变量不算
-        outbound["currency"] = await self.currency(eid)
-        ctx = ctx.model_copy(update={"language": run.language})
+        currency = await self.currency(eid)
+        outbound["currency"] = currency
+        ctx = ctx.model_copy(update={"language": run.language, "currency": currency})
         messages = [LLMMessage(role="user", content=self.render(template, outbound))]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -1123,6 +1168,7 @@ class JudgmentEngine:
             evidence=draft.evidence,
             counter_argument=draft.counter_argument,
             proposed_action=draft.proposed_action,
+            verdict=draft.verdict,
             misstatement_draft=draft.misstatement_draft,
             exception_ids=[x.id for x in ctx.rule_findings],
             autonomy_level=ctx.autonomy_level or template.autonomy_level,

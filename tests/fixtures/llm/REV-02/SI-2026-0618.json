@@ -142,5 +142,6 @@
   "counter_argument": "A later signed delivery note for the same goods, or evidence that DN-2026-0618 was signed after 30 June 2026, would overturn this conclusion.",
   "proposed_action": "accept",
   "misstatement_draft": null,
+  "verdict": "not_misstatement",
   "self_confidence": 0.9
 }
