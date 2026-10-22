@@ -63,6 +63,11 @@ SECTIONS = {
     "review": words("复核意见", "Review comments"),
 }
 FIELDS = {
+    "unaudited_cents": ("本期未审数", "Unaudited balance"),
+    "adjustments_cents": ("已更正调整", "Verified adjustments"),
+    "audited_cents": ("审定数", "Audited balance"),
+    "change_cents": ("变动", "Movement"),
+    "uncorrected_cents": ("未更正错报", "Uncorrected misstatements"),
     "ref": ("索引", "Index"),
     "title": ("底稿", "Workpaper"),
     "procedure_id": ("程序", "Procedure"),

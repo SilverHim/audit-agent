@@ -68,11 +68,13 @@ from backend.contracts.models import (
     WorkpaperNote,
     WorkpaperSignoff,
     WorkpaperStatus,
+    verified_adjustment_entries,
 )
-from backend.contracts.records import Account, TrialBalanceRow
+from backend.contracts.records import Account, DatasetTraits, JournalEntry, TrialBalanceRow
 from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import ProcedureLibrary, render_text, workpaper_kind
+from backend.services.staleness import current_misstatements, superseded_runs
 from backend.services.workpaper_content import build_content
 from backend.services.workpaper_decisions import decision_draft
 from backend.services.workpaper_judgments import model_judgments
@@ -153,6 +155,8 @@ class Sources:
     trial_balance: list[TrialBalanceRow] = field(default_factory=list)
     misstatements: list[Misstatement] = field(default_factory=list)
     reruns: list[RerunRequest] = field(default_factory=list)
+    adjustment_lines: list[JournalEntry] = field(default_factory=list)
+    traits: DatasetTraits = field(default_factory=DatasetTraits)
 
 
 @dataclass(frozen=True)
@@ -492,13 +496,32 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
             risk = await store.get(eid, RiskItem, edit.target_id, edit.target_version)
             if risk is not None:
                 materials[(risk.id, risk.version)] = risk
+    misstatements = await store.latest(eid, Misstatement)
+    judgments = await store.latest(eid, Judgment)
+    exceptions = await store.latest(eid, AuditException)
+    reruns = await store.latest(eid, RerunRequest)
+    active = current_misstatements(misstatements, judgments, exceptions, superseded_runs(reruns))
+    verified = verified_adjustment_entries(active)
+    adjustment_lines = await deps.financial_store.journal_entries(eid, entry_nos=verified) if verified else []
+    accounts = await deps.financial_store.accounts(eid)
+    trial_balance = [
+        *await deps.financial_store.trial_balance(eid, "current"),
+        *await deps.financial_store.trial_balance(eid, "prior"),
+    ]
+    lead_data = any(r.period == "current" for r in trial_balance) and any(
+        a.category in {"cash", "revenue", "other_income"} for a in accounts
+    )
     sources = Sources(
         library=library,
         papers=papers,
-        accounts=await deps.financial_store.accounts(eid),
-        trial_balance=await deps.financial_store.trial_balance(eid, "current"),
-        misstatements=await store.latest(eid, Misstatement),
-        reruns=await store.latest(eid, RerunRequest),
+        accounts=accounts,
+        trial_balance=trial_balance,
+        adjustment_lines=adjustment_lines,
+        traits=deps.datasets.dataset_traits(engagement.dataset)
+        if lead_data and engagement and engagement.dataset
+        else DatasetTraits(),
+        misstatements=misstatements,
+        reruns=reruns,
         materials=materials,
         engagement=engagement,
         client_name=profile.legal_name if profile else "",
@@ -510,8 +533,8 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         currency=engagement.currency if engagement else DEFAULT_CURRENCY,
         runs=await store.latest(eid, ProcedureRun),
         populations=await store.latest(eid, RunPopulation),
-        exceptions=await store.latest(eid, AuditException),
-        judgments=await store.latest(eid, Judgment),
+        exceptions=exceptions,
+        judgments=judgments,
         decisions=decisions,
         outputs=outputs,
         contracts=await deps.financial_store.contracts(eid),
@@ -555,7 +578,14 @@ async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
             assert isinstance(stored, Workpaper)
             written.append(stored)
         if papers:
-            for ref in ("S", "00"):
+            lead_refs = [
+                w.ref
+                for w in deps.library.workpapers.system
+                if w.categories
+                and any(r.period == "current" for r in snapshot.sources.trial_balance)
+                and any(a.category in w.categories for a in snapshot.sources.accounts)
+            ]
+            for ref in (*lead_refs, "S", "00"):
                 spec = next(w for w in deps.library.workpapers.system if w.ref == ref)
                 updated = system_refreshed(papers.get(ref), spec, snapshot.sources, papers)
                 if updated:
