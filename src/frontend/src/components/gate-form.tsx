@@ -581,8 +581,18 @@ export function GateDecisionCard({
       ) : null}
 
       <ReasonField id={`gate-reason-${gate}`} value={reason} onChange={setReason} />
+      <MaterialityReasonHint visible={view.material.kind === 'PLN-01/03' && verdict === 'approve' && !reason.trim()} />
     </DecisionFrame>
   )
+}
+
+export function MaterialityReasonHint({ visible }: { visible: boolean }) {
+  const { t } = useI18n()
+  return visible ? (
+    <p role="note" className="text-muted-foreground text-sm">
+      {t.planning.reasonHint}
+    </p>
+  ) : null
 }
 
 function PlanningFields({

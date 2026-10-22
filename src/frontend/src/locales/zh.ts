@@ -592,6 +592,8 @@ export const zh: Messages = {
     },
   },
   planning: {
+    reasonHint:
+      '建议写明选择基准与比例的理由 (ASA 320 第 14 段)。不写时底稿 A-2 标为缺选择理由, 可之后在底稿上补充说明；仍可提交。',
     analytics: '初步分析',
     candidates: '重要性候选',
     notApplicable: {

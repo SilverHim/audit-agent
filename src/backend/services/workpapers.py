@@ -71,6 +71,7 @@ from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import render_text, workpaper_kind
 from backend.services.workpaper_content import build_content
+from backend.services.workpaper_decisions import decision_draft
 from backend.services.workpaper_judgments import model_judgments
 
 if TYPE_CHECKING:
@@ -138,6 +139,7 @@ class Sources:
     tasks: list[ReviewTask] = field(default_factory=list)
     reviews: list[ReviewRecord] = field(default_factory=list)
     withdrawals: list[ReviewWithdrawal] = field(default_factory=list)
+    materials: dict[tuple[str, int], Versioned] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -175,6 +177,14 @@ def view_of(template: ProcedureTemplate, sources: Sources) -> View:
         key=lambda d: (d.decided_at, d.id),
     )
     outputs = [o for name in template.outputs if name in OUTPUT_BASIS for o in sources.outputs.get(name, [])]
+    outputs.extend(
+        sources.materials[(d.target_id, d.target_version)]
+        for d in decisions
+        if (d.target_id, d.target_version) in sources.materials
+    )
+    if template.id == "PLN-03":
+        outputs.extend(sources.risks)
+    outputs = list({(type(o).__name__, o.id, o.version): o for o in outputs}.values())
     return View(template, runs, current, populations, exceptions, judgments, decisions, outputs, sources.currency)
 
 
@@ -189,8 +199,8 @@ def basis_of(view: View) -> list[ObjectRef]:
         *view.decisions,
         *view.outputs,
     ]
-    refs = {(type(o).__name__, o.id): o.version for o in objects}
-    return [ObjectRef(kind=kind, id=oid, version=version) for (kind, oid), version in sorted(refs.items())]
+    refs = {(type(o).__name__, o.id, o.version) for o in objects}
+    return [ObjectRef(kind=kind, id=oid, version=version) for kind, oid, version in sorted(refs)]
 
 
 def joined(parts: Iterable[LocalizedText]) -> LocalizedText | None:
@@ -302,7 +312,7 @@ def conclusion_draft(view: View) -> LocalizedText | None:
     kind = workpaper_kind(view.template)
     if kind == "rule":
         return rule_draft(view)
-    return judgment_draft(view) if kind == "judgment" else None
+    return judgment_draft(view) if kind == "judgment" else decision_draft(view)
 
 
 def noted(workpaper: Workpaper, item: str) -> bool:
@@ -450,7 +460,27 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         user = await deps.users.get(uid)
         if user:
             people[uid] = user.full_name
+    decisions = await store.latest(eid, GateDecision)
+    material_types: dict[GateId, type[Versioned]] = {
+        GateId.ACC_01: AcceptanceScorecard,
+        GateId.PLN_01_03: MaterialityCandidates,
+        GateId.PLN_15: AuditPlan,
+        GateId.FIN_01: UncorrectedSchedule,
+        GateId.RPT_01: AuditReportVersion,
+    }
+    materials: dict[tuple[str, int], Versioned] = {}
+    for decision in decisions:
+        kind = material_types.get(decision.gate)
+        if kind is not None:
+            material = await store.get(eid, kind, decision.target_id, decision.target_version)
+            if material is not None:
+                materials[(material.id, material.version)] = material
+        for edit in decision.edits:
+            risk = await store.get(eid, RiskItem, edit.target_id, edit.target_version)
+            if risk is not None:
+                materials[(risk.id, risk.version)] = risk
     sources = Sources(
+        materials=materials,
         engagement=engagement,
         client_name=profile.legal_name if profile else "",
         people=people,
@@ -463,7 +493,7 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         populations=await store.latest(eid, RunPopulation),
         exceptions=await store.latest(eid, AuditException),
         judgments=await store.latest(eid, Judgment),
-        decisions=await store.latest(eid, GateDecision),
+        decisions=decisions,
         outputs=outputs,
         contracts=await deps.financial_store.contracts(eid),
         documents=await deps.financial_store.documents(eid),

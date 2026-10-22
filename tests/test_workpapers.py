@@ -482,3 +482,128 @@ async def test_judgment_missing_reasoning_and_extraction_changes(walked: tuple[W
         }
     ]
     assert contract_paper.content != content
+
+
+@pytest.mark.external
+@shared_loop
+async def test_decision_workpapers_record_materials_and_calculations(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """复用走通核对重要性计算、风险、承接评分卡、计划修订与报告文本."""
+    w, _ = walked
+    papers = {ref: (await history(w, ref))[-1] for ref in ("A-1", "A-2", "A-3", "B-1", "Z-1", "Z-2", "Z-3")}
+    details = {ref: next(s for s in p.content.sections if s.id == "details") for ref, p in papers.items()}
+    [calculation] = next(t for t in details["A-2"].tables if t.id == "materiality_calculation").rows
+    assert {
+        key: calculation[key]
+        for key in (
+            "base_amount_cents",
+            "pct",
+            "overall_cents",
+            "performance_pct",
+            "performance_cents",
+            "trivial_pct",
+            "trivial_cents",
+        )
+    } == {
+        "base_amount_cents": 3243100,
+        "pct": 0.01,
+        "overall_cents": 32431,
+        "performance_pct": 0.5,
+        "performance_cents": 16216,
+        "trivial_pct": 0.05,
+        "trivial_cents": 1622,
+    }
+    assert calculation["specific"].en == "Not applicable"
+    risks = next(t for t in details["A-3"].tables if t.id == "risk_register").rows
+    assert {r["id"]: r["risk"].en for r in risks} == {
+        "RISK-REV-OCC": "Significant risk",
+        "RISK-REV-CUT": "Significant risk",
+        "RISK-CASH-EXI": "High",
+    }
+    assert len(next(t for t in details["B-1"].tables if t.id == "acceptance").rows) == 3
+    assert next(t for t in details["B-1"].tables if t.id == "decision_history").rows[0]["decision"].en == "Approved"
+    assert details["A-1"].children and all(child.paragraphs for child in details["A-1"].children)
+    assert all(any(t.id == "plan_material" for t in child.tables) for child in details["A-1"].children)
+    assert details["Z-2"].children and all(child.paragraphs for child in details["Z-2"].children)
+    assert next(t for t in details["Z-1"].tables if t.id == "completion_material").rows
+    assert next(t for t in details["Z-3"].tables if t.id == "decision_history").rows  # 退回也留作决定历史.
+
+
+@pytest.mark.external
+@shared_loop
+async def test_materiality_reason_supplement_and_bound_candidate_version(
+    walked: tuple[Walk, httpx.AsyncClient],
+) -> None:
+    """空理由明确提示且能补齐; 新候选不倒算旧决定, 两次选择分别使用各自绑定的版本."""
+    from dataclasses import replace
+
+    from backend.contracts.models import MaterialityCandidates, WorkpaperNote
+    from backend.services.workpaper_content import build_content
+    from backend.services.workpapers import load, missing_of, view_of
+
+    w, _ = walked
+    snapshot = await load(w.x.runner.deps, w.x.eid)
+    paper = snapshot.workpapers["WP-A-2"]
+    sources = snapshot.sources
+    template = snapshot.templates["PLN-01"]
+    decisions = [d.model_copy(update={"reason": None}) if d.gate is GateId.PLN_01_03 else d for d in sources.decisions]
+    empty = replace(sources, decisions=decisions)
+    view = view_of(template, empty)
+    blank = build_content(view, empty, paper)
+    row = next(t for s in blank.sections for t in s.tables if t.id == "materiality_calculation").rows[0]
+    assert row["reason"].en == "Missing: no reason recorded at the decision"
+    assert "materiality_factors" in missing_of(snapshot.required[template.id], view, empty, paper)
+    noted = paper.model_copy(
+        update={
+            "notes": [
+                WorkpaperNote(
+                    text="Revenue is the stable benchmark.",
+                    item="materiality_factors",
+                    added_by=w.x.owner,
+                    added_at=DECIDED_AT,
+                )
+            ]
+        }
+    )
+    content = build_content(view, empty, noted)
+    assert (
+        next(t for s in content.sections for t in s.tables if t.id == "materiality_calculation").rows[0]["reason"]
+        == "Revenue is the stable benchmark."
+    )
+    assert "materiality_factors" not in missing_of(snapshot.required[template.id], view, empty, noted)
+    candidate = next(o for o in sources.outputs["materiality_candidates"] if isinstance(o, MaterialityCandidates))
+    altered = candidate.model_copy(
+        update={
+            "version": 2,
+            "candidates": [
+                c.model_copy(update={"base_amount_cents": 5000000}) if c.basis == "revenue" else c
+                for c in candidate.candidates
+            ],
+        }
+    )
+    changed_sources = replace(empty, outputs={**sources.outputs, "materiality_candidates": [altered]})
+    content = build_content(view_of(template, changed_sources), changed_sources, paper)
+    assert (
+        next(t for s in content.sections for t in s.tables if t.id == "materiality_calculation").rows[0][
+            "overall_cents"
+        ]
+        == 32431
+    )
+
+    from datetime import timedelta
+
+    selected = next(d for d in decisions if d.gate is GateId.PLN_01_03)
+    later = selected.model_copy(
+        update={"id": "D-PLN-REVISED", "target_version": 2, "decided_at": selected.decided_at + timedelta(seconds=1)}
+    )
+    revised_sources = replace(
+        changed_sources,
+        decisions=[*decisions, later],
+        materials={**sources.materials, (altered.id, altered.version): altered},
+    )
+    updated = workpapers.refreshed(paper, template, snapshot.required[template.id], revised_sources)
+    table = next(t for s in updated.content.sections for t in s.tables if t.id == "materiality_calculation")
+    assert [r["overall_cents"] for r in table.rows] == [32431, 50000]
+    assert {(r.kind, r.id, r.version) for r in updated.basis} >= {
+        ("MaterialityCandidates", "MATERIALITY", 1),
+        ("MaterialityCandidates", "MATERIALITY", 2),
+    }

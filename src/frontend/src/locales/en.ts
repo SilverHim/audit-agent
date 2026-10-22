@@ -656,6 +656,8 @@ export const en = {
     },
   },
   planning: {
+    reasonHint:
+      'Consider recording why you chose the benchmark and percentages (ASA 320 paragraph 14). If left blank, workpaper A-2 will show a missing selection rationale. You can supplement it later and submit this decision now.',
     analytics: 'Preliminary analysis',
     candidates: 'Materiality candidates',
     notApplicable: {

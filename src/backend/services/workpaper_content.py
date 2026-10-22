@@ -18,6 +18,7 @@ from backend.contracts.models import (
     WorkpaperValue,
 )
 from backend.services.procedure_library import render_text
+from backend.services.workpaper_decisions import decision_sections
 from backend.services.workpaper_judgments import detail_sections
 from backend.services.workpaper_labels import (
     AGENTS,
@@ -26,6 +27,7 @@ from backend.services.workpaper_labels import (
     NOT_AVAILABLE,
     NOT_RECORDED,
     PROCEDURE_NAMES,
+    REGISTRY_CHECKS,
     ROW_CHECKS,
     words,
 )
@@ -290,12 +292,6 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
             execution.append(render_text(template.scope, run.params_snapshot))
     table, missing = rule_details(view)
     if template.id == "ACC-04":
-        names = {
-            "abn_active": words("ABN 有效", "ABN is active"),
-            "name_match": words("登记名称一致", "Registered name agrees"),
-            "company_registered": words("公司登记有效", "Company registration is current"),
-            "directors_match": words("董事一致", "Directors agree"),
-        }
         table = WorkpaperTable(
             id="tested_items",
             columns=[
@@ -306,7 +302,7 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
             ],
             rows=[
                 {
-                    "check": names[check.check],
+                    "check": REGISTRY_CHECKS[check.check],
                     "status": "—" if check.passed is None else ("✓" if check.passed else "✗"),
                     "description": check.detail,
                     "evidence": f"{check.evidence.source_type}:{check.evidence.source_id} / {check.evidence.locator}",
@@ -332,7 +328,7 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
     ]
     if template.id == "REV-03" and "GEN-02" in sources.program_refs:
         linked.append(sources.program_refs["GEN-02"])
-    specialized = detail_sections(view, sources)
+    specialized = decision_sections(view, sources, workpaper) or detail_sections(view, sources)
     details = section(
         "details",
         tables=[table],
