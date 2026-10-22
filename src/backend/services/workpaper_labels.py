@@ -63,6 +63,31 @@ SECTIONS = {
     "review": words("复核意见", "Review comments"),
 }
 FIELDS = {
+    "before": ("修改前", "Before"),
+    "after": ("修改后", "After"),
+    "withdrawn_at": ("撤回时间", "Withdrawn at"),
+    "field": ("字段", "Field"),
+    "value": ("取值", "Value"),
+    "page": ("页码", "Page"),
+    "quote": ("引用原文", "Original text"),
+    "term_type": ("条款类型", "Term type"),
+    "document_id": ("文件", "Document"),
+    "counterparty": ("合同对方", "Counterparty"),
+    "sign_date": ("签订日", "Signing date"),
+    "changed_by": ("修改人", "Changed by"),
+    "changed_at": ("修改时间", "Changed at"),
+    "reason": ("理由", "Reason"),
+    "decision": ("决定", "Decision"),
+    "reviewer": ("复核人", "Reviewer"),
+    "reviewed_at": ("复核时间", "Reviewed at"),
+    "step": ("步骤", "Step"),
+    "from_steps": ("所引步骤", "Referenced steps"),
+    "confidence": ("置信度", "Confidence"),
+    "conclusion": ("结论", "Conclusion"),
+    "recommendation": ("建议", "Recommendation"),
+    "balance_date": ("余额截至日", "Balance date"),
+    "confirmed_balance_cents": ("回函余额", "Confirmed balance"),
+    "accrued_interest_cents": ("应计利息", "Accrued interest"),
     "marker": ("标记", "Mark"),
     "source_id": ("对象", "Item"),
     "invoice_no": ("发票号", "Invoice"),
@@ -166,4 +191,26 @@ ROW_CHECKS = {
     ("PLN-07", "A02"): "Ratio analysis inputs",
     ("PLN-07", "A03"): "Monthly trend inputs",
     ("REV-02", "S01"): "Invoices above performance materiality within the closing window",
+}
+
+
+STATES = {
+    key: words(zh, en)
+    for key, zh, en in (
+        ("pending", "待复核", "Pending review"),
+        ("confirmed", "已确认", "Confirmed"),
+        ("overridden", "已推翻", "Overridden"),
+        ("superseded", "已取代", "Superseded"),
+        ("decided", "已决定", "Decided"),
+        ("consistent", "一致", "Consistent"),
+        ("inconsistent", "不一致", "Inconsistent"),
+        ("not_applicable", "未完成复核", "Review not completed"),
+        ("skipped", "未触发独立复核", "Independent review not triggered"),
+        ("confirm", "确认", "Confirm"),
+        ("override", "推翻并另出结论", "Override"),
+        ("misstatement", "认定错报", "Recognise misstatement"),
+        ("rerun", "重跑", "Rerun"),
+        ("manual_result", "人工结果", "Manual result"),
+        ("dispute_resolution", "争议裁决", "Resolve dispute"),
+    )
 }

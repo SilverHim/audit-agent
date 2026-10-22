@@ -742,6 +742,14 @@ async def test_workpaper_versions_share_the_procedure_table(storage) -> None:
                 WorkpaperSection(
                     id="details",
                     title=LocalizedText(zh="明细", en="Details"),
+                    children=[
+                        WorkpaperSection(
+                            id="subject",
+                            title=LocalizedText(zh="对象", en="Subject"),
+                            generated_language="en",
+                            paragraphs=["Synthetic original text"],
+                        )
+                    ],
                     tables=[
                         WorkpaperTable(
                             id="items",

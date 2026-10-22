@@ -6206,6 +6206,14 @@ export type WorkpaperSection = {
      * Tables
      */
     tables?: Array<WorkpaperTable>;
+    /**
+     * Generated Language
+     */
+    generated_language?: 'zh' | 'en' | null;
+    /**
+     * Children
+     */
+    children?: Array<WorkpaperSection>;
 };
 
 /**

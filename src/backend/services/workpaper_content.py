@@ -1,8 +1,8 @@
 """从一次读取的资料生成语言无关的底稿快照. 纯函数, 不查库、不调用模型、不渲染 Excel."""
 
 import json
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from backend.contracts.models import (
     AcceptanceScorecard,
@@ -14,11 +14,11 @@ from backend.contracts.models import (
     WorkpaperColumn,
     WorkpaperContent,
     WorkpaperHeader,
-    WorkpaperSection,
     WorkpaperTable,
     WorkpaperValue,
 )
 from backend.services.procedure_library import render_text
+from backend.services.workpaper_judgments import detail_sections
 from backend.services.workpaper_labels import (
     AGENTS,
     ASSERTIONS,
@@ -27,35 +27,15 @@ from backend.services.workpaper_labels import (
     NOT_RECORDED,
     PROCEDURE_NAMES,
     ROW_CHECKS,
-    SECTIONS,
-    field_label,
     words,
 )
+from backend.services.workpaper_tables import column, section, value
 
 if TYPE_CHECKING:
     from backend.services.workpapers import Sources, View
 
 # Xero 原始录入/审批人员不复制进快照; 服务完成记录中的合成签收人照原文保留.
 PRIVATE_FIELDS = frozenset({"created_by", "approved_by", "posted_by", "email"})
-
-
-def column(key: str, *, money: bool = False, total: bool = False, width: float = 20) -> WorkpaperColumn:
-    return WorkpaperColumn(
-        key=key, label=field_label(key), format="money" if money else "text", total=total, width=width
-    )
-
-
-def section(
-    key: str, *, paragraphs: Sequence[str | LocalizedText] = (), tables: Sequence[WorkpaperTable] = ()
-) -> WorkpaperSection:
-    return WorkpaperSection(id=key, title=SECTIONS[key], paragraphs=list(paragraphs), tables=list(tables))
-
-
-def value(raw: Any) -> WorkpaperValue:
-    """单个原始字段保留原文; 嵌套识别信息用稳定 JSON, 不写进 Excel 公式."""
-    if raw is None or isinstance(raw, str | int | float | bool):
-        return raw
-    return json.dumps(raw, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def marker(index: int) -> str:
@@ -350,6 +330,17 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
         for pid, ref in sources.program_refs.items()
         if pid in template.depends_on or (ref.startswith(workpaper.area + "-") and ref != workpaper.ref)
     ]
+    if template.id == "REV-03" and "GEN-02" in sources.program_refs:
+        linked.append(sources.program_refs["GEN-02"])
+    specialized = detail_sections(view, sources)
+    details = section(
+        "details",
+        tables=[table],
+        paragraphs=missing
+        or ([NOT_RECORDED] if template.engine == "rule" and not view.populations and template.rules else []),
+    )
+    if specialized is not None:
+        details = specialized
     return WorkpaperContent(
         header=header,
         sections=[
@@ -367,11 +358,7 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
             section("basis", tables=[basis]),
             section("procedures", paragraphs=execution),
             section("checks", tables=[checks]),
-            section(
-                "details",
-                tables=[table],
-                paragraphs=missing or ([NOT_RECORDED] if template.engine == "rule" and not view.populations else []),
-            ),
+            details,
             section("exceptions", tables=[exceptions_table(view)]),
             section("conclusion", paragraphs=[conclusion, *notes]),
             section("cross_references", paragraphs=[", ".join(linked)] if linked else []),
