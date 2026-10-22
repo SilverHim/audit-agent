@@ -644,7 +644,7 @@ async def assert_loop(w: Walk) -> None:
 @shared_loop
 async def test_end_state(walked: Walk) -> None:
     """需求 R287 验收 4, R260 与 R195: 见 assert_end_state."""
-    assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals", "misstatement", "planning"]
+    assert sorted(DEMO_FEATURES) == ["collab", "critic", "journals", "misstatement", "more_evidence", "planning"]
     await assert_end_state(walked)
 
 

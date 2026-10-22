@@ -300,7 +300,12 @@ async def test_misstatement_on_classification_applies_judgments_update(waiting: 
     (来源为该判断, 未分类), 任务 v2 decided. 再带人给的载荷 → FIELD_NOT_ALLOWED (载荷取判断上的)."""
     task = await waiting.output_store.get(EID, ReviewTask, XJ499_TASK)
     assert task is not None
-    assert waiting.runner.deps.queue.allowed(task) == {Decision.confirm, Decision.override, Decision.misstatement}
+    assert waiting.runner.deps.queue.allowed(task) == {
+        Decision.confirm,
+        Decision.override,
+        Decision.misstatement,
+        Decision.more_evidence,
+    }
     decision = record(XJ499_TASK, Decision.misstatement, id="D-C2", misstatement_draft=DUPLICATE)
     update = MisstatementUpdate(misstatement_id=XJ499, base_version=1, kind="classification", type="judgmental")
     await assert_rejected(

@@ -168,7 +168,8 @@ class Reliability(StrEnum):
     external_original = "external_original"  # 外部原件, 最高
     external_copy = "external_copy"  # 外部副本
     internal_original = "internal_original"  # 内部原件
-    internal_copy = "internal_copy"  # 内部副本, 最低
+    internal_copy = "internal_copy"  # 内部副本
+    management_representation = "management_representation"  # 管理层说明 (需求 R369), 低于外部证据, 最低
 
 
 class StepKind(StrEnum):
@@ -308,6 +309,7 @@ class TaskStatus(StrEnum):
 
     pending = "pending"  # 待决
     decided = "decided"  # 已决定
+    awaiting_evidence = "awaiting_evidence"  # 等补充证据 (需求 R369): 不算待你处理, 不阻塞流程
 
 
 class TargetType(StrEnum):
@@ -327,6 +329,7 @@ class Decision(StrEnum):
     rerun = "rerun"  # 重跑
     manual_result = "manual_result"  # 人工给出结果
     dispute_resolution = "dispute_resolution"  # 仲裁争议 (只用于 dispute 任务)
+    more_evidence = "more_evidence"  # 要求补充证据 (需求 R369): 普通复核任务; 转补交请求并等证据, 不卡流程
 
 
 class GateId(StrEnum):
@@ -1560,6 +1563,7 @@ class ReviewTask(Versioned):
     status: TaskStatus = TaskStatus.pending  # 待决或已决定
     created_at: datetime  # 创建时间
     manual_request: ManualRequest | None = None  # manual 任务的请求, 其余类型为空
+    evidence_request_id: str | None = None  # 要求补充证据的任务关联的请求 (需求 R369), 其余为空
 
     @model_validator(mode="after")
     def request_matches_kind(self) -> Self:
@@ -1674,6 +1678,44 @@ class RerunRequest(Versioned):
     report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿
     requested_by: str  # 请求人的用户 ID
     requested_at: datetime  # 请求时间
+
+
+class EvidenceRequest(Versioned):
+    """补充证据请求 (需求 R369, Issue #65): 复核时要求补充证据, 由数据管理智能体发出, 等待期间不卡流程.
+
+    按判断里缺的证据整理成结构化请求: description 要什么, related_object_ids 关联对象 (凭证号, 发票, 合同, 银行账户),
+    requested_from 向谁要 (客户, 银行或其他第三方, 管理层). 审计师发出前可改 (PATCH); 按请求上传文件后置 received,
+    记 document_ids 与重判后的判断 ID; 拿不到时置 unavailable 并记范围受限."""
+
+    task_id: str  # 来源复核任务
+    judgment_id: str  # 要补证据的判断
+    procedure_id: str  # 判断所属程序
+    subject_id: str  # 判断对象
+    description: str  # 要什么文件或资料
+    related_object_ids: list[str] = []  # 关联对象 (凭证号, 发票, 合同, 银行账户等)
+    requested_from: Literal["client", "bank", "other", "management"] = "client"  # 向谁要
+    status: Literal["open", "received", "unavailable"] = "open"  # 待补, 已收到, 无法取得
+    document_ids: list[str] = []  # 按请求上传并登记的文件 (需求 R369)
+    unavailable_reason: str | None = None  # 无法取得的原因 (选填)
+    rejudged_judgment_id: str | None = None  # 证据到了重判后的判断 (新版本)
+    requested_by: str  # 发出请求的审计师
+    requested_at: datetime  # 发出时刻
+    resolved_at: datetime | None = None  # 收到或标无法取得的时刻
+    resolved_by: str | None = None
+
+
+class ScopeLimitation(Versioned):
+    """审计范围受限 (需求 R369): 补充证据请求无法取得时记一条, 列入错报汇总与 FIN-01 材料 (不自动改意见)."""
+
+    request_id: str  # 无法取得的请求
+    judgment_id: str  # 关联判断
+    procedure_id: str
+    subject_id: str  # 受限的对象
+    assertion: Assertion | None = None  # 涉及的认定, 判断草稿有科目时带
+    amount_cents: int | None = None  # 涉及的金额 (判断草稿或归因例外的金额)
+    reason: str | None = None  # 无法取得的原因
+    recorded_by: str
+    recorded_at: datetime
 
 
 class ReviewWithdrawal(Versioned):

@@ -33,6 +33,7 @@ from backend.contracts.models import (
     DocumentRef,
     Engagement,
     EvidencePointer,
+    EvidenceRequest,
     GateDecision,
     GateId,
     Judgment,
@@ -95,7 +96,9 @@ from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
 from backend.services.correction_entries import correction_problems
 from backend.services.data_quality import OnHand
-from backend.services.features import COLLAB, MISSTATEMENT
+from backend.services.evidence_followup import awaiting_task, evidence_trail, request_of
+from backend.services.evidence_followup import unavailable as evidence_unavailable
+from backend.services.features import COLLAB, MISSTATEMENT, MORE_EVIDENCE
 from backend.services.judgment_engine import document_pointer
 from backend.services.presentation import dwell_seconds
 from backend.services.procedure_library import ProcedureLibrary
@@ -154,6 +157,7 @@ REVIEW_FIELDS: dict[tuple[TaskKind | None, Decision], ReviewFields] = {
     (None, Decision.misstatement): ReviewFields(("misstatement_draft",), frozenset({"misstatement_draft"})),
     (None, Decision.rerun): ReviewFields((), frozenset({"rerun_params"})),
     (None, Decision.manual_result): ReviewFields(("manual_result",), frozenset({"manual_result"})),
+    (None, Decision.more_evidence): ReviewFields(),  # 要求补充证据 (需求 R369): 只填理由, 没有专用字段
     # manual 任务 (人工程序, 需求 R92) 的结果另须写执行日期; 其余按任务请求的核对见 check_manual_result
     (TaskKind.manual, Decision.manual_result): ReviewFields(
         ("manual_result", "manual_result.performed_on"), frozenset({"manual_result"})
@@ -425,6 +429,8 @@ def check_review_values(
             "VERSION_MISMATCH",
             f"{task.target_id} 当前为第 {current} 版, 任务与决定绑定的是第 {record.target_version} 版",
         )
+    if record.decision is Decision.more_evidence and MORE_EVIDENCE not in deps.features:
+        raise DecisionRejected("DECISION_NOT_ALLOWED", "补充证据闭环的功能未开启")
     if record.decision not in deps.queue.allowed(task, target):
         if record.decision is Decision.confirm and isinstance(target, Judgment):  # 建议认定错报的判断 (需求 R363)
             raise DecisionRejected(
@@ -1233,6 +1239,89 @@ class GraphDecisionSubmit:
             seconds, presentation_id = dwell_seconds(entries, record.task_id, record.reviewed_by, record.decided_at)
         return record.model_copy(update={"dwell_seconds": seconds, "presentation_id": presentation_id})
 
+    async def _apply_evidence_request(self, eid: str, record: ReviewRecord, task: ReviewTask) -> None:
+        """要求补充证据的决定 (需求 R369): 由判断整理出证据请求, 任务转等证据 (不算待你处理, 不阻塞流程); 程序按仍待决的
+        任务重算. 复查任务的目标必是判断 (normal 任务)."""
+        store = self.deps.output_store
+        judgment = await store.get(eid, Judgment, task.target_id)
+        assert judgment is not None  # 校验时已读到
+        request = request_of(record, task, judgment, now=self.now())
+        updated_task = awaiting_task(task, request)
+        procedure = await store.get(eid, Procedure, task.procedure_id)
+        assert procedure is not None
+        pending = await store.latest(eid, ReviewTask, procedure_id=task.procedure_id, status=TaskStatus.pending)
+        rest = [t for t in pending if t.id != task.id]
+        updated = recompute_procedure(
+            procedure, rest, done_status(self.deps.library.load(task.procedure_id)), COLLAB in self.deps.features
+        )
+        created: list[Versioned] = [request, updated_task, *([updated] if updated is not None else [])]
+        async with store.transaction(eid):
+            await store.put(eid, [record], actor=record.reviewed_by)
+            saved = await store.put(eid, created, actor=AgentId.A1)
+            if saved != created:
+                clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
+                raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+        await self.deps.trail.record(review_trail(eid, record, task, []))
+        await self.deps.trail.record(evidence_trail(eid, request, "requested", record.reviewed_by))
+        await record_transitions(
+            self.deps.trail, await procedure_transitions(store, eid, [updated] if updated is not None else [])
+        )
+
+    async def mark_evidence_unavailable(
+        self, eid: str, request_id: str, reason: str | None, *, actor: str
+    ) -> EvidenceRequest:
+        """审计师标补充证据无法取得 (需求 R369): 请求置 unavailable, 复核任务回待处理, 记一条范围受限.
+        校验项目锁定与项目锁; 请求不存在 404, 已不是待补的 409."""
+        engagement = await self._engagement(eid)
+        if engagement.locked:
+            raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
+        self.runner.acquire(eid)
+        try:
+            return await evidence_unavailable(self.deps, eid, request_id, actor=actor, reason=reason)
+        finally:
+            self.runner.release(eid)
+
+    async def edit_evidence_request(
+        self,
+        eid: str,
+        request_id: str,
+        *,
+        description: str | None,
+        requested_from: str | None,
+        related_object_ids: list[str] | None,
+        actor: str,
+    ) -> EvidenceRequest:
+        """审计师在发出前修改请求 (需求 R369): 只改给了的项; 已收到或无法取得的不能改 (409)."""
+        engagement = await self._engagement(eid)
+        if engagement.locked:
+            raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
+        self.runner.acquire(eid)
+        try:
+            store = self.deps.output_store
+            request = await store.get(eid, EvidenceRequest, request_id)
+            if request is None:
+                raise LookupError(request_id)
+            if request.status != "open":
+                raise DecisionRejected("INVALID_VALUE", f"{request_id} 已不是待补充的请求")
+            changes: dict[str, Any] = {
+                key: value
+                for key, value in (
+                    ("description", description),
+                    ("requested_from", requested_from),
+                    ("related_object_ids", related_object_ids),
+                )
+                if value is not None
+            }
+            updated = request.model_copy(update={"version": request.version + 1, **changes})
+            async with store.transaction(eid):
+                saved = await store.put(eid, [updated], actor=actor)
+                if saved != [updated]:
+                    raise VersionConflict(f"补充证据请求 {request_id} 已有新版本")
+            await self.deps.trail.record(evidence_trail(eid, updated, "edited", actor, **changes))
+            return updated
+        finally:
+            self.runner.release(eid)
+
     async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
         rerun 时连同同程序其余待决的可重跑任务 (failed, unattributed) 一并置 decided (一轮失败算一组, 见 rerun_group).
@@ -1246,6 +1335,9 @@ class GraphDecisionSubmit:
         snapshot: 当前检查点, 人工判断按其中已有的判断取号 (-H{n}); 其中的过期重跑请求定出哪些归因已失效.
         """
         store = self.deps.output_store
+        if record.decision is Decision.more_evidence:
+            await self._apply_evidence_request(eid, record, task)
+            return
         target = await store.get(eid, TARGET_MODELS[task.target_type], task.target_id)
         assert target is not None  # 校验时已按任务目标取到
         values = fill_defaults(snapshot.values)

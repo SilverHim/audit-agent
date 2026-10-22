@@ -2631,6 +2631,302 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/evidence-requests": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Evidence Requests",
+        "description": "补充证据请求, 按发出顺序; 任务与请求的状态供前端显示 (等待证据, 已收到, 无法取得).",
+        "operationId": "evidence-list_evidence_requests",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EvidenceRequest"
+                  },
+                  "title": "Response Evidence-List Evidence Requests"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/scope-limitations": {
+      "get": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "List Scope Limitations",
+        "description": "审计范围受限的记录 (需求 R369), 按记录顺序.",
+        "operationId": "evidence-list_scope_limitations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScopeLimitation"
+                  },
+                  "title": "Response Evidence-List Scope Limitations"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/evidence-requests/{request_id}": {
+      "patch": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Edit Evidence Request",
+        "description": "审计师在发出前修改补充证据请求 (要什么, 向谁要, 关联对象); 只改给了的项. 请求不存在 404; 已收到或无法取得 409;\n锁定 423; 忙 409.",
+        "operationId": "evidence-edit_evidence_request",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceRequestIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/evidence-requests/{request_id}/unavailable": {
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Evidence Unavailable",
+        "description": "标补充证据无法取得 (需求 R369): 原复核任务回待处理, 另记一条审计范围受限. 理由选填. 请求不存在 404; 已结 409;\n锁定 423; 忙 409.",
+        "operationId": "evidence-evidence_unavailable",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvidenceUnavailableIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceRequest"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/management-representations": {
+      "post": {
+        "tags": [
+          "evidence"
+        ],
+        "summary": "Register Management Representation",
+        "description": "登记管理层的书面或口头说明为证据 (需求 R369): 说明人, 时间与内容, 存成证据文件, 可靠性为管理层说明 (低于外部\n证据); 判断可以引用它. 锁定 423.",
+        "operationId": "evidence-register_management_representation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagementRepresentationIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRef"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/data/imports": {
       "post": {
         "tags": [
@@ -7825,6 +8121,22 @@
             "type": "array",
             "title": "Stale Procedure Ids",
             "default": []
+          },
+          "open_evidence_requests": {
+            "items": {
+              "$ref": "#/components/schemas/EvidenceRequest"
+            },
+            "type": "array",
+            "title": "Open Evidence Requests",
+            "default": []
+          },
+          "scope_limitations": {
+            "items": {
+              "$ref": "#/components/schemas/ScopeLimitation"
+            },
+            "type": "array",
+            "title": "Scope Limitations",
+            "default": []
           }
         },
         "additionalProperties": false,
@@ -9079,7 +9391,8 @@
           "misstatement",
           "rerun",
           "manual_result",
-          "dispute_resolution"
+          "dispute_resolution",
+          "more_evidence"
         ],
         "title": "Decision",
         "description": "复核决定."
@@ -10361,6 +10674,193 @@
         "title": "EvidencePointer",
         "description": "证据指针: 结论依据的是哪条证据 (source_id) 的哪一处 (locator), 前端据此打开原文."
       },
+      "EvidenceRequest": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "task_id": {
+            "type": "string",
+            "title": "Task Id"
+          },
+          "judgment_id": {
+            "type": "string",
+            "title": "Judgment Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "related_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Object Ids",
+            "default": []
+          },
+          "requested_from": {
+            "type": "string",
+            "enum": [
+              "client",
+              "bank",
+              "other",
+              "management"
+            ],
+            "title": "Requested From",
+            "default": "client"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "received",
+              "unavailable"
+            ],
+            "title": "Status",
+            "default": "open"
+          },
+          "document_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Document Ids",
+            "default": []
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "rejudged_judgment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejudged Judgment Id"
+          },
+          "requested_by": {
+            "type": "string",
+            "title": "Requested By"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved At"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "task_id",
+          "judgment_id",
+          "procedure_id",
+          "subject_id",
+          "description",
+          "requested_by",
+          "requested_at"
+        ],
+        "title": "EvidenceRequest",
+        "description": "补充证据请求 (需求 R369, Issue #65): 复核时要求补充证据, 由数据管理智能体发出, 等待期间不卡流程.\n\n按判断里缺的证据整理成结构化请求: description 要什么, related_object_ids 关联对象 (凭证号, 发票, 合同, 银行账户),\nrequested_from 向谁要 (客户, 银行或其他第三方, 管理层). 审计师发出前可改 (PATCH); 按请求上传文件后置 received,\n记 document_ids 与重判后的判断 ID; 拿不到时置 unavailable 并记范围受限."
+      },
+      "EvidenceRequestIn": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "requested_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "client",
+                  "bank",
+                  "other",
+                  "management"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested From"
+          },
+          "related_object_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Object Ids"
+          }
+        },
+        "type": "object",
+        "title": "EvidenceRequestIn",
+        "description": "修改补充证据请求 (需求 R369): 只给要改的项, 审计师在发出前改."
+      },
       "EvidenceType": {
         "type": "string",
         "enum": [
@@ -10374,6 +10874,24 @@
         ],
         "title": "EvidenceType",
         "description": "证据种类."
+      },
+      "EvidenceUnavailableIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "EvidenceUnavailableIn",
+        "description": "补充证据无法取得 (需求 R369): 理由选填."
       },
       "ExceptionDisposition": {
         "type": "string",
@@ -11947,6 +12465,30 @@
         ],
         "title": "LocalizedText",
         "description": "中英两种写法的文字 (需求 R324), 两种都须给出, 去掉首尾空白后不能为空 (原文不改). 知识文件 (contracts/knowledge)\n与底稿记录 (Workpaper, 需求 R330) 共用, 定义在这里免得两个模块互相引入."
+      },
+      "ManagementRepresentationIn": {
+        "properties": {
+          "person": {
+            "type": "string",
+            "title": "Person"
+          },
+          "stated_on": {
+            "type": "string",
+            "title": "Stated On"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          }
+        },
+        "type": "object",
+        "required": [
+          "person",
+          "stated_on",
+          "content"
+        ],
+        "title": "ManagementRepresentationIn",
+        "description": "登记管理层说明为证据 (需求 R369)."
       },
       "ManualRequest": {
         "properties": {
@@ -14391,7 +14933,8 @@
           "external_original",
           "external_copy",
           "internal_original",
-          "internal_copy"
+          "internal_copy",
+          "management_representation"
         ],
         "title": "Reliability",
         "description": "证据可靠性, 影响置信度权重."
@@ -14962,6 +15505,17 @@
                 "type": "null"
               }
             ]
+          },
+          "evidence_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Request Id"
           }
         },
         "additionalProperties": false,
@@ -15269,6 +15823,89 @@
         ],
         "title": "RunTrigger",
         "description": "一次执行的起因."
+      },
+      "ScopeLimitation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version",
+            "default": 1
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          },
+          "judgment_id": {
+            "type": "string",
+            "title": "Judgment Id"
+          },
+          "procedure_id": {
+            "type": "string",
+            "title": "Procedure Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "title": "Subject Id"
+          },
+          "assertion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Assertion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Amount Cents"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "recorded_by": {
+            "type": "string",
+            "title": "Recorded By"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "request_id",
+          "judgment_id",
+          "procedure_id",
+          "subject_id",
+          "recorded_by",
+          "recorded_at"
+        ],
+        "title": "ScopeLimitation",
+        "description": "审计范围受限 (需求 R369): 补充证据请求无法取得时记一条, 列入错报汇总与 FIN-01 材料 (不自动改意见)."
       },
       "ServiceOrganisation": {
         "properties": {
@@ -16077,7 +16714,8 @@
         "type": "string",
         "enum": [
           "pending",
-          "decided"
+          "decided",
+          "awaiting_evidence"
         ],
         "title": "TaskStatus",
         "description": "复核任务状态."

@@ -110,6 +110,7 @@ from backend.services.data_import import (
 )
 from backend.services.data_quality import REQUIRED_TABLES, missing_tables
 from backend.services.demo_import import DEMO_JOB, NO_DEMO, STAGE_NAMES, DemoImport, stage_statuses
+from backend.services.evidence_followup import link_uploaded_documents
 from backend.services.extraction_edits import (
     apply_confirmation_edit,
     apply_contract_edit,
@@ -1457,6 +1458,10 @@ class DataService:
             await self.backfill_trails(eid)
             saved = await self.register_uploads(eid, names, [data for _, data in files], actor, request_id)
             self.jobs[eid][key] = frozenset(d.id for d in saved.fresh)
+            try:  # 按补充证据请求上传时登记到请求 (需求 R369), 请求已结或没有该请求时原样返回; 失败不影响上传
+                await link_uploaded_documents(self.deps, eid, request_id, saved.documents, actor=actor)
+            except Exception:
+                logger.exception("补充证据请求登记上传文件失败: %s", request_id)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)

@@ -113,7 +113,7 @@ def review(view: dict[str, Any], xj499: str) -> dict[str, Any]:
     body: dict[str, Any] = {"task_id": task["id"], "target_version": task["target_version"]}
     if "confirm" in view["allowed_decisions"]:
         return body | {"decision": "confirm"}
-    assert view["allowed_decisions"] == ["override", "misstatement"], view["allowed_decisions"]
+    assert view["allowed_decisions"] == ["override", "misstatement", "more_evidence"], view["allowed_decisions"]
     if task["id"] == XJ499_TASK and xj499 == "disagree":
         return body | {"decision": "override", "override_conclusion": NOT_MISSTATEMENT}
     return body | {"decision": "misstatement", "misstatement_draft": target["misstatement_draft"]}
@@ -197,7 +197,7 @@ async def test_agreeing_records_both_and_withdrawing_one_updates_the_schedule() 
         )
         [again] = [v for v in await d.tasks("pending") if v["task"]["id"] == XJ499_TASK]
         assert (again["allowed_decisions"], again["target"]["review_status"]) == (
-            ["override", "misstatement"],
+            ["override", "misstatement", "more_evidence"],
             "pending",
         )
         assert again["task"]["target_version"] == again["target"]["version"]

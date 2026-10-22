@@ -98,7 +98,7 @@ def knowledge(tmp_path: Path, **extra: str) -> Path:
 
 
 def test_registry_and_parsing() -> None:
-    """验收 1, 2: 11 个功能名与 requires (R313: planning 只含 PLN-15 且不依赖其他功能, PLN-19 另立 reassessment);
+    """验收 1, 2: 12 个功能名与 requires (R313: planning 只含 PLN-15 且不依赖其他功能, PLN-19 另立 reassessment);
     逗号分隔解析; 未登记的名字与依赖不满足都报出名字."""
     assert list(FEATURES) == [
         "critic",
@@ -111,6 +111,7 @@ def test_registry_and_parsing() -> None:
         "acceptance",
         "planning",
         "reassessment",
+        "more_evidence",
         "presign",
     ]
     assert {name: set(spec.requires) for name, spec in FEATURES.items() if spec.requires} == {

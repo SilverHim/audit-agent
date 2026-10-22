@@ -31,12 +31,14 @@ FEATURES: dict[str, FeatureSpec] = {
     "planning": FeatureSpec("总体审计计划: PLN-15 与其闸门"),
     # 修订重要性要出计划的新修订, 有计划才说得通; 重估在错报闭环之后
     "reassessment": FeatureSpec("重要性重估: PLN-19 与其闸门", frozenset({"misstatement", "planning"})),
+    "more_evidence": FeatureSpec("补充证据闭环: 要求补充证据决定, 证据请求与范围受限, 管理层说明登记 (Issue #65)"),
     "presign": FeatureSpec(
         "签字前: FIN-15, FIN-07, FIN-18, FIN-10, RPT-08, RPT-07, 签字前清单", frozenset({"misstatement"})
     ),
 }
 BASELINE: frozenset[str] = frozenset({"critic"})  # 缺省功能集; Numbat 回归测试显式用它 (tests/fakes.NUMBAT_FEATURES)
 COLLAB = "collab"  # 智能体协作增量的功能名 (A7 触发规则, 争议中状态与单列, 仲裁补全等按它开关)
+MORE_EVIDENCE = "more_evidence"  # 补充证据闭环的功能名 (需求 R369, Issue #65)
 MISSTATEMENT = "misstatement"  # 错报闭环的功能名 (需求 R156 起: 新错报为 identified 并走生命周期; 关闭时为 uncorrected)
 PLANNING = "planning"  # 计划的功能名: 装配后起草总体审计计划, 停在 PLN-15 闸门, 计划批准才进 P2 (需求 R205)
 AUTONOMY = "autonomy"  # 自主度的功能名: 装配与判断两个时点的动态降级, 关键证据缺失的判断交人 (需求 R168, R170)
