@@ -31,6 +31,7 @@ const result = {
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
   corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
+  workpapers: null, // 档案页预览、编辑、历史与下载, 复用 mock 走通.
   currency: null, // 币种确认与锁定后的显示核对 (R366), 共用原有走通.
   withdrawal_totals: [], // Issue #67: 初次同意, 撤回后改判不是错报, 再撤回并同意的未更正合计
   activity: null, // 配了 activity 时的核对结果 (需求 R362), 见 checkActivity
@@ -614,6 +615,39 @@ async function confirmCurrency() {
   }, timeouts.action_ms, '保存项目币种')
 }
 
+async function editWorkpaper() {
+  await goto(`${base}/engagements/${result.eid}/workpapers?ref=D-3`)
+  await page.getByTestId('workpaper-preview').waitFor()
+  await page.getByLabel('Action', { exact: true }).selectOption('conclusion')
+  await page.getByLabel('Text', { exact: true }).fill('Reviewed the six invoices against the recorded evidence.')
+  await click(page.getByRole('button', { name: 'Save', exact: true }))
+  await waitFor(async () => (await api(`/engagements/${result.eid}/workpapers/D-3`)).body?.workpaper.conclusion === 'Reviewed the six invoices against the recorded evidence.', timeouts.action_ms, '底稿结论未保存')
+  await page.getByLabel('Action', { exact: true }).selectOption('signoff')
+  await click(page.getByRole('button', { name: 'Save', exact: true }))
+  await waitFor(async () => (await api(`/engagements/${result.eid}/workpapers/D-3`)).body?.workpaper.status === 'signed', timeouts.action_ms, '底稿签署未保存')
+  result.workpapers = { edited: true, previewed: false, downloaded: false }
+}
+
+async function checkAuditFile() {
+  await goto(`${base}/engagements/${result.eid}/workpapers?ref=D-3`)
+  await page.getByTestId('workpaper-preview').waitFor()
+  await page.getByRole('heading', { name: /D-3.*Three-way match/ }).waitFor()
+  await page.getByLabel('Version', { exact: true }).selectOption('1')
+  await page.getByTestId('workpaper-preview').getByText('ORC1026', { exact: true }).first().waitFor()
+  if (!(await page.getByRole('button', { name: 'Save', exact: true }).isDisabled())) throw new Error('归档后的底稿仍可修改')
+  const single = page.waitForEvent('download')
+  await click(page.getByRole('button', { name: 'Download Excel', exact: true }))
+  const file = await single
+  if (!file.suggestedFilename().startsWith('D-3 ')) throw new Error('单份底稿文件名不正确')
+  await file.saveAs(path.join(SHOTS, 'D-3.xlsx'))
+  const bundled = page.waitForEvent('download')
+  await click(page.getByRole('button', { name: 'Download all (ZIP)', exact: true }))
+  const zip = await bundled
+  await zip.saveAs(path.join(SHOTS, 'audit-file.zip'))
+  result.workpapers.previewed = true
+  result.workpapers.downloaded = true
+}
+
 async function checkArchivedCurrency() {
   await goto(`${base}/engagements/${result.eid}/data`)
   const input = page.getByLabel('Accounting currency', { exact: true })
@@ -642,6 +676,7 @@ async function main() {
     if (view.engagement.phase === 'Archived') {
       result.reached_archive = true
       if (config.currency) await step('核对归档后的币种与金额表头', checkArchivedCurrency)
+      if (config.currency) await step('归档底稿的历史预览与整套下载', checkAuditFile)
       // 报告页上签字的那一稿带 "已签字归档" 标记; 等它出来再截图 (打开页面时内容还没渲染)
       await step('归档后的报告页', async () => {
         await goto(`${base}/engagements/${result.eid}/report`)
@@ -651,6 +686,13 @@ async function main() {
     }
     const pending = (await api(`/engagements/${result.eid}/review-tasks?status=pending`)).body ?? []
     const suggested = (await summary())?.demo?.suggested ?? null
+    if (config.currency && !result.workpapers && pending.length && view.engagement.phase === 'P2_Executing') {
+      const papers = (await api(`/engagements/${result.eid}/workpapers`)).body ?? []
+      if (papers.some(p => p.ref === 'D-3' && p.availability === 'generated')) {
+        if (!(await step('修改并签署工作底稿', editWorkpaper))) return
+        continue
+      }
+    }
     let name
     let action
     if (pending.length && pending[0].task.kind === 'manual') {

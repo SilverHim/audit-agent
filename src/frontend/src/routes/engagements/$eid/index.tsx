@@ -32,6 +32,7 @@ import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
 import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { WorkingLanguageSelect } from '@/components/working-language'
+import { WorkpaperLinks } from '@/components/workpaper-links'
 import { XeroProfileCard } from '@/components/xero-profile'
 import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-api'
 import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
@@ -458,7 +459,12 @@ function HistoryItem({
   if (item.kind === 'phase')
     return <EventLine>{t.workspace.phaseEntered(t.phases[item.phase] ?? item.phase)}</EventLine>
   if (item.kind === 'completed')
-    return <EventLine>{t.workspace.completed(item.ids.join(lang === 'zh' ? '、' : ', '))}</EventLine>
+    return (
+      <EventLine>
+        {t.workspace.completed(item.ids.join(lang === 'zh' ? '、' : ', '))}
+        <WorkpaperLinks eid={eid} procedureIds={item.ids} />
+      </EventLine>
+    )
   if (item.kind === 'deferral') {
     const target = item.xero
       ? t.xeroProfile.item

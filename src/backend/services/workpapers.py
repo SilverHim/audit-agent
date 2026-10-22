@@ -71,12 +71,14 @@ from backend.contracts.models import (
     verified_adjustment_entries,
 )
 from backend.contracts.records import Account, DatasetTraits, JournalEntry, TrialBalanceRow
+from backend.contracts.views import WorkpaperDetail, WorkpaperIndexEntry
 from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import ProcedureLibrary, render_text, workpaper_kind
 from backend.services.staleness import current_misstatements, superseded_runs
 from backend.services.workpaper_content import build_content
 from backend.services.workpaper_decisions import decision_draft
+from backend.services.workpaper_files import relative_filename
 from backend.services.workpaper_judgments import model_judgments
 from backend.services.workpaper_summaries import system_content, system_missing, system_refreshed
 from backend.services.workpaper_tables import unsigned as unsigned
@@ -549,50 +551,48 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
     return Snapshot(templates, required, sources, workpapers)
 
 
-def plan_refresh(snapshot: Snapshot) -> list[tuple[Workpaper, ProcedureTemplate]]:
-    """snapshot 下要写的底稿新版本 (与其模板), 按程序编号; 纯函数."""
-    planned = []
+def plan_refresh(snapshot: Snapshot) -> list[tuple[Workpaper, str]]:
+    """纯函数计算全部派生底稿新版本及写入者, 顺序为程序、导引表、准则对照、索引."""
+    planned: list[tuple[Workpaper, str]] = []
+    papers = {p.ref: p for p in snapshot.workpapers.values()}
     for pid, template in sorted(snapshot.templates.items()):
         assert template.workpaper is not None
         previous = snapshot.workpapers.get(workpaper_id(template.workpaper.ref))
         new = refreshed(previous, template, snapshot.required[pid], snapshot.sources)
         if new is not None:
-            planned.append((new, template))
+            planned.append((new, template.owner))
+            papers[new.ref] = new
+    library = snapshot.sources.library
+    if papers and library is not None:
+        lead_refs = [
+            w.ref
+            for w in library.workpapers.system
+            if w.categories
+            and any(r.period == "current" for r in snapshot.sources.trial_balance)
+            and any(a.category in w.categories for a in snapshot.sources.accounts)
+        ]
+        for ref in (*lead_refs, "S", "00"):
+            spec = next(w for w in library.workpapers.system if w.ref == ref)
+            new = system_refreshed(papers.get(ref), spec, snapshot.sources, papers)
+            if new is not None:
+                papers[ref] = new
+                planned.append((new, "A8"))
     return planned
 
 
 async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
-    """刷新项目的全部底稿记录 (见模块说明), 在一个事务内写入变了的 (写入者为程序的执行智能体), 返回写入的. 项目不存在
-    或已锁定 (签字或拒绝承接) 时不刷新, 返回空."""
+    """只写实际变化的派生快照, 不存在或锁定的项目不刷新. 签字后的定稿由归档路径完成."""
     engagement = await deps.engagement_store.get(eid)
     if engagement is None or engagement.locked:
         return []
-    snapshot = await load(deps, eid)
-    planned = plan_refresh(snapshot)
-    papers = {p.ref: p for p in snapshot.workpapers.values()}
-    papers.update({paper.ref: paper for paper, _ in planned})
+    planned = plan_refresh(await load(deps, eid))
     written: list[Workpaper] = []
-    async with deps.output_store.transaction(eid):
-        for workpaper, template in planned:
-            [stored] = await deps.output_store.put(eid, [workpaper], actor=template.owner)
-            assert isinstance(stored, Workpaper)
-            written.append(stored)
-        if papers:
-            lead_refs = [
-                w.ref
-                for w in deps.library.workpapers.system
-                if w.categories
-                and any(r.period == "current" for r in snapshot.sources.trial_balance)
-                and any(a.category in w.categories for a in snapshot.sources.accounts)
-            ]
-            for ref in (*lead_refs, "S", "00"):
-                spec = next(w for w in deps.library.workpapers.system if w.ref == ref)
-                updated = system_refreshed(papers.get(ref), spec, snapshot.sources, papers)
-                if updated:
-                    [stored] = await deps.output_store.put(eid, [updated], actor="A8")
-                    assert isinstance(stored, Workpaper)
-                    papers[ref] = stored
-                    written.append(stored)
+    if planned:
+        async with deps.output_store.transaction(eid):
+            for paper, actor in planned:
+                [stored] = await deps.output_store.put(eid, [paper], actor=actor)
+                assert isinstance(stored, Workpaper)
+                written.append(stored)
     return written
 
 
@@ -620,10 +620,74 @@ class WorkpaperService:
         self.deps = deps
         self.runner = runner
 
-    async def list(self, eid: str) -> list[Workpaper]:
-        """项目的底稿记录 (各最新版本), 按档案顺序 (ProcedureLibrary.workpaper_order)."""
-        found = await self.deps.output_store.latest(eid, Workpaper)
-        return sorted(found, key=lambda w: self.deps.library.workpaper_order(w.ref))
+    async def ready(self, eid: str) -> Snapshot:
+        """空闲时补齐派生快照, 执行中仍可读已有版本, 不抢占运行中的项目锁."""
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None:
+            raise LookupError(f"Engagement {eid} not found")
+        snapshot = await load(self.deps, eid)
+        if not engagement.locked and not self.runner.is_running(eid) and plan_refresh(snapshot):
+            self.runner.acquire(eid)
+            try:
+                await refresh(self.deps, eid)
+            except Exception:
+                logger.exception("刷新底稿记录失败: %s", eid)
+            finally:
+                self.runner.release(eid)
+            return await load(self.deps, eid)
+        return snapshot
+
+    async def list(self, eid: str) -> list[WorkpaperIndexEntry]:
+        """全部配置底稿的轻量索引, 未生成的保留其不可用原因."""
+        snapshot = await self.ready(eid)
+        sources = snapshot.sources
+        library = self.deps.library
+        templates = {t.workpaper.ref: t for t in library.all(include_disabled=True) if t.workpaper}
+        systems = {s.ref: s for s in library.workpapers.system}
+        enabled = {t.id for t in library.all()}
+        engagement = sources.engagement
+        assert engagement is not None
+        entries = []
+        from backend.services.workpaper_labels import PROCEDURE_NAMES, words
+
+        for ref in library.workpaper_refs():
+            template = templates.get(ref)
+            paper = snapshot.workpapers.get(workpaper_id(ref))
+            pid = template.id if template else None
+            title = (
+                words(template.name, PROCEDURE_NAMES.get(template.id, template.id)) if template else systems[ref].name
+            )
+            available = "generated" if paper else "disabled" if pid and pid not in enabled else "unexecuted"
+            entries.append(
+                WorkpaperIndexEntry(
+                    ref=ref,
+                    title=title,
+                    procedure_id=pid,
+                    availability=available,
+                    status=paper.status if paper else None,
+                    version=paper.version if paper else None,
+                    header=paper.content.header if paper and paper.content else None,
+                    missing=paper.missing if paper else [],
+                    pending_tasks=sum(t.procedure_id == pid and t.status == "pending" for t in sources.tasks)
+                    if pid
+                    else 0,
+                    unsigned=not paper or paper.signoff is None,
+                    file_name=relative_filename(ref, paper.content.header.title, pid, engagement.working_language)
+                    if paper and paper.content
+                    else None,
+                )
+            )
+        return entries
+
+    async def detail(self, eid: str, ref: str, version: int | None = None) -> WorkpaperDetail:
+        await self.ready(eid)
+        paper = await self.deps.output_store.get(eid, Workpaper, workpaper_id(ref), version)
+        if paper is None:
+            raise LookupError(f"底稿 {ref} 的指定版本没有记录")
+        history = await self.deps.output_store.history(eid, Workpaper, paper.id)
+        return WorkpaperDetail(
+            workpaper=paper, versions=[p.version for p in history], required=self.deps.library.required_items(ref)
+        )
 
     @asynccontextmanager
     async def holding(self, eid: str) -> AsyncIterator[Snapshot]:

@@ -4873,6 +4873,40 @@ export type RequestUnavailableIn = {
 };
 
 /**
+ * RequiredItem
+ *
+ * 各类底稿必须记录的一项 (ASA 230 第 8, 9 段与各准则). kinds 与 refs 都为空即全部底稿, 否则为其并集
+ * (ProcedureLibrary.required_items).
+ */
+export type RequiredItem = {
+    /**
+     * Id
+     */
+    id: string;
+    name: LocalizedText;
+    /**
+     * Standard
+     */
+    standard: string;
+    /**
+     * Paragraph
+     */
+    paragraph: string;
+    /**
+     * Supplementable
+     */
+    supplementable: boolean;
+    /**
+     * Kinds
+     */
+    kinds?: Array<'rule' | 'judgment'>;
+    /**
+     * Refs
+     */
+    refs?: Array<string>;
+};
+
+/**
  * RerunIn
  *
  * 重跑过期程序的请求体: 要重跑的程序; 不填为全部可重跑的过期程序 (需求 R274).
@@ -6100,6 +6134,23 @@ export type WorkpaperContent = {
 };
 
 /**
+ * WorkpaperDetail
+ *
+ * 指定版本的内容与当前可选版本号, 不以当前材料重建历史.
+ */
+export type WorkpaperDetail = {
+    workpaper: Workpaper;
+    /**
+     * Versions
+     */
+    versions: Array<number>;
+    /**
+     * Required
+     */
+    required: Array<RequiredItem>;
+};
+
+/**
  * WorkpaperHeader
  *
  * 生成当时的项目信息与编制/复核情况; 渲染旧版本不再读项目或用户表.
@@ -6144,6 +6195,49 @@ export type WorkpaperHeader = {
      */
     reviewed_at?: string | null;
     review_scope?: ReviewScope | null;
+};
+
+/**
+ * WorkpaperIndexEntry
+ *
+ * 档案列表的轻量行, 不返回整份内容; 缺项标签取详情的 required.
+ */
+export type WorkpaperIndexEntry = {
+    /**
+     * Ref
+     */
+    ref: string;
+    title: LocalizedText;
+    /**
+     * Procedure Id
+     */
+    procedure_id?: string | null;
+    /**
+     * Availability
+     */
+    availability: 'generated' | 'disabled' | 'unexecuted';
+    status?: WorkpaperStatus | null;
+    /**
+     * Version
+     */
+    version?: number | null;
+    header?: WorkpaperHeader | null;
+    /**
+     * Missing
+     */
+    missing?: Array<string>;
+    /**
+     * Pending Tasks
+     */
+    pending_tasks?: number;
+    /**
+     * Unsigned
+     */
+    unsigned?: boolean;
+    /**
+     * File Name
+     */
+    file_name?: string | null;
 };
 
 /**
@@ -9122,10 +9216,118 @@ export type WorkpapersListWorkpapersResponses = {
      *
      * Successful Response
      */
-    200: Array<Workpaper>;
+    200: Array<WorkpaperIndexEntry>;
 };
 
 export type WorkpapersListWorkpapersResponse = WorkpapersListWorkpapersResponses[keyof WorkpapersListWorkpapersResponses];
+
+export type WorkpapersDownloadArchiveData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/workpapers/archive';
+};
+
+export type WorkpapersDownloadArchiveErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersDownloadArchiveError = WorkpapersDownloadArchiveErrors[keyof WorkpapersDownloadArchiveErrors];
+
+export type WorkpapersDownloadArchiveResponses = {
+    /**
+     * Successful Response
+     */
+    200: Blob | File;
+};
+
+export type WorkpapersDownloadArchiveResponse = WorkpapersDownloadArchiveResponses[keyof WorkpapersDownloadArchiveResponses];
+
+export type WorkpapersGetWorkpaperData = {
+    body?: never;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Version
+         */
+        version?: number | null;
+    };
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}';
+};
+
+export type WorkpapersGetWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersGetWorkpaperError = WorkpapersGetWorkpaperErrors[keyof WorkpapersGetWorkpaperErrors];
+
+export type WorkpapersGetWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: WorkpaperDetail;
+};
+
+export type WorkpapersGetWorkpaperResponse = WorkpapersGetWorkpaperResponses[keyof WorkpapersGetWorkpaperResponses];
+
+export type WorkpapersDownloadWorkpaperData = {
+    body?: never;
+    path: {
+        /**
+         * Ref
+         */
+        ref: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * Version
+         */
+        version?: number | null;
+    };
+    url: '/api/v1/engagements/{eid}/workpapers/{ref}/file';
+};
+
+export type WorkpapersDownloadWorkpaperErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type WorkpapersDownloadWorkpaperError = WorkpapersDownloadWorkpaperErrors[keyof WorkpapersDownloadWorkpaperErrors];
+
+export type WorkpapersDownloadWorkpaperResponses = {
+    /**
+     * Successful Response
+     */
+    200: Blob | File;
+};
+
+export type WorkpapersDownloadWorkpaperResponse = WorkpapersDownloadWorkpaperResponses[keyof WorkpapersDownloadWorkpaperResponses];
 
 export type WorkpapersConcludeWorkpaperData = {
     body: WorkpaperConclusionIn;
