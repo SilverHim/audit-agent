@@ -12,6 +12,7 @@
 刷新 (refresh) 在程序执行终态与决定提交之后由编排调用 (orchestration/nodes, decisions), 出错只记日志; 项目已锁定
 (签字或拒绝承接) 时不刷新 (归档见 R337). 刷新本身不写留痕: 每一版都在 Store 中 (写入者为程序的执行智能体)."""
 
+import logging
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -48,6 +49,7 @@ from backend.contracts.models import (
     Procedure,
     ProcedureRun,
     ProposedAction,
+    RerunRequest,
     ReviewRecord,
     ReviewScope,
     ReviewStatus,
@@ -67,16 +69,21 @@ from backend.contracts.models import (
     WorkpaperSignoff,
     WorkpaperStatus,
 )
+from backend.contracts.records import Account, TrialBalanceRow
 from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
-from backend.services.procedure_library import render_text, workpaper_kind
+from backend.services.procedure_library import ProcedureLibrary, render_text, workpaper_kind
 from backend.services.workpaper_content import build_content
 from backend.services.workpaper_decisions import decision_draft
 from backend.services.workpaper_judgments import model_judgments
+from backend.services.workpaper_summaries import system_content, system_missing, system_refreshed
+from backend.services.workpaper_tables import unsigned as unsigned
 
 if TYPE_CHECKING:
     from backend.agents.base import AgentDeps
     from backend.orchestration.runner import GraphRunner
+
+logger = logging.getLogger(__name__)
 
 # 模板 outputs 中这些字段的对象全部计入依据 (材料类产出; 例外, 判断与执行记录另取, 任务与文件不计)
 OUTPUT_BASIS: dict[str, type[Versioned]] = {
@@ -140,6 +147,12 @@ class Sources:
     reviews: list[ReviewRecord] = field(default_factory=list)
     withdrawals: list[ReviewWithdrawal] = field(default_factory=list)
     materials: dict[tuple[str, int], Versioned] = field(default_factory=dict)
+    library: ProcedureLibrary | None = None
+    papers: list[Workpaper] = field(default_factory=list)
+    accounts: list[Account] = field(default_factory=list)
+    trial_balance: list[TrialBalanceRow] = field(default_factory=list)
+    misstatements: list[Misstatement] = field(default_factory=list)
+    reruns: list[RerunRequest] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -333,6 +346,17 @@ def plans(sources: Sources) -> list[AuditPlan]:
     return [p for p in sources.outputs.get("audit_plans", []) if isinstance(p, AuditPlan)]
 
 
+def tested_items_recorded(view: View) -> bool:
+    """非 SQL 规则程序按实际材料识别被测项目, 其余规则与判断按总体或对象检查."""
+    if view.template.id == "ACC-04":
+        return any(isinstance(o, AcceptanceScorecard) and o.registry_checks for o in view.outputs)
+    if view.template.id == "FIN-04":
+        return any(isinstance(o, UncorrectedSchedule) for o in view.outputs)
+    if workpaper_kind(view.template) == "rule":
+        return bool(view.populations) and all(distinct_items(p) is not None for p in view.populations)
+    return bool(view.judgments)
+
+
 Check = Callable[[View, Sources, Workpaper], bool]
 # 必填项代号 → 是否已记录 (底稿配置 required 的每一项都须在这里, tests/test_workpapers 核对). 可由补充说明补齐的另看
 # 补充说明的 item (missing_of). ASA 300 第 12(c) 段与 ASA 320 第 14 段的 "修订" 是有条件的要求: 没有修订时算已记录
@@ -356,11 +380,7 @@ SATISFIED: dict[str, Check] = {
         and all(j.reasoning_chain for j in model_judgments(v.judgments, v.runs))
     ),
     # 规则程序: 当前执行的被测总体都记录了; 判断程序: 有判断的对象
-    "tested_items": lambda v, s, w: (
-        bool(v.populations) and all(distinct_items(p) is not None for p in v.populations)
-        if workpaper_kind(v.template) == "rule"
-        else bool(v.judgments)
-    ),
+    "tested_items": lambda v, s, w: tested_items_recorded(v),
     "materiality_amounts": lambda v, s, w: (
         (d := latest_approval(s.decisions, GateId.PLN_01_03)) is not None and d.materiality is not None
     ),
@@ -381,13 +401,6 @@ def missing_of(required: Sequence[RequiredItem], view: View, sources: Sources, w
         for item in required
         if not SATISFIED[item.id](view, sources, workpaper) and not (item.supplementable and noted(workpaper, item.id))
     ]
-
-
-def unsigned(workpaper: Workpaper) -> dict[str, object]:
-    """内容变了时签署的处理 (要并进新版本的字段): 已签署的改为 needs_rereview, 签署移到 last_signoff; 未签署的不变."""
-    if workpaper.signoff is None:
-        return {}
-    return {"status": WorkpaperStatus.needs_rereview, "signoff": None, "last_signoff": workpaper.signoff}
 
 
 def refreshed(
@@ -480,6 +493,12 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
             if risk is not None:
                 materials[(risk.id, risk.version)] = risk
     sources = Sources(
+        library=library,
+        papers=papers,
+        accounts=await deps.financial_store.accounts(eid),
+        trial_balance=await deps.financial_store.trial_balance(eid, "current"),
+        misstatements=await store.latest(eid, Misstatement),
+        reruns=await store.latest(eid, RerunRequest),
         materials=materials,
         engagement=engagement,
         client_name=profile.legal_name if profile else "",
@@ -525,14 +544,25 @@ async def refresh(deps: "AgentDeps", eid: str) -> list[Workpaper]:
     engagement = await deps.engagement_store.get(eid)
     if engagement is None or engagement.locked:
         return []
-    planned = plan_refresh(await load(deps, eid))
+    snapshot = await load(deps, eid)
+    planned = plan_refresh(snapshot)
+    papers = {p.ref: p for p in snapshot.workpapers.values()}
+    papers.update({paper.ref: paper for paper, _ in planned})
     written: list[Workpaper] = []
-    if planned:
-        async with deps.output_store.transaction(eid):
-            for workpaper, template in planned:
-                [stored] = await deps.output_store.put(eid, [workpaper], actor=template.owner)
-                assert isinstance(stored, Workpaper)
-                written.append(stored)
+    async with deps.output_store.transaction(eid):
+        for workpaper, template in planned:
+            [stored] = await deps.output_store.put(eid, [workpaper], actor=template.owner)
+            assert isinstance(stored, Workpaper)
+            written.append(stored)
+        if papers:
+            for ref in ("S", "00"):
+                spec = next(w for w in deps.library.workpapers.system if w.ref == ref)
+                updated = system_refreshed(papers.get(ref), spec, snapshot.sources, papers)
+                if updated:
+                    [stored] = await deps.output_store.put(eid, [updated], actor="A8")
+                    assert isinstance(stored, Workpaper)
+                    papers[ref] = stored
+                    written.append(stored)
     return written
 
 
@@ -587,16 +617,31 @@ class WorkpaperService:
             self.runner.release(eid)
 
     async def _write(self, eid: str, snapshot: Snapshot, new: Workpaper, actor: str, trail: TrailEntry) -> Workpaper:
-        template = snapshot.templates[new.procedure_id]
-        view = view_of(template, snapshot.sources)
-        new = new.model_copy(
-            update={"missing": missing_of(snapshot.required[template.id], view, snapshot.sources, new)}
-        )
-        new = new.model_copy(update={"content": build_content(view, snapshot.sources, new)})
+        if new.procedure_id is not None:
+            template = snapshot.templates[new.procedure_id]
+            view = view_of(template, snapshot.sources)
+            new = new.model_copy(
+                update={"missing": missing_of(snapshot.required[template.id], view, snapshot.sources, new)}
+            )
+            new = new.model_copy(update={"content": build_content(view, snapshot.sources, new)})
+        else:
+            spec = next(w for w in self.deps.library.workpapers.system if w.ref == new.ref)
+            new = new.model_copy(update={"missing": system_missing(new)})
+            new = new.model_copy(
+                update={
+                    "content": system_content(
+                        spec, snapshot.sources, {p.ref: p for p in snapshot.workpapers.values()}, new
+                    )
+                }
+            )
         async with self.deps.output_store.transaction(eid):
             [stored] = await self.deps.output_store.put(eid, [new], actor=actor)
         assert isinstance(stored, Workpaper)
         await self.deps.trail.record(trail)
+        try:
+            await refresh(self.deps, eid)
+        except Exception:
+            logger.exception("刷新底稿记录失败: %s", eid)
         return stored
 
     @staticmethod
@@ -631,7 +676,7 @@ class WorkpaperService:
         async with self.holding(eid) as snapshot:
             workpaper = self.current(snapshot, ref)
             if item is not None:
-                allowed = [r.id for r in snapshot.required[workpaper.procedure_id] if r.supplementable]
+                allowed = [r.id for r in self.deps.library.required_items(ref) if r.supplementable]
                 if item not in allowed:
                     detail = f"{item} 不是底稿 {ref} 可由补充说明补齐的必填项 ({', '.join(allowed) or '没有'})"
                     raise DataRejected("INVALID_VALUE", detail)

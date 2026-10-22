@@ -63,6 +63,23 @@ SECTIONS = {
     "review": words("复核意见", "Review comments"),
 }
 FIELDS = {
+    "ref": ("索引", "Index"),
+    "title": ("底稿", "Workpaper"),
+    "procedure_id": ("程序", "Procedure"),
+    "preparer": ("编制人", "Preparer"),
+    "completed_at": ("完成日期", "Completed"),
+    "review_scope": ("复核范围", "Extent of review"),
+    "missing_count": ("缺项数", "Missing items"),
+    "standard": ("准则", "Standard"),
+    "paragraph": ("段号", "Paragraphs"),
+    "source_ref": ("来源底稿", "Source workpaper"),
+    "category": ("标准分类", "Category"),
+    "type": ("类型", "Type"),
+    "direction": ("方向", "Direction"),
+    "above_trivial": ("超过明显微小", "Above clearly trivial"),
+    "accumulated_cents": ("累计未更正金额", "Accumulated uncorrected amount"),
+    "performance_ratio": ("占执行重要性", "Proportion of performance materiality"),
+    "overall_ratio": ("占整体重要性", "Proportion of overall materiality"),
     "revision": ("修订", "Revision"),
     "applicable_framework": ("适用财务报告框架", "Applicable reporting framework"),
     "materiality_choice": ("重要性选择", "Materiality choice"),
@@ -261,4 +278,37 @@ REGISTRY_CHECKS = {
     "name_match": words("登记名称一致", "Registered name agrees"),
     "company_registered": words("公司登记有效", "Company registration is current"),
     "directors_match": words("董事一致", "Directors agree"),
+}
+
+
+CATEGORIES = {
+    key: words(zh, key.replace("_", " ").capitalize())
+    for key, zh in (
+        ("cash", "货币资金"),
+        ("receivables", "应收款项"),
+        ("inventory", "存货"),
+        ("prepayments", "预付款项"),
+        ("other_current_assets", "其他流动资产"),
+        ("property_plant_equipment", "固定资产"),
+        ("intangible_assets", "无形资产"),
+        ("other_non_current_assets", "其他非流动资产"),
+        ("payables", "应付账款"),
+        ("accruals", "预提费用"),
+        ("tax_payable", "应交税费"),
+        ("employee_provisions", "应付职工薪酬与员工准备"),
+        ("borrowings", "借款与透支"),
+        ("other_current_liabilities", "其他流动负债"),
+        ("other_non_current_liabilities", "其他非流动负债"),
+        ("share_capital", "股本"),
+        ("retained_earnings", "留存收益"),
+        ("other_equity", "其他权益"),
+        ("revenue", "主营收入"),
+        ("other_income", "其他收入"),
+        ("cost_of_sales", "销售成本"),
+        ("employee_expenses", "职工薪酬费用"),
+        ("depreciation_amortisation", "折旧与摊销"),
+        ("finance_costs", "财务费用"),
+        ("operating_expenses", "其他经营费用"),
+        ("income_tax", "所得税费用"),
+    )
 }

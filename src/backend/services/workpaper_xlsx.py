@@ -1,7 +1,6 @@
 """按工作语言把底稿内容快照渲染成 Excel. 不查项目、程序库或财务资料, 旧版本可独立重现."""
 
 import math
-import re
 import unicodedata
 from io import BytesIO
 
@@ -20,6 +19,7 @@ from backend.contracts.models import (
     WorkpaperValue,
 )
 from backend.services.currency import MINOR_DIGITS
+from backend.services.workpaper_files import relative_filename
 from backend.services.workpaper_labels import PENDING, SCOPES
 
 THIN = Side(style="thin", color="A6A6A6")
@@ -44,8 +44,7 @@ def filename(workpaper: Workpaper, language: WorkingLanguage) -> str:
     if workpaper.content is None:
         raise ValueError(f"底稿 {workpaper.ref} 的这一版本没有内容快照")
     header = workpaper.content.header
-    title = re.sub(r'[\\/:*?"<>|\r\n]', " ", text(header.title, language)).strip()
-    return f"{workpaper.ref} {title} ({header.procedure_id}).xlsx"
+    return relative_filename(workpaper.ref, header.title, header.procedure_id, language)
 
 
 def money_format(currency: str) -> str:
@@ -120,6 +119,9 @@ def table(ws: Worksheet, start: int, data: WorkpaperTable, language: WorkingLang
                 displayed = text(raw, language)
             put(ws, at, n, displayed)
             cell = ws.cell(at, n)
+            if data.link_column == col.key and isinstance(raw, str) and raw in data.links:
+                cell.hyperlink = text(data.links[raw], language)
+                cell.font = Font(name="Calibri", size=11, color="0563C1", underline="single")
             if col.format == "money":
                 cell.number_format = money_format(currency)
                 cell.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
@@ -179,7 +181,13 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
         f"{'审计期间' if zh else 'Period'}: {period}    "
         f"{'项目' if zh else 'Engagement'}: {header.engagement_id}    {header.currency}",
     )
-    span(ws, 3, 1, half, f"{'对应程序' if zh else 'Procedure'}: {header.procedure_id} {text(header.title, language)}")
+    span(
+        ws,
+        3,
+        1,
+        half,
+        f"{'对应程序' if zh else 'Procedure'}: {header.procedure_id or '—'} {text(header.title, language)}",
+    )
     span(ws, 3, half + 1, ncols, f"{'索引' if zh else 'Index'}: {workpaper.ref}")
     completed = header.completed_at.date().isoformat() if header.completed_at else "—"
     reviewed = header.reviewed_at.date().isoformat() if header.reviewed_at else text(PENDING, language)
@@ -202,6 +210,7 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
         fill=PENDING_FILL if not header.reviewed_at else None,
     )
     at = 6
+    positions: dict[str, tuple[WorkpaperTable, int]] = {}
     for part in parts:
         span(ws, at, 1, ncols, text(part.title, language), bold=True, fill=SECTION_FILL)
         at += 1
@@ -218,8 +227,22 @@ def render(workpaper: Workpaper, language: WorkingLanguage) -> bytes:
             span(ws, at, 1, ncols, text(paragraph, language))
             at += 1
         for data in part.tables:
+            positions[data.id] = (data, at + 1)
             at = table(ws, at, data, language, header.currency)
         at += 1
+    if "misstatement_totals" in positions and "misstatements" in positions:
+        totals, row = positions["misstatement_totals"]
+        detail, first = positions["misstatements"]
+        cols = {col.key: n for n, col in enumerate(totals.columns, 1)}
+        amount_col = next(n for n, col in enumerate(detail.columns, 1) if col.key == "accumulated_cents")
+        letter = get_column_letter(amount_col)
+        ws.cell(row, cols["total_cents"]).value = (
+            f"=SUM({letter}{first}:{letter}{first + len(detail.rows) - 1})" if detail.rows else "=0"
+        )
+        for ratio, denominator in (("performance_ratio", "performance_cents"), ("overall_ratio", "overall_cents")):
+            numerator_cell = f"{get_column_letter(cols['total_cents'])}{row}"
+            denominator_cell = f"{get_column_letter(cols[denominator])}{row}"
+            ws.cell(row, cols[ratio]).value = f'=IF({denominator_cell}=0,"—",{numerator_cell}/{denominator_cell})'
     ws.freeze_panes = "A6"
     ws.print_title_rows = "1:4"
     assert ws.sheet_properties.pageSetUpPr is not None

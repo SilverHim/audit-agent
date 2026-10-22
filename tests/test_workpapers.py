@@ -140,8 +140,10 @@ async def test_unsigned_workpapers_do_not_block_and_lock_after_archive(walked: t
     base = f"/api/v1/engagements/{w.x.eid}/workpapers"
     listed = (await client.get(base)).json()
     assert [r["ref"] for r in listed] == [
+        "00",
         *("A-1", "A-2", "A-3", "A-4", "B-1", "B-2", "C-1", "C-2", "C-3", "C-4", "D-1", "D-2", "D-3", "D-4"),
         *("G-1", "G-2", "X", "X-A", "X-B", "X-C", "Z-1", "Z-2", "Z-3"),
+        "S",
     ]
     assert {r["status"] for r in listed} == {"draft"}
     posts = [
@@ -186,7 +188,7 @@ async def seeded() -> tuple[GraphRunner, FakeOutputStore]:
     runner, store = make_runner()
     pack = [make_procedure("REV-08", Phase.P2_Executing), make_procedure("PLN-01", Phase.P1_Planning)]
     await store.put(EID, [*pack, *rev08_outputs(rev08_run(1)), PLN_APPROVE], actor="A6")
-    assert [w.id for w in await refresh(runner.deps, EID)] == ["WP-A-2", "WP-D-3"]
+    assert {w.id for w in await refresh(runner.deps, EID)} == {"WP-A-2", "WP-D-3", "WP-S", "WP-00"}
     return runner, store
 
 
@@ -280,7 +282,7 @@ async def test_signed_workpaper_needs_rereview_when_basis_changes(change: Any) -
         signed = (await client.post(f"{BASE}/D-3/signoff", json={"scope": "sample"})).json()
     assert await refresh(runner.deps, EID) == []  # 依据没变
     await store.put(EID, change(rev08_run(1)), actor="A6")
-    [refreshed] = await refresh(runner.deps, EID)
+    [refreshed] = [p for p in await refresh(runner.deps, EID) if p.ref == "D-3"]
     assert (refreshed.id, refreshed.version, refreshed.status) == ("WP-D-3", 3, WorkpaperStatus.needs_rereview)
     assert refreshed.signoff is None and refreshed.last_signoff is not None
     assert refreshed.last_signoff.model_dump(mode="json") == signed["signoff"]
@@ -607,3 +609,115 @@ async def test_materiality_reason_supplement_and_bound_candidate_version(
         ("MaterialityCandidates", "MATERIALITY", 1),
         ("MaterialityCandidates", "MATERIALITY", 2),
     }
+
+
+@pytest.mark.external
+@shared_loop
+async def test_index_standards_and_misstatement_snapshots(walked: tuple[Walk, httpx.AsyncClient]) -> None:
+    """总索引覆盖配置, 相对链接与导出文件名一致; 准则对照保留实际缺项; 错报表不把已更正额累计."""
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from backend.services.workpaper_xlsx import filename, render
+
+    w, _ = walked
+    papers = {p.ref: p for p in await w.x.runner.deps.output_store.latest(w.x.eid, Workpaper)}
+    [index] = [t for s in papers["00"].content.sections for t in s.tables if t.id == "workpaper_index"]
+    assert [row["ref"] for row in index.rows] == w.x.runner.deps.library.workpaper_refs()
+    assert next(row for row in index.rows if row["ref"] == "B-3")["status"].en == "Feature disabled"
+    assert next(row for row in index.rows if row["ref"] == "G-3")["status"].en == "Feature disabled"
+    for language in ("zh", "en"):
+        sheet = load_workbook(BytesIO(render(papers["00"], language))).active
+        for ref, link in index.links.items():
+            assert getattr(link, language) == filename(papers[ref], language)
+            cell = next(cell for row in sheet for cell in row if cell.value == ref and cell.hyperlink)
+            assert cell.hyperlink.target == filename(papers[ref], language)
+    standards = next(t for s in papers["S"].content.sections for t in s.tables if t.id == "standards")
+    assert len(standards.rows) == 15
+    assert next(r for r in standards.rows if r["standard"] == "ASA 240")["paragraph"] == "45-48"
+    asa330 = next(r for r in standards.rows if r["standard"] == "ASA 330")
+    assert "lead schedules C and D" in asa330["remarks"].en
+    assert next(r for r in standards.rows if r["standard"] == "ASA 600")["status"].en.startswith("Not applicable")
+    details = next(s for s in papers["X"].content.sections if s.id == "details")
+    errors = next(t for t in details.tables if t.id == "misstatements")
+    assert sorted(r["amount_cents"] for r in errors.rows) == [4853, 75000]
+    assert {r["status"].en for r in errors.rows} == {"Corrected"}
+    assert {r["source_ref"] for r in errors.rows} == {"G-2", "C-4"}
+    assert all(r["decided_by"] == w.x.owner and r["decided_at"] for r in errors.rows)
+    assert sum(r["accumulated_cents"] for r in errors.rows) == 0
+    sheet = load_workbook(BytesIO(render(papers["X"], "en"))).active
+    formulas = [cell.value for row in sheet for cell in row if cell.data_type == "f"]
+    assert len(formulas) == 3 and any(f.startswith("=SUM(") for f in formulas)
+    assert sum(f.startswith("=IF(") for f in formulas) == 2
+
+
+async def test_system_workpaper_operations_are_versioned_and_stable() -> None:
+    """系统底稿使用同一签署与补充入口, 相关索引刷新之后再刷新不写, 旧版可以独立导出."""
+    runner, store = await seeded()
+    before = await store.get(EID, Workpaper, "WP-S")
+    async with api_client(runner) as client:
+        signed = await client.post(f"{BASE}/S/signoff", json={"scope": "full"})
+        assert signed.status_code == 200 and signed.json()["status"] == "signed"
+        noted = await client.post(
+            f"{BASE}/00/notes", json={"text": "Scope limitations remain visible on each workpaper."}
+        )
+        assert noted.status_code == 200
+    assert await refresh(runner.deps, EID) == []
+    assert await store.get(EID, Workpaper, "WP-S", 1) == before
+    assert (await store.get(EID, Workpaper, "WP-S")).status is WorkpaperStatus.signed
+
+
+@pytest.mark.external
+@shared_loop
+async def test_summary_excludes_withdrawn_and_standards_show_missing_reason(
+    walked: tuple[Walk, httpx.AsyncClient],
+) -> None:
+    """累计表陈旧时也不把撤回金额带回预览; ASA 320 缺理由与没有任何对应底稿的要求明确标出."""
+    from dataclasses import replace
+
+    from backend.contracts.models import MisstatementStatus, UncorrectedItem, UncorrectedSchedule
+    from backend.services.workpaper_summaries import misstatement_section, standards_table
+    from backend.services.workpapers import load, view_of
+
+    w, _ = walked
+    snapshot = await load(w.x.runner.deps, w.x.eid)
+    sources = snapshot.sources
+    uncorrected = [
+        m.model_copy(
+            update={
+                "status": MisstatementStatus.uncorrected,
+                "corrected_cents": 0,
+                "residual_cents": None,
+                "verified_by_judgment_id": None,
+            }
+        )
+        for m in sources.misstatements
+    ]
+    original = next(o for o in sources.outputs["uncorrected_schedule"] if isinstance(o, UncorrectedSchedule))
+    schedule = original.model_copy(
+        update={
+            "items": [
+                UncorrectedItem(misstatement_id=m.id, amount_cents=m.amount_cents, direction=m.direction)
+                for m in uncorrected
+            ],
+            "total_cents": 79853,
+        }
+    )
+    altered = replace(
+        sources, misstatements=uncorrected, outputs={**sources.outputs, "uncorrected_schedule": [schedule]}
+    )
+    details = misstatement_section(view_of(snapshot.templates["FIN-04"], altered), altered)
+    assert next(t for t in details.tables if t.id == "misstatement_totals").rows[0]["total_cents"] == 79853
+    withdrawn = uncorrected[0].model_copy(update={"status": MisstatementStatus.withdrawn})
+    altered = replace(altered, misstatements=[withdrawn, *uncorrected[1:]])
+    details = misstatement_section(view_of(snapshot.templates["FIN-04"], altered), altered)
+    assert (
+        next(t for t in details.tables if t.id == "misstatement_totals").rows[0]["total_cents"]
+        == uncorrected[1].amount_cents
+    )
+    papers = {p.ref: p for p in snapshot.workpapers.values()}
+    papers["A-2"] = papers["A-2"].model_copy(update={"missing": ["materiality_factors"]})
+    table = standards_table(sources, papers)
+    assert next(r for r in table.rows if r["standard"] == "ASA 320")["status"].en == "Missing selection rationale"
+    assert next(r for r in table.rows if r["standard"] == "ASA 250")["status"].en == "Missing"

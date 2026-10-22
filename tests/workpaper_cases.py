@@ -14,5 +14,5 @@ async def d3_case() -> tuple[GraphRunner, FakeOutputStore, Workpaper]:
     await store.put(
         engagement.id, [make_procedure("REV-08", Phase.P2_Executing), *rev08_outputs(rev08_run(1))], actor="A6"
     )
-    [paper] = await refresh(runner.deps, engagement.id)
+    [paper] = [p for p in await refresh(runner.deps, engagement.id) if p.ref == "D-3"]
     return runner, store, paper

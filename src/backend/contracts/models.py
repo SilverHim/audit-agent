@@ -2152,6 +2152,8 @@ class WorkpaperTable(Model):
     id: str
     columns: list[WorkpaperColumn]
     rows: list[dict[str, WorkpaperValue]] = []
+    link_column: str | None = None  # 索引表的哪一列链到同套文件, 无任意公式
+    links: dict[str, LocalizedText] = {}  # 索引号 -> 中英文相对文件名
 
 
 class WorkpaperSection(Model):
@@ -2175,7 +2177,7 @@ class WorkpaperHeader(Model):
     period_start: date | None = None
     period_end: date | None = None
     currency: str = DEFAULT_CURRENCY
-    procedure_id: str
+    procedure_id: str | None = None
     preparer: LocalizedText
     completed_at: datetime | None = None
     reviewer: str | None = None
@@ -2197,7 +2199,7 @@ class Workpaper(Versioned):
 
     ref: str  # 索引号, 如 D-3 (程序 YAML 的 workpaper)
     area: str  # 所属区, 如 D
-    procedure_id: str  # 所属程序
+    procedure_id: str | None = None  # 所属程序, 系统底稿为空
     status: WorkpaperStatus = WorkpaperStatus.draft  # 状态
     # 所依据的对象及其版本 (执行记录, 被测总体, 例外, 判断, 闸门决定与程序产出的材料; services.workpapers.basis_of),
     # 按类名与 ID 排序; 刷新时与上一版比, 变了即内容变了
