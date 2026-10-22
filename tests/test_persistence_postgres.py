@@ -707,7 +707,16 @@ async def test_run_population_on_postgres(storage) -> None:  # type: ignore[no-u
 
 async def test_workpaper_versions_share_the_procedure_table(storage) -> None:
     """底稿与执行记录, 被测总体同表但互不混淆; 回滚, 版本留存与项目隔离均由真实存储保证."""
-    from backend.contracts.models import ObjectRef, Workpaper
+    from backend.contracts.models import (
+        LocalizedText,
+        ObjectRef,
+        Workpaper,
+        WorkpaperColumn,
+        WorkpaperContent,
+        WorkpaperHeader,
+        WorkpaperSection,
+        WorkpaperTable,
+    )
 
     engine, e, _, _ = storage
     store = PostgresAuditOutputStore(engine)
@@ -721,6 +730,32 @@ async def test_workpaper_versions_share_the_procedure_table(storage) -> None:
         area="D",
         procedure_id="REV-08",
         basis=[ObjectRef(kind=type(obj).__name__, id=obj.id, version=obj.version) for obj in (run, population)],
+        content=WorkpaperContent(
+            header=WorkpaperHeader(
+                title=LocalizedText(zh="测试", en="Test"),
+                client_name="Synthetic client",
+                engagement_id=e.id,
+                procedure_id="REV-08",
+                preparer=LocalizedText(zh="智能体", en="Agent"),
+            ),
+            sections=[
+                WorkpaperSection(
+                    id="details",
+                    title=LocalizedText(zh="明细", en="Details"),
+                    tables=[
+                        WorkpaperTable(
+                            id="items",
+                            columns=[
+                                WorkpaperColumn(
+                                    key="amount", label=LocalizedText(zh="金额", en="Amount"), format="money"
+                                )
+                            ],
+                            rows=[{"amount": 990000, "description": LocalizedText(zh="原文", en="Original")}],
+                        )
+                    ],
+                )
+            ],
+        ),
     )
     async with store.transaction(e.id):
         await store.put(e.id, [run, population, paper], actor="A6")

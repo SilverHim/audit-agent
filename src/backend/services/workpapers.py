@@ -25,9 +25,11 @@ from backend.contracts.models import (
     AcceptanceScorecard,
     AnalyticsResult,
     AuditException,
+    AuditObjective,
     AuditPlan,
     AuditReportVersion,
     Confirmation,
+    Engagement,
     EngagementTerms,
     ExceptionDisposition,
     GateDecision,
@@ -45,6 +47,7 @@ from backend.contracts.models import (
     ProposedAction,
     ReviewScope,
     ReviewStatus,
+    RiskItem,
     RunPopulation,
     RunStatus,
     RunTrigger,
@@ -60,6 +63,7 @@ from backend.contracts.models import (
 from backend.services.currency import format_money
 from backend.services.populations import distinct_items, total_cents
 from backend.services.procedure_library import render_text, workpaper_kind
+from backend.services.workpaper_content import build_content
 
 if TYPE_CHECKING:
     from backend.agents.base import AgentDeps
@@ -107,6 +111,13 @@ class Sources:
     """一次刷新读到的 Store 内容, 都是各对象的最新版本. outputs 为 OUTPUT_BASIS 的字段 → 对象 (只读程序包用到的)."""
 
     currency: str = DEFAULT_CURRENCY
+    engagement: Engagement | None = None
+    client_name: str = ""
+    people: dict[str, str] = field(default_factory=dict)
+    procedures: list[Procedure] = field(default_factory=list)
+    objectives: list[AuditObjective] = field(default_factory=list)
+    risks: list[RiskItem] = field(default_factory=list)
+    program_refs: dict[str, str] = field(default_factory=dict)
     runs: list[ProcedureRun] = field(default_factory=list)
     populations: list[RunPopulation] = field(default_factory=list)
     exceptions: list[AuditException] = field(default_factory=list)
@@ -376,9 +387,14 @@ def refreshed(
         new = new.model_copy(update={"conclusion_draft": draft})
     else:
         changes: dict[str, object] = {"basis": basis, "conclusion_draft": draft}
-        if basis != previous.basis or draft != previous.conclusion_draft:
-            changes |= unsigned(previous)
         new = previous.model_copy(update=changes)
+    content = build_content(view, sources, new)
+    if previous is not None and (
+        basis != previous.basis or draft != previous.conclusion_draft or content != previous.content
+    ):
+        new = new.model_copy(update=unsigned(previous))
+        content = build_content(view, sources, new)
+    new = new.model_copy(update={"content": content})
     new = new.model_copy(update={"missing": missing_of(required, view, sources, new)})
     if previous is not None:
         if new == previous:
@@ -408,7 +424,26 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
     for name in needed:
         outputs[name] = list(await store.latest(eid, OUTPUT_BASIS[name]))
     engagement = await deps.engagement_store.get(eid)
+    profile = (
+        await deps.engagement_store.client_profile(engagement.client_id, engagement.client_profile_version)
+        if engagement
+        else None
+    )
+    papers = await store.latest(eid, Workpaper)
+    people: dict[str, str] = {}
+    user_ids = {p.signoff.signed_by for p in papers if p.signoff} | {engagement.owner_id if engagement else ""}
+    for uid in sorted(user_ids - {""}):
+        user = await deps.users.get(uid)
+        if user:
+            people[uid] = user.full_name
     sources = Sources(
+        engagement=engagement,
+        client_name=profile.legal_name if profile else "",
+        people=people,
+        procedures=pack,
+        objectives=await store.latest(eid, AuditObjective),
+        risks=await store.latest(eid, RiskItem),
+        program_refs={t.id: t.workpaper.ref for t in library.all(include_disabled=True) if t.workpaper},
         currency=engagement.currency if engagement else DEFAULT_CURRENCY,
         runs=await store.latest(eid, ProcedureRun),
         populations=await store.latest(eid, RunPopulation),
@@ -418,7 +453,7 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         outputs=outputs,
     )
     required = {pid: library.required_items(t.workpaper.ref) for pid, t in templates.items() if t.workpaper}
-    workpapers = {w.id: w for w in await store.latest(eid, Workpaper)}
+    workpapers = {w.id: w for w in papers}
     return Snapshot(templates, required, sources, workpapers)
 
 
@@ -507,6 +542,7 @@ class WorkpaperService:
         new = new.model_copy(
             update={"missing": missing_of(snapshot.required[template.id], view, snapshot.sources, new)}
         )
+        new = new.model_copy(update={"content": build_content(view, snapshot.sources, new)})
         async with self.deps.output_store.transaction(eid):
             [stored] = await self.deps.output_store.put(eid, [new], actor=actor)
         assert isinstance(stored, Workpaper)

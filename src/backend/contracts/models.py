@@ -2133,6 +2133,60 @@ class WorkpaperSignoff(Model):
     opinion: str = ""  # 复核意见, 选填 (Issue #61 的口径), 没写为空串
 
 
+WorkpaperValue = str | int | float | bool | LocalizedText | None
+
+
+class WorkpaperColumn(Model):
+    """底稿表格的一列: 标签双语, 金额仍以整数分存; totals 为是否在表尾用公式合计."""
+
+    key: str
+    label: LocalizedText
+    format: Literal["text", "money", "percent", "integer"] = "text"
+    width: float = 20
+    total: bool = False
+
+
+class WorkpaperTable(Model):
+    """语言无关的表格快照. 原始单据文字为字符串, 固定标签为 LocalizedText; 不接收任意 Excel 公式."""
+
+    id: str
+    columns: list[WorkpaperColumn]
+    rows: list[dict[str, WorkpaperValue]] = []
+
+
+class WorkpaperSection(Model):
+    """一节底稿的固定标题, 段落与表格. 段落字符串保留原文, 双语段落在导出时选语言."""
+
+    id: str
+    title: LocalizedText
+    paragraphs: list[str | LocalizedText] = []
+    tables: list[WorkpaperTable] = []
+
+
+class WorkpaperHeader(Model):
+    """生成当时的项目信息与编制/复核情况; 渲染旧版本不再读项目或用户表."""
+
+    title: LocalizedText
+    client_name: str
+    engagement_id: str
+    period_start: date | None = None
+    period_end: date | None = None
+    currency: str = DEFAULT_CURRENCY
+    procedure_id: str
+    preparer: LocalizedText
+    completed_at: datetime | None = None
+    reviewer: str | None = None
+    reviewed_at: datetime | None = None
+    review_scope: ReviewScope | None = None
+
+
+class WorkpaperContent(Model):
+    """底稿内容的版本化快照 (R331): 全部数据与双语固定文字在生成时写入, Excel/在线预览只读本快照."""
+
+    header: WorkpaperHeader
+    sections: list[WorkpaperSection]
+
+
 class Workpaper(Versioned):
     """一份程序底稿的记录 (需求 R330, Issue #50), ID 为 WP-{索引号}, 如 WP-D-3. 程序执行终态与相关决定提交之后由
     services.workpapers.refresh 刷新 (依据变了或草稿, 缺项变了才出新版本), 审计师改结论, 补充说明与签署各出一版.
@@ -2145,6 +2199,7 @@ class Workpaper(Versioned):
     # 所依据的对象及其版本 (执行记录, 被测总体, 例外, 判断, 闸门决定与程序产出的材料; services.workpapers.basis_of),
     # 按类名与 ID 排序; 刷新时与上一版比, 变了即内容变了
     basis: list[ObjectRef]
+    content: WorkpaperContent | None = None  # R331 前的历史记录可没有内容, 不用当前资料伪造旧版.
     # 结论草稿 (中英两种, 下载时按工作语言取): 规则与判断程序按模板拼出 (Q27), 其余为空 (R332, R333 补)
     conclusion_draft: LocalizedText | None = None
     conclusion: str | None = None  # 审计师改写的结论, 没改为空 (草稿照留)

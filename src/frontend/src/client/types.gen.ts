@@ -6023,6 +6023,7 @@ export type Workpaper = {
      * Basis
      */
     basis: Array<ObjectRef>;
+    content?: WorkpaperContent | null;
     conclusion_draft?: LocalizedText | null;
     /**
      * Conclusion
@@ -6049,6 +6050,31 @@ export type Workpaper = {
 };
 
 /**
+ * WorkpaperColumn
+ *
+ * 底稿表格的一列: 标签双语, 金额仍以整数分存; totals 为是否在表尾用公式合计.
+ */
+export type WorkpaperColumn = {
+    /**
+     * Key
+     */
+    key: string;
+    label: LocalizedText;
+    /**
+     * Format
+     */
+    format?: 'text' | 'money' | 'percent' | 'integer';
+    /**
+     * Width
+     */
+    width?: number;
+    /**
+     * Total
+     */
+    total?: boolean;
+};
+
+/**
  * WorkpaperConclusionIn
  *
  * 审计师改写底稿结论 (POST /workpapers/{ref}/conclusion, 需求 R330).
@@ -6058,6 +6084,66 @@ export type WorkpaperConclusionIn = {
      * Text
      */
     text: string;
+};
+
+/**
+ * WorkpaperContent
+ *
+ * 底稿内容的版本化快照 (R331): 全部数据与双语固定文字在生成时写入, Excel/在线预览只读本快照.
+ */
+export type WorkpaperContent = {
+    header: WorkpaperHeader;
+    /**
+     * Sections
+     */
+    sections: Array<WorkpaperSection>;
+};
+
+/**
+ * WorkpaperHeader
+ *
+ * 生成当时的项目信息与编制/复核情况; 渲染旧版本不再读项目或用户表.
+ */
+export type WorkpaperHeader = {
+    title: LocalizedText;
+    /**
+     * Client Name
+     */
+    client_name: string;
+    /**
+     * Engagement Id
+     */
+    engagement_id: string;
+    /**
+     * Period Start
+     */
+    period_start?: string | null;
+    /**
+     * Period End
+     */
+    period_end?: string | null;
+    /**
+     * Currency
+     */
+    currency?: string;
+    /**
+     * Procedure Id
+     */
+    procedure_id: string;
+    preparer: LocalizedText;
+    /**
+     * Completed At
+     */
+    completed_at?: string | null;
+    /**
+     * Reviewer
+     */
+    reviewer?: string | null;
+    /**
+     * Reviewed At
+     */
+    reviewed_at?: string | null;
+    review_scope?: ReviewScope | null;
 };
 
 /**
@@ -6102,6 +6188,27 @@ export type WorkpaperNoteIn = {
 };
 
 /**
+ * WorkpaperSection
+ *
+ * 一节底稿的固定标题, 段落与表格. 段落字符串保留原文, 双语段落在导出时选语言.
+ */
+export type WorkpaperSection = {
+    /**
+     * Id
+     */
+    id: string;
+    title: LocalizedText;
+    /**
+     * Paragraphs
+     */
+    paragraphs?: Array<string | LocalizedText>;
+    /**
+     * Tables
+     */
+    tables?: Array<WorkpaperTable>;
+};
+
+/**
  * WorkpaperSignoff
  *
  * 底稿的一次签署 (需求 R330; ASA 230 第 9(c) 段: 复核人, 复核日期与范围).
@@ -6141,6 +6248,28 @@ export type WorkpaperSignoffIn = {
  * 底稿记录的状态 (需求 R330). 签署不阻塞 FIN-01 与 RPT-01.
  */
 export type WorkpaperStatus = 'draft' | 'signed' | 'needs_rereview' | 'final';
+
+/**
+ * WorkpaperTable
+ *
+ * 语言无关的表格快照. 原始单据文字为字符串, 固定标签为 LocalizedText; 不接收任意 Excel 公式.
+ */
+export type WorkpaperTable = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Columns
+     */
+    columns: Array<WorkpaperColumn>;
+    /**
+     * Rows
+     */
+    rows?: Array<{
+        [key: string]: string | number | number | boolean | LocalizedText | null;
+    }>;
+};
 
 /**
  * XeroAuthorize
