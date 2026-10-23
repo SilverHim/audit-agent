@@ -4,7 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { useMoney } from '@/lib/use-money'
 import { procedureIntro } from '@/locales/procedure-intros'
 
-// 程序介绍 (程序页侧栏与程序详情页): 做什么, 什么时候执行 (含本项目取值), 需要的资料, 怎么判断, 结果与你的工作.
+// 程序介绍 (程序页侧栏与程序详情页): 审计目标, 适用条件, 所需资料, 执行方法, 产出与复核要求.
 // 本项目取值按最近一次执行的参数快照; 还没执行时不显示
 export function ProcedureIntroView({ procedureId, runs }: { procedureId: string; runs?: ProcedureRun[] }) {
   const { currency } = useMoney()
