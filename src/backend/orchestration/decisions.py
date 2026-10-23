@@ -1038,7 +1038,9 @@ class GraphDecisionSubmit:
             raise DecisionRejected("RESUME_REQUIRED", missing)
 
     @asynccontextmanager
-    async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
+    async def _deciding(
+        self, eid: str, resume: str | None = None, *, continue_graph: Callable[[], bool] | None = None
+    ) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
         """submit, update_client_profile 与 rerun_stale 共用的外壳,
         用法: async with self._deciding(eid) as (engagement, snapshot).
 
@@ -1074,6 +1076,9 @@ class GraphDecisionSubmit:
         except BaseException:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
             raise
+        if continue_graph is not None and not continue_graph():
+            self.runner.release(eid)
+            return
         self.runner.launch(eid, None if resume is None else Command(resume=resume))
 
     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
@@ -1285,7 +1290,8 @@ class GraphDecisionSubmit:
         self, eid: str, request_ids: list[str], reason: str | None, *, actor: str, plan: AssistantPlan | None = None
     ) -> list[EvidenceRequest]:
         """同批请求在一个事务提交, 全部校验后只更新一次检查点并启动一次流程."""
-        async with self._deciding(eid) as (_, snapshot):
+        local_wait = False
+        async with self._deciding(eid, continue_graph=lambda: not local_wait) as (_, snapshot):
             values = fill_defaults(snapshot.values)
             store = self.deps.output_store
             # 完成阶段等人节点继续等待本程序的补证, 无需回退到 P2.
@@ -1293,6 +1299,7 @@ class GraphDecisionSubmit:
             tasks_before = [await store.get(eid, ReviewTask, r.task_id) if r else None for r in requests_before]
             local_wait = (
                 bool(tasks_before)
+                and not any(task.error for task in snapshot.tasks)
                 and all(
                     t is not None and any(accepts(w, t, values["procedure_pack"]) for w in review_waits(snapshot))
                     for t in tasks_before

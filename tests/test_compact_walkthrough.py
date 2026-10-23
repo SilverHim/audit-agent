@@ -14,7 +14,8 @@ DATA = Path(__file__).resolve().parents[1] / "data/demo-compact"
 
 
 @pytest.mark.slow
-async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path) -> None:
+@pytest.mark.parametrize("evidence_branch", [False, True])
+async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, evidence_branch: bool) -> None:
     async with real_storage(
         tmp_path,
         dataset="demo-compact",
@@ -85,6 +86,41 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path) 
                     )
                     continue
                 if pending:
+                    if evidence_branch and all(v["task"]["procedure_id"] == "FIN-03" for v in pending):
+                        for view in pending:
+                            await post(
+                                "/review-records",
+                                {
+                                    "task_id": view["task"]["id"],
+                                    "target_version": view["task"]["target_version"],
+                                    "decision": "more_evidence",
+                                    "reason": "Isolated supplementary evidence scenario.",
+                                },
+                            )
+                            await wait_idle(runner, run.eid)
+                        plan = await post("/assistant-actions", {"action": "evidence_unavailable"})
+                        assert len(plan["targets"]) == 2
+                        await post(f"/assistant-actions/{plan['id']}/execute", {})
+                        await wait_idle(runner, run.eid)
+                        reopened = (await client.get(base + "/review-tasks?status=pending")).json()
+                        assert len(reopened) == 2
+                        assert (await client.get(base)).json()["awaiting_review"] is True
+                        plan = await post(
+                            "/assistant-actions",
+                            {
+                                "action": "confirm_reviews",
+                                "target_kind": "review_task",
+                                "target_ids": [v["task"]["id"] for v in reopened],
+                            },
+                        )
+                        await post(f"/assistant-actions/{plan['id']}/execute", {})
+                        await wait_idle(runner, run.eid)
+                        assert runner.run_error(run.eid) is None
+                        tasks = (await client.get(base + "/review-tasks?status=pending")).json()
+                        assert [v["task"]["procedure_id"] for v in tasks] == ["FIN-08"]
+                        await service.shutdown()
+                        await run.deps.activities.settle()
+                        return
                     assert all(v["task"]["kind"] == "normal" for v in pending)
                     assert all(v["target"]["proposed_action"] in ("accept", "misstatement") for v in pending)
                     accept = any(v["target"]["proposed_action"] == "accept" for v in pending)

@@ -212,7 +212,8 @@ async def test_batch_failure_rolls_back_earlier_decisions_and_receipt() -> None:
     assert (await actions.plans(EID))[0].status == "proposed"
 
 
-async def test_completion_evidence_batch_reopens_locally_without_phase_rewind() -> None:
+@pytest.mark.parametrize("node_error", [False, True])
+async def test_completion_evidence_batch_reopens_locally_without_phase_rewind(node_error: bool) -> None:
     from dataclasses import replace
 
     from backend.contracts.models import Decision, ReviewRecord
@@ -239,16 +240,41 @@ async def test_completion_evidence_batch_reopens_locally_without_phase_rewind() 
     assert s.runner.run_error(EID) is None
     actions = AssistantActions(s.runner.deps, s.submit)
     plan = await actions.propose(EID, "U-1", AssistantPlanIn(action="evidence_unavailable"), "全部标记为无法取得")
+    if node_error:
+        snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
+        broken = snapshot._replace(tasks=tuple(task._replace(error="Interrupted node") for task in snapshot.tasks))
+        with (
+            patch.object(s.submit.app, "aget_state", return_value=broken),
+            pytest.raises(DecisionRejected, match="请在相关程序"),
+        ):
+            await actions.execute(EID, plan.id, "U-1")
+        assert all(r.status == "open" for r in await s.output_store.latest(EID, EvidenceRequest))
+        return
     with patch.object(s.runner, "launch", wraps=s.runner.launch) as launch:
         await actions.execute(EID, plan.id, "U-1")
         await wait_idle(s.runner, EID)
-        assert launch.call_count == 1
-    assert len(await s.output_store.latest(EID, ReviewTask, status=TaskStatus.pending)) == 2
+        assert launch.call_count == 0  # 等待仍然有效, 无需以空输入调用图而清除中断.
+    pending = await s.output_store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    assert len(pending) == 2
     assert await s.output_store.latest(EID, RerunRequest) == []
     snapshot = await s.runner.app.aget_state(GraphRunner.config(EID))
     assert any(task.name == "misstatement_triage" and task.interrupts for task in snapshot.tasks)
     assert s.runner.run_error(EID) is None
     assert await resume_required(s.runner.deps, await s.engagement_store.get(EID), snapshot) is None
+    await s.submit.submit(
+        EID,
+        ReviewRecord(
+            id="D-AFTER-UNAVAILABLE",
+            task_id=pending[0].id,
+            target_version=pending[0].target_version,
+            decision=Decision.confirm,
+            reviewed_by="U-1",
+            decided_at=datetime.now(UTC),
+        ),
+    )
+    await wait_idle(s.runner, EID)
+    assert s.runner.run_error(EID) is None
+    assert len(await s.output_store.latest(EID, ReviewTask, status=TaskStatus.pending)) == 1
 
 
 async def test_action_api_is_owned_and_cancelled_plan_cannot_execute() -> None:
