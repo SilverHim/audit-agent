@@ -1291,12 +1291,14 @@ class GraphDecisionSubmit:
                 updated = procedure.model_copy(
                     update={"version": procedure.version + 1, "status": ProcedureStatus.awaiting_human}
                 )
+                reports = await store.latest(eid, AuditReportVersion)
                 rewind = RerunRequest(
                     id=f"RR-UNAVAILABLE-{request.id}",
                     procedure_ids=[procedure.id],
                     superseded_run_ids=[],
                     evidence_request_id=request.id,
                     data_version=(await self.deps.data.readiness(eid)).data_version,
+                    report_revision=max((r.revision for r in reports), default=None),
                     requested_by=actor,
                     requested_at=self.now(),
                 )

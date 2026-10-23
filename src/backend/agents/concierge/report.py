@@ -21,6 +21,7 @@ from backend.contracts.models import (
     OpinionType,
     ReportSection,
     ReviewStatus,
+    RunStatus,
     WorkingLanguage,
 )
 from backend.contracts.services import ValidationContext
@@ -153,9 +154,26 @@ def revision_inputs(ctx: RunContext, revision: int) -> RevisionInputs:
     if rejects:
         reject = rejects[-1]
         return RevisionInputs(previous, language, [a.model_dump(mode="json") for a in reject.annotations], reject.id)
-    if any(r.report_revision == last.revision for r in state["rerun_requests"]):
+    if any(r.report_revision == last.revision for r in state["rerun_requests"]) or legacy_evidence_return(ctx, last):
         return RevisionInputs(previous, language)  # 重跑后重拟: 没有批注, 不针对哪个退回决定
     raise LookupError(f"RPT-03 第 {revision} 稿找不到 RPT-01 对 {last.id} 的退回决定, 也没有其后的过期重跑")
+
+
+def legacy_evidence_return(ctx: RunContext, report: AuditReportVersion) -> bool:
+    """兼容旧版无法取得证据的回流漏记报告修订号: 只认该稿成功生成之后、本次起草之前的确定性请求.
+
+    不改写历史请求或补造退回决定; 早于该稿或晚于本次执行的请求不能授权重拟. 缺少原执行记录时不推断.
+    """
+    previous = next((run for run in ctx.state["procedure_runs"] if run.id == report.run_id), None)
+    if previous is None or previous.status is not RunStatus.succeeded or previous.ended_at is None:
+        return False
+    return any(
+        r.report_revision is None
+        and r.evidence_request_id is not None
+        and r.id == f"RR-UNAVAILABLE-{r.evidence_request_id}"
+        and previous.ended_at <= r.requested_at <= ctx.run.started_at
+        for r in ctx.state["rerun_requests"]
+    )
 
 
 def drafted_in(ctx: RunContext, report: AuditReportVersion) -> WorkingLanguage:

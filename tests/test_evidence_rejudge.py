@@ -13,14 +13,17 @@ import pytest
 from backend.agents.judging import in_scope
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
+    AuditReportVersion,
     Decision,
     DocumentType,
     EvidenceRequest,
+    GateVerdict,
     Judgment,
     Procedure,
     ProcedureRun,
     ProcedureStatus,
     Reliability,
+    RerunRequest,
     ReviewRecord,
     ReviewStatus,
     ReviewTask,
@@ -32,6 +35,7 @@ from backend.services.features import MORE_EVIDENCE
 from backend.services.staleness import current_results
 from tests.fakes import ENGAGEMENT as FAKE_ENGAGEMENT
 from tests.fakes import NOW, NUMBAT_FEATURES, FakeRegistry, FakeTrail, make_ctx, make_deps, wait_idle
+from tests.test_fin_gate import fin_decision
 from tests.test_review_decisions import EID, record, waiting_on_cutoff
 
 shared_loop = pytest.mark.asyncio(loop_scope="module")
@@ -169,6 +173,27 @@ async def test_more_evidence_decision_requires_the_feature() -> None:
         await s.submit.submit(EID, evidence_decision(task))
     assert caught.value.code == "DECISION_NOT_ALLOWED"
     assert await s.output_store.latest(EID, EvidenceRequest) == []
+
+
+async def test_unavailable_after_report_records_the_revision_for_redrafting() -> None:
+    """首稿之后补证无法取得须绑定首稿修订号, 否则 FIN-01 再次通过时报告重拟永久失败."""
+    s = await waiting_on_cutoff(features=NUMBAT_FEATURES | {MORE_EVIDENCE})
+    tasks = await s.output_store.latest(EID, ReviewTask, status=TaskStatus.pending)
+    for index, task in enumerate(tasks):
+        await s.submit.submit(EID, evidence_decision(task, f"D-MORE-{index}"))
+        await wait_idle(s.runner, EID)
+    assert await s.next_nodes() == ("gate_fin",)
+    await s.submit.submit(EID, fin_decision(GateVerdict.approve))
+    await wait_idle(s.runner, EID)
+    assert await s.next_nodes() == ("gate_rpt01",)
+    [first] = await s.output_store.latest(EID, AuditReportVersion)
+    request = (await s.output_store.latest(EID, EvidenceRequest))[0]
+
+    await s.submit.mark_evidence_unavailable(EID, request.id, None, actor="U-1")
+    [rewind] = await s.output_store.latest(EID, RerunRequest)
+    assert rewind.report_revision == first.revision
+    state = fill_defaults((await s.runner.app.aget_state(s.runner.config(EID))).values)
+    assert state["rerun_requests"][-1] == rewind
 
 
 def test_in_scope_keeps_only_rerun_subjects() -> None:

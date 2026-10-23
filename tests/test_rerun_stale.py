@@ -944,6 +944,31 @@ async def test_reject_wins_and_rerun_of_other_report_does_not_count() -> None:
         revision_inputs(ctx, 2)
 
 
+@pytest.mark.parametrize("minutes", [-1, 1, 3], ids=["before_report", "after_report", "after_current_run"])
+async def test_legacy_unavailable_return_redrafts_only_the_report_it_follows(minutes: int) -> None:
+    """兼容已卡住的旧请求, 但不把首稿之前或本次执行之后的事件当作重拟依据."""
+    first_run = finished(make_run("RPT-03"))
+    first = report(1).model_copy(update={"run_id": first_run.id})
+    rewind = request(
+        id="RR-UNAVAILABLE-ER-1",
+        evidence_request_id="ER-1",
+        report_revision=None,
+        superseded_run_ids=[],
+        requested_at=NOW + timedelta(minutes=minutes),
+    )
+    agent, ctx, _ = revising({"report_versions": [first], "procedure_runs": [first_run], "rerun_requests": [rewind]}, 2)
+    ctx = replace(ctx, run=ctx.run.model_copy(update={"started_at": NOW + timedelta(minutes=2)}))
+    if minutes != 1:
+        with pytest.raises(LookupError, match="也没有其后的过期重跑"):
+            revision_inputs(ctx, 2)
+        return
+    inputs = revision_inputs(ctx, 2)
+    assert inputs.previous and inputs.annotations == [] and inputs.addresses is None
+    [second] = (await agent.run(ctx))["report_versions"]
+    assert (second.revision, second.addresses_decision_id) == (2, None)
+    assert ctx.state["report_versions"] == [first]
+
+
 def test_phase_transition_key_counts_reruns() -> None:
     """阶段留痕的防重复键: 没有重跑为原样, 第 n 次重跑之后带 :n, 重跑后再经过同一阶段也能留痕."""
     [first] = phase_transition(EID, Phase.P2_Executing, Phase.P3_Completion, "FIN-04")
