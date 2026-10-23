@@ -15,114 +15,11 @@ import {
   ScrollText,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { EngagementOverview, Phase } from '@/client/types.gen'
+import type { EngagementOverview } from '@/client/types.gen'
 import { BrandMark, CurrentUser, LanguageToggle } from '@/components/chrome'
 import { useDataSummary } from '@/lib/data-api'
 import { useI18n } from '@/lib/i18n'
 import { useManualTasks } from '@/lib/manual-api'
-import { useMoney } from '@/lib/use-money'
-
-const STAGES = ['P0_Acceptance', 'P1_Planning', 'P2_Executing', 'P3_Completion', 'P4_Reporting'] as const
-type Stage = (typeof STAGES)[number]
-
-function stageIndex(phase: Phase): number {
-  if (phase === 'Archived') return STAGES.length
-  if (phase === 'Declined') return 0
-  return STAGES.indexOf(phase as Stage)
-}
-
-function StageDot({ state }: { state: 'done' | 'current' | 'todo' }) {
-  if (state === 'done') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <circle cx="9" cy="9" r="8" fill="#12A27A" />
-        <path
-          d="M5.5 9.3l2.3 2.3 4.7-5"
-          fill="none"
-          stroke="#FFFFFF"
-          strokeWidth="1.8"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    )
-  }
-  if (state === 'current') {
-    return (
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-        <circle cx="9" cy="9" r="8" fill="none" stroke="#6B83FF" strokeWidth="2" />
-        <circle cx="9" cy="9" r="3.5" fill="#6B83FF" />
-      </svg>
-    )
-  }
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-      <circle cx="9" cy="9" r="7.5" fill="none" stroke="#4A5366" strokeWidth="1.5" />
-    </svg>
-  )
-}
-
-function StageList({ overview }: { overview: EngagementOverview | undefined }) {
-  const { formatMoneyShort } = useMoney()
-  const { t } = useI18n()
-  const phase = overview?.engagement.phase ?? 'P0_Acceptance'
-  const current = stageIndex(phase)
-  const declined = phase === 'Declined'
-
-  const subline = (stage: Stage, index: number): string => {
-    if (declined && index === 0) return t.stageStatus.declined
-    if (index < current) {
-      if (stage === 'P0_Acceptance') return t.stageStatus.accepted
-      if (stage === 'P1_Planning' && overview?.materiality_cents != null)
-        return t.stageStatus.materiality(formatMoneyShort(overview.materiality_cents))
-      if (stage === 'P4_Reporting') return t.stageStatus.signed
-      return t.stageStatus.completed
-    }
-    if (index === current && overview) {
-      if (overview.running) return t.stageStatus.running
-      if ((overview as { awaiting_data?: boolean }).awaiting_data) return t.data.awaiting
-      if (overview.current_gate) return t.stageStatus.gate(t.gates[overview.current_gate] ?? overview.current_gate)
-      if (overview.pending_tasks > 0) return t.stageStatus.reviews(overview.pending_tasks)
-    }
-    return t.phaseHints[stage]
-  }
-
-  return (
-    <ol className="flex flex-col px-2">
-      {STAGES.map((stage, index) => {
-        const state = declined
-          ? index === 0
-            ? 'current'
-            : 'todo'
-          : index < current
-            ? 'done'
-            : index === current
-              ? 'current'
-              : 'todo'
-        return (
-          <li key={stage} className="flex gap-3">
-            <div className="flex flex-col items-center">
-              <StageDot state={state} />
-              {index < STAGES.length - 1 ? (
-                <span
-                  className={cn('min-h-[22px] w-0.5 flex-1', state === 'done' ? 'bg-[#12A27A]' : 'bg-sidebar-border')}
-                />
-              ) : null}
-            </div>
-            <div className={cn(index < STAGES.length - 1 && 'pb-3.5')}>
-              <div className={cn('text-[13.5px]', state === 'current' ? 'font-semibold text-white' : 'text-[#d4d9e2]')}>
-                {t.phases[stage]}
-              </div>
-              <div className={cn('text-[12.5px]', state === 'current' ? 'text-[#c7ceff]' : 'text-sidebar-muted')}>
-                {subline(stage, index)}
-              </div>
-            </div>
-          </li>
-        )
-      })}
-    </ol>
-  )
-}
 
 type NavItem = {
   to:
@@ -272,11 +169,6 @@ export function EngagementShell({
           </span>
           <ChevronsUpDown className="size-4 shrink-0 text-[#9aa3b2]" aria-hidden="true" />
         </Link>
-
-        <div className="flex flex-col gap-2">
-          <div className="px-2 font-semibold text-sidebar-muted text-xs tracking-wide">{t.nav.stages}</div>
-          <StageList overview={overview} />
-        </div>
 
         <div className="flex flex-col gap-0.5">
           <div className="px-2 pb-2 font-semibold text-sidebar-muted text-xs tracking-wide">{t.nav.workspace}</div>

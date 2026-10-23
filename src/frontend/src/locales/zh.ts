@@ -49,7 +49,6 @@ export const zh: Messages = {
   },
   lang: { label: '语言', en: 'EN', zh: '中文' },
   nav: {
-    stages: '审计阶段',
     workspace: '审计工作台',
     concierge: '审计助理',
     decisions: '待决定',
@@ -74,23 +73,7 @@ export const zh: Messages = {
     Archived: '已归档',
     Declined: '不承接',
   },
-  phaseHints: {
-    P0_Acceptance: '客户承接',
-    P1_Planning: '重要性与风险清单',
-    P2_Executing: '收入与银行函证',
-    P3_Completion: '错报与审计意见',
-    P4_Reporting: '报告与签字',
-  },
-  stageStatus: {
-    gate: (gate) => `${gate} 待人工处理`,
-    reviews: (n) => `${n} 项复核待人工处理`,
-    running: '处理中',
-    accepted: '已承接',
-    materiality: (amount) => `重要性水平 ${amount}`,
-    completed: '已完成',
-    signed: '已签字归档',
-    declined: '不承接',
-  },
+  stageStatus: { signed: '已签字归档' },
   gates: {
     'ACC-01': '业务承接',
     'ACC-08': '约定条款与委任核验',

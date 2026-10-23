@@ -54,7 +54,6 @@ export const en = {
   },
   lang: { label: 'Language', en: 'EN', zh: '中文' },
   nav: {
-    stages: 'Audit stages',
     workspace: 'Workspace',
     concierge: 'Concierge',
     decisions: 'Pending decisions',
@@ -79,23 +78,7 @@ export const en = {
     Archived: 'Archived',
     Declined: 'Declined',
   },
-  phaseHints: {
-    P0_Acceptance: 'Client acceptance',
-    P1_Planning: 'Materiality and risk register',
-    P2_Executing: 'Revenue and bank confirmation',
-    P3_Completion: 'Misstatements and opinion',
-    P4_Reporting: 'Report and sign-off',
-  },
-  stageStatus: {
-    gate: (gate: string) => `${gate} pending auditor review`,
-    reviews: (n: number) => `${n} item${n === 1 ? '' : 's'} pending auditor review`,
-    running: 'Working',
-    accepted: 'Accepted',
-    materiality: (amount: string) => `Materiality ${amount}`,
-    completed: 'Completed',
-    signed: 'Signed and archived',
-    declined: 'Declined',
-  },
+  stageStatus: { signed: 'Signed and archived' },
   gates: {
     'ACC-01': 'Engagement acceptance',
     'ACC-08': 'Engagement terms and appointment',
