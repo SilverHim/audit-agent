@@ -146,7 +146,7 @@ describe('定论的回退', () => {
     expect(actionVerdict(null)).toBeNull()
   })
 
-  test('是错报时的金额与方向取 AI 的错报草稿; 不是错报或没有草稿时为空', () => {
+  test('构成错报时的金额与方向取 AI 的错报草稿; 不构成错报或没有草稿时为空', () => {
     const draft = { ...DRAFT }
     expect(
       verdictFigure({ verdict: 'misstatement', proposed_action: 'misstatement', misstatement_draft: draft }),
@@ -178,17 +178,17 @@ describe('更正分录的读取', () => {
 })
 
 describe('定论行', () => {
-  test('是错报: 红色大字, 同一行给金额与方向 (需求 R368 第 1, 2 条)', () => {
+  test('构成错报: 红色大字, 同一行给金额与方向 (需求 R368 第 1, 2 条)', () => {
     const html = render(<VerdictBanner judgment={judgment({ verdict: 'misstatement', misstatement_draft: DRAFT })} />)
     expect(html).toContain('data-verdict="misstatement"')
     expect(html).toContain('text-risk')
     expect(html).toContain('>Misstatement<')
     expect(html).toContain('AUD 750.00')
     expect(html).toContain('Overstated')
-    expect(html).toContain('>Verdict<')
+    expect(html).toContain('>Conclusion<')
   })
 
-  test('不是错报绿色, 暂时判断不了黄色; 两者都不显示金额', () => {
+  test('不构成错报绿色, 尚无法形成结论黄色; 两者都不显示金额', () => {
     const clear = render(
       <VerdictBanner judgment={judgment({ verdict: 'not_misstatement', proposed_action: 'accept' })} />,
     )
@@ -202,7 +202,7 @@ describe('定论行', () => {
     )
     expect(undetermined).toContain('data-verdict="undetermined"')
     expect(undetermined).toContain('text-warn')
-    expect(undetermined).toContain('Cannot tell yet')
+    expect(undetermined).toContain('Unable to conclude')
     expect(undetermined).not.toContain('AUD')
   })
 
@@ -240,16 +240,16 @@ describe('定论行', () => {
       const banner = render(
         <VerdictBanner judgment={judgment({ verdict: 'misstatement', misstatement_draft: DRAFT })} />,
       )
-      for (const text of ['定论', '是错报', '高估', 'AUD 750.00']) expect(banner).toContain(text)
+      for (const text of ['判断结论', '构成错报', '高估', 'AUD 750.00']) expect(banner).toContain(text)
       expect(render(<CorrectionList entries={CORRECTION} />)).toContain('AI 建议的更正分录')
       const clear = render(
         <VerdictBanner judgment={judgment({ verdict: 'not_misstatement', proposed_action: 'accept' })} />,
       )
-      expect(clear).toContain('不是错报')
+      expect(clear).toContain('不构成错报')
       const undetermined = render(
         <VerdictBanner judgment={judgment({ verdict: 'undetermined', proposed_action: 'more_evidence' })} />,
       )
-      expect(undetermined).toContain('暂时判断不了')
+      expect(undetermined).toContain('尚无法形成结论')
       expect(render(<CorrectionList entries={CORRECTION} />)).toContain('借方')
     } finally {
       if (original) Object.defineProperty(navigator, 'language', original)
@@ -259,7 +259,7 @@ describe('定论行', () => {
 })
 
 describe('列表里的定论一格', () => {
-  test('不是判断时为破折号; 是错报的同一格给金额与方向', () => {
+  test('不是判断时为破折号; 构成错报的同一格给金额与方向', () => {
     expect(render(<VerdictCell judgment={null} />)).toBe('<span>—</span>')
     const html = render(<VerdictCell judgment={judgment({ verdict: 'misstatement', misstatement_draft: DRAFT })} />)
     expect(html).toContain('data-verdict="misstatement"')
@@ -268,19 +268,19 @@ describe('列表里的定论一格', () => {
     expect(html).toContain('Overstated')
   })
 
-  test('不是错报与没有 verdict 的旧数据照常出一格', () => {
+  test('不构成错报与没有 verdict 的旧数据照常出一格', () => {
     expect(
       render(<VerdictCell judgment={judgment({ verdict: 'not_misstatement', proposed_action: 'close' })} />),
     ).toContain('Not a misstatement')
     expect(render(<VerdictCell judgment={judgment({ verdict: null, proposed_action: 'more_evidence' })} />)).toContain(
-      'Cannot tell yet',
+      'Unable to conclude',
     )
   })
 })
 
 describe('两方的建议', () => {
   test('按定论的说法显示, 没有建议动作时说明', () => {
-    expect(render(<ProposalVerdict action="more_evidence" />)).toContain('Cannot tell yet')
+    expect(render(<ProposalVerdict action="more_evidence" />)).toContain('Unable to conclude')
     expect(render(<ProposalVerdict action={null} />)).toContain('No proposal')
   })
 })
@@ -383,7 +383,7 @@ describe('判断卡', () => {
       judgment({ verdict: null, proposed_action: 'more_evidence', misstatement_draft: null }),
     )
     expect(html).toContain('data-verdict="undetermined"')
-    expect(html).toContain('Cannot tell yet')
+    expect(html).toContain('Unable to conclude')
     expect(html).not.toContain('data-testid="correction-entries"')
   })
 })
