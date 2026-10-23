@@ -1,7 +1,7 @@
 // 新建项目表单的客户下拉 (lib/clients.ts, 需求 R287) 的测试, bun test 运行. 客户取自仓库里的数据集画像 (合成).
 import { describe, expect, test } from 'bun:test'
 import type { ClientSummary } from '../src/client/types.gen'
-import { clientNote, clientOptionLabel, isDemoClient } from '../src/lib/clients'
+import { clientNote, clientOptionLabel, creationClients, isDemoClient } from '../src/lib/clients'
 import { en } from '../src/locales/en'
 import { zh } from '../src/locales/zh'
 
@@ -44,5 +44,19 @@ describe('clientNote', () => {
     expect(clientNote(NEW, en)).toBe(en.projectsPage.noDataset)
     expect(clientNote(MOCK, zh)).toBeNull()
     expect(clientNote(undefined, zh)).toBeNull()
+  })
+})
+
+describe('creationClients', () => {
+  test('只保留精简演示与手工客户, 旧默认数据集不会参与创建', () => {
+    const compact = { dataset: 'demo-compact', default: false, demo: true }
+    const numbat: ClientSummary = {
+      ...DEMO,
+      client_id: 'CLIENT-NUMBAT',
+      datasets: [{ dataset: 'demo', default: true, demo: true }, compact],
+    }
+    expect(creationClients([DEMO, MOCK, numbat, NEW])).toEqual([{ ...numbat, datasets: [compact] }, NEW])
+    expect(numbat.datasets).toHaveLength(2)
+    expect(creationClients([])).toEqual([])
   })
 })

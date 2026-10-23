@@ -16,7 +16,7 @@ import { QueryState } from '@/components/query-state'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { getToken } from '@/lib/auth'
-import { clientNote, clientOptionLabel } from '@/lib/clients'
+import { clientNote, clientOptionLabel, creationClients } from '@/lib/clients'
 import { invalidateEngagementList } from '@/lib/engagement'
 import { apiMessage } from '@/lib/errors'
 import { useI18n } from '@/lib/i18n'
@@ -166,7 +166,7 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
     },
     onError: (error) => toast.error(apiMessage(error)),
   })
-  const options = clients.data ?? []
+  const options = creationClients(clients.data ?? [])
   // 默认选带默认数据集 (配置项 DEMO_DATASET) 的客户, 没有时选第一个. 清单加载中, 取数失败或为空时不能创建,
   // 免得在默认客户出来之前建成别的项目
   const chosen =
@@ -175,12 +175,8 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
     options[0]?.client_id ||
     ''
   const selected = options.find((item) => item.client_id === chosen)
-  // 数据集客户发数据集 (默认的或第一个; 现在每个客户只有一个, 有多个时再出数据集选择), 没有数据集的客户发 client_id
-  const [datasetId, setDatasetId] = useState('')
-  const dataset =
-    selected?.datasets.find((d) => d.dataset === datasetId) ??
-    selected?.datasets.find((d) => d.default) ??
-    selected?.datasets[0]
+  // 演示客户只提供精简数据; 手工新建客户按 client_id 创建项目.
+  const dataset = selected?.datasets[0]
   const fixedStart = dataset?.period_start ?? null
   const fixedEnd = dataset?.period_end ?? null
   const note = clientNote(selected, t)
@@ -236,25 +232,6 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
                   {note}
                 </span>
               ) : null}
-            </div>
-          ) : null}
-          {selected && selected.datasets.length > 1 ? (
-            <div className="flex flex-[1_1_200px] flex-col gap-1.5">
-              <label htmlFor="demo-profile" className="text-sm">
-                {t.projectsPage.demoProfile}
-              </label>
-              <select
-                id="demo-profile"
-                value={dataset?.dataset ?? ''}
-                onChange={(event) => setDatasetId(event.target.value)}
-                className="min-h-10 rounded-lg border bg-card px-3 text-sm"
-              >
-                {selected.datasets.map((item) => (
-                  <option key={item.dataset} value={item.dataset}>
-                    {item.dataset === 'demo-compact' ? t.projectsPage.compactProfile : item.dataset}
-                  </option>
-                ))}
-              </select>
             </div>
           ) : null}
           {clients.isError ? (
