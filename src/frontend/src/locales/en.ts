@@ -12,7 +12,11 @@ export const en = {
     title: 'Audit file',
     archive: 'Download all (ZIP)',
     file: 'Download Excel',
-    version: 'Version',
+    version: 'Record version',
+    currentVersion: (n: number) => `Latest record · Version ${n}`,
+    historicalVersion: (n: number) => `Historical record · Version ${n}`,
+    versionHint:
+      'The system saves a snapshot when procedure results or review records change. The version count includes these automatic updates.',
     index: 'Index',
     paper: 'Workpaper',
     procedure: 'Procedure',
@@ -359,15 +363,16 @@ export const en = {
   },
   // FIN-08 的登记 (人工任务页, 结果模型 ManagementResponses): 每条错报一行
   fin08: {
-    hint: 'One row for each misstatement in the material',
+    hint: 'Choose whether to correct each misstatement. Corrections still require verification of adjustment entries.',
+    recorded: 'Correction intentions recorded for each item; adjustment entries remain subject to verification.',
     fields: {
       communicatedAt: 'Communicated at',
       communicatedTo: 'Communicated to',
       respondedAt: 'Responded at',
       response: 'Response (verbatim)',
-      agrees: 'Agreement to correct',
+      agrees: 'Correct this misstatement?',
     },
-    agreeChoices: { yes: 'Agrees', no: 'Does not agree' },
+    agreeChoices: { yes: 'Correct', no: 'Do not correct' },
     separator: ', ',
     errors: {
       missing: (fields: string) => `Fill in ${fields}.`,
@@ -620,7 +625,10 @@ export const en = {
         label: 'Disagree, not a misstatement',
         hint: 'Record the review conclusion and basis',
       },
-      amend_misstatement: { label: 'Record the misstatement with changes', hint: 'Amend the draft misstatement' },
+      amend_misstatement: {
+        label: 'Edit misstatement details and confirm',
+        hint: 'Edit the proposed amount, account or assertion, then confirm the misstatement',
+      },
       agree_clear: { label: 'Agree, not a misstatement', hint: 'Adopt the AI conclusion' },
       disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
       misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
@@ -719,8 +727,9 @@ export const en = {
       not_positive: 'not applicable this period: the base amount is not positive',
     },
     basis: 'Basis',
-    overallPct: (low: string, high: string) => `Overall materiality (${low} to ${high} of the base)`,
-    performancePct: (low: string, high: string) => `Performance materiality (${low} to ${high} of overall)`,
+    overallPct: (low: string, high: string) => `Overall materiality (recommended: ${low} to ${high} of the base)`,
+    performancePct: (low: string, high: string) =>
+      `Performance materiality (recommended: ${low} to ${high} of overall)`,
     trivialPct: 'Clearly trivial (share of overall)',
     preview: (overall: string, performance: string) => `Overall ${overall} · performance ${performance}`,
     risks: 'Risk register',

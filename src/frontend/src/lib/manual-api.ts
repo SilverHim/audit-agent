@@ -170,10 +170,14 @@ export function manualRecordBody(
   t: Messages,
   given?: Record<string, unknown>,
 ): ReviewRecordIn | string {
-  const conclusion = draft.conclusion.trim()
+  const correctionDecision = view.request.result_model === 'ManagementResponses' && given !== undefined
+  const conclusion = draft.conclusion.trim() || (correctionDecision ? t.fin08.recorded : '')
+  const now = new Date()
+  const today = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+  const performedOn = draft.performedOn || (correctionDecision ? today : '')
   const reason = draft.reason.trim()
   if (!conclusion) return t.errors.conclusionRequired
-  if (!draft.performedOn) return t.manualPage.errors.performedOn
+  if (!performedOn) return t.manualPage.errors.performedOn
   const evidence = evidencePointers(view, draft.evidence)
   if (evidence.length < view.request.min_evidence) return t.manualPage.errors.evidence(view.request.min_evidence)
   const details = given ?? parseDetails(resultFields(view.result_schema), draft.values, t)
@@ -183,7 +187,7 @@ export function manualRecordBody(
     target_version: view.task.target_version,
     decision: 'manual_result',
     reason,
-    manual_result: { conclusion, performed_on: draft.performedOn, evidence, details },
+    manual_result: { conclusion, performed_on: performedOn, evidence, details },
   }
 }
 

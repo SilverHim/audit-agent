@@ -16,6 +16,7 @@ import {
 import type { AssistantPlan } from '@/client/types.gen'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { pendingPlans } from '@/lib/assistant-plans'
 import { decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { errorText } from '@/lib/errors'
 import { useEvidenceRequests } from '@/lib/evidence-api'
@@ -50,9 +51,9 @@ export function AssistantActions({ eid }: { eid: string }) {
           throwOnError: true,
         })
       ).data,
-    onSuccess: () => {
+    onSuccess: async () => {
       setSelected([])
-      void invalidateEngagement(queryClient, eid)
+      await invalidateEngagement(queryClient, eid)
     },
     onError: (error) => toast.error(errorText(error, t)),
   })
@@ -74,7 +75,7 @@ export function AssistantActions({ eid }: { eid: string }) {
         item.allowed_decisions.includes('misstatement'),
     )
     .map((item) => item.task.id)
-  const pending = (plans.data ?? []).filter((plan) => plan.status === 'proposed')
+  const pending = pendingPlans(plans.data ?? [])
   const completed = (plans.data ?? []).filter((plan) => plan.status === 'completed')
   return (
     <section className="rounded-xl border bg-card p-4" aria-label={c.batch}>

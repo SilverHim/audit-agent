@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, ClassVar, cast, get_args
 
 from backend.agents.base import AgentDeps, ProcedureAgent, RunContext, run_rules
@@ -135,9 +136,12 @@ def to_communicate(state: Any) -> list[Misstatement]:
     ]
 
 
-def after_response(misstatement: Misstatement, response: ManagementResponse) -> Misstatement:
+def after_response(
+    misstatement: Misstatement, response: ManagementResponse, *, recorded_at: datetime | None = None
+) -> Misstatement:
     """按管理层的回复写出的错报新版本 (接口文档第 2.5 节迁移表): 同意更正为 communicated, 拒绝为 uncorrected
-    (refused); 都记沟通与回复的四项, 清掉重新沟通的标记. 经 model_validate 重建. 回复依据的不是该错报的当前版本抛
+    (refused); 只保留实际提供的沟通信息, 另记审计人员登记时刻, 清掉重新沟通标记.
+    经 model_validate 重建. 回复依据的不是该错报的当前版本抛
     VersionConflict. 纯函数."""
     if response.base_version != misstatement.version:
         raise VersionConflict(
@@ -151,6 +155,7 @@ def after_response(misstatement: Misstatement, response: ManagementResponse) -> 
         "communicated_to": response.communicated_to,
         "responded_at": response.responded_at,
         "management_response": response.response,
+        "correction_decision_at": recorded_at,
         "needs_recommunication": False,
         "version": misstatement.version + 1,
     }
@@ -520,7 +525,7 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
             f"{r.misstatement_id} 的{label} {at.isoformat()} 晚于决定时刻 {record.decided_at.isoformat()}"
             for r in responses
             for label, at in (("沟通时间", r.communicated_at), ("回复时间", r.responded_at))
-            if at > record.decided_at
+            if at is not None and at > record.decided_at
         ]
 
     def collect(self, ctx: RunContext, record: ReviewRecord) -> StatePatch:
@@ -528,7 +533,11 @@ class WorkpaperAgent(ProcedureAgent[JudgedRun]):
         顺序; 错报取 ctx.state 中的版本 (派发之前的), 重放时重算得同一版本. 登记的错报不在状态中抛 KeyError (check
         已核对登记覆盖材料, 正常走不到)."""
         by_id = {m.id: m for m in ctx.state["misstatements"]}
-        return {"misstatements": [after_response(by_id[r.misstatement_id], r) for r in responses_of(record)]}
+        return {
+            "misstatements": [
+                after_response(by_id[r.misstatement_id], r, recorded_at=record.decided_at) for r in responses_of(record)
+            ]
+        }
 
     async def fin03_subjects(self, ctx: RunContext, misstatements: Sequence[Misstatement]) -> Subjects:
         """FIN-03 的判断对象: 给定的错报 (已筛选的未分类错报, 见 execute), 对象 ID 为错报 ID, mock 的 fixture_key 为

@@ -480,3 +480,20 @@ async def test_collect_replayed_after_crash(monkeypatch: pytest.MonkeyPatch) -> 
     assert store.workflow_rows_of(EID) == rows
     assert [latest(s, Misstatement, m).version for m in (XJ499, CSH02)] == [3, 3]
     assert (await s.runner.app.aget_state(CONFIG)).next == ("await_correction",)
+
+
+async def test_correction_choice_only_keeps_external_communication_unknown() -> None:
+    s = await at_communicate()
+    source = registration(1, round1_misstatements())
+    rows = [{k: row[k] for k in ("misstatement_id", "base_version", "agrees_to_correct")} for row in source]
+    rows[0]["agrees_to_correct"] = True
+    rows[1]["agrees_to_correct"] = False
+    await submit_and_wait(s, registered(task_of(1), rows, ON_19, DECIDED_1))
+    first, second = [latest(s, Misstatement, row["misstatement_id"]) for row in rows]
+    assert first.status is MisstatementStatus.communicated
+    assert second.status is MisstatementStatus.uncorrected and second.uncorrected_basis == "refused"
+    for item in (first, second):
+        assert item.correction_decision_at == DECIDED_1
+        assert item.communicated_at is None and item.communicated_to is None
+        assert item.responded_at is None and item.management_response is None
+    assert first_misstatement_communicated_at((await s.runner.app.aget_state(CONFIG)).values) == DECIDED_1

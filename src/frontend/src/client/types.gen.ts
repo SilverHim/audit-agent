@@ -4245,6 +4245,10 @@ export type Misstatement = {
      */
     management_response?: string | null;
     /**
+     * Correction Decision At
+     */
+    correction_decision_at?: string | null;
+    /**
      * Needs Recommunication
      */
     needs_recommunication?: boolean;

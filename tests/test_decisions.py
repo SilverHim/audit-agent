@@ -825,17 +825,17 @@ async def assert_rejected(
         (pln_decision(GateVerdict.approve, target_id="ANALYTICS"), "VERSION_MISMATCH", None),
         (pln_decision(GateVerdict.approve, edits=[edit(target_version=2)]), "VERSION_MISMATCH", "RISK-CASH-EXI"),
         (
-            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.02})),
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.0})),
             "INVALID_VALUE",
             "pct",
         ),
         (
-            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.004})),
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": -0.004})),
             "INVALID_VALUE",
             "pct",
         ),
         (
-            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"performance_pct": 0.8})),
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"performance_pct": float("inf")})),
             "INVALID_VALUE",
             "performance_pct",
         ),
@@ -845,7 +845,7 @@ async def assert_rejected(
             "clearly_trivial_pct",
         ),
         (
-            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"clearly_trivial_pct": 0.06})),
+            pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"clearly_trivial_pct": -0.06})),
             "INVALID_VALUE",
             "clearly_trivial_pct",
         ),
@@ -862,11 +862,11 @@ async def assert_rejected(
         "stale_target_version",
         "wrong_target",
         "stale_edit_version",
-        "pct_above_range",
-        "pct_below_range",
-        "performance_pct",
+        "pct_zero",
+        "pct_negative",
+        "performance_pct_nonfinite",
         "clearly_trivial_zero",
-        "clearly_trivial_above_candidate",
+        "clearly_trivial_negative",
         "unknown_risk",
         "same_risk_twice",
         "reused_decision_id",
@@ -897,7 +897,7 @@ async def test_pln_decision_rejected(pln_gate: Started, decision: GateDecision, 
         ),
         (pln_decision(GateVerdict.approve, id="D-ACC", materiality=None), "MISSING_FIELD", "materiality"),
         (
-            pln_decision(GateVerdict.approve, id="D-ACC", materiality=CHOICE.model_copy(update={"pct": 0.02})),
+            pln_decision(GateVerdict.approve, id="D-ACC", materiality=CHOICE.model_copy(update={"pct": 0.0})),
             "INVALID_VALUE",
             "materiality.pct",
         ),
@@ -1324,9 +1324,9 @@ def test_pln_effects_without_edits_carry_current_lists_unchanged() -> None:
 
 
 async def test_pln_coverage_checked_after_other_invalid_values() -> None:
-    """覆盖检查在其余取值校验之后: 重要性比例越界与缺口同时存在时先报比例."""
+    """覆盖检查在其余取值校验之后: 重要性比例非法与缺口同时存在时先报比例."""
     s = await at_pln_gate(inventory())
-    bad = pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": 0.5}))
+    bad = pln_decision(GateVerdict.approve, materiality=CHOICE.model_copy(update={"pct": -0.5}))
     await assert_rejected(s, bad, "INVALID_VALUE", "materiality.pct")
 
 
@@ -1925,3 +1925,13 @@ async def test_plan_approve_caught_up_after_lost_checkpoint() -> None:
         if e.payload["object"] == "engagement"
     ]
     assert moves.count(("P1_Planning", "P2_Executing")) == 1
+
+
+@pytest.mark.parametrize("pct,performance,trivial", [(0.002, 0.4, 0.06), (0.02, 0.9, 0.1)])
+def test_materiality_ranges_are_recommendations(pct: float, performance: float, trivial: float) -> None:
+    from backend.orchestration.gates import check_materiality
+
+    check_materiality(
+        MaterialityCandidates(id="MATERIALITY", candidates=NUMBAT_CANDIDATES),
+        CHOICE.model_copy(update={"pct": pct, "performance_pct": performance, "clearly_trivial_pct": trivial}),
+    )

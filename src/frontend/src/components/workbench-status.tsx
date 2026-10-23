@@ -76,9 +76,6 @@ export function WorkbenchStatus({
               ? t.gates[overview.current_gate]
               : t.phases[overview.engagement.phase]}
         </span>
-        <span className="rounded-md border px-2 py-0.5 text-muted-foreground text-xs">
-          {overview.model_mode === 'live' ? c.liveModel : c.mockModel}
-        </span>
         {overview.progress.total > 0 ? (
           <span className="text-muted-foreground text-xs">
             {c.progress(overview.progress.done, overview.progress.total)}

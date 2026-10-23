@@ -1515,7 +1515,7 @@ class MaterialityCandidates(Versioned):
     """PLN-01 算出的全部重要性候选, PLN-01/03 闸门的呈报材料."""
 
     candidates: list[MaterialityCandidate]  # 各基准的候选区间
-    performance_pct_range: tuple[float, float] = (0.5, 0.75)  # 执行重要性占整体重要性的比例范围
+    performance_pct_range: tuple[float, float] = (0.5, 0.75)  # 执行重要性占整体重要性的推荐比例范围
     clearly_trivial_pct: float = 0.05  # 明显微小门槛占整体重要性的默认比例
 
 
@@ -1699,7 +1699,7 @@ class MaterialityChoice(Model):
     """审计师在 PLN-01/03 闸门选定的重要性基准与比例."""
 
     basis: MaterialityBasis  # 选定的基准
-    pct: float  # 整体重要性占基准的比例, 须在候选区间内
+    pct: float  # 整体重要性占基准的比例, 候选区间仅作推荐
     performance_pct: float  # 执行重要性占整体重要性的比例
     clearly_trivial_pct: float  # 明显微小门槛占整体重要性的比例
 
@@ -1849,6 +1849,7 @@ class Misstatement(Versioned):
     communicated_to: str | None = None
     responded_at: datetime | None = None
     management_response: str | None = None
+    correction_decision_at: datetime | None = None  # 审计人员登记更正意向的时刻, 不冒充外部沟通时间
     needs_recommunication: bool = False
     uncorrected_basis: UncorrectedBasis | None = None  # status 为 uncorrected 时的依据; 旧口径 (未经沟通) 为空
     # 更正与验证 (A1 等待更正, A8 验证, FIN-09): 更正通知, 已验证的更正分录凭证号, 已更正与剩余金额, 作验证的判断
@@ -1860,14 +1861,20 @@ class Misstatement(Versioned):
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
-        """状态与字段一致 (接口文档第 2.5 节): communicated 须有沟通时间; verifying 须有更正通知; corrected 与
+        """状态与字段一致 (接口文档第 2.5 节): communicated 须有沟通时间或更正意向登记时刻;
+        verifying 须有更正通知; corrected 与
         partially_corrected 须有验证判断, 且已更正额加剩余额等于错报金额, corrected 剩余额为 0, partially_corrected
-        剩余额在 (0, amount_cents) 内; 未更正的依据只随 uncorrected, 因拒绝而 uncorrected 须有沟通时间与管理层回复,
+        剩余额在 (0, amount_cents) 内; 未更正的依据只随 uncorrected;
+        因拒绝而 uncorrected 须有沟通与回复或更正意向登记时刻,
         停止等待须有更正通知; 重新沟通的标记只在 communicated 时为真. uncorrected 而 basis 为空合法 (功能关闭时的旧
         口径). 依据随 evaluated, closed 的放开留给它们落地的需求."""
         problems = []
         status, residual = self.status, self.residual_cents
-        if status is MisstatementStatus.communicated and self.communicated_at is None:
+        if (
+            status is MisstatementStatus.communicated
+            and self.communicated_at is None
+            and self.correction_decision_at is None
+        ):
             problems.append("communicated 须有沟通时间 (communicated_at)")
         if status is MisstatementStatus.verifying and self.correction_notice_id is None:
             problems.append("verifying 须有更正通知 (correction_notice_id)")
@@ -1889,6 +1896,7 @@ class Misstatement(Versioned):
         if (
             status is MisstatementStatus.uncorrected
             and basis == "refused"
+            and self.correction_decision_at is None
             and (self.communicated_at is None or self.management_response is None)
         ):
             problems.append("因管理层拒绝而未更正, 须有沟通时间 (communicated_at) 与管理层回复 (management_response)")
@@ -1916,20 +1924,24 @@ def verified_adjustment_entries(misstatements: Iterable[Misstatement]) -> list[s
 
 
 class ManagementResponse(Model):
-    """管理层对一条错报的回复 (FIN-08 的人工结果载荷, 需求 R156): 沟通的时间与对象, 回复的时间与原文, 是否同意更正.
-    base_version 为沟通时的错报版本. 回复不能早于沟通."""
+    """FIN-08 的更正意向登记: 错报及版本、是否更正必填, 外部沟通和回复信息选填.
+    同时提供沟通与回复时间时, 回复不能早于沟通."""
 
     misstatement_id: str  # 回复的错报
     base_version: int  # 沟通时的错报版本
-    communicated_at: AwareDatetime  # 沟通时间 (须带时区: 与决定时刻比较, 第 1 轮审核 R161-01)
-    communicated_to: NonBlank  # 沟通对象 (管理层或治理层中的人与职务)
-    responded_at: AwareDatetime  # 回复时间 (须带时区)
-    response: NonBlank  # 回复原文
+    communicated_at: AwareDatetime | None = None  # 可选的外部沟通时间
+    communicated_to: NonBlank | None = None  # 可选的沟通对象
+    responded_at: AwareDatetime | None = None  # 可选的外部回复时间
+    response: NonBlank | None = None  # 可选的回复原文
     agrees_to_correct: bool  # 是否同意更正
 
     @model_validator(mode="after")
     def responded_after_communication(self) -> Self:
-        if self.responded_at < self.communicated_at:
+        if (
+            self.responded_at is not None
+            and self.communicated_at is not None
+            and self.responded_at < self.communicated_at
+        ):
             raise ValueError(f"回复时间 {self.responded_at} 早于沟通时间 {self.communicated_at}")
         return self
 

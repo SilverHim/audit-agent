@@ -915,12 +915,12 @@ function PlanningFields({
           id="pln-pct"
           label={t.planning.overallPct(formatPct(selected?.pct_low), formatPct(selected?.pct_high))}
         >
-          <PercentInput id="pln-pct" step="0.05" value={choice.pct} onChange={(pct) => onChoice({ ...choice, pct })} />
+          <PercentInput id="pln-pct" step="any" value={choice.pct} onChange={(pct) => onChoice({ ...choice, pct })} />
         </LabeledField>
         <LabeledField id="pln-perf" label={t.planning.performancePct(formatPct(range[0]), formatPct(range[1]))}>
           <PercentInput
             id="pln-perf"
-            step="1"
+            step="any"
             value={choice.performance_pct}
             onChange={(performance_pct) => onChoice({ ...choice, performance_pct })}
           />
@@ -928,7 +928,7 @@ function PlanningFields({
         <LabeledField id="pln-trivial" label={t.planning.trivialPct}>
           <PercentInput
             id="pln-trivial"
-            step="1"
+            step="any"
             value={choice.clearly_trivial_pct}
             onChange={(clearly_trivial_pct) => onChoice({ ...choice, clearly_trivial_pct })}
           />
