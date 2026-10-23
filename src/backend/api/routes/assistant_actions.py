@@ -57,5 +57,4 @@ async def cancel_assistant_action(
     actions: Annotated[AssistantActions, Depends(get_actions)],
 ) -> None:
     async with catch_api():
-        plan = await actions.get(engagement.id, plan_id, user.id)
-        await actions.executor.cancel_assistant(engagement.id, plan, actor=user.id)
+        await actions.cancel(engagement.id, plan_id, user.id)

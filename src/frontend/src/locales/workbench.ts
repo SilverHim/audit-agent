@@ -56,7 +56,7 @@ export const workbenchEn = {
   },
   failed: 'Failed',
   running: 'In progress',
-  batch: 'Authorised assistant actions',
+  batch: 'Batch confirmation',
   prepare: 'Prepare batch action',
   selected: (n: number) => `${n} selected`,
   actions: {
@@ -155,7 +155,7 @@ export const workbenchZh: typeof workbenchEn = {
   },
   failed: '执行失败',
   running: '正在执行',
-  batch: '审计助理授权操作',
+  batch: '批量确认',
   prepare: '生成批量操作方案',
   selected: (n) => `已选择 ${n} 项`,
   actions: {

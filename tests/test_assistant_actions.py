@@ -323,3 +323,37 @@ async def test_chat_count_mismatch_only_proposes_then_exact_instruction_executes
     assert all(r.status == "unavailable" for r in await s.output_store.latest(EID, EvidenceRequest))
     assert model.requests == []
     await chat.shutdown()
+
+
+async def test_repeated_and_concurrent_proposals_reuse_pending_scope() -> None:
+    s, actions, plan = await setup_batch()
+    body = AssistantPlanIn(action="evidence_unavailable", target_ids=[t.id for t in reversed(plan.targets)])
+    repeated = await asyncio.gather(*(actions.propose(EID, "U-1", body, "再次点击") for _ in range(3)))
+    assert {p.id for p in repeated} == {plan.id}
+    assert len(await actions.plans(EID)) == 1
+    changed = await s.output_store.get(EID, EvidenceRequest, plan.targets[0].id)
+    await s.output_store.put(EID, [changed.model_copy(update={"version": changed.version + 1})], actor="U-1")
+    newer = await actions.propose(EID, "U-1", body, "事项更新后重新生成")
+    assert newer.id != plan.id
+    await actions.cancel(EID, newer.id, "U-1")
+    regenerated = await actions.propose(EID, "U-1", body, "取消后重新生成")
+    assert regenerated.id != newer.id
+
+
+async def test_cancel_closes_legacy_duplicate_proposals() -> None:
+    from backend.contracts.models import TrailEntry
+
+    s, actions, plan = await setup_batch()
+    duplicate = plan.model_copy(update={"id": "AP-LEGACY-DUPLICATE"})
+    await s.runner.deps.trail.record(
+        TrailEntry(
+            engagement_id=EID,
+            actor="U-1",
+            kind=TrailKind.assistant_action,
+            summary="旧版重复方案",
+            idempotency_key=f"{duplicate.id}:proposed",
+            payload={"action": "proposed", "plan": duplicate.model_dump(mode="json")},
+        )
+    )
+    await actions.cancel(EID, plan.id, "U-1")
+    assert [p.status for p in await actions.plans(EID)] == ["cancelled", "cancelled"]

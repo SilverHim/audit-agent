@@ -167,22 +167,43 @@ def direct_instruction(text: str) -> DirectInstruction | None:
     return DirectInstruction(AssistantPlanIn(action="evidence_unavailable", reason=reason), number)
 
 
+def target_scope(items: list[AssistantTarget]) -> list[tuple[str, str, int | None, str]]:
+    return sorted((t.kind, t.id, t.version, t.fingerprint) for t in items)
+
+
 class AssistantActions:
     def __init__(self, deps: AgentDeps, executor: ActionExecutor) -> None:
         self.deps, self.executor = deps, executor
         self.tasks: set[asyncio.Task[AssistantReceipt]] = set()
+        self.proposal_locks: dict[str, asyncio.Lock] = {}
 
     async def propose(self, eid: str, actor: str, body: AssistantPlanIn, instruction: str) -> AssistantPlan:
+        # 单 worker 内按项目串行生成方案, 重复点击与并发请求复用同一待确认范围.
+        async with self.proposal_locks.setdefault(eid, asyncio.Lock()):
+            return await self._propose(eid, actor, body, instruction)
+
+    async def _propose(self, eid: str, actor: str, body: AssistantPlanIn, instruction: str) -> AssistantPlan:
         engagement = await self.deps.engagement_store.get(eid)
         if engagement is None:
             raise LookupError(eid)
         if engagement.locked:
             raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
+        targets = await current_targets(self.deps, eid, body)
+        reason = (body.reason.strip() or None) if body.reason else None
+        for previous in await self.plans(eid):
+            if (
+                previous.status == "proposed"
+                and previous.proposed_for == actor
+                and previous.action == body.action
+                and previous.reason == reason
+                and target_scope(previous.targets) == target_scope(targets)
+            ):
+                return previous
         plan = AssistantPlan(
             id=f"AP-{uuid4()}",
             action=body.action,
-            targets=await current_targets(self.deps, eid, body),
-            reason=body.reason.strip() if body.reason else None,
+            targets=targets,
+            reason=reason,
             instruction=instruction,
             proposed_for=actor,
             created_at=datetime.now(UTC),
@@ -222,6 +243,24 @@ class AssistantActions:
         if plan is None or plan.proposed_for != actor:
             raise LookupError(plan_id)
         return plan
+
+    async def cancel(self, eid: str, plan_id: str, actor: str) -> None:
+        async with self.proposal_locks.setdefault(eid, asyncio.Lock()):
+            plan = await self.get(eid, plan_id, actor)
+            # 旧版本可能已保存同一范围的多份方案; 取消时一并关闭这些重复待确认项.
+            duplicates = [
+                other
+                for other in await self.plans(eid)
+                if other.id != plan.id
+                and other.status == "proposed"
+                and other.proposed_for == actor
+                and other.action == plan.action
+                and other.reason == plan.reason
+                and target_scope(other.targets) == target_scope(plan.targets)
+            ]
+            await self.executor.cancel_assistant(eid, plan, actor=actor)
+            for other in duplicates:
+                await self.executor.cancel_assistant(eid, other, actor=actor)
 
     async def execute(self, eid: str, plan_id: str, actor: str, reason: str | None = None) -> AssistantReceipt:
         plan = await self.get(eid, plan_id, actor)
