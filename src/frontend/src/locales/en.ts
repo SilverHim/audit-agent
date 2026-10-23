@@ -719,8 +719,9 @@ export const en = {
       not_positive: 'not applicable this period: the base amount is not positive',
     },
     basis: 'Basis',
-    overallPct: (low: string, high: string) => `Overall materiality (${low} to ${high} of the base)`,
-    performancePct: (low: string, high: string) => `Performance materiality (${low} to ${high} of overall)`,
+    overallPct: (low: string, high: string) => `Overall materiality (recommended: ${low} to ${high} of the base)`,
+    performancePct: (low: string, high: string) =>
+      `Performance materiality (recommended: ${low} to ${high} of overall)`,
     trivialPct: 'Clearly trivial (share of overall)',
     preview: (overall: string, performance: string) => `Overall ${overall} · performance ${performance}`,
     risks: 'Risk register',

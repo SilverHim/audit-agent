@@ -65,7 +65,7 @@ describe('重要性候选', () => {
   })
 })
 
-test('系统推荐在可选区间内时预选推荐, 不再一律取上限', () => {
+test('系统推荐允许超出推荐区间, 但须使用本期适用的基准', () => {
   const recommendation = {
     basis: 'revenue',
     percentage: 0.005,
@@ -76,6 +76,6 @@ test('系统推荐在可选区间内时预选推荐, 不再一律取上限', () 
     counter_argument: 'Profit is volatile.',
     self_confidence: 0.8,
   } as const
-  expect(initialChoice(XERO, { ...recommendation, evidence: [] }).pct).toBe(0.005)
+  expect(initialChoice(XERO, { ...recommendation, percentage: 0.02, evidence: [] }).pct).toBe(0.02)
   expect(initialChoice(XERO, { ...recommendation, basis: 'profit_before_tax', evidence: [] }).basis).toBe('revenue')
 })

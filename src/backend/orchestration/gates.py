@@ -9,6 +9,7 @@
 from collections.abc import Awaitable, Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 from typing import Any, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
@@ -304,8 +305,7 @@ def revise_risks(
 def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoice) -> None:
     """重要性选择的取值校验, 不过报 INVALID_VALUE: basis 在候选中, 且该候选的基准金额为正 (Q18: 如税前亏损时
     不能以税前利润为基准; 候选照常列出并标本期不适用, 需求 R351. 按金额判断, 不看标记, 没有标记的旧候选同样拒绝);
-    pct 在该候选 [pct_low, pct_high] 内;
-    performance_pct 在 performance_pct_range 内 (闭区间); clearly_trivial_pct 大于 0 且不超过候选给的比例 (Q8)."""
+    比例为有限正数; 候选区间与执行重要性、明显微小比例只作推荐, 不限制审计师选择."""
     candidate = next((c for c in candidates.candidates if c.basis == choice.basis), None)
     if candidate is None:
         raise DecisionRejected("INVALID_VALUE", f"materiality.basis {choice.basis} 不在候选中")
@@ -315,15 +315,10 @@ def check_materiality(candidates: MaterialityCandidates, choice: MaterialityChoi
             f"materiality.basis {choice.basis} 本期不适用: 基准金额不为正 ({candidate.base_amount_cents} 分), "
             "不能作为重要性基准",
         )
-    if not candidate.pct_low <= choice.pct <= candidate.pct_high:
-        raise DecisionRejected("INVALID_VALUE", f"materiality.pct 应在 [{candidate.pct_low}, {candidate.pct_high}] 内")
-    low, high = candidates.performance_pct_range
-    if not low <= choice.performance_pct <= high:
-        raise DecisionRejected("INVALID_VALUE", f"materiality.performance_pct 应在 [{low}, {high}] 内")
-    if not 0 < choice.clearly_trivial_pct <= candidates.clearly_trivial_pct:
-        raise DecisionRejected(
-            "INVALID_VALUE", f"materiality.clearly_trivial_pct 应在 (0, {candidates.clearly_trivial_pct}] 内"
-        )
+    for name in ("pct", "performance_pct", "clearly_trivial_pct"):
+        value = getattr(choice, name)
+        if not isfinite(value) or value <= 0:
+            raise DecisionRejected("INVALID_VALUE", f"materiality.{name} 应为有限正数")
 
 
 def check_edits(edits: list[GateEdit], risks: dict[str, RiskItem]) -> None:

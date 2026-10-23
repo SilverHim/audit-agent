@@ -28,9 +28,7 @@ export function initialChoice(
     recommendation &&
     selectableCandidates(candidates).find(
       (c) =>
-        c.basis === recommendation.basis &&
-        recommendation.percentage >= c.pct_low &&
-        recommendation.percentage <= c.pct_high,
+        c.basis === recommendation.basis && Number.isFinite(recommendation.percentage) && recommendation.percentage > 0,
     )
   const usable = recommended || selectableCandidates(candidates)[0] || candidates.candidates[0]
   const range = candidates.performance_pct_range ?? [0.5, 0.75]

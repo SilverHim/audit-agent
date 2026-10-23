@@ -1515,7 +1515,7 @@ class MaterialityCandidates(Versioned):
     """PLN-01 算出的全部重要性候选, PLN-01/03 闸门的呈报材料."""
 
     candidates: list[MaterialityCandidate]  # 各基准的候选区间
-    performance_pct_range: tuple[float, float] = (0.5, 0.75)  # 执行重要性占整体重要性的比例范围
+    performance_pct_range: tuple[float, float] = (0.5, 0.75)  # 执行重要性占整体重要性的推荐比例范围
     clearly_trivial_pct: float = 0.05  # 明显微小门槛占整体重要性的默认比例
 
 
@@ -1699,7 +1699,7 @@ class MaterialityChoice(Model):
     """审计师在 PLN-01/03 闸门选定的重要性基准与比例."""
 
     basis: MaterialityBasis  # 选定的基准
-    pct: float  # 整体重要性占基准的比例, 须在候选区间内
+    pct: float  # 整体重要性占基准的比例, 候选区间仅作推荐
     performance_pct: float  # 执行重要性占整体重要性的比例
     clearly_trivial_pct: float  # 明显微小门槛占整体重要性的比例
 
