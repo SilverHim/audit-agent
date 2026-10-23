@@ -114,14 +114,14 @@ function Plan() {
                 <PlanNarrative eid={eid} plan={current} />
               </Panel>
               <Facts plan={current} view={view} lang={lang} />
-              <ProcedureTable eid={eid} view={view} lang={lang} />
             </>
           ) : (
-            // 功能 planning 关闭的项目永远不会起草计划 (导航里也没有这一项, 只有直接打开地址才到这里)
+            // 功能 planning 只控制总体计划正文; 项目程序表始终可看.
             <p className="text-muted-foreground text-sm">
               {overview && !overview.features?.includes('planning') ? t.planPage.disabled : t.planPage.none}
             </p>
           )}
+          {view ? <ProcedureTable eid={eid} view={view} lang={lang} /> : null}
         </QueryState>
       </div>
     </>
@@ -227,67 +227,74 @@ function ProcedureTable({ eid, view, lang }: { eid: string; view: PlanView; lang
   const cols = t.planPage.cols
   return (
     <section className="overflow-x-auto rounded-xl border bg-card">
-      <table className="w-full min-w-[860px] border-collapse text-[14px]">
-        <thead>
-          <tr className="border-b bg-[#fafbfc] text-left font-semibold text-[12px] text-muted-foreground">
-            <th className="px-4 py-2.5">{cols.objective}</th>
-            <th className="px-4 py-2.5">{cols.procedure}</th>
-            <th className="px-4 py-2.5">{cols.method}</th>
-            <th className="px-4 py-2.5">{cols.extent}</th>
-            <th className="px-4 py-2.5">{cols.owner}</th>
-            <th className="px-4 py-2.5">{cols.status}</th>
-            <th className="px-4 py-2.5">{cols.workpaper}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.key} className="border-line-soft border-b last:border-b-0">
-              <td className="px-4 py-2.5">
-                {row.objective ? (
-                  <span className="flex flex-col">
-                    <span>
-                      {row.objective.account} · {t.assertions[row.objective.assertion]}
-                    </span>
-                    <span className="text-[12.5px] text-muted-foreground">
-                      {t.riskLevels[row.objective.risk_level]}
-                    </span>
-                  </span>
-                ) : (
-                  <span className="text-muted-foreground">{t.planPage.general}</span>
-                )}
-              </td>
-              <td className="px-4 py-2.5">
-                <Link
-                  to="/engagements/$eid/procedures/$pid"
-                  params={{ eid, pid: row.procedureId }}
-                  className="flex flex-col hover:underline"
-                >
-                  <Code className="font-semibold">{row.procedureId}</Code>
-                  <span>{procedureName(t, row.procedureId, row.name ?? row.procedureId)}</span>
-                </Link>
-                {row.note ? (
-                  <details className="mt-1 max-w-[28rem] text-[13px]">
-                    <summary className="cursor-pointer text-muted-foreground">{t.planPage.note}</summary>
-                    <p className="m-0 mt-1 whitespace-pre-wrap" lang={lang}>
-                      {row.note}
-                    </p>
-                  </details>
-                ) : null}
-              </td>
-              <td className="px-4 py-2.5">{methodLabel(row.engine, t)}</td>
-              <td className="px-4 py-2.5">{extentLabel(row, t)}</td>
-              <td className="px-4 py-2.5">{row.owner ? t.agents[row.owner] : '—'}</td>
-              <td className="px-4 py-2.5">
-                <span className="flex flex-wrap items-center gap-1.5">
-                  {row.status ? <StatusPill tone="neutral">{t.procStatus[row.status]}</StatusPill> : '—'}
-                  {row.stale ? <StaleBadge short /> : null}
-                </span>
-              </td>
-              <td className="px-4 py-2.5 text-muted-foreground">—</td>
+      <h2 className="m-0 border-b px-4 py-3 font-semibold text-base">{t.planPage.procedures}</h2>
+      {rows.length ? (
+        <table className="w-full min-w-[860px] border-collapse text-[14px]">
+          <thead>
+            <tr className="border-b bg-[#fafbfc] text-left font-semibold text-[12px] text-muted-foreground">
+              <th className="px-4 py-2.5">{t.proceduresPage.stage}</th>
+              <th className="px-4 py-2.5">{cols.objective}</th>
+              <th className="px-4 py-2.5">{cols.procedure}</th>
+              <th className="px-4 py-2.5">{cols.method}</th>
+              <th className="px-4 py-2.5">{cols.extent}</th>
+              <th className="px-4 py-2.5">{cols.owner}</th>
+              <th className="px-4 py-2.5">{cols.status}</th>
+              <th className="px-4 py-2.5">{cols.workpaper}</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key} className="border-line-soft border-b last:border-b-0">
+                <td className="px-4 py-2.5">{row.phase ? t.phases[row.phase] : '—'}</td>
+                <td className="px-4 py-2.5">
+                  {row.objective ? (
+                    <span className="flex flex-col">
+                      <span>
+                        {row.objective.account} · {t.assertions[row.objective.assertion]}
+                      </span>
+                      <span className="text-[12.5px] text-muted-foreground">
+                        {t.riskLevels[row.objective.risk_level]}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">{t.planPage.general}</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5">
+                  <Link
+                    to="/engagements/$eid/procedures/$pid"
+                    params={{ eid, pid: row.procedureId }}
+                    className="flex flex-col hover:underline"
+                  >
+                    <Code className="font-semibold">{row.procedureId}</Code>
+                    <span>{procedureName(t, row.procedureId, row.name ?? row.procedureId)}</span>
+                  </Link>
+                  {row.note ? (
+                    <details className="mt-1 max-w-[28rem] text-[13px]">
+                      <summary className="cursor-pointer text-muted-foreground">{t.planPage.note}</summary>
+                      <p className="m-0 mt-1 whitespace-pre-wrap" lang={lang}>
+                        {row.note}
+                      </p>
+                    </details>
+                  ) : null}
+                </td>
+                <td className="px-4 py-2.5">{methodLabel(row.engine, t)}</td>
+                <td className="px-4 py-2.5">{extentLabel(row, t)}</td>
+                <td className="px-4 py-2.5">{row.owner ? t.agents[row.owner] : '—'}</td>
+                <td className="px-4 py-2.5">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {row.status ? <StatusPill tone="neutral">{t.procStatus[row.status]}</StatusPill> : '—'}
+                    {row.stale ? <StaleBadge short /> : null}
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-muted-foreground">—</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="m-0 px-4 py-3 text-muted-foreground text-sm">{t.planPage.noProcedures}</p>
+      )}
     </section>
   )
 }

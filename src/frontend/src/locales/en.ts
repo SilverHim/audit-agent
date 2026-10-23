@@ -958,6 +958,8 @@ export const en = {
   },
   planPage: {
     title: 'Audit plan',
+    procedures: 'Procedures planned for this engagement',
+    noProcedures: 'No procedures have been selected for this engagement yet.',
     status: { draft: 'Awaiting approval', approved: 'Approved', superseded: 'Superseded' },
     revision: (n: number) => `Revision ${n}`,
     none: 'The overall audit plan has not been drafted yet. The AI drafts it after the risk and materiality decision is approved and the procedures are assembled.',
@@ -1027,6 +1029,9 @@ export const en = {
   },
   proceduresPage: {
     title: 'Audit procedures',
+    catalogHint: 'All procedures implemented by the system. See the audit plan for this engagement’s procedures.',
+    notIncluded: 'Not yet included',
+    notEnabled: 'Feature not enabled for this engagement',
     total: (n: number) => `${n} in total`,
     search: 'Search by code or name',
     all: 'All',

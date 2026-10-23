@@ -7,6 +7,7 @@ import type {
   GateDecision,
   GateDecisionIn,
   GateView,
+  Phase,
   PlanConfirmation,
   PlanRow,
   PlanStatus,
@@ -24,12 +25,13 @@ export type PlanTableRow = {
   key: string // 列表 key: 目标与程序编号, 同一计划内唯一
   objective: AuditObjective | null // 为空为通用程序 (不针对单一认定)
   procedureId: string
+  phase: Phase | null
   name: string | null // 总览程序行的名称; 总览里没有时为空, 页面显示编号
   engine: Engine | null
   owner: AgentId | null
   status: ProcedureStatus | null
   stale: boolean // 过期: 读的数据在执行后变过
-  extent: PlanRow['extent']
+  extent: PlanRow['extent'] | null
   sampleSize: number | null
   note: string | null // 当前计划对该程序的性质, 时间与范围说明 (AI 写的英文; ASA 300 第 9 段); 没有为空
 }
@@ -50,19 +52,20 @@ export function planAnalytics(
   return gate?.material.kind === 'PLN-01/03' ? (gate.material.analytics ?? null) : null
 }
 
-// 程序表: 后端已按 "风险或认定 → 程序" 排好, 这里只接上审计目标与总览的程序行
+// 程序表以本项目为界: 保留计划的目标与范围, 补齐项目已确定的承接, 计划, 收尾和报告程序. 不读系统程序库.
 export function planTable(view: PlanView, procedures: ProcedureSummary[]): PlanTableRow[] {
   const objectives = new Map(view.objectives.map((item) => [item.id, item]))
   const rows = new Map(procedures.map((item) => [item.id, item]))
   const notes = new Map(
     (currentPlan(view)?.procedure_notes ?? []).map((item) => [item.procedure_id, item.nature_timing_extent]),
   )
-  return view.rows.map((row) => {
+  const planned: PlanTableRow[] = view.rows.map((row) => {
     const procedure = rows.get(row.procedure_id)
     return {
       key: `${row.objective_id ?? '-'}:${row.procedure_id}`,
       objective: row.objective_id ? (objectives.get(row.objective_id) ?? null) : null,
       procedureId: row.procedure_id,
+      phase: procedure?.phase ?? null,
       name: procedure?.name ?? null,
       engine: procedure?.engine ?? null,
       owner: procedure?.owner ?? null,
@@ -73,6 +76,26 @@ export function planTable(view: PlanView, procedures: ProcedureSummary[]): PlanT
       note: notes.get(row.procedure_id) ?? null,
     }
   })
+  const included = new Set(view.rows.map((row) => row.procedure_id))
+  for (const procedure of procedures) {
+    if (included.has(procedure.id)) continue
+    planned.push({
+      key: `-:${procedure.id}`,
+      objective: null,
+      procedureId: procedure.id,
+      phase: procedure.phase,
+      name: procedure.name,
+      engine: procedure.engine,
+      owner: procedure.owner,
+      status: procedure.status,
+      stale: procedure.stale ?? false,
+      extent: null,
+      sampleSize: null,
+      note: notes.get(procedure.id) ?? null,
+    })
+  }
+  const stages: Phase[] = ['P0_Acceptance', 'P1_Planning', 'P2_Executing', 'P3_Completion', 'P4_Reporting']
+  return planned.sort((a, b) => stages.indexOf(a.phase ?? 'P2_Executing') - stages.indexOf(b.phase ?? 'P2_Executing'))
 }
 
 export type Revision = {
@@ -99,6 +122,7 @@ export function methodLabel(engine: Engine | null, t: Messages): string {
 
 // 范围: 全量, 或抽样 n
 export function extentLabel(row: Pick<PlanTableRow, 'extent' | 'sampleSize'>, t: Messages): string {
+  if (!row.extent) return '—'
   return row.extent === 'sample' && row.sampleSize != null ? t.planPage.sample(row.sampleSize) : t.planPage.full
 }
 

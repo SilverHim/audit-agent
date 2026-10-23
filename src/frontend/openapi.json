@@ -1118,6 +1118,58 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/procedures": {
+      "get": {
+        "tags": [
+          "reviews"
+        ],
+        "summary": "List Procedures",
+        "description": "系统完整程序库, 含未启用功能和未纳入本项目的程序, 按阶段与编号排序. 项目状态仍取总览 procedures;\n未纳入的程序不创建项目实例, 不可执行或重跑. 项目不存在或不属于当前用户时 404.",
+        "operationId": "reviews-list_procedures",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProcedureCatalogEntry"
+                  },
+                  "title": "Response Reviews-List Procedures"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engagements/{eid}/procedures/{pid}": {
       "get": {
         "tags": [
@@ -14573,6 +14625,70 @@
         ],
         "title": "Procedure",
         "description": "本项目中一条审计程序的实例, 如 REV-02. 模板见 knowledge/procedures/."
+      },
+      "ProcedureCatalogEntry": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/Phase"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AgentId"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/Engine"
+          },
+          "autonomy_level": {
+            "$ref": "#/components/schemas/AutonomyLevel"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
+          "standards": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Standards"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "phase",
+          "owner",
+          "engine",
+          "autonomy_level",
+          "feature",
+          "depends_on",
+          "standards"
+        ],
+        "title": "ProcedureCatalogEntry",
+        "description": "系统已实现程序的公开说明, 不受项目程序包和功能开关过滤, 不含 SQL 或提示词."
       },
       "ProcedureDetail": {
         "properties": {

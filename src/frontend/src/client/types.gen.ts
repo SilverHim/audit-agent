@@ -4788,6 +4788,38 @@ export type Procedure = {
 };
 
 /**
+ * ProcedureCatalogEntry
+ *
+ * 系统已实现程序的公开说明, 不受项目程序包和功能开关过滤, 不含 SQL 或提示词.
+ */
+export type ProcedureCatalogEntry = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Name
+     */
+    name: string;
+    phase: Phase;
+    owner: AgentId;
+    engine: Engine;
+    autonomy_level: AutonomyLevel;
+    /**
+     * Feature
+     */
+    feature: string | null;
+    /**
+     * Depends On
+     */
+    depends_on: Array<string>;
+    /**
+     * Standards
+     */
+    standards: Array<string>;
+};
+
+/**
  * ProcedureDetail
  *
  * 一条程序的执行记录, 例外与判断.
@@ -7717,6 +7749,38 @@ export type ReviewsWithdrawReviewRecordResponses = {
 };
 
 export type ReviewsWithdrawReviewRecordResponse = ReviewsWithdrawReviewRecordResponses[keyof ReviewsWithdrawReviewRecordResponses];
+
+export type ReviewsListProceduresData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/procedures';
+};
+
+export type ReviewsListProceduresErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ReviewsListProceduresError = ReviewsListProceduresErrors[keyof ReviewsListProceduresErrors];
+
+export type ReviewsListProceduresResponses = {
+    /**
+     * Response Reviews-List Procedures
+     *
+     * Successful Response
+     */
+    200: Array<ProcedureCatalogEntry>;
+};
+
+export type ReviewsListProceduresResponse = ReviewsListProceduresResponses[keyof ReviewsListProceduresResponses];
 
 export type ReviewsGetProcedureData = {
     body?: never;

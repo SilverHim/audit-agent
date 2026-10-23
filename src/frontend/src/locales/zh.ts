@@ -869,6 +869,8 @@ export const zh: Messages = {
   },
   planPage: {
     title: '审计计划',
+    procedures: '本项目计划执行的程序',
+    noProcedures: '本项目尚未选定程序。',
     status: { draft: '待批准', approved: '已批准', superseded: '已被取代' },
     revision: (n) => `第 ${n} 修订`,
     none: '总体审计计划尚未起草。风险与重要性决定通过、程序装配后，由 AI 起草计划。',
@@ -934,6 +936,9 @@ export const zh: Messages = {
   },
   proceduresPage: {
     title: '审计程序',
+    catalogHint: '列出系统已实现的全部程序。本项目计划执行的程序请查看审计计划。',
+    notIncluded: '尚未纳入本项目',
+    notEnabled: '本项目未启用此功能',
     total: (n) => `共 ${n} 个`,
     search: '搜索编号或名称',
     all: '全部',

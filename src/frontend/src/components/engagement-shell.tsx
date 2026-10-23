@@ -215,23 +215,18 @@ export function EngagementShell({
       count: manualPending,
       urgent: true,
     },
-    // 审计计划只在项目冻结的功能集含 planning 时显示 (需求 R315); 停在 PLN-15 时带待办标记
-    ...(overview?.features?.includes('planning')
-      ? [
-          {
-            to: '/engagements/$eid/plan' as const,
-            label: t.nav.plan,
-            icon: <NotebookPen className={icon} aria-hidden="true" />,
-            count: overview.current_gate === 'PLN-15' ? 1 : undefined,
-            urgent: true,
-          },
-        ]
-      : []),
+    // 项目程序清单始终可看; planning 只控制总体计划起草和批准流程.
+    {
+      to: '/engagements/$eid/plan',
+      label: t.nav.plan,
+      icon: <NotebookPen className={icon} aria-hidden="true" />,
+      count: overview?.current_gate === 'PLN-15' ? 1 : undefined,
+      urgent: true,
+    },
     {
       to: '/engagements/$eid/procedures',
       label: t.nav.procedures,
       icon: <ListChecks className={icon} aria-hidden="true" />,
-      count: overview?.procedures.length,
     },
     {
       to: '/engagements/$eid/workpapers',
