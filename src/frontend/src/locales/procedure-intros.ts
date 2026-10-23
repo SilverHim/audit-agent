@@ -1813,9 +1813,9 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
         {
           name: '管理层回复登记',
           detail:
-            '每项待沟通错报须对应一条完整回复记录，包括沟通时间、对象及职务、回复时间、回复原文及更正意向。另记录执行日期，本程序不强制附列证据文件。',
+            '每条错报只需选择是否更正，系统记录提交人和登记时间。外部沟通时间、对象和回复原文均为选填，不强制上传证据文件。',
         },
-        { name: '沟通与回复时点核验', detail: '回复时间不能早于沟通时间，两者都不能晚于提交时刻。' },
+        { name: '沟通与回复时点核验', detail: '如提供沟通与回复时间，回复不得早于沟通，两者不得晚于提交时刻。' },
         {
           name: '同意更正',
           detail:
@@ -1827,7 +1827,7 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
         },
       ],
       result:
-        '本程序通过人工任务记录执行结果。各项错报生成包含沟通时间、沟通对象及回复内容的新版本，可在错报与审计意见页查看。存在待更正事项时暂停等待客户更正；全部拒绝更正时进入 FIN-04 汇总。',
+        '本程序通过人工任务记录执行结果。各项错报生成包含更正意向及登记时间的新版本，可在错报与审计意见页查看。存在待更正事项时暂停等待客户更正；全部拒绝更正时进入 FIN-04 汇总。',
     },
     en: {
       purpose:
@@ -1842,12 +1842,12 @@ export const PROCEDURE_INTROS: Record<string, Record<Lang, ProcedureIntro>> = {
         {
           name: 'Management response records',
           detail:
-            'Each communicated misstatement requires one complete response record containing the communication time, management contact and position, response time, verbatim response and correction intention. The execution date is also recorded; evidence file attachment is not mandatory.',
+            'Each item requires only a correction choice. The system records the submitter and registration time. External communication dates, contact and verbatim response are optional; no evidence file is required.',
         },
         {
           name: 'Date checks',
           detail:
-            'The response must not precede the communication, and neither date may be later than the submission time.',
+            'Where dates are supplied, the response must not precede the communication and neither date may be later than submission.',
         },
         {
           name: 'Agreement to correct',

@@ -140,7 +140,9 @@ function Workpapers() {
                     >
                       {detail.data.versions.map((version) => (
                         <option key={version} value={version}>
-                          v{version}
+                          {version === Math.max(...detail.data.versions)
+                            ? t.workpapers.currentVersion(version)
+                            : t.workpapers.historicalVersion(version)}
                         </option>
                       ))}
                     </select>
@@ -153,6 +155,7 @@ function Workpapers() {
                     {t.workpapers.file}
                   </Button>
                 </div>
+                <p className="m-0 text-muted-foreground text-xs">{t.workpapers.versionHint}</p>
                 {detail.data.workpaper.missing?.length ? (
                   <p className="text-sm text-muted-foreground">
                     {t.workpapers.missing}:{' '}

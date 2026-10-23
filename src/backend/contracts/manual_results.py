@@ -9,7 +9,7 @@ from backend.contracts.models import ManagementResponse, Model
 
 
 class ManagementResponses(Model):
-    """FIN-08 的登记表 (需求 R161): 与管理层沟通的错报每条一行 (沟通的时间与对象, 回复的时间与原文, 是否同意更正),
+    """FIN-08 的登记表 (需求 R161): 每条错报记录是否更正, 沟通时间、对象及回复原文选填,
     须恰好覆盖派发材料中的错报 (A8 的 check 核对)."""
 
     responses: list[ManagementResponse]

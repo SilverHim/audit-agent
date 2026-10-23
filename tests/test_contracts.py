@@ -896,6 +896,7 @@ LIFECYCLE_DEFAULTS = {  # 本条新加的字段与缺省 (验收 1)
     "communicated_to": None,
     "responded_at": None,
     "management_response": None,
+    "correction_decision_at": None,
     "needs_recommunication": False,
     "uncorrected_basis": None,
     "correction_notice_id": None,
@@ -1126,7 +1127,7 @@ def test_verification_status_is_limited(status: str) -> None:
 
 
 def test_misstatement_update_and_management_response_shapes() -> None:
-    """验收 8: 两类更新各带自己的全部字段时通过; ManagementResponse 七项都必填 (缺一项抛 ValidationError), 回复不能早于
+    """验收 8: 两类更新各带自己的全部字段时通过; ManagementResponse 仅错报 ID、版本及更正意向必填, 回复不能早于
     沟通 (同一时刻可以)."""
     classification = MisstatementUpdate(
         misstatement_id="M-D-1",
@@ -1161,9 +1162,11 @@ def test_misstatement_update_and_management_response_shapes() -> None:
         "agrees_to_correct": True,
     }
     assert ManagementResponse.model_validate(response).agrees_to_correct is True
-    for key in response:
+    for key in ("misstatement_id", "base_version", "agrees_to_correct"):
         with pytest.raises(ValidationError):
             ManagementResponse.model_validate({k: v for k, v in response.items() if k != key})
+    minimal = ManagementResponse(misstatement_id="M-D-1", base_version=1, agrees_to_correct=False)
+    assert minimal.communicated_at is None and minimal.response is None
     with pytest.raises(ValidationError, match="早于沟通时间"):
         ManagementResponse.model_validate(response | {"responded_at": datetime(2026, 10, 19, 3, tzinfo=UTC)})
 

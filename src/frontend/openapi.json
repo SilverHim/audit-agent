@@ -13934,6 +13934,18 @@
             ],
             "title": "Management Response"
           },
+          "correction_decision_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction Decision At"
+          },
           "needs_recommunication": {
             "type": "boolean",
             "title": "Needs Recommunication",

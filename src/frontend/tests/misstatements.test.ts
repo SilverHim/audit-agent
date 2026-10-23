@@ -126,58 +126,23 @@ describe('FIN-08 的登记', () => {
     expect(listedMisstatements(view(null))).toBeNull()
   })
 
-  test('每行一条回复: 依据材料中的版本, 时刻带时区, 文字去首尾空白; 同意与否照所选', () => {
-    const row = {
-      communicatedAt: '2026-10-19T15:00',
-      communicatedTo: ' Alex Morgan, Director ',
-      respondedAt: '2026-10-20T09:00',
-      response: ' Agreed. ',
-      agrees: true,
-    }
-    const result = responsesDetails(listed as never, { [XJ499]: row, [CSH02]: { ...row, agrees: false } }, en)
-    if (!('details' in result)) throw new Error('应当通过')
-    const [first, second] = result.details.responses as Array<Record<string, unknown>>
-    expect(first).toMatchObject({
-      misstatement_id: XJ499,
-      base_version: 2,
-      communicated_to: 'Alex Morgan, Director',
-      response: 'Agreed.',
-      agrees_to_correct: true,
-    })
-    expect(String(first?.communicated_at)).toMatch(/Z$/)
-    expect(new Date(String(first?.communicated_at)).getTime()).toBe(new Date('2026-10-19T15:00').getTime())
-    expect(second).toMatchObject({ misstatement_id: CSH02, agrees_to_correct: false })
-  })
-
-  test('有问题的行各给一条提示 (按错报 ID): 漏填的列出各项 (含未选是否同意), 回复早于沟通另报', () => {
-    const early = {
-      ...emptyResponseRow(),
-      communicatedAt: '2026-10-20T09:00',
-      communicatedTo: 'Alex Morgan',
-      respondedAt: '2026-10-19T15:00',
-      response: 'No.',
-      agrees: false,
-    }
-    const result = responsesDetails(listed as never, { [CSH02]: early }, zh)
+  test('仅选择是否更正即可提交, 不生成沟通时间或回复原文', () => {
+    const result = responsesDetails(listed as never, { [XJ499]: { agrees: true }, [CSH02]: { agrees: false } }, zh)
     expect(result).toEqual({
-      errors: {
-        [XJ499]: zh.fin08.errors.missing('沟通时间、沟通对象、回复时间、回复原文、是否同意更正'),
-        [CSH02]: zh.fin08.errors.order,
+      details: {
+        responses: [
+          { misstatement_id: XJ499, base_version: 2, agrees_to_correct: true },
+          { misstatement_id: CSH02, base_version: 2, agrees_to_correct: false },
+        ],
       },
     })
   })
 
-  test('是否同意更正缺省未选: 别的都填了也按漏填提示, 不当作同意 (ASA 450 第 9 段: 拒绝更正的一路不能被缺省值跳过)', () => {
+  test('逐项明确选择, 未选不能默认为更正', () => {
     expect(emptyResponseRow().agrees).toBeNull()
-    const filled = {
-      communicatedAt: '2026-10-19T15:00',
-      communicatedTo: 'Alex Morgan, Director',
-      respondedAt: '2026-10-20T09:00',
-      response: 'Agreed.',
-      agrees: null,
-    }
-    const result = responsesDetails(listed as never, { [XJ499]: filled, [CSH02]: { ...filled, agrees: true } }, en)
-    expect(result).toEqual({ errors: { [XJ499]: en.fin08.errors.missing(en.fin08.fields.agrees) } })
+    expect(responsesDetails(listed as never, { [CSH02]: { agrees: false } }, zh)).toEqual({
+      errors: { [XJ499]: zh.fin08.errors.missing(zh.fin08.fields.agrees) },
+    })
   })
 })
 

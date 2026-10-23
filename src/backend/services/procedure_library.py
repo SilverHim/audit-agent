@@ -146,12 +146,13 @@ def render_text(text: LocalizedText, params: Mapping[str, Any]) -> LocalizedText
 
 def first_misstatement_communicated_at(state: EngagementState) -> datetime | None:
     """首次发出错报沟通的时间 (需求 R161): 状态中 FIN-08 各次登记 (manual 任务的 manual_result 决定) 的沟通时间的最早
-    值; 还没有登记过为 None (如 P2 中 GEN-05 首次执行时). 决定只追加, 每次沟通都登记在那里, 被过期重跑取代的执行的
+    值; 未提供沟通时刻时取该登记的决定时刻作为更正跟踪起点. 还没有登记过为 None.
+    决定只追加, 每次沟通都登记在那里, 被过期重跑取代的执行的
     登记也还在; 不看错报上的 communicated_at: 重新沟通会覆盖它 (第 1 轮审核 R161-02). 纯函数."""
     fin08 = {t.id for t in state["review_tasks"] if t.procedure_id == FIN08 and t.kind is TaskKind.manual}
     return min(
         (
-            response.communicated_at
+            response.communicated_at or record.decided_at
             for record in state["review_records"]
             if record.task_id in fin08 and record.manual_result is not None
             for response in ManagementResponses.model_validate(record.manual_result.details).responses

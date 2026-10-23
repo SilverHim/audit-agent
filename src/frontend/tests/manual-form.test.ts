@@ -165,3 +165,14 @@ describe('证据要求的提示', () => {
     expect(en.manualPage.minEvidence(1)).toBe('Choose at least 1 page from registered documents.')
   })
 })
+
+test('更正意向登记自动记录执行日期与说明, 不要求另填通用人工表单', () => {
+  const view = { ...fixture, request: { ...fixture.request, result_model: 'ManagementResponses', min_evidence: 0 } }
+  const result = manualRecordBody(view, emptyManualDraft(), zh, {
+    responses: [{ misstatement_id: 'M-1', base_version: 1, agrees_to_correct: true }],
+  })
+  expect(typeof result).not.toBe('string')
+  if (typeof result === 'string') throw new Error(result)
+  expect(result.manual_result?.conclusion).toBe(zh.fin08.recorded)
+  expect(result.manual_result?.performed_on).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+})

@@ -139,7 +139,7 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
     <>
       <Card title={t.manualPage.instructions}>
         <p className="m-0 text-[14px] leading-[1.65]">
-          {manualInstructions(t, view.task.procedure_id, view.request.instructions)}
+          {listed ? t.fin08.hint : manualInstructions(t, view.task.procedure_id, view.request.instructions)}
         </p>
         <div className="flex flex-col gap-1.5">
           <SectionLabel>{t.manualPage.material}</SectionLabel>
@@ -160,13 +160,15 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
 
       {pending ? (
         <>
-          <EvidenceCard
-            eid={eid}
-            view={view}
-            draft={draft}
-            onChange={(evidence) => set({ evidence })}
-            disabled={busy}
-          />
+          {listed ? null : (
+            <EvidenceCard
+              eid={eid}
+              view={view}
+              draft={draft}
+              onChange={(evidence) => set({ evidence })}
+              disabled={busy}
+            />
+          )}
           <Card title={t.manualPage.result}>
             {listed ? (
               <ResponsesForm
@@ -188,40 +190,44 @@ function ManualTask({ eid, view }: { eid: string; view: ManualTaskView }) {
                 />
               ))
             )}
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="performed-on" className="font-semibold text-[13px]">
-                {t.manualPage.performedOn}
-              </label>
-              <Input
-                id="performed-on"
-                type="date"
-                className="h-10 max-w-[220px]"
-                value={draft.performedOn}
-                onChange={(event) => set({ performedOn: event.target.value })}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="manual-conclusion" className="font-semibold text-[13px]">
-                {t.manualPage.conclusion}
-              </label>
-              <Textarea
-                id="manual-conclusion"
-                rows={3}
-                value={draft.conclusion}
-                onChange={(event) => set({ conclusion: event.target.value })}
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="manual-reason" className="font-semibold text-[13px]">
-                {t.reason.label}
-              </label>
-              <Textarea
-                id="manual-reason"
-                rows={3}
-                value={draft.reason}
-                onChange={(event) => set({ reason: event.target.value })}
-              />
-            </div>
+            {listed ? null : (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="performed-on" className="font-semibold text-[13px]">
+                    {t.manualPage.performedOn}
+                  </label>
+                  <Input
+                    id="performed-on"
+                    type="date"
+                    className="h-10 max-w-[220px]"
+                    value={draft.performedOn}
+                    onChange={(event) => set({ performedOn: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="manual-conclusion" className="font-semibold text-[13px]">
+                    {t.manualPage.conclusion}
+                  </label>
+                  <Textarea
+                    id="manual-conclusion"
+                    rows={3}
+                    value={draft.conclusion}
+                    onChange={(event) => set({ conclusion: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="manual-reason" className="font-semibold text-[13px]">
+                    {t.reason.label}
+                  </label>
+                  <Textarea
+                    id="manual-reason"
+                    rows={3}
+                    value={draft.reason}
+                    onChange={(event) => set({ reason: event.target.value })}
+                  />
+                </div>
+              </>
+            )}
             <div className="flex flex-col items-end gap-1">
               <Button type="button" size="lg" disabled={busy} onClick={record}>
                 {t.manualPage.submit}
@@ -248,8 +254,7 @@ function SourceConclusion({ eid, item }: { eid: string; item: ListedMisstatement
   )
 }
 
-// FIN-08 的登记表: 材料中的每条错报一行 (沟通时间与对象, 回复时间与原文, 是否同意更正); 时刻按本机时区填, 提交时带
-// 时区. 有问题的行在行下提示 (lib/misstatements.responsesDetails)
+// FIN-08 只登记每条错报是否更正, 不强制补填外部沟通信息.
 // 是否同意更正的两个选项; 两个都没选为未选 (null)
 const AGREE_CHOICES: ReadonlyArray<['yes' | 'no', boolean]> = [
   ['yes', true],
@@ -285,7 +290,6 @@ function ResponsesForm({
         return (
           <fieldset key={item.id} className="m-0 flex flex-col gap-2.5 rounded-[10px] border p-3.5">
             <legend className="flex flex-wrap gap-2 px-1 text-[14px]">
-              <Code className="font-semibold">{item.id}</Code>
               <span>
                 {item.account}
                 {code ? ` (${code})` : ''} · {t.directions[item.direction]} ·{' '}
@@ -293,50 +297,6 @@ function ResponsesForm({
               </span>
             </legend>
             {item.source_conclusion ? <SourceConclusion eid={eid} item={item} /> : null}
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-2.5">
-              <label htmlFor={`${id}-communicated-at`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-                {f.communicatedAt}
-                <Input
-                  id={`${id}-communicated-at`}
-                  type="datetime-local"
-                  className="h-10"
-                  value={row.communicatedAt}
-                  disabled={disabled}
-                  onChange={(event) => set({ communicatedAt: event.target.value })}
-                />
-              </label>
-              <label htmlFor={`${id}-communicated-to`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-                {f.communicatedTo}
-                <Input
-                  id={`${id}-communicated-to`}
-                  className="h-10"
-                  value={row.communicatedTo}
-                  disabled={disabled}
-                  onChange={(event) => set({ communicatedTo: event.target.value })}
-                />
-              </label>
-              <label htmlFor={`${id}-responded-at`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-                {f.respondedAt}
-                <Input
-                  id={`${id}-responded-at`}
-                  type="datetime-local"
-                  className="h-10"
-                  value={row.respondedAt}
-                  disabled={disabled}
-                  onChange={(event) => set({ respondedAt: event.target.value })}
-                />
-              </label>
-            </div>
-            <label htmlFor={`${id}-response`} className="flex flex-col gap-1 text-[12.5px] text-[#4a5262]">
-              {f.response}
-              <Textarea
-                id={`${id}-response`}
-                rows={2}
-                value={row.response}
-                disabled={disabled}
-                onChange={(event) => set({ response: event.target.value })}
-              />
-            </label>
             <fieldset className="m-0 flex flex-wrap items-center gap-x-4 gap-y-1 border-0 p-0 text-[13.5px]">
               <legend className="float-left mr-2 text-[12.5px] text-[#4a5262]">{f.agrees}</legend>
               {AGREE_CHOICES.map(([choice, value]) => (

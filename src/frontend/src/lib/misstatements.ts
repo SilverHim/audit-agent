@@ -75,20 +75,13 @@ export type ListedMisstatement = {
   source_run_id: string | null // 来源判断的执行, 页面据此给结论标语言 (需求 R340)
 }
 
-// 一行登记的表单值: 两个时刻为 datetime-local 的文本 (本机时区); 是否同意更正为三态, 缺省未选 (null): 管理层拒绝更正
-// 的一路 (ASA 450 第 9 段) 不能被缺省值悄悄带过, 未选的行同漏填一样提示
-export type ResponseRow = {
-  communicatedAt: string
-  communicatedTo: string
-  respondedAt: string
-  response: string
-  agrees: boolean | null
-}
+// 是否更正须逐项明确选择, 未选不能默认通过.
+export type ResponseRow = { agrees: boolean | null }
 
 export const RESPONSES_MODEL = 'ManagementResponses' // FIN-08 模板的 manual.result_model
 
 export function emptyResponseRow(): ResponseRow {
-  return { communicatedAt: '', communicatedTo: '', respondedAt: '', response: '', agrees: null }
+  return { agrees: null }
 }
 
 // 任务的材料是否按错报逐条登记 (结果模型为 ManagementResponses); 是时返回材料中的错报, 否则为 null
@@ -98,17 +91,9 @@ export function listedMisstatements(view: ManualTaskView): ListedMisstatement[] 
   return Array.isArray(listed) ? listed : []
 }
 
-// datetime-local 的文本 → 带时区的 ISO 时刻 (按本机时区解读); 填不对为 null
-function instant(text: string): string | null {
-  if (!text) return null
-  const time = new Date(text)
-  return Number.isNaN(time.getTime()) ? null : time.toISOString()
-}
-
 export type ResponsesResult = { details: { responses: unknown[] } } | { errors: Record<string, string> }
 
-// 逐行登记 → details {responses}; 每行的必填与先后在这里先查, 有问题的行各给一条文案 (按错报 ID), 都没问题才给 details.
-// 依据的版本取材料中的; 回复不能早于沟通 (后端 ManagementResponse 同样校验)
+// 逐项选择 → details {responses}; 仅检查是否明确选择, 依据的版本取材料中的.
 export function responsesDetails(
   listed: ListedMisstatement[],
   rows: Record<string, ResponseRow>,
@@ -117,24 +102,10 @@ export function responsesDetails(
   const errors: Record<string, string> = {}
   const responses = listed.map((item) => {
     const row = rows[item.id] ?? emptyResponseRow()
-    const communicated = instant(row.communicatedAt)
-    const responded = instant(row.respondedAt)
-    const missing = [
-      communicated ? null : t.fin08.fields.communicatedAt,
-      row.communicatedTo.trim() ? null : t.fin08.fields.communicatedTo,
-      responded ? null : t.fin08.fields.respondedAt,
-      row.response.trim() ? null : t.fin08.fields.response,
-      row.agrees === null ? t.fin08.fields.agrees : null,
-    ].filter((label): label is string => label !== null)
-    if (missing.length) errors[item.id] = t.fin08.errors.missing(missing.join(t.fin08.separator))
-    else if (communicated && responded && responded < communicated) errors[item.id] = t.fin08.errors.order
+    if (row.agrees === null) errors[item.id] = t.fin08.errors.missing(t.fin08.fields.agrees)
     return {
       misstatement_id: item.id,
       base_version: item.version,
-      communicated_at: communicated,
-      communicated_to: row.communicatedTo.trim(),
-      responded_at: responded,
-      response: row.response.trim(),
       agrees_to_correct: row.agrees,
     }
   })
