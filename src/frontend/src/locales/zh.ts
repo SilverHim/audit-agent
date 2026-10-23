@@ -254,7 +254,7 @@ export const zh: Messages = {
     decided: '已决定',
     confirmed: '已确认',
     // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
-    awaitingEvidence: '等待证据（不阻塞）',
+    awaitingEvidence: '等待补充证据',
   },
   checks: {
     abn_active: 'ABN 处于有效状态',
