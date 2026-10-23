@@ -1000,8 +1000,6 @@ export const zh: Messages = {
     notRecorded: '未记录',
   },
   projectsPage: {
-    demoProfile: '演示数据配置',
-    compactProfile: '精简合成演示 · 每个程序 1–2 项复核',
     title: '审计项目',
     subtitle: '每个客户、每个财务年度一个项目。',
     newEngagement: '新建项目',

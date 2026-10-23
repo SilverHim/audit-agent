@@ -1109,8 +1109,6 @@ export const en = {
     notRecorded: 'Not recorded',
   },
   projectsPage: {
-    demoProfile: 'Demonstration dataset',
-    compactProfile: 'Compact synthetic demo · 1–2 review items per procedure',
     title: 'Engagements',
     subtitle: 'One engagement per client and financial year.',
     newEngagement: 'New engagement',
