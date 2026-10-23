@@ -244,7 +244,7 @@ export const zh: Messages = {
     full_review: '超过实际执行的重要性',
     check_evidence: '置信度低于 0.70',
     read_reasoning: '置信度 0.70 至 0.90',
-    batch_eligible: '置信度高于 0.90、金额较小且判为不是错报',
+    batch_eligible: '置信度高于 0.90、金额较小且判断为不构成错报',
   },
   status: {
     pending: '待人工处理',
@@ -558,7 +558,7 @@ export const zh: Messages = {
       direction: '方向',
     },
     rerunParams: '要调整的参数（JSON，选填）',
-    reviewQuestion: (subject) => `你对 ${subject} 的结论是？`,
+    reviewQuestion: (subject) => `${subject} 的复核结论`,
     checks: (passed, total) => `${total} 项通过 ${passed} 项`,
     checksManual: (passed, manual, total) => `${total} 项通过 ${passed} 项 · ${manual} 项待人工确认`,
     manualCheck: '待人工确认',
@@ -574,17 +574,17 @@ export const zh: Messages = {
     dispute: {
       a6_upheld: '维持原结论',
       a7_upheld: '采用独立复核的结论',
-      neither: '都不采用，由你给出结论',
+      neither: '均不采纳，另行形成结论',
     },
-    notMisstatementConclusion: '经复核，这不是错报。',
+    notMisstatementConclusion: '经复核，该事项不构成错报。',
     choices: {
-      agree_misstatement: { label: '同意，认定为错报', hint: '按 AI 的定论与草稿带出金额、科目、方向与认定，可以修改' },
-      disagree_not_misstatement: { label: '不同意，不是错报', hint: '写出你的结论' },
-      amend_misstatement: { label: '修改后认定为错报', hint: '先改动 AI 草稿的数据' },
-      agree_clear: { label: '同意，不是错报', hint: '采用 AI 的定论' },
-      disagree_misstatement: { label: '不同意，认定为错报', hint: '把定论改为是错报，填写错报的数据' },
-      misstatement: { label: '认定为错报', hint: '填写错报的数据' },
-      not_misstatement: { label: '不是错报', hint: '把定论改为不是错报，写出你的结论' },
+      agree_misstatement: { label: '同意，认定为错报', hint: '根据 AI 判断及草稿预填金额、科目、方向与认定，支持修订' },
+      disagree_not_misstatement: { label: '不同意，不构成错报', hint: '填写复核结论及依据' },
+      amend_misstatement: { label: '修订后认定为错报', hint: '修订 AI 错报草稿' },
+      agree_clear: { label: '同意，不构成错报', hint: '采纳 AI 判断结论' },
+      disagree_misstatement: { label: '不同意，认定为错报', hint: '将判断结论调整为构成错报，并填写错报信息' },
+      misstatement: { label: '认定为错报', hint: '填写错报信息' },
+      not_misstatement: { label: '不构成错报', hint: '将判断结论调整为不构成错报，并填写复核依据' },
       // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
       more_evidence: {
         label: '要求补充证据，生成补交请求',
@@ -596,8 +596,8 @@ export const zh: Messages = {
     subject: '对象',
     amount: '金额',
     // 定论 (需求 R368): 判断是不是错报, 与建议动作一一对应; 显示在判断卡, 复核卡, 程序详情与列表的最上面
-    verdict: '定论',
-    verdicts: { not_misstatement: '不是错报', misstatement: '是错报', undetermined: '暂时判断不了' },
+    verdict: '判断结论',
+    verdicts: { not_misstatement: '不构成错报', misstatement: '构成错报', undetermined: '尚无法形成结论' },
     confidence: '置信度',
     parts: { evidence: '证据', rule: '规则', llm: '模型' },
     // AI 的叙述文字: 定论下面是理由 (需求 R368)
@@ -798,7 +798,7 @@ export const zh: Messages = {
     manual: '人工程序',
     noStage: '当前没有待作出的阶段决定。',
     none: '当前筛选条件下没有事项。',
-    cols: { item: '事项', procedure: '程序', amount: '金额', verdict: '定论', tier: '复核档位', status: '状态' },
+    cols: { item: '事项', procedure: '程序', amount: '金额', verdict: '判断结论', tier: '复核档位', status: '状态' },
     open: '处理',
     perform: '去执行',
     // 等补充证据的任务 (需求 R369): 不算待处理, 单列一组, 链到补充证据请求
@@ -815,7 +815,7 @@ export const zh: Messages = {
       item: '事项',
       procedure: '程序',
       amount: '金额',
-      verdict: '定论',
+      verdict: '判断结论',
       confidence: '置信度',
       status: '状态',
     },

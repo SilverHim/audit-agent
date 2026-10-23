@@ -605,7 +605,7 @@ export const en = {
       direction: 'Direction',
     },
     rerunParams: 'Parameters to change (JSON, optional)',
-    reviewQuestion: (subject: string) => `What do you conclude on ${subject}?`,
+    reviewQuestion: (subject: string) => `Review conclusion on ${subject}`,
     checks: (passed: number, total: number) => `${passed} of ${total} passed`,
     checksManual: (passed: number, manual: number, total: number) =>
       `${passed} of ${total} passed · ${manual} to confirm manually`,
@@ -622,21 +622,24 @@ export const en = {
     dispute: {
       a6_upheld: 'Keep the original conclusion',
       a7_upheld: "Adopt the independent review's conclusion",
-      neither: 'Neither; give your own conclusion',
+      neither: 'Adopt neither; form an alternative conclusion',
     } as Record<string, string>,
     // 判断的复核选项, 按 AI 的定论给 (lib/review 的 reviewChoices, 需求 R364, R368); 文案用定论的说法
-    notMisstatementConclusion: 'On review, this is not a misstatement.',
+    notMisstatementConclusion: 'Following review, the matter does not constitute a misstatement.',
     choices: {
       agree_misstatement: {
         label: 'Agree, record the misstatement',
-        hint: "The AI's verdict and figures are filled in; you can edit them",
+        hint: 'Amounts and details are prefilled from the AI assessment and remain available for amendment',
       },
-      disagree_not_misstatement: { label: 'Disagree, not a misstatement', hint: 'Give your conclusion' },
-      amend_misstatement: { label: 'Record the misstatement with changes', hint: "Change the AI's figures first" },
-      agree_clear: { label: 'Agree, not a misstatement', hint: "Adopt the AI's verdict" },
+      disagree_not_misstatement: {
+        label: 'Disagree, not a misstatement',
+        hint: 'Record the review conclusion and basis',
+      },
+      amend_misstatement: { label: 'Record the misstatement with changes', hint: 'Amend the draft misstatement' },
+      agree_clear: { label: 'Agree, not a misstatement', hint: 'Adopt the AI conclusion' },
       disagree_misstatement: { label: 'Disagree, record a misstatement', hint: 'Fill in the misstatement' },
       misstatement: { label: 'Record a misstatement', hint: 'Fill in the misstatement' },
-      not_misstatement: { label: 'Not a misstatement', hint: 'Give your conclusion' },
+      not_misstatement: { label: 'Not a misstatement', hint: 'Record the review conclusion and basis' },
       // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
       more_evidence: {
         label: 'Ask for more evidence, raising a request',
@@ -648,8 +651,12 @@ export const en = {
     subject: 'Subject',
     amount: 'Amount',
     // 定论 (需求 R368): 判断是不是错报, 与建议动作一一对应; 显示在判断卡, 复核卡, 程序详情与列表的最上面
-    verdict: 'Verdict',
-    verdicts: { not_misstatement: 'Not a misstatement', misstatement: 'Misstatement', undetermined: 'Cannot tell yet' },
+    verdict: 'Conclusion',
+    verdicts: {
+      not_misstatement: 'Not a misstatement',
+      misstatement: 'Misstatement',
+      undetermined: 'Unable to conclude',
+    },
     confidence: 'Confidence',
     parts: { evidence: 'evidence', rule: 'rule', llm: 'model' } as Record<string, string>,
     // AI 的叙述文字: 定论下面是理由 (需求 R368)
@@ -880,7 +887,7 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      verdict: 'Verdict',
+      verdict: 'Conclusion',
       tier: 'Review tier',
       status: 'Status',
     },
@@ -900,7 +907,7 @@ export const en = {
       item: 'Item',
       procedure: 'Procedure',
       amount: 'Amount',
-      verdict: 'Verdict',
+      verdict: 'Conclusion',
       confidence: 'Confidence',
       status: 'Status',
     },
