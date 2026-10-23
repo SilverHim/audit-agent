@@ -388,7 +388,10 @@ function Workspace() {
           <div ref={bottom} className="scroll-mb-36" />
           <Composer onAsk={ask} busy={turns.some((turn) => turn.status === 'streaming')} eid={eid} />
         </div>
-        <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4" aria-label={t.workbench.current}>
+        <aside
+          className="order-first flex min-w-0 flex-col gap-4 xl:order-last xl:sticky xl:top-4"
+          aria-label={t.workbench.current}
+        >
           <div className="rounded-xl border bg-card p-4">
             <h2 className="m-0 mb-3 font-semibold text-sm">
               {t.workbench.queue} · {candidates.length}
