@@ -2,15 +2,17 @@ import { useQuery } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { cn } from 'cn'
 import { useMemo, useState } from 'react'
-import { reviewsGetProcedureOptions } from '@/client/@tanstack/react-query.gen'
-import type { EngagementOverview, Engine, ProcedureStatus, ProcedureSummary } from '@/client/types.gen'
+import { reviewsGetProcedureOptions, reviewsListProceduresOptions } from '@/client/@tanstack/react-query.gen'
+import type { EngagementOverview, Engine, ProcedureStatus } from '@/client/types.gen'
 import { Code, PageHeader, StatusPill, type Tone } from '@/components/chrome'
 import { standardLabel } from '@/components/evidence-link'
 import { ProcedureIntroView } from '@/components/procedure-intro'
+import { QueryState } from '@/components/query-state'
 import { RerunButton, StaleBadge } from '@/components/rerun'
 import { buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/lib/i18n'
+import { type CatalogProcedure, catalogProcedures } from '@/lib/procedures'
 import { procedureName } from '@/lib/review'
 import { useEngagement } from '@/lib/use-engagement'
 
@@ -44,10 +46,15 @@ function Procedures() {
   const { selected } = Route.useSearch()
   const navigate = useNavigate()
   const { t, lang } = useI18n()
-  const overview = useEngagement(eid).data
+  const engagement = useEngagement(eid)
+  const overview = engagement.data
+  const catalog = useQuery(reviewsListProceduresOptions({ path: { eid } }))
   const [engine, setEngine] = useState<Engine | 'all'>('all')
   const [query, setQuery] = useState('')
-  const procedures = overview?.procedures ?? []
+  const procedures = useMemo(
+    () => catalogProcedures(catalog.data ?? [], overview?.procedures ?? [], overview?.features ?? []),
+    [catalog.data, overview?.procedures, overview?.features],
+  )
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -62,7 +69,7 @@ function Procedures() {
 
   const current =
     procedures.find((item) => item.id === selected) ??
-    procedures.find((item) => WAITING.has(item.status)) ??
+    procedures.find((item) => item.project && WAITING.has(item.project.status)) ??
     procedures[0]
   const select = (id: string) =>
     void navigate({ to: '/engagements/$eid/procedures', params: { eid }, search: { selected: id }, replace: true })
@@ -70,6 +77,7 @@ function Procedures() {
   return (
     <>
       <PageHeader
+        subtitle={t.proceduresPage.catalogHint}
         title={
           <span className="flex items-baseline gap-2.5">
             {t.proceduresPage.title}
@@ -97,78 +105,82 @@ function Procedures() {
           </>
         }
       />
-      <div className="flex flex-1 flex-wrap">
-        <section className="flex min-w-0 flex-[999_1_560px] flex-col gap-4 px-4 py-5 sm:px-7">
-          <fieldset
-            aria-label={t.proceduresPage.cols.method}
-            className="inline-flex flex-wrap self-start rounded-[10px] bg-[#e9ecf1] p-[3px]"
-          >
-            {(['all', ...ENGINES] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                aria-pressed={engine === item}
-                onClick={() => setEngine(item)}
-                className={cn(
-                  'min-h-8 rounded-lg px-3 text-[13px]',
-                  engine === item ? 'bg-card font-semibold shadow-xs' : 'font-medium',
-                )}
-              >
-                {item === 'all' ? t.proceduresPage.all : t.engines[item]} ·{' '}
-                {item === 'all' ? procedures.length : procedures.filter((p) => p.engine === item).length}
-              </button>
-            ))}
-          </fieldset>
-          <div className="overflow-x-auto rounded-xl border bg-card">
-            <div className="min-w-[640px]">
-              <div
-                className={cn(
-                  COLS,
-                  'border-b bg-[#fafbfc] px-4 py-2.5 font-semibold text-[12px] text-muted-foreground',
-                )}
-              >
-                <span>{t.proceduresPage.cols.code}</span>
-                <span>{t.proceduresPage.cols.name}</span>
-                <span>{t.proceduresPage.cols.method}</span>
-                <span>{t.proceduresPage.cols.role}</span>
-                <span>{t.proceduresPage.cols.status}</span>
-              </div>
-              {STAGES.map((stage) => {
-                const rows = filtered.filter((item) => item.phase === stage)
-                return (
-                  <div key={stage} className="flex flex-col">
-                    <div className="flex items-baseline gap-2 border-line-soft border-b bg-[#fcfcfd] px-4 pt-3 pb-2">
-                      <span className="font-semibold text-[13.5px]">{t.phases[stage]}</span>
-                      <span className="flex-1" />
-                      <Code className="text-[12px] text-muted-foreground">{rows.length}</Code>
-                    </div>
-                    {rows.length ? (
-                      rows.map((item) => (
-                        <ProcedureRow
-                          key={item.id}
-                          item={item}
-                          on={current?.id === item.id}
-                          onSelect={() => select(item.id)}
-                        />
-                      ))
-                    ) : (
-                      <div className="border-line-soft border-b px-4 py-3 text-[13px] text-muted-foreground">
-                        {t.proceduresPage.none}
+      <QueryState isPending={catalog.isPending || engagement.isPending} error={catalog.error || engagement.error}>
+        <div className="flex flex-1 flex-wrap">
+          <section className="flex min-w-0 flex-[999_1_560px] flex-col gap-4 px-4 py-5 sm:px-7">
+            <fieldset
+              aria-label={t.proceduresPage.cols.method}
+              className="inline-flex flex-wrap self-start rounded-[10px] bg-[#e9ecf1] p-[3px]"
+            >
+              {(['all', ...ENGINES] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={engine === item}
+                  onClick={() => setEngine(item)}
+                  className={cn(
+                    'min-h-8 rounded-lg px-3 text-[13px]',
+                    engine === item ? 'bg-card font-semibold shadow-xs' : 'font-medium',
+                  )}
+                >
+                  {item === 'all' ? t.proceduresPage.all : t.engines[item]} ·{' '}
+                  {item === 'all' ? procedures.length : procedures.filter((p) => p.engine === item).length}
+                </button>
+              ))}
+            </fieldset>
+            <div className="overflow-x-auto rounded-xl border bg-card">
+              <div className="min-w-[640px]">
+                <div
+                  className={cn(
+                    COLS,
+                    'border-b bg-[#fafbfc] px-4 py-2.5 font-semibold text-[12px] text-muted-foreground',
+                  )}
+                >
+                  <span>{t.proceduresPage.cols.code}</span>
+                  <span>{t.proceduresPage.cols.name}</span>
+                  <span>{t.proceduresPage.cols.method}</span>
+                  <span>{t.proceduresPage.cols.role}</span>
+                  <span>{t.proceduresPage.cols.status}</span>
+                </div>
+                {STAGES.map((stage) => {
+                  const rows = filtered.filter((item) => item.phase === stage)
+                  return (
+                    <div key={stage} className="flex flex-col">
+                      <div className="flex items-baseline gap-2 border-line-soft border-b bg-[#fcfcfd] px-4 pt-3 pb-2">
+                        <span className="font-semibold text-[13.5px]">{t.phases[stage]}</span>
+                        <span className="flex-1" />
+                        <Code className="text-[12px] text-muted-foreground">{rows.length}</Code>
                       </div>
-                    )}
-                  </div>
-                )
-              })}
+                      {rows.length ? (
+                        rows.map((item) => (
+                          <ProcedureRow
+                            key={item.id}
+                            item={item}
+                            on={current?.id === item.id}
+                            onSelect={() => select(item.id)}
+                          />
+                        ))
+                      ) : (
+                        <div className="border-line-soft border-b px-4 py-3 text-[13px] text-muted-foreground">
+                          {t.proceduresPage.none}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
-          </div>
-        </section>
-        {current ? <ProcedureAside eid={eid} item={current} overview={overview} lang={lang} onSelect={select} /> : null}
-      </div>
+          </section>
+          {current ? (
+            <ProcedureAside eid={eid} item={current} overview={overview} lang={lang} onSelect={select} />
+          ) : null}
+        </div>
+      </QueryState>
     </>
   )
 }
 
-function ProcedureRow({ item, on, onSelect }: { item: ProcedureSummary; on: boolean; onSelect: () => void }) {
+function ProcedureRow({ item, on, onSelect }: { item: CatalogProcedure; on: boolean; onSelect: () => void }) {
   const { t } = useI18n()
   return (
     <button
@@ -188,10 +200,19 @@ function ProcedureRow({ item, on, onSelect }: { item: ProcedureSummary; on: bool
         <Code className="font-semibold">{item.autonomy_level}</Code> · {t.levels[item.autonomy_level]}
       </span>
       <span className="flex flex-wrap items-center gap-1.5">
-        <StatusPill tone={STATUS_TONE[item.status]}>{t.procStatus[item.status]}</StatusPill>
-        {item.stale ? <StaleBadge short /> : null}
+        <CatalogStatus item={item} />
+        {item.project?.stale ? <StaleBadge short /> : null}
       </span>
     </button>
+  )
+}
+
+function CatalogStatus({ item }: { item: CatalogProcedure }) {
+  const { t } = useI18n()
+  return item.project ? (
+    <StatusPill tone={STATUS_TONE[item.project.status]}>{t.procStatus[item.project.status]}</StatusPill>
+  ) : (
+    <StatusPill tone="neutral">{item.enabled ? t.proceduresPage.notIncluded : t.proceduresPage.notEnabled}</StatusPill>
   )
 }
 
@@ -203,29 +224,33 @@ function ProcedureAside({
   onSelect,
 }: {
   eid: string
-  item: ProcedureSummary
+  item: CatalogProcedure
   overview: EngagementOverview | undefined
   lang: 'zh' | 'en'
   onSelect: (id: string) => void
 }) {
   const { t } = useI18n()
-  const detail = useQuery(reviewsGetProcedureOptions({ path: { eid, pid: item.id } }))
-  const deps = detail.data?.depends_on ?? []
-  const standards = detail.data?.standards ?? []
+  const detail = useQuery({
+    ...reviewsGetProcedureOptions({ path: { eid, pid: item.id } }),
+    enabled: Boolean(item.project),
+    refetchInterval: overview?.running ? 2000 : false,
+  })
+  const deps = item.depends_on
+  const standards = item.standards
   return (
     <aside className="flex flex-[1_1_340px] flex-col gap-4 border-l bg-card p-5">
       <div className="flex flex-col gap-1">
         <Code className="text-[13px] text-muted-foreground">{item.id}</Code>
         <h2 className="m-0 font-semibold text-lg">{procedureName(t, item.id, item.name)}</h2>
         <span className="flex flex-wrap items-center gap-1.5">
-          <StatusPill tone={STATUS_TONE[item.status]}>{t.procStatus[item.status]}</StatusPill>
-          {item.stale ? <StaleBadge /> : null}
+          <CatalogStatus item={item} />
+          {item.project?.stale ? <StaleBadge /> : null}
         </span>
       </div>
-      {item.stale ? (
+      {item.project?.stale ? (
         <div className="flex flex-col gap-2 rounded-[10px] bg-warn-soft p-3">
           <p className="m-0 text-[13px]">{t.rerun.staleHint}</p>
-          <RerunButton eid={eid} overview={overview} procedure={item} size="default" />
+          <RerunButton eid={eid} overview={overview} procedure={item.project} size="default" />
         </div>
       ) : null}
       <ProcedureIntroView procedureId={item.id} runs={detail.data?.runs} />
@@ -275,11 +300,11 @@ function ProcedureAside({
         )}
       </div>
       <div className="pt-1">
-        {WAITING.has(item.status) ? (
+        {item.project && WAITING.has(item.project.status) ? (
           <Link to="/engagements/$eid" params={{ eid }} search={{}} className={buttonVariants({ size: 'lg' })}>
             {t.proceduresPage.workOnIt}
           </Link>
-        ) : (
+        ) : item.project ? (
           <Link
             to="/engagements/$eid/procedures/$pid"
             params={{ eid, pid: item.id }}
@@ -287,7 +312,10 @@ function ProcedureAside({
           >
             {t.proceduresPage.openDetail}
           </Link>
-        )}
+        ) : null}
+        <Link to="/engagements/$eid/plan" params={{ eid }} className="mt-3 block text-[13px] underline">
+          {t.planPage.open}
+        </Link>
       </div>
     </aside>
   )

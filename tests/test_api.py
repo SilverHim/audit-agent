@@ -28,7 +28,15 @@ from backend.core.security import create_access_token, decode_access_token, hash
 from backend.main import create_app
 from backend.persistence.stores import CsvDatasetLoader, PostgresUserStore
 from tests.external import REPO
-from tests.fakes import FakeEngagementStore, FakeFinancialStore, FakeOutputStore, FakeTrail, bind_stores
+from tests.fakes import (
+    KNOWLEDGE,
+    FakeEngagementStore,
+    FakeFinancialStore,
+    FakeOutputStore,
+    FakeTrail,
+    bind_stores,
+    knowledge_library,
+)
 
 
 @functools.cache
@@ -332,11 +340,35 @@ def test_missing_token(api: SimpleNamespace) -> None:
         ("ENG-missing", "NOT_FOUND"),  # 不存在的项目
     ],
 )
-@pytest.mark.parametrize("suffix", ["", "/workpapers"])  # 底稿记录 (需求 R330) 同样经 owned_engagement
+@pytest.mark.parametrize("suffix", ["", "/workpapers", "/procedures"])
 def test_engagement_routes_return_404(api: SimpleNamespace, path: str, code: str, suffix: str) -> None:
     response = api.client.get(f"/api/v1/engagements/{path}{suffix}", headers=_auth(api))
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == code
+
+
+def test_procedure_catalog_includes_unselected_and_disabled_templates(api: SimpleNamespace) -> None:
+    """承接阶段也须能浏览完整程序库, 不能依赖项目程序实例或功能开关, 且不暴露 SQL 和提示词."""
+    library = knowledge_library(KNOWLEDGE)
+    api.client.app.state.deps.library = library
+    path = "/api/v1/engagements/ENG-2026-001/procedures"
+    assert api.client.get(path).status_code == 401
+    response = api.client.get(path, headers=_auth(api))
+    assert response.status_code == 200
+    entries = response.json()
+    assert {t["id"] for t in entries} == {t.id for t in library.all(include_disabled=True)}
+    assert len(entries) == 29
+    by_id = {t["id"]: t for t in entries}
+    assert by_id["REV-02"]["phase"] == "P2_Executing"
+    assert by_id["GEN-08"]["feature"] == "related_parties"
+    assert not library.enabled("GEN-08")
+    assert by_id["REV-02"]["standards"] == library.load("REV-02").standards
+    assert by_id["REV-02"]["depends_on"] == library.load("REV-02").depends_on
+    assert all(
+        set(t) == {"id", "name", "phase", "owner", "engine", "autonomy_level", "feature", "depends_on", "standards"}
+        for t in entries
+    )
+    api.client.app.state.query.overview.assert_not_awaited()
 
 
 def test_gate_not_at_gate_returns_null(api: SimpleNamespace) -> None:

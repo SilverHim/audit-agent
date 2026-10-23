@@ -13,6 +13,7 @@ from backend.api.errors import api_error, catch_api
 from backend.api.schemas import (
     IdBody,
     JudgmentDetail,
+    ProcedureCatalogEntry,
     ProcedureDetail,
     RerunIn,
     ReviewRecordIn,
@@ -28,6 +29,7 @@ from backend.contracts.models import (
     Judgment,
     Misstatement,
     MisstatementUpdateKind,
+    Phase,
     Procedure,
     ProcedureRun,
     RerunRequest,
@@ -254,6 +256,29 @@ async def withdraw_review_record(
             engagement.id, f"WD-{uuid4()}", record_id, reason=body.reason, withdrawn_by=user.id
         )
     return IdBody(id=withdrawal.id)
+
+
+@router.get("/procedures")
+async def list_procedures(
+    engagement: Annotated[Engagement, Depends(owned_engagement)],
+    deps: Annotated[AgentDeps, Depends(get_deps)],
+) -> list[ProcedureCatalogEntry]:
+    """系统完整程序库, 含未启用功能和未纳入本项目的程序, 按阶段与编号排序. 项目状态仍取总览 procedures;
+    未纳入的程序不创建项目实例, 不可执行或重跑. 项目不存在或不属于当前用户时 404."""
+    return [
+        ProcedureCatalogEntry(
+            id=t.id,
+            name=t.name,
+            phase=t.phase,
+            owner=t.owner,
+            engine=t.engine,
+            autonomy_level=t.autonomy_level,
+            feature=t.feature,
+            depends_on=list(t.depends_on),
+            standards=list(t.standards),
+        )
+        for t in sorted(deps.library.all(include_disabled=True), key=lambda t: (list(Phase).index(t.phase), t.id))
+    ]
 
 
 @router.get("/procedures/{pid}")

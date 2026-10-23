@@ -15,6 +15,7 @@ from backend.contracts.models import (
     Annotation,
     AuditException,
     AuditReportVersion,
+    AutonomyLevel,
     ClientProfile,
     Confirmation,
     CorrectionNotice,
@@ -26,6 +27,7 @@ from backend.contracts.models import (
     DocumentRef,
     DocumentType,
     DraftRule,
+    Engine,
     EvidenceType,
     Fees,
     GateDecision,
@@ -368,6 +370,20 @@ class ManualTaskView(Model):
     result_schema: dict[str, Any] | None
     documents: list[DocumentRef]
     evidence_types: dict[str, EvidenceType]  # documents 中每份文件都有, 前端缺了即报错, 不兜底
+
+
+class ProcedureCatalogEntry(Model):
+    """系统已实现程序的公开说明, 不受项目程序包和功能开关过滤, 不含 SQL 或提示词."""
+
+    id: str
+    name: str
+    phase: Phase
+    owner: AgentId
+    engine: Engine
+    autonomy_level: AutonomyLevel
+    feature: str | None
+    depends_on: list[str]
+    standards: list[str]
 
 
 class ProcedureDetail(Model):

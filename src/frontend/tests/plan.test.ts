@@ -51,9 +51,31 @@ const VIEW: PlanView = {
   ],
 } as PlanView
 
-const REV08 = { id: 'REV-08', name: '凭证三单匹配', engine: 'rule', owner: 'A6', status: 'executing', stale: true }
+const REV08 = {
+  id: 'REV-08',
+  name: '凭证三单匹配',
+  phase: 'P2_Executing',
+  engine: 'rule',
+  owner: 'A6',
+  status: 'executing',
+  stale: true,
+}
 
 describe('审计计划页', () => {
+  test('计划生成前显示项目已确定的步骤, 生成后补齐各阶段且不重复已映射的程序', () => {
+    const acceptance = { id: 'ACC-04', phase: 'P0_Acceptance', status: 'completed' } as ProcedureSummary
+    const completion = { id: 'FIN-01', phase: 'P3_Completion', status: 'planned' } as ProcedureSummary
+    const project = [acceptance, REV08 as ProcedureSummary, completion]
+    const before = planTable({ ...VIEW, current_plan_id: null, plans: [], rows: [] }, [acceptance, completion])
+    expect(before.map((p) => [p.procedureId, p.phase, p.status, extentLabel(p, zh)])).toEqual([
+      ['ACC-04', 'P0_Acceptance', 'completed', '—'],
+      ['FIN-01', 'P3_Completion', 'planned', '—'],
+    ])
+    const after = planTable(VIEW, project)
+    expect(after.map((p) => p.procedureId)).toEqual(['ACC-04', 'REV-08', 'GEN-05', 'FIN-01'])
+    expect(after.filter((p) => p.procedureId === 'REV-08')).toHaveLength(1)
+  })
+
   test('程序表接上审计目标与总览的程序行; 总览里没有的程序方法, 负责智能体与状态为空; 说明只取当前计划的', () => {
     const rows = planTable(VIEW, [REV08 as ProcedureSummary])
     expect(
