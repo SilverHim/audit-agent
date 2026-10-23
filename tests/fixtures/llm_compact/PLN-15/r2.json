@@ -1,0 +1,79 @@
+{
+  "overall_strategy": "Revised audit strategy. The audit will cover the financial report of Numbat Electronic Components Pty Ltd for the 12-month period from 1 July 2025 to 30 June 2026. It is a first engagement for the auditor and has been requested by shareholders; the engagement terms have not been checked, so the legal basis for the audit and the applicable reporting arrangements are not confirmed. The audit will focus on cash existence and revenue occurrence and cutoff, including the significant fraud-related revenue risks, and will use the planned cash, bank, journal-entry and revenue procedures described below. The audit will be directed towards obtaining sufficient appropriate evidence for the report, with fieldwork and completion after year end and reporting planned within any applicable statutory deadline.",
+  "sections": {
+    "scope": "The entity is Numbat Electronic Components Pty Ltd (ABN 68900042015), a small proprietary company distributing electronic components wholesale to manufacturers and retailers in NSW and VIC. The audit covers its financial report for 1 July 2025 to 30 June 2026. The audit has been requested by shareholders, but the engagement terms have not been checked; accordingly, whether this request is a shareholder direction under CA2001-S293, and the precise basis of the audit, have not been confirmed. The financial year end is stated in the entity notes as 30 June; no change of financial year is identified in the inputs. The financial reporting framework and engagement letter date are not stated.",
+    "initial_audit": "This is the first engagement for this auditor, but whether the prior period was audited is unknown. Obtain evidence over opening balances in accordance with ASA510-P06: determine whether prior-period closing balances were correctly brought forward or restated, whether opening balances reflect appropriate accounting policies, and use predecessor working papers if the prior period was audited and access is available, current-period evidence, or specific opening-balance procedures as appropriate. Establish whether the prior-period financial report was audited; if it was not, consider the corresponding-figures reporting requirement in ASA710-P14. Before starting the initial audit, complete the ASA 220 acceptance and continuance activities and, if there has been a change of auditor, communicate with the predecessor auditor as required by ASA300-P13.",
+    "significant_risks": "RISK-CASH-EXI (OBJ-CASH-EXI), high risk: cash existence is material. Respond by confirming cash and performing the planned cash procedures CSH-02, CSH-04 and CSH-05, with the nature, timing and extent set out in the procedure notes. RISK-REV-CUT (OBJ-REV-CUT), significant and fraud-related: revenue cutoff is material. Evaluate revenue recognition and period-end delivery, including the planned REV-02, REV-03 and REV-08 procedures. RISK-REV-OCC (OBJ-REV-OCC), significant and fraud-related: revenue occurrence is material. Evaluate revenue recognition and period-end delivery using REV-03 and REV-08. Management override is a presumed fraud risk in all audits; test the appropriateness of journal entries and other adjustments, make enquiries about unusual journal-entry activity, select period-end entries and consider testing entries throughout the period, as required by ASA240-P32 and ASA240-P33. GEN-05 is the planned journal-entry procedure.",
+    "going_concern": "The trial balance reports cash at bank of $126,358.02, trade receivables of $12,345.67, sales revenue of $46,913.56 and operating expenses of $8,209.87. The preliminary analytics report revenue growth of 17.28% and gross margins of 100% for both the current and prior periods. Monthly data show no recorded revenue from July 2025 to May 2026 and all recorded revenue in June 2026; expenses are recorded in May and June, with none shown for the other months. These patterns warrant enquiry and consideration but, on the information provided, do not alone establish whether events or conditions cast significant doubt on going concern. Determine whether management has performed a preliminary going-concern assessment and discuss it and any identified conditions and plans; if no assessment has been performed, discuss the basis for the intended use of the going-concern basis and enquire about relevant events or conditions, as required by ASA570-P10.",
+    "other_significant_balances": "The trial balance balances at or above overall materiality that are not covered by the listed objectives are trade receivables ($12,345.67), share capital ($70,000.00), retained earnings ($30,000.00) and operating expenses ($8,209.87). The supplied procedure list does not specify account-specific procedures for these balances; their audit coverage and procedures need to be set in the audit programme before approval of the plan. Interest income is nil and below overall materiality. Cash and sales revenue are addressed through the stated objectives and planned procedures.",
+    "materiality": "Materiality was decided at PLN-01/03 using revenue as the benchmark at 0.01 (1%). Overall materiality is $469.14, performance materiality is $234.57 (0.5 of overall materiality), and the clearly trivial threshold is $23.46 (0.05 of overall materiality). Revenue is the selected basis for measuring materiality. Reassess these amounts if information obtained during the audit indicates that revision is appropriate.",
+    "timing": "The reporting period ends on 30 June 2026. Fieldwork and completion are planned after year end, with sufficient time for review and resolution of audit matters before the auditor's report is issued. No specific fieldwork dates or reporting date are provided. Plan team direction, supervision and review throughout the engagement, including review of planning, significant-risk work and completion matters. The deadline in CA2001-S315-4 is within four months after year end if that provision applies; the applicable reporting arrangements should be confirmed from the engagement terms.",
+    "reporting": "Plan to issue an auditor's report on the financial report and give it to members within the applicable deadline. CA2001-S315-4 specifies reporting to members within four months after year end for a proprietary company not covered by subsections (1) or (2); whether those conditions and any shareholder-direction arrangements apply must be confirmed. If the prior period was unaudited, address the corresponding-figures statement described in ASA710-P14."
+  },
+  "procedure_notes": [
+    {
+      "procedure_id": "CSH-02",
+      "nature_timing_extent": "For OBJ-CASH-EXI, perform the planned cash existence procedure around 30 June 2026, using the stated five-day lookback and ten-day subsequent period. Apply the $23.46 clearly trivial threshold. No reversal-entry number template or reversal-reference pattern is specified in the parameters."
+    },
+    {
+      "procedure_id": "CSH-04",
+      "nature_timing_extent": "For OBJ-CASH-EXI, perform the planned cash procedure as at 30 June 2026, addressing the existence of the cash balance at that date."
+    },
+    {
+      "procedure_id": "CSH-05",
+      "nature_timing_extent": "For OBJ-CASH-EXI, perform the planned cash procedure at the 30 June 2026 period end, addressing cash existence."
+    },
+    {
+      "procedure_id": "DOC-06",
+      "nature_timing_extent": "Perform the planned procedure required on every audit and document the audit work and conclusions in the engagement file throughout the audit."
+    },
+    {
+      "procedure_id": "GEN-02",
+      "nature_timing_extent": "Perform the planned procedure required on every audit using a three-day bank window. Apply it in connection with the audit work on the bank information for the period end."
+    },
+    {
+      "procedure_id": "GEN-05",
+      "nature_timing_extent": "Perform the planned journal-entry and adjustment analysis for the period 1 July 2025 to 30 June 2026, using the Australia/Sydney timezone and the stated reliable entry timestamps. Include cash, receivables and revenue categories; apply the $234.57 performance materiality and $23.46 clearly trivial thresholds, and screen for entries during 07:00–20:00, round amounts of $10,000.00, users with a maximum of two entries, the stated counterparty prefixes and entity suffixes, and the AJE- prefix. Investigate relevant flagged items and select period-end entries; consider whether entries throughout the period also require testing. No entry-number selection, approval limit, audit-adjustment start or reversal matching pattern is specified."
+    },
+    {
+      "procedure_id": "REV-02",
+      "nature_timing_extent": "For OBJ-REV-CUT, perform the planned revenue cutoff procedure around 30 June 2026 using the 20-day window and the $234.57 threshold. Evaluate whether revenue is recorded in the appropriate period in light of period-end delivery."
+    },
+    {
+      "procedure_id": "REV-03",
+      "nature_timing_extent": "For OBJ-REV-CUT and OBJ-REV-OCC, perform the planned procedure at the 30 June 2026 period end to evaluate revenue recognition and period-end delivery, addressing cutoff and occurrence."
+    },
+    {
+      "procedure_id": "REV-08",
+      "nature_timing_extent": "For OBJ-REV-CUT and OBJ-REV-OCC, perform the planned procedure using the 20-day window around 30 June 2026 to evaluate revenue recognition and period-end delivery, addressing cutoff and occurrence."
+    }
+  ],
+  "timetable": [
+    {
+      "milestone": "Financial year end",
+      "due": "2026-06-30"
+    },
+    {
+      "milestone": "Fieldwork, completion and reporting to members, subject to confirmation of applicable reporting arrangements",
+      "due": "2026-10-30"
+    }
+  ],
+  "eqr_recommendation": {
+    "required": false,
+    "basis": "The entity is not listed, and the inputs do not identify a legal or regulatory requirement for an engagement quality review or a firm determination that one is needed to address a quality risk. The auditor must confirm this conclusion when approving the plan."
+  },
+  "expert_assessment": "No auditor's expert is identified as necessary on the information provided. Reassess if audit evidence or matters encountered indicate a need for specialised expertise.",
+  "standards_cited": [
+    "ASA300-P07",
+    "ASA300-P09",
+    "ASA300-P13",
+    "ASA510-P06",
+    "ASA710-P14",
+    "ASA240-P32",
+    "ASA240-P33",
+    "ASA570-P10",
+    "ASQM1-P34f",
+    "CA2001-S293",
+    "CA2001-S315-4"
+  ]
+}

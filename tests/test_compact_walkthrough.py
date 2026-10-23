@@ -14,8 +14,8 @@ DATA = Path(__file__).resolve().parents[1] / "data/demo-compact"
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("evidence_branch", [False, True])
-async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, evidence_branch: bool) -> None:
+@pytest.mark.parametrize("scenario", ["normal", "evidence", "returns"])
+async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, scenario: str) -> None:
     async with real_storage(
         tmp_path,
         dataset="demo-compact",
@@ -28,6 +28,8 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
         await runner.start(run.eid)
         counts: dict[str, set[str]] = defaultdict(set)
         uploaded = False
+        returned: set[str] = set()
+        evidence_processed = False
         async with api_client(runner, run.owner, xero=xero_link(run.deps, service)) as client:
             base = f"/api/v1/engagements/{run.eid}"
 
@@ -66,8 +68,10 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
                             "communicated_at": "2026-07-20T08:00:00+10:00",
                             "communicated_to": "Synthetic directors",
                             "responded_at": "2026-07-20T09:00:00+10:00",
-                            "response": "Management agrees to both corrections.",
-                            "agrees_to_correct": True,
+                            "response": "Management declines both corrections."
+                            if scenario == "evidence"
+                            else "Management agrees to both corrections.",
+                            "agrees_to_correct": scenario != "evidence",
                         }
                         for m in view["request"]["material"]["misstatements"]
                     ]
@@ -86,7 +90,11 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
                     )
                     continue
                 if pending:
-                    if evidence_branch and all(v["task"]["procedure_id"] == "FIN-03" for v in pending):
+                    if (
+                        scenario == "evidence"
+                        and not evidence_processed
+                        and all(v["task"]["procedure_id"] == "FIN-03" for v in pending)
+                    ):
                         for view in pending:
                             await post(
                                 "/review-records",
@@ -118,9 +126,8 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
                         assert runner.run_error(run.eid) is None
                         tasks = (await client.get(base + "/review-tasks?status=pending")).json()
                         assert [v["task"]["procedure_id"] for v in tasks] == ["FIN-08"]
-                        await service.shutdown()
-                        await run.deps.activities.settle()
-                        return
+                        evidence_processed = True
+                        continue
                     assert all(v["task"]["kind"] == "normal" for v in pending)
                     assert all(v["target"]["proposed_action"] in ("accept", "misstatement") for v in pending)
                     accept = any(v["target"]["proposed_action"] == "accept" for v in pending)
@@ -162,6 +169,22 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
                 assert gate is not None, overview
                 body = {k: gate[k] for k in ("gate", "target_id", "target_version")}
                 body["decision"] = "approve"
+                if scenario == "returns" and gate["gate"] in {"PLN-15", "RPT-01"} and gate["gate"] not in returned:
+                    rejection = {
+                        **body,
+                        "decision": "reject",
+                        "reason": "Redraft for clarity, retaining the approved scope and opinion.",
+                    }
+                    if gate["gate"] == "RPT-01":
+                        rejection["annotations"] = [
+                            {
+                                "section": "basis_for_opinion",
+                                "comment": "Please express the existing basis more concisely.",
+                            }
+                        ]
+                    await post("/gate-decisions", rejection)
+                    returned.add(gate["gate"])
+                    continue
                 if gate["gate"] == "PLN-01/03":
                     body["materiality"] = {
                         "basis": "revenue",
@@ -182,10 +205,14 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
                 pytest.fail("精简演示未在预期步数内完成")
         assert (await run.deps.engagement_store.get(run.eid)).phase is Phase.Archived
         statements = await run.deps.output_store.latest(run.eid, Misstatement)
-        assert len(statements) == 2 and all(m.status is MisstatementStatus.corrected for m in statements)
+        expected_status = MisstatementStatus.uncorrected if scenario == "evidence" else MisstatementStatus.corrected
+        assert len(statements) == 2 and all(m.status is expected_status for m in statements)
         reports = await run.deps.output_store.latest(run.eid, AuditReportVersion)
         assert any(r.status is ReportStatus.signed for r in reports)
-        assert {pid: len(ids) for pid, ids in counts.items()} == {
+        if scenario == "returns":
+            assert returned == {"PLN-15", "RPT-01"}
+            assert max(r.revision for r in reports) == 2
+        expected_counts = {
             "REV-03": 2,
             "GEN-02": 1,
             "CSH-02": 1,
@@ -194,5 +221,10 @@ async def test_compact_demo_authorized_batches_to_signed_report(tmp_path: Path, 
             "FIN-08": 1,
             "FIN-09": 2,
         }
+        if scenario == "evidence":
+            expected_counts.pop("FIN-09")
+            assert evidence_processed
+            assert any(r.opinion_type.value == "qualified" for r in reports)
+        assert {pid: len(ids) for pid, ids in counts.items()} == expected_counts
         await service.shutdown()
         await run.deps.activities.settle()
