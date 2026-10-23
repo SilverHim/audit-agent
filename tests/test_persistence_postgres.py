@@ -864,6 +864,28 @@ async def test_evidence_and_adapters(storage, tmp_path):
         )
     ).id == doc.id
     assert len(await evidence.pages(e.id, doc.id)) == 3
+    from dataclasses import replace
+
+    from backend.services.evidence_followup import register_representation
+    from tests.fakes import FakeRegistry, make_deps
+
+    deps = make_deps(FakeRegistry(), PostgresAuditTrail(engine))
+
+    deps = replace(deps, evidence_store=evidence, financial_store=PostgresFinancialDataStore(engine))
+    async with PostgresAuditOutputStore(engine).transaction(e.id):
+        representation = await register_representation(
+            deps,
+            e.id,
+            person="Alex Morgan",
+            stated_on="2026-10-23",
+            content="Opening balance explained.",
+            actor="U-1",
+            attachment_ids=[doc.id],
+            related_object_ids=["XJ-397"],
+        )
+    pages = await evidence.pages(e.id, representation.id)
+    assert len(pages) == 1 and doc.id in pages[0] and "Opening balance explained." in pages[0]
+    assert representation.related_ids == ["XJ-397"]
     with pytest.raises(ValueError):
         await evidence.save(
             e.id, "../escape.pdf", pdf.read_bytes(), type=DocumentType.contract, reliability=Reliability.external_copy

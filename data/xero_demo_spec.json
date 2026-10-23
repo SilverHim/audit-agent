@@ -2667,6 +2667,42 @@
           "23 October 2026"
         ]
       ]
+    },
+    {
+      "path": "documents/followup/xj397_bank_statement.pdf",
+      "type": "bank_statement",
+      "reliability": "external_copy",
+      "document_date": "2026-07-16",
+      "related_ids": [
+        "XJ-397"
+      ],
+      "registration": null,
+      "index": false,
+      "xero_refs": [
+        "XJ-397",
+        "090",
+        "091"
+      ],
+      "footer": "Demo Company (AU) Pty Ltd | Opening bank evidence",
+      "pages": [
+        [
+          "SYNTHETIC DEMONSTRATION BANK",
+          "BANK BALANCE AND MIGRATION RECONCILIATION",
+          "As at 16 July 2026",
+          "Synthetic - for demonstration only",
+          "",
+          "Account holder: Demo Company (AU) Pty Ltd",
+          "Business Bank Account (090): balance AUD -4,572.22",
+          "Balance before conversion AUD -8,703.20; conversion debit AUD 4,130.98.",
+          "Business Savings Account (091): balance AUD 15,081.23.",
+          "The savings balance was transferred from the prior accounting system.",
+          "Total conversion journal XJ-397 debits: AUD 19,212.21.",
+          "",
+          "This statement confirms the bank balances at the conversion date.",
+          "It does not independently establish the nature of Historical Adjustment (840).",
+          "The director loan agreement and confirmation must support that credit."
+        ]
+      ]
     }
   ],
   "contract_links": [

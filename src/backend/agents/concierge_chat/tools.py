@@ -29,6 +29,7 @@ from backend.contracts.models import (
     Contract,
     DocumentType,
     EvidencePointer,
+    EvidenceRequest,
     EvidenceType,
     GateDecision,
     GateId,
@@ -388,6 +389,18 @@ async def list_open_items(env: ToolEnv, args: NoArgs) -> Found:
             judgment = await deps.output_store.get(eid, Judgment, suggestion.judgment_id)
             if judgment is not None:
                 cites[judgment.id] = cite_judgment(judgment)
+    for followup in await deps.output_store.latest(eid, EvidenceRequest):
+        if followup.status == "open":
+            items.append(
+                {
+                    "type": "evidence_request",
+                    "request_id": followup.id,
+                    "description": followup.description,
+                    "subject_id": followup.subject_id,
+                    "requested_from": followup.requested_from,
+                    "judgment_id": followup.judgment_id,
+                }
+            )
     for request in requests:
         if request.status != "open":
             continue

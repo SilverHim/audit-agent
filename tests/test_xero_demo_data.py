@@ -217,6 +217,7 @@ def test_manifest_layout() -> None:
         "documents/evidence/payroll_register_terms.pdf",
         "documents/evidence/ridgeway_order_CRM08-12.pdf",
         "documents/evidence/smart_agency_invoice_SM0195-70135.pdf",
+        "documents/followup/xj397_bank_statement.pdf",
         "documents/index.csv",
         "documents/related_party/harbourview_lease.pdf",
         "documents/related_party/rm2031_sublease.pdf",

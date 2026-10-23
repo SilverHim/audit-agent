@@ -16,6 +16,7 @@ from backend.agents.base import AgentDeps
 from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     AcceptanceScorecard,
+    AnalyticsResult,
     AuditException,
     AuditObjective,
     AuditPlan,
@@ -531,7 +532,20 @@ async def pln_apply(
     risks = await deps.output_store.latest(eid, RiskItem)
     objectives = await deps.output_store.latest(eid, AuditObjective)
     sources: StatePatch = {"procedure_pack": pack, "risk_register": risks, "audit_objectives": objectives}
-    return pln_effects(pack, risks, objectives, target, decision), sources
+    effects = pln_effects(pack, risks, objectives, target, decision)
+    analytics = await deps.output_store.get(eid, AnalyticsResult, "ANALYTICS")
+    if decision.decision is GateVerdict.approve and decision.materiality and analytics and analytics.recommendation:
+        recommendation = analytics.recommendation
+        stale = (decision.materiality.basis, decision.materiality.pct) != (
+            recommendation.basis,
+            recommendation.percentage,
+        )
+        if stale != analytics.materiality_stale:
+            sources["analytics"] = analytics
+            effects["analytics"] = analytics.model_copy(
+                update={"version": analytics.version + 1, "materiality_stale": stale}
+            )
+    return effects, sources
 
 
 async def pln_rebuild(deps: AgentDeps, eid: str, decision: GateDecision, values: EngagementState) -> StatePatch:
@@ -541,6 +555,7 @@ async def pln_rebuild(deps: AgentDeps, eid: str, decision: GateDecision, values:
     assert candidates is not None and decision.materiality is not None  # 提交时已校验
     overall, performance, trivial = materiality_amounts(candidates, decision.materiality)
     return {
+        "analytics": await store.get(eid, AnalyticsResult, "ANALYTICS"),
         "materiality_cents": overall,
         "performance_materiality_cents": performance,
         "clearly_trivial_cents": trivial,
@@ -705,6 +720,8 @@ async def fin01_view(deps: AgentDeps, eid: str, values: EngagementState) -> tupl
     runs = await deps.output_store.latest(eid, ProcedureRun)
     superseded = superseded_runs(await deps.output_store.latest(eid, RerunRequest))
     stale = stale_procedures(values["procedure_pack"], runs, await deps.data.changes(eid), deps.library, superseded)
+    if values["analytics"] and values["analytics"].materiality_stale and "PLN-07" not in stale:
+        stale.append("PLN-07")
     return schedule, CompletionMaterial(
         schedule=schedule,
         misstatements=misstatements,

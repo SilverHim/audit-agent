@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoice SI-2026-0618 belongs to the year ended 30 June 2026: control passed when the customer signed delivery note DN-2026-0618 on 30 June 2026, on or before the period end.",
+  "conclusion": "Not a misstatement. Invoice SI-2026-0618 belongs to the year ended 30 June 2026: control passed when the customer signed delivery note DN-2026-0618 on 30 June 2026, on or before the period end.",
   "reasoning_chain": [
     {
       "kind": "fact",

@@ -410,6 +410,7 @@ def test_classify_fixtures_follow_the_manifest() -> None:
     assert {stem: f.document_type for stem, f in fixtures.items()} == {
         **expected,
         "fs_v1": DocumentType.financial_statements,
+        "xj397_bank_statement": DocumentType.bank_statement,
     }
     assert all(f.reason.isascii() and f.reason.endswith(".") and ". " not in f.reason for f in fixtures.values())
     assert default.document_type is None
@@ -787,7 +788,8 @@ def test_csh02_ba091_fixture_is_an_accumulated_misstatement(cash: Cash) -> None:
     )
     unaccrued = sentence_with(j.conclusion, "48.53 earned")
     assert all(text in unaccrued for text in ("30 September 2026", "not yet credited")), unaccrued
-    understated = sentence_with(j.conclusion, "understated")
+    assert j.conclusion.startswith("Misstatement:")
+    understated = sentence_with(j.conclusion, "25 to 30 September 2026")
     assert all(text in understated for text in ("25 to 30 September 2026", "interest income", "receivable"))
     trivial = sentence_with(j.conclusion, "clearly trivial")
     assert all(text in trivial for text in ("16.22", "accumulated", "ASA 450 para 5")), trivial
@@ -917,7 +919,8 @@ def test_rev02_conclusion_and_evidence(
     另一句回应 R03-1: 期后匹配到的收款 3,850.00 少于发票 7,150.00, 属收款与对账问题, 不改变转移日, 不构成截止错报.
     关键词取能分辨肯定与否定的写法 (如 "in September is correct", "not change the transfer date")."""
     [j] = [j for j in revenue.rev02["judgments"] if j.subject_id == ORC[number]]
-    first = re.split(r"(?<=\.)\s+", j.conclusion)[0]
+    assert j.conclusion.startswith("Not a misstatement.")
+    first = sentence_with(j.conclusion, f"Invoice {number}")
     for text in (f"Invoice {number}", "period ending 30 September 2026", *transfer):
         assert text in first, text
     assert evidence <= {(p.source_type, p.source_id, p.locator, p.page) for p in j.evidence}

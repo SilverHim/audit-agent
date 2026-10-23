@@ -6165,6 +6165,11 @@
               }
             ],
             "title": "Fallback Reason"
+          },
+          "materiality_stale": {
+            "type": "boolean",
+            "title": "Materiality Stale",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -12739,6 +12744,22 @@
       },
       "ManagementRepresentationIn": {
         "properties": {
+          "attachment_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Attachment Ids",
+            "default": []
+          },
+          "related_object_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Related Object Ids",
+            "default": []
+          },
           "person": {
             "type": "string",
             "title": "Person"
@@ -12904,7 +12925,10 @@
             "enum": [
               "revenue",
               "total_assets",
-              "profit_before_tax"
+              "profit_before_tax",
+              "gross_profit",
+              "total_expenses",
+              "net_assets"
             ],
             "title": "Basis"
           },
@@ -13015,7 +13039,10 @@
             "enum": [
               "revenue",
               "total_assets",
-              "profit_before_tax"
+              "profit_before_tax",
+              "gross_profit",
+              "total_expenses",
+              "net_assets"
             ],
             "title": "Basis"
           },

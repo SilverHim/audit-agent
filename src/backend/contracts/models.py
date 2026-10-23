@@ -587,10 +587,12 @@ SourceType = Literal[
     "bank_account",
     "trial_balance",
 ]
-# 重要性基准: 收入, 总资产, 税前利润
-MaterialityBasis = Literal["revenue", "total_assets", "profit_before_tax"]
-# PLN-07 初步分析可选的重要性基准 (需求 R371): 清单与比例范围在 knowledge/analytic_benchmarks.json. 比 PLN-01/03 闸门
-# 可选的三个基准多毛利, 总费用与净资产 (ASA 320 A5 的基准举例); 闸门仍只接受 MaterialityBasis 的三个
+# 重要性基准: 收入, 总资产, 税前利润, 毛利, 总费用, 净资产
+MaterialityBasis = Literal[
+    "revenue", "total_assets", "profit_before_tax", "gross_profit", "total_expenses", "net_assets"
+]
+# PLN-07 初步分析可选的重要性基准 (需求 R371): 清单与比例范围在 knowledge/analytic_benchmarks.json.
+# 六种重要性基准 (ASA 320 A5); 分析推荐与闸门选择使用同一集合
 AnalyticBasis = Literal["revenue", "gross_profit", "profit_before_tax", "total_expenses", "net_assets", "total_assets"]
 # 重要性候选本期不适用的原因 (需求 R351): 税前亏损 (以税前利润为基准时), 其余基准金额不为正
 MaterialityInapplicable = Literal["loss", "not_positive"]
@@ -1490,6 +1492,7 @@ class AnalyticsResult(Versioned):
     screening: AnalyticsScreening = AnalyticsScreening()  # 第 3 步的复筛结果; 纯规则路径与退回规则时为空
     fallback: bool = False  # 大模型失败或输出不合格且重试用尽, 退回本期收入 × 0.5% 的规则结果
     fallback_reason: str | None = None  # 退回规则的原因; 未退回为空
+    materiality_stale: bool = False  # 审计师改选了基准或比例, 原分析须重新评估
 
 
 class MaterialityCandidate(Model):
@@ -1742,6 +1745,7 @@ class RerunRequest(Versioned):
 
     procedure_ids: list[str]  # 重跑的程序, 按程序包顺序
     superseded_run_ids: list[str]  # 被取代的执行: 这些程序在请求时已有的全部执行
+    evidence_request_id: str | None = None  # 补证单对象重判的请求, 恢复时据此同步旧判断
     closed_task_ids: list[str] = []  # 一并关闭的待决任务
     data_version: int  # 请求时的项目数据版本
     report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿

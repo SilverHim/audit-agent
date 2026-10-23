@@ -35,6 +35,7 @@ from backend.contracts.models import (
     DocumentRef,
     Engagement,
     EngagementTerms,
+    EvidenceRequest,
     ExceptionDisposition,
     GateDecision,
     GateId,
@@ -59,6 +60,7 @@ from backend.contracts.models import (
     RunPopulation,
     RunStatus,
     RunTrigger,
+    ScopeLimitation,
     StepKind,
     TrailEntry,
     TrailKind,
@@ -152,6 +154,8 @@ class Sources:
     tasks: list[ReviewTask] = field(default_factory=list)
     reviews: list[ReviewRecord] = field(default_factory=list)
     withdrawals: list[ReviewWithdrawal] = field(default_factory=list)
+    evidence_requests: list[EvidenceRequest] = field(default_factory=list)
+    limitations: list[ScopeLimitation] = field(default_factory=list)
     materials: dict[tuple[str, int], Versioned] = field(default_factory=dict)
     library: ProcedureLibrary | None = None
     papers: list[Workpaper] = field(default_factory=list)
@@ -208,6 +212,12 @@ def view_of(template: ProcedureTemplate, sources: Sources) -> View:
     if template.id == "RPT-01" and decisions:
         targets = {d.target_id for d in decisions}
         outputs.extend(o for o in sources.outputs.get("report_versions", []) if o.id in targets)
+    outputs.extend(r for r in sources.evidence_requests if r.procedure_id == pid or pid in {"FIN-01", "FIN-04"})
+    outputs.extend(
+        limitation
+        for limitation in sources.limitations
+        if limitation.procedure_id == pid or pid in {"FIN-01", "FIN-04"}
+    )
     outputs = list({(type(o).__name__, o.id, o.version): o for o in outputs}.values())
     return View(template, runs, current, populations, exceptions, judgments, decisions, outputs, sources.currency)
 
@@ -550,6 +560,8 @@ async def load(deps: "AgentDeps", eid: str) -> Snapshot:
         tasks=await store.latest(eid, ReviewTask),
         reviews=await store.latest(eid, ReviewRecord),
         withdrawals=await store.latest(eid, ReviewWithdrawal),
+        evidence_requests=await store.latest(eid, EvidenceRequest),
+        limitations=await store.latest(eid, ScopeLimitation),
     )
     required = {pid: library.required_items(t.workpaper.ref) for pid, t in templates.items() if t.workpaper}
     workpapers = {w.id: w for w in papers}

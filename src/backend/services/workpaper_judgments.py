@@ -12,11 +12,13 @@ from backend.contracts.models import (
     LocalizedText,
     ProcedureRun,
     ReviewRecord,
+    Verdict,
     WorkpaperSection,
     WorkpaperTable,
     WorkpaperValue,
 )
 from backend.services.currency import format_money
+from backend.services.workpaper_followup import corrections
 from backend.services.workpaper_labels import STATES, words
 from backend.services.workpaper_tables import column, section, value
 
@@ -60,11 +62,24 @@ ACTIONS = {
     key: words(zh, en)
     for key, zh, en in (
         ("accept", "接受", "Accept"),
-        ("close", "关闭事项", "Close"),
+        ("close", "关闭", "Close"),
         ("misstatement", "认定错报", "Misstatement"),
         ("more_evidence", "补充证据", "More evidence"),
     )
 }
+
+
+def action_label(judgment: Judgment) -> LocalizedText:
+    """定论用判断措辞; 分类与更正验证没有定论, 保留接受/关闭的动作含义."""
+    if judgment.verdict is not None:
+        return {
+            Verdict.not_misstatement: words("不是错报", "Not a misstatement"),
+            Verdict.misstatement: words("认定错报", "Misstatement"),
+            Verdict.undetermined: words("暂时判断不了", "Undetermined"),
+        }[judgment.verdict]
+    return ACTIONS[judgment.proposed_action]
+
+
 AWAITING = words("待审计师决定", "Awaiting auditor decision")
 
 
@@ -282,15 +297,15 @@ def judgment_section(judgment: Judgment, view: "View", sources: "Sources") -> Wo
             reviews_table(judgment, sources),
         ]
     )
+    if judgment.misstatement_draft and judgment.misstatement_draft.correction:
+        tables.append(corrections(judgment.misstatement_draft.correction, judgment.id))
     paragraphs: list[str | LocalizedText] = [
         words(
             f"判断 {judgment.id} (v{judgment.version}): {judgment.conclusion}",
             f"Judgment {judgment.id} (v{judgment.version}): {judgment.conclusion}",
         ),
         words(f"反方论证: {judgment.counter_argument}", f"Counter-argument: {judgment.counter_argument}"),
-        words(
-            f"建议: {ACTIONS[judgment.proposed_action].zh}", f"Recommendation: {ACTIONS[judgment.proposed_action].en}"
-        ),
+        words(f"建议: {action_label(judgment).zh}", f"Recommendation: {action_label(judgment).en}"),
     ]
     if not judgment.reasoning_chain:
         paragraphs.append(words("缺: 推理链未记录", "Missing: reasoning chain not recorded"))
@@ -385,7 +400,7 @@ def detail_sections(view: "View", sources: "Sources") -> WorkpaperSection | None
                 "id": j.id,
                 "conclusion": j.conclusion,
                 "confidence": j.confidence,
-                "recommendation": ACTIONS[j.proposed_action],
+                "recommendation": action_label(j),
                 "status": AWAITING if j.review_status == "pending" else STATES[j.review_status],
             }
             for j in judged

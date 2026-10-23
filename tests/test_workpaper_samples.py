@@ -329,7 +329,7 @@ async def test_data_matches_the_samples_and_this_run(walked: tuple[Walk, httpx.A
     assert contracts == ["CON-X01", "CON-X02", "CON-X03"]
     summary = tables_of(papers["D-2"])["judgment_summary"].rows
     assert [row["source_id"] for row in summary] == ["CON-X01", "CON-X02", "CON-X03"]
-    assert {zh(row["recommendation"]) for row in summary} == {"接受"}
+    assert {zh(row["recommendation"]) for row in summary} == {"不是错报"}
     assert [row["confidence"] for row in summary] == [0.84, 0.84, 0.82]
 
     # A-2: 整体重要性与明显微小临界值同示例; 执行重要性按演示决定 (50%), 示例取 75%

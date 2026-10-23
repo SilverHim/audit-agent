@@ -1,5 +1,5 @@
 {
-  "conclusion": "Journal entry XJ-575 (16 September 2026) records a payment of AUD 296.95 from the Business Bank Account (090) against Unpaid Expense Claims (801) to Odette Garrison. It reposts XJ-560, recorded the same day for the same amount to Odette Grainger and voided by XJ-567; the bank statement shows only the batch payment BT-090-0052 (NAB AutoPay, AUD -889.80) that day, which does not identify the payee. Nothing in the inputs records why the payee's name was changed, so the expense claim and its approval should be obtained, with enquiry of the person who processed the entries (ASA 240 para 33(a)(i)).",
+  "conclusion": "Undetermined: the evidence needed to conclude is missing. Journal entry XJ-575 (16 September 2026) records a payment of AUD 296.95 from the Business Bank Account (090) against Unpaid Expense Claims (801) to Odette Garrison. It reposts XJ-560, recorded the same day for the same amount to Odette Grainger and voided by XJ-567; the bank statement shows only the batch payment BT-090-0052 (NAB AutoPay, AUD -889.80) that day, which does not identify the payee. Nothing in the inputs records why the payee's name was changed, so the expense claim and its approval should be obtained, with enquiry of the person who processed the entries (ASA 240 para 33(a)(i)).",
   "reasoning_chain": [
     {
       "kind": "fact",

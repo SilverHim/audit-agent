@@ -15,6 +15,7 @@ from backend.agents.base import AgentDeps, RunContext, finish_run, gather_all
 from backend.contracts.models import (
     AuditException,
     ClientProfile,
+    DocumentType,
     ExceptionDisposition,
     Judgment,
     ReviewStatus,
@@ -258,10 +259,20 @@ async def judge_all(
     task = {"params": ctx.run.model_dump(mode="json")["params_snapshot"], "risks": risks}
 
     async def judge(subject: Subject) -> Judged:
+        data = dict(subject.data)
+        if ctx.procedure.rerun_subject_ids:
+            data["supplementary_documents"] = [
+                {
+                    "document": d.model_dump(mode="json"),
+                    "pages": await deps.evidence_store.pages(ctx.engagement.id, d.id),
+                }
+                for d in await deps.financial_store.documents(ctx.engagement.id, related_id=subject.subject_id)
+                if d.type is not DocumentType.registry_extract
+            ]
         jctx = JudgmentContext(
             subject_id=subject.subject_id,
             task=task,
-            data=subject.data,
+            data=data,
             rule_findings=subject.rule_findings,
             fixture_key=subject.fixture_key or subject.subject_id,
             autonomy_level=ctx.procedure.autonomy_level,

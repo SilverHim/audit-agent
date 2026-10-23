@@ -347,6 +347,13 @@ export const zh: Messages = {
   },
   // AI 建议的更正分录 (需求 R367, R368): 判断卡片, 复核卡片与错报列表共用; 每行只记借方或贷方一方
   correctionEntry: {
+    edit: '修改更正分录',
+    account: '科目',
+    description: '分录摘要',
+    add: '添加分录',
+    remove: '移除分录',
+    invalid: '请填写借贷平衡的分录, 每行填写科目、摘要及一项正数借方或贷方金额。',
+
     title: 'AI 建议的更正分录',
     debit: '借方',
     credit: '贷方',
@@ -670,6 +677,7 @@ export const zh: Messages = {
     monthly: { title: '月度趋势（本期）', month: '月份', revenue: '收入', expense: '费用', employee: '其中员工费用' },
     // 推荐重要性与三步复筛 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用
     analysis: {
+      stale: '已批准的重要性与原推荐不同, 本次初步分析已过期, 需重新评估。',
       screening: '复筛结果',
       threshold: (amount) => `门槛 ${amount}`,
       hits: (n) => `命中 ${n} 个科目`,
@@ -1873,6 +1881,8 @@ export const zh: Messages = {
   },
   // 补充证据请求 (后端需求 R369, 页面 R370): 数据管理页的区块, 复核队列与判断详情里的状态与链接
   evidenceRequests: {
+    decisionNotice: '决定审计意见前需考虑的未结证据与范围受限',
+    scopeTitle: '审计范围受限',
     title: '补充证据请求',
     intro: (n) => `有 ${n} 项复核任务需要补充证据。任务在等待证据期间不阻塞流程。`,
     closed: '补充证据请求都已处理。',
@@ -1911,6 +1921,8 @@ export const zh: Messages = {
   },
   // 登记管理层说明 (后端需求 R369, 页面 R370): 证据页的表单
   managementRepresentation: {
+    related: '关联对象 ID (逗号分隔, 选填)',
+    attachments: '附件 (选填, 本项目已登记文件)',
     title: '登记管理层说明',
     intro: '把管理层书面或口头的说明登记为证据。可靠性为管理层说明，低于外部证据。',
     person: '说明人',

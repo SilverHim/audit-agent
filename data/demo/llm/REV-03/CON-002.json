@@ -1,5 +1,5 @@
 {
-  "conclusion": "Control of the goods passes to Quoll Automation Pty Ltd when its authorised representative signs the delivery note at the delivery address (CON-002-T1). Payment falls due 30 days after the signed delivery note (CON-002-T2); the contract has no return right or rebate terms.",
+  "conclusion": "Not a misstatement. Control of the goods passes to Quoll Automation Pty Ltd when its authorised representative signs the delivery note at the delivery address (CON-002-T1). Payment falls due 30 days after the signed delivery note (CON-002-T2); the contract has no return right or rebate terms.",
   "reasoning_chain": [
     {
       "kind": "fact",

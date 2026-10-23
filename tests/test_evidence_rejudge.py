@@ -6,6 +6,7 @@ SI-2026-0618 的判断不动; 新任务照常可以决定. 功能关闭时不允
 """
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -69,7 +70,8 @@ async def upload_and_link(s, request: EvidenceRequest) -> EvidenceRequest:
     return received
 
 
-async def test_evidence_upload_rejudges_the_subject_and_supersedes_the_old_judgment() -> None:
+@pytest.mark.parametrize("late", [False, True])
+async def test_evidence_upload_rejudges_the_subject_and_supersedes_the_old_judgment(late: bool) -> None:
     """要求补充证据 → 上传证据 → 自动重判: 新判断 J-REV-02-2-SI-2026-0612 与新任务, 旧判断 v2 superseded 且
     superseded_by 指向新判断, 当前结果里只剩新判断; 请求记重判后的判断 ID; 新任务照常可决定.
     (测试台 REV-02 是无状态脚本 Agent, 不按 rerun_subject_ids 过滤, 故这里不对"只重判一个对象"下断言, 见
@@ -86,6 +88,11 @@ async def test_evidence_upload_rejudges_the_subject_and_supersedes_the_old_judgm
     assert stored_task is not None and stored_task.status is TaskStatus.awaiting_evidence
     assert request.status == "open" and request.subject_id == "SI-2026-0612"
 
+    if late:
+        for other in await s.output_store.latest(EID, ReviewTask, status=TaskStatus.pending):
+            await s.submit.submit(EID, evidence_decision(other, "D-OTHER-EVIDENCE"))
+            await wait_idle(s.runner, EID)
+        assert await s.next_nodes() == ("gate_fin",)
     await upload_and_link(s, request)
     assert (await s.output_store.get(EID, ReviewTask, task.id)).status is TaskStatus.pending
 
@@ -127,7 +134,8 @@ async def test_evidence_upload_rejudges_the_subject_and_supersedes_the_old_judgm
     assert decided is not None and decided.status is TaskStatus.decided
 
 
-async def test_rejudge_twice_does_not_duplicate() -> None:
+@pytest.mark.parametrize("recovery", ["startup", "after_intake"])
+async def test_rejudge_twice_does_not_duplicate(recovery: str) -> None:
     """同一请求重判两次: 第二次原样返回, 不再重跑 (判断只有一份新的)."""
     s = await waiting_on_cutoff(features=NUMBAT_FEATURES | {MORE_EVIDENCE})
     task = await pending_task(s)
@@ -135,8 +143,17 @@ async def test_rejudge_twice_does_not_duplicate() -> None:
     await wait_idle(s.runner, EID)
     [request] = await s.output_store.latest(EID, EvidenceRequest)
     await upload_and_link(s, request)
-    first = await s.submit.rejudge_after_evidence(EID, request.id, actor="U-1")
+    # 请求持久化后重启也会补做, 不依赖上传 HTTP 请求的有限重试窗口.
+    document_id = (await s.output_store.get(EID, EvidenceRequest, request.id)).document_ids[0]
+    await s.runner.deps.evidence_store.set_status(EID, document_id, "classified")
+    if recovery == "startup":
+        await s.runner.recover()
+    else:
+        s.runner.acquire(EID)
+        await s.runner.proceed(EID)
     await wait_idle(s.runner, EID)
+    first = await s.output_store.get(EID, EvidenceRequest, request.id)
+    assert first and first.rejudged_judgment_id
     second = await s.submit.rejudge_after_evidence(EID, request.id, actor="U-1")
     await wait_idle(s.runner, EID)
     assert second.rejudged_judgment_id == first.rejudged_judgment_id
@@ -162,3 +179,38 @@ def test_in_scope_keeps_only_rerun_subjects() -> None:
     assert in_scope(only, "SI-2026-0612") is True
     assert in_scope(only, "SI-2026-0618") is False
     assert in_scope(ctx, "SI-2026-0618") is True
+
+
+@pytest.mark.parametrize("received", [False, True])
+async def test_recover_evidence_decision_after_checkpoint_write_failed(
+    monkeypatch: pytest.MonkeyPatch, received: bool
+) -> None:
+    """Store 已提交而检查点写入失败后, 恢复重判的旧判断或无法取得的待决任务, 不丢掉补证状态."""
+    s = await waiting_on_cutoff(features=NUMBAT_FEATURES | {MORE_EVIDENCE})
+    task = await pending_task(s)
+    await s.submit.submit(EID, evidence_decision(task))
+    await wait_idle(s.runner, EID)
+    [request] = await s.output_store.latest(EID, EvidenceRequest)
+    if received:
+        await upload_and_link(s, request)
+
+    async def fail_checkpoint(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("checkpoint interrupted")
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(s.runner.app, "aupdate_state", fail_checkpoint)
+        with pytest.raises(RuntimeError, match="checkpoint interrupted"):
+            if received:
+                await s.submit.rejudge_after_evidence(EID, request.id, actor="U-1")
+            else:
+                await s.submit.mark_evidence_unavailable(EID, request.id, None, actor="U-1")
+    await s.runner.resume(EID)
+    await wait_idle(s.runner, EID)
+    assert s.runner.run_error(EID) is None
+    state = fill_defaults((await s.runner.app.aget_state(s.runner.config(EID))).values)
+    if received:
+        old = next(j for j in state["judgments"] if j.id == request.judgment_id)
+        assert old.superseded_by and old.review_status is ReviewStatus.superseded
+    else:
+        restored = next(t for t in state["review_tasks"] if t.id == task.id)
+        assert restored.status is TaskStatus.pending

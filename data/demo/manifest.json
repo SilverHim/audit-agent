@@ -57,7 +57,7 @@
     },
     {
       "path": "llm/CSH-02/BA-01.json",
-      "sha256": "44fd095159a7ef23fd59807b00e66de31e7aaea281620772dd9a0f18be3c1078"
+      "sha256": "f5c925e375693ea9fe48f4821fdf890cdda0f1a7646e28b9aae3b5aa97182062"
     },
     {
       "path": "llm/DOC-04/CON-001.json",
@@ -188,24 +188,32 @@
       "sha256": "a8976893f606609756d02eae805a8a056c8ba93f52fd4a25fa638be43527c58d"
     },
     {
+      "path": "llm/PLN-07/basis.json",
+      "sha256": "7abc3bb8c08348a2dbf7e6cd8ab2bfc1ab1d7cd503bc369c607986d0856a2f76"
+    },
+    {
+      "path": "llm/PLN-07/screen.json",
+      "sha256": "857eba039f36772fa0ea7ffb67aeeb9bbf2c45c384f779b0174c2f7e67c8434d"
+    },
+    {
       "path": "llm/REV-02/SI-2026-0612.json",
-      "sha256": "e1192e26422854779add631fbfc64f13bfd273fa709ae5c0b25607bd6a3329e5"
+      "sha256": "d9627db636e1338957b72e763e59f73818e79253a14366d2b0bb336a36f6ff8f"
     },
     {
       "path": "llm/REV-02/SI-2026-0618.json",
-      "sha256": "e4aafc55f8b71b99e031d8c686ae840a067dd3c773f88f8bc3c432d0cfdd89c8"
+      "sha256": "30b8fdc8e7a4ef6d11cb35eca55a576492a3b0811103dbd7c55c1ea7bb1f693d"
     },
     {
       "path": "llm/REV-03/CON-001.json",
-      "sha256": "cae8174730dd44b9f5dbf814d3c6a788a46a3f0887b173f90c4b319ca9a6b6a1"
+      "sha256": "d40088254ed1b6dc2447bda77643b5c0d4ee499718581b203a1a2c65d6a7a5b0"
     },
     {
       "path": "llm/REV-03/CON-002.json",
-      "sha256": "e03778fbbbea50a61ff8c0a982df7568eba15dc959b5fc4719bc98fd50806244"
+      "sha256": "d53acb48c7a7b9a2e4cc30cc98175db98d4ae9bcd77b0d874015e1540a4ced54"
     },
     {
       "path": "llm/REV-03/CON-003.json",
-      "sha256": "c43ebc87051822397b7c15964c558c33bdbe3ac57829c47e7340450e4e3ee155"
+      "sha256": "e542674baeec3eda3e23186eb7743400e0daec6a25cab64d3943a6ea93525791"
     },
     {
       "path": "llm/RPT-03/qualified-r1.json",

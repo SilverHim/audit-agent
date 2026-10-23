@@ -17,6 +17,7 @@ from backend.contracts.models import (
     Reliability,
     ReviewRecord,
     ReviewTask,
+    ScopeLimitation,
     StepKind,
     TaskKind,
     TaskStatus,
@@ -133,7 +134,7 @@ def test_awaiting_task_does_not_count_as_pending() -> None:
     )
 
 
-def scope_check() -> None:
+def test_scope_limitation_without_draft_preserves_optional_amount() -> None:
     """范围受限取判断的错报草稿 (对象, 金额, 认定), 草稿为空时金额与认定为空."""
     j = judgment(limitation="Missing bank statement.")
     limitation = scope_limitation(request(j), j, actor="U-1", now=NOW, reason="Bank refused")
@@ -159,6 +160,8 @@ async def test_uploaded_evidence_links_to_the_request_and_reopens_the_task() -> 
     assert updated is not None and updated.status == "received" and updated.document_ids == [document.id]
     stored_task = await deps.output_store.get(eid, ReviewTask, t.id)
     assert stored_task is not None and stored_task.status is TaskStatus.pending
+    linked = await deps.financial_store.documents(eid, related_id="XJ-397")
+    assert [d.id for d in linked] == [document.id]
     assert any(e.kind is TrailKind.data and e.payload["action"] == "received" for e in deps.trail.entries)
 
 
@@ -173,7 +176,10 @@ async def test_unavailable_records_a_scope_limitation_and_reopens_the_task() -> 
     assert (updated.status, updated.unavailable_reason) == ("unavailable", "Bank refused to provide it.")
     stored_task = await deps.output_store.get(eid, ReviewTask, t.id)
     assert stored_task is not None and stored_task.status is TaskStatus.pending
-    assert scope_check is not None  # 范围受限的记录由 unavailable 写, 见下面从 Store 读
+    [limitation] = await deps.output_store.latest(eid, ScopeLimitation)
+    assert limitation.request_id == request_.id and limitation.subject_id == j.subject_id
+    assert limitation.assertion is not None and limitation.reason == "Bank refused to provide it."
+    assert limitation.recorded_by == "U-1"
 
 
 async def test_management_representation_is_registered_as_evidence() -> None:

@@ -18,9 +18,11 @@ from backend.contracts.models import (
     CorrectionNotice,
     Decision,
     Engagement,
+    EvidenceRequest,
     GateDecision,
     GateId,
     GateVerdict,
+    Judgment,
     Procedure,
     ProcedureRun,
     RerunRequest,
@@ -193,6 +195,15 @@ async def catch_up_rerun(
             "confirmations": await confirmations_from_store(store, eid),
             "phase": engagement.phase,
         }
+        if request.evidence_request_id:
+            evidence_request = await store.get(eid, EvidenceRequest, request.evidence_request_id)
+            if evidence_request:
+                task = tasks.get(evidence_request.task_id)
+                if task:
+                    patch["review_tasks"] = list({t.id: t for t in [*closed, task]}.values())
+                old_judgment = await store.get(eid, Judgment, evidence_request.judgment_id)
+                if old_judgment:
+                    patch["judgments"] = [old_judgment]
         await app.aupdate_state(config, patch, as_node="fan_in")
         snapshot = await app.aget_state(config)
     return snapshot

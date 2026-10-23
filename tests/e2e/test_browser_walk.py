@@ -200,6 +200,7 @@ async def browser_walk(
     activity: dict[str, Any] | None = None,
     review_withdrawal: bool = False,
     currency: str | None = None,
+    evidence_followup: bool = False,
     **llm: str,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """起后端与前端, 跑驱动, 写报告; 返回 (驱动结果, R311 口径的汇总, 报告路径). 没有测试库或走查工具时跳过.
@@ -231,8 +232,38 @@ async def browser_walk(
             config = walk_config(out, base, mode, fin_policy, activity)
             config["review_withdrawal"] = review_withdrawal
             config["currency"] = currency
+            config["evidence_followup"] = (
+                str(REPO / "data/xero_demo/20261017-q1/documents/followup/xj397_bank_statement.pdf")
+                if evidence_followup
+                else None
+            )
             results = await run_walk(config, out, WALK_TIMEOUT_S[mode])
         data = await evaluate(app.state.runner, walk_of(results), budget) if results["eid"] else {}
+        if evidence_followup and results["reached_archive"]:
+            from backend.contracts.models import EvidenceRequest, Judgment, Misstatement, ScopeLimitation, TrailKind
+            from backend.services.trail_pages import all_of_kind
+
+            eid = results["eid"]
+            store = app.state.deps.output_store
+            requests = await store.latest(eid, EvidenceRequest)
+            received = next(r for r in requests if r.subject_id == "XJ-397")
+            assert received.rejudged_judgment_id
+            old = await store.get(eid, Judgment, received.judgment_id)
+            new = await store.get(eid, Judgment, received.rejudged_judgment_id)
+            assert old and new and old.superseded_by == new.id and new.subject_id == "XJ-397"
+            linked = await app.state.deps.financial_store.documents(eid, related_id="XJ-397")
+            assert set(received.document_ids) <= {d.id for d in linked}
+            calls = await all_of_kind(app.state.deps.trail, eid, TrailKind.llm_call)
+            assert any(
+                e.procedure_id == "GEN-02" and e.run_id == new.run_id and received.document_ids[0] in str(e.payload)
+                for e in calls
+            )
+            assert any(limitation.subject_id == "XJ-575" for limitation in await store.latest(eid, ScopeLimitation))
+            if results.get("correction_edited"):
+                misstatements = await store.latest(eid, Misstatement)
+                assert any(
+                    m.correction and m.correction[0].description.startswith("Auditor reviewed:") for m in misstatements
+                )
     return results, data, write_report(out, mode, results, data)
 
 
@@ -300,15 +331,61 @@ async def test_browser_review_withdrawal_mock(tmp_path: Path, monkeypatch: pytes
 
 @pytest.mark.live(max_calls=MAX_CALLS)
 async def test_browser_walk_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live_budget: Budget) -> None:
-    """live 模式 (真实模型): 同一驱动走到归档, R311 的硬性检查都过; 走查发现的问题与建议动作的差异写进报告, 不在这里
-    判失败 (由协调者看报告另立需求). FIN-01 按汇总表的候选意见决定."""
+    """真实模型用同一驱动到归档, R311 硬性检查全部通过; 审计建议与固定输出的差异只记报告.
+    页面报错、缺少判断或补证链路失败均判失败, FIN-01 按候选意见决定."""
     configured = live_llm_settings()  # 没配时跳过
     llm = {key: str(getattr(configured, key)) for key in LLM_KEYS}
-    results, data, report = await browser_walk(tmp_path, monkeypatch, live_budget, "live", "candidate", **llm)
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, live_budget, "live", "candidate", evidence_followup=True, **llm
+    )
     live_budget.reported = True
     warn_soft(data)
+    assert results["issues"] == [], report
     assert results["reached_archive"], report
-    assert_hard(data)
+    assert_hard(data, expected_p2_entries=("PLN-15", "GEN-02"))
+    assert results["evidence_followup"] == {"requested": True, "received": True, "unavailable": True}, report
+
+
+async def test_browser_evidence_followup_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """补证闭环, 并在 FIN-09 模型建议认定错报时从页面改用人工判断, 不尝试不可用的确认."""
+    from backend.adapters.llm import SwitchableLLMClient
+    from backend.contracts.llm_outputs import JudgmentDraft
+    from backend.contracts.models import ProposedAction
+
+    complete = SwitchableLLMClient.complete
+
+    async def uncertain(client: Any, request: Any, output_model: Any) -> Any:
+        response = await complete(client, request, output_model)
+        if request.procedure_id == "FIN-09" and response.output is not None:
+            source = "CSH-02" if request.fixture_key == "BA-091" else "GEN-02"
+            sample = JudgmentDraft.model_validate_json(
+                (XERO.fixtures / source / f"{request.fixture_key}.json").read_text()
+            )
+            draft = sample.misstatement_draft
+            assert draft is not None
+            output = response.output.model_copy(
+                update={
+                    "proposed_action": ProposedAction.misstatement,
+                    "misstatement_draft": draft,
+                    "conclusion": f"Misstatement: {draft.account} is {draft.direction.value} "
+                    f"by AUD {draft.amount_cents / 100:,.2f}.",
+                }
+            )
+            return response.model_copy(update={"output": output, "raw": output.model_dump_json()})
+        return response
+
+    monkeypatch.setattr(SwitchableLLMClient, "complete", uncertain)
+    results, data, report = await browser_walk(
+        tmp_path, monkeypatch, Budget(max_calls=MAX_CALLS), "mock", "candidate", evidence_followup=True
+    )
+    assert results["issues"] == [], report
+    assert results["correction_edited"] is True
+    assert (
+        sum(task.startswith("T-J-FIN-09-") and decision == "override" for task, decision in results["decisions"]) == 2
+    )
+    assert results["reached_archive"], report
+    assert results["evidence_followup"] == {"requested": True, "received": True, "unavailable": True}, report
+    assert_hard(data, expected_p2_entries=("PLN-15", "GEN-02"))
 
 
 async def test_browser_activity_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

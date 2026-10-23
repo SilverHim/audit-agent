@@ -125,6 +125,12 @@ def new_versions(effects: StatePatch, sources: StatePatch) -> list[Versioned]:
     for key in VERSIONED_EFFECTS:
         before = {(o.id, o.version) for o in sources.get(key, [])}
         created += [o for o in effects.get(key, []) if (o.id, o.version) not in before]
+    analytics = effects.get("analytics")
+    previous = sources.get("analytics")
+    if analytics is not None and (
+        previous is None or (analytics.id, analytics.version) != (previous.id, previous.version)
+    ):
+        created.append(analytics)
     return created
 
 
@@ -1273,14 +1279,48 @@ class GraphDecisionSubmit:
     ) -> EvidenceRequest:
         """审计师标补充证据无法取得 (需求 R369): 请求置 unavailable, 复核任务回待处理, 记一条范围受限.
         校验项目锁定与项目锁; 请求不存在 404, 已不是待补的 409."""
-        engagement = await self._engagement(eid)
-        if engagement.locked:
-            raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
-        self.runner.acquire(eid)
-        try:
-            return await evidence_unavailable(self.deps, eid, request_id, actor=actor, reason=reason)
-        finally:
-            self.runner.release(eid)
+        async with self._deciding(eid) as (_, snapshot):
+            if not at_rerun_point(snapshot):
+                raise DecisionRejected("NOT_RERUNNABLE", "请在程序等复核或报告签字前的闸门处理")
+            values = fill_defaults(snapshot.values)
+            store = self.deps.output_store
+            async with store.transaction(eid):
+                request = await evidence_unavailable(self.deps, eid, request_id, actor=actor, reason=reason)
+                procedure = await store.get(eid, Procedure, request.procedure_id)
+                assert procedure is not None
+                updated = procedure.model_copy(
+                    update={"version": procedure.version + 1, "status": ProcedureStatus.awaiting_human}
+                )
+                rewind = RerunRequest(
+                    id=f"RR-UNAVAILABLE-{request.id}",
+                    procedure_ids=[procedure.id],
+                    superseded_run_ids=[],
+                    evidence_request_id=request.id,
+                    data_version=(await self.deps.data.readiness(eid)).data_version,
+                    requested_by=actor,
+                    requested_at=self.now(),
+                )
+                await store.put(eid, [updated, rewind], actor=actor)
+                if values["phase"] is not Phase.P2_Executing:
+                    await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+            await self.deps.trail.record(rerun_trail(eid, rewind))
+            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [updated]))
+            await record_transitions(
+                self.deps.trail,
+                phase_transition(eid, values["phase"], Phase.P2_Executing, procedure.id, reruns=rewinds(values) + 1),
+            )
+            task = await store.get(eid, ReviewTask, request.task_id)
+            await self.app.aupdate_state(
+                GraphRunner.config(eid),
+                {
+                    "phase": Phase.P2_Executing,
+                    "rerun_requests": [rewind],
+                    "procedure_pack": latest_in_order(values["procedure_pack"], await store.latest(eid, Procedure)),
+                    "review_tasks": [task] if task else [],
+                },
+                as_node="fan_in",
+            )
+        return request
 
     async def edit_evidence_request(
         self,
@@ -1520,19 +1560,18 @@ class GraphDecisionSubmit:
     async def rejudge_after_evidence(self, eid: str, request_id: str, *, actor: str) -> EvidenceRequest:
         """补充证据到达后只重判该对象 (需求 R369, Issue #65 验收 4).
 
-        图须停在 P2 的等复核 (await_events) 位置; 请求须为 received 且尚未重判. 通过后一个事务内写: 证据请求记重判后的
-        判断 ID; 原复核任务关闭; 原判断出新版本 (superseded, superseded_by 为新判断 ID); 该程序新版本 (executing,
+        图须停在等复核、FIN-01 或 RPT-01; 请求须为 received 且尚未重判, 后两处先回 P2.
+        通过后一个事务内写: 证据请求记重判后的判断 ID; 原复核任务关闭;
+        原判断出新版本 (superseded, superseded_by 为新判断 ID); 该程序新版本 (executing,
         rerun_subject_ids 只含该对象); 重跑请求 (superseded_run_ids 为空, 不取代整次执行的其余对象). 提交后写重跑与
         证据留痕, 再以 fan_in 身份写检查点: after_fan_in 只重派发该对象, 判断公共流程生成新判断 (run_no + 1) 与新复核
         任务; 旧判断不再计入当前结果 (services.staleness.current_results 排除 superseded_by 非空的判断). 图不在可重判
-        位置时抛 NOT_RERUNNABLE, 由调用方保留请求为已收到、任务回待处理, 等审计师复核.
+        位置时抛 NOT_RERUNNABLE; received 请求保持待重判, 图下次空闲或启动恢复时继续尝试.
         """
         async with self._deciding(eid) as (_, snapshot):
             if not at_rerun_point(snapshot):
                 raise DecisionRejected("NOT_RERUNNABLE", "图不在等复核位置, 证据已登记, 由审计师带新证据复核")
             values = fill_defaults(snapshot.values)
-            if values["phase"] is not Phase.P2_Executing:
-                raise DecisionRejected("NOT_RERUNNABLE", "图不在执行阶段, 证据已登记, 由审计师带新证据复核")
             store = self.deps.output_store
             request = await store.get(eid, EvidenceRequest, request_id)
             if request is None:
@@ -1572,6 +1611,7 @@ class GraphDecisionSubmit:
             reports = await store.latest(eid, AuditReportVersion)
             rerun = RerunRequest(
                 id=f"RR-EV-{request.id}",
+                evidence_request_id=request.id,
                 procedure_ids=[procedure.id],
                 superseded_run_ids=[],
                 closed_task_ids=[task.id],
@@ -1583,6 +1623,7 @@ class GraphDecisionSubmit:
             updated_request = request.model_copy(
                 update={"version": request.version + 1, "rejudged_judgment_id": new_judgment_id}
             )
+            phase = values["phase"]
             created: list[Versioned] = [updated_procedure, closed_task, updated_request]
             if replaced is not None:
                 created.append(replaced)
@@ -1592,13 +1633,20 @@ class GraphDecisionSubmit:
                 if saved != created:
                     clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
                     raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+                if phase is not Phase.P2_Executing:
+                    await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
             await self.deps.trail.record(rerun_trail(eid, rerun))
             await self.deps.trail.record(
                 evidence_trail(eid, updated_request, "rejudged", actor, judgment_id=new_judgment_id)
             )
             await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
+            await record_transitions(
+                self.deps.trail,
+                phase_transition(eid, phase, Phase.P2_Executing, request.procedure_id, reruns=rewinds(values) + 1),
+            )
             pack = values["procedure_pack"]
             patch: StatePatch = {
+                "phase": Phase.P2_Executing,
                 "rerun_requests": [rerun],
                 "procedure_pack": latest_in_order(pack, await store.latest(eid, Procedure)),
                 "review_tasks": [closed_task],

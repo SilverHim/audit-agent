@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoices ORC1003 (journal entry XJ-405) and ORC1008 (XJ-408) were both raised to Hamilton Smith Pty on 17 July 2026 for AUD 550.00, while CON-X02 provides for one invoice for the Monthly Fee of each calendar month, so ORC1003 duplicates ORC1008. ORC1003 has no service-completion record, whereas ORC1008 has the July service record SR-ORC1008. The duplicate was cancelled in full by credit note CR1003 (XJ-430) on 26 July 2026, so the entry has no net effect and the July fee is recorded once.",
+  "conclusion": "Not a misstatement. Invoices ORC1003 (journal entry XJ-405) and ORC1008 (XJ-408) were both raised to Hamilton Smith Pty on 17 July 2026 for AUD 550.00, while CON-X02 provides for one invoice for the Monthly Fee of each calendar month, so ORC1003 duplicates ORC1008. ORC1003 has no service-completion record, whereas ORC1008 has the July service record SR-ORC1008. The duplicate was cancelled in full by credit note CR1003 (XJ-430) on 26 July 2026, so the entry has no net effect and the July fee is recorded once.",
   "reasoning_chain": [
     {
       "kind": "fact",

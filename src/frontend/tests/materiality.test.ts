@@ -64,3 +64,18 @@ describe('重要性候选', () => {
     expect(initialChoice(none).basis).toBe('revenue')
   })
 })
+
+test('系统推荐在可选区间内时预选推荐, 不再一律取上限', () => {
+  const recommendation = {
+    basis: 'revenue',
+    percentage: 0.005,
+    base_amount_cents: 100000,
+    threshold_cents: 500,
+    rationale: 'Revenue fits this entity.',
+    evidence: [],
+    counter_argument: 'Profit is volatile.',
+    self_confidence: 0.8,
+  } as const
+  expect(initialChoice(XERO, { ...recommendation, evidence: [] }).pct).toBe(0.005)
+  expect(initialChoice(XERO, { ...recommendation, basis: 'profit_before_tax', evidence: [] }).basis).toBe('revenue')
+})

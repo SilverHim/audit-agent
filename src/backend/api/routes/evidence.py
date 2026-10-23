@@ -1,8 +1,6 @@
 """文件与证据: 上传与分类 (需求 R14), 文件登记, 合同与回函 (含修改与版本), ASIC 摘录的抽取结果 (需求 R290), 原件,
 财务明细."""
 
-import asyncio
-import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
@@ -28,7 +26,6 @@ from backend.api.schemas import (
     RegistryExtractView,
 )
 from backend.contracts.data import ContractVersion, ExtractionEdit, ExtractionRecord
-from backend.contracts.errors import DecisionRejected
 from backend.contracts.models import (
     Confirmation,
     Contract,
@@ -43,7 +40,6 @@ from backend.orchestration.decisions import GraphDecisionSubmit
 from backend.services import data_import, evidence_followup
 from backend.services.data_service import DataService
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/engagements/{eid}", tags=["evidence"])
 INLINE = {"application/pdf", "image/png", "image/jpeg"}  # 浏览器能直接显示的; 其余 (Word, Excel, CSV) 以附件下载
 
@@ -79,7 +75,6 @@ async def upload_documents(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     user: Annotated[User, Depends(current_user)],
     service: Annotated[DataService, Depends(get_data_service)],
-    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
     files: Annotated[list[UploadFile], File(description="PDF, DOCX, XLSX, PNG, JPG 等, 单个不超过 50 MB")],
     request_id: Annotated[str | None, Form()] = None,
 ) -> list[DocumentRef]:
@@ -93,8 +88,6 @@ async def upload_documents(
         contents.append((upload.filename or "upload", data))
     async with catch_api():
         documents = await service.upload_documents(engagement.id, contents, actor=user.id, request_id=request_id)
-    if request_id is not None:
-        await _rejudge_after_evidence(decisions, engagement.id, request_id, user.id)
     return documents
 
 
@@ -328,31 +321,25 @@ async def register_management_representation(
     engagement: Annotated[Engagement, Depends(owned_engagement)],
     user: Annotated[User, Depends(current_user)],
     deps: Annotated[AgentDeps, Depends(get_deps)],
+    decisions: Annotated[GraphDecisionSubmit, Depends(get_decisions)],
 ) -> DocumentRef:
     """登记管理层的书面或口头说明为证据 (需求 R369): 说明人, 时间与内容, 存成证据文件, 可靠性为管理层说明 (低于外部
     证据); 判断可以引用它. 锁定 423."""
     async with catch_api():
         if engagement.locked:
             raise api_error("ENGAGEMENT_LOCKED", engagement.id)
-        return await evidence_followup.register_representation(
-            deps, engagement.id, person=body.person, stated_on=body.stated_on, content=body.content, actor=user.id
-        )
-
-
-async def _rejudge_after_evidence(decisions: GraphDecisionSubmit, eid: str, request_id: str, actor: str) -> None:
-    """补充证据上传后自动重判该对象 (需求 R369): 上传刚结束, A3 可能仍持项目锁处理文件, 稍等再试; 图不在可重判位置
-    (如已过执行阶段) 时保留请求为已收到、任务回待处理, 由审计师带新证据复核, 不影响上传本身."""
-    for _ in range(40):
+        decisions.runner.acquire(engagement.id)
         try:
-            await decisions.rejudge_after_evidence(eid, request_id, actor=actor)
-            return
-        except DecisionRejected as error:
-            if error.code != "ENGAGEMENT_BUSY":
-                if error.code != "NOT_RERUNNABLE":
-                    logger.info("补充证据请求 %s 未自动重判: %s", request_id, error)
-                return
-            await asyncio.sleep(0.5)
-        except Exception:
-            logger.exception("补充证据请求 %s 自动重判失败", request_id)
-            return
-    logger.info("补充证据请求 %s 等待项目空闲超时, 由审计师带新证据复核", request_id)
+            async with deps.output_store.transaction(engagement.id):
+                return await evidence_followup.register_representation(
+                    deps,
+                    engagement.id,
+                    person=body.person,
+                    stated_on=body.stated_on,
+                    content=body.content,
+                    actor=user.id,
+                    attachment_ids=body.attachment_ids,
+                    related_object_ids=body.related_object_ids,
+                )
+        finally:
+            decisions.runner.release(engagement.id)

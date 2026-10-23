@@ -478,6 +478,8 @@ class FileEvidenceStore(Store):
 
     async def pages(self, eid: str, document_id: str) -> list[str]:
         path = await self.path(eid, document_id)
+        if path.suffix.lower() == ".txt":
+            return [await asyncio.to_thread(path.read_text, encoding="utf-8")]
 
         def extract() -> list[str]:
             with pdfplumber.open(path) as pdf:

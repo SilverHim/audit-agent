@@ -362,6 +362,10 @@ export type AnalyticsResult = {
      * Fallback Reason
      */
     fallback_reason?: string | null;
+    /**
+     * Materiality Stale
+     */
+    materiality_stale?: boolean;
 };
 
 /**
@@ -3787,6 +3791,14 @@ export type LocalizedText = {
  */
 export type ManagementRepresentationIn = {
     /**
+     * Attachment Ids
+     */
+    attachment_ids?: Array<string>;
+    /**
+     * Related Object Ids
+     */
+    related_object_ids?: Array<string>;
+    /**
      * Person
      */
     person: string;
@@ -3896,7 +3908,7 @@ export type MaterialityCandidate = {
     /**
      * Basis
      */
-    basis: 'revenue' | 'total_assets' | 'profit_before_tax';
+    basis: 'revenue' | 'total_assets' | 'profit_before_tax' | 'gross_profit' | 'total_expenses' | 'net_assets';
     /**
      * Base Amount Cents
      */
@@ -3963,7 +3975,7 @@ export type MaterialityChoice = {
     /**
      * Basis
      */
-    basis: 'revenue' | 'total_assets' | 'profit_before_tax';
+    basis: 'revenue' | 'total_assets' | 'profit_before_tax' | 'gross_profit' | 'total_expenses' | 'net_assets';
     /**
      * Pct
      */
