@@ -1,0 +1,26 @@
+[
+  {
+    "id": "OBJ-REV-OCC",
+    "version": 1,
+    "account": "Revenue",
+    "assertion": "Occurrence",
+    "risk_level": "significant",
+    "is_material": true
+  },
+  {
+    "id": "OBJ-REV-CUT",
+    "version": 1,
+    "account": "Revenue",
+    "assertion": "Cutoff",
+    "risk_level": "significant",
+    "is_material": true
+  },
+  {
+    "id": "OBJ-CASH-EXI",
+    "version": 1,
+    "account": "Cash",
+    "assertion": "Existence",
+    "risk_level": "high",
+    "is_material": true
+  }
+]

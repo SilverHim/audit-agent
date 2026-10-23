@@ -1,0 +1,16 @@
+{
+  "basis": "revenue",
+  "percentage": 0.01,
+  "rationale": "Revenue is a suitable measure of the scale of this wholesale distributor's activity and is relevant to the shareholders who requested the audit. In considering the users, ownership and financing, benchmark volatility and the financial report as a whole, as ASA 320 A4 requires, the available figures show positive profit before tax and revenue of AUD 46,913.56 for the current period, compared with AUD 40,000.00 for the equal-length prior period. Revenue is among the benchmarks identified in ASA 320 A5. The current period is 12 months, so ASA 320 A7 does not require adjustment for a shorter period. The selected 1% is the revenue example in ASA 320 A8; the permitted range is common practice, not a prescribed percentage. The resulting preliminary threshold is AUD 469.14.",
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "400",
+      "locator": "balance_cents",
+      "reliability": "internal_original"
+    }
+  ],
+  "counter_argument": "Profit before tax is positive at AUD 38,703.69, compared with AUD 30,000.00 in the equal-length prior period, and ASA 320 A8 gives 5% of profit before tax as an example. It could therefore be considered because profitability is relevant to shareholders. However, revenue provides a direct measure of the entity's trading scale, and the information provided does not establish that profit before tax is more suitable as the benchmark. The 5% example is not mandatory.",
+  "self_confidence": 0.83
+}

@@ -1,0 +1,166 @@
+{
+  "conclusion": "Not a misstatement: INV-C01 belongs in the year ended 2026-06-30. The contract requires physical delivery and signed customer acceptance for control to transfer, and both occurred on 2026-06-10, when the revenue was posted.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "CON-C01-T1 states that control transfers only upon physical delivery and signed customer acceptance.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3515e6c314b2",
+          "locator": "CON-C01-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The delivery note records shipment on 2026-06-10.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C01",
+          "locator": "shipped_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The delivery note records customer signature on 2026-06-10.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C01",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "INV-C01 was posted on 2026-06-10, and the related journal line credits Sales revenue.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-C01",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-001-2",
+          "locator": "account_category, posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the entity transfers control to the customer; customer acceptance is an indicator to consider when determining the point of transfer.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        },
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Physical delivery and signed customer acceptance both occurred on 2026-06-10, so control transferred that day under the contract. The revenue was posted on that date, within the year ended 2026-06-30; this addresses RISK-REV-CUT and supports acceptance without a cutoff misstatement.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3515e6c314b2",
+      "locator": "CON-C01-T1",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C01",
+      "locator": "shipped_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C01",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-C01",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-001-2",
+      "locator": "account_category, posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that customer acceptance occurred after 2026-06-30, or that the delivery note's signed date is inaccurate, would overturn the cutoff conclusion.",
+  "proposed_action": "accept",
+  "verdict": "not_misstatement",
+  "misstatement_draft": null,
+  "self_confidence": 0.98
+}

@@ -545,6 +545,8 @@ class TrailKind(StrEnum):
     data = "data"  # 数据管理: 导入, 同步, 上传, 分类, 修改, 体检, 补交请求, 确认数据已齐
     presentation = "presentation"  # 判断呈递 (GEN-11): 审计师打开一条复核任务, 每次一行 (services/presentation)
     archive = "archive"  # 签字后的底稿定稿
+    assistant_action = "assistant_action"  # 审计助理操作方案, 授权与执行回执
+    execution = "execution"  # 程序内部的可核验步骤与终态
     run = "run"  # 程序执行的开始与结束, 每次执行各一行 (需求 R325, orchestration/trail)
 
 
@@ -1746,6 +1748,7 @@ class RerunRequest(Versioned):
     procedure_ids: list[str]  # 重跑的程序, 按程序包顺序
     superseded_run_ids: list[str]  # 被取代的执行: 这些程序在请求时已有的全部执行
     evidence_request_id: str | None = None  # 补证单对象重判的请求, 恢复时据此同步旧判断
+    evidence_request_ids: list[str] = []  # 批量无法取得时关联的全部请求, 恢复时同步其任务
     closed_task_ids: list[str] = []  # 一并关闭的待决任务
     data_version: int  # 请求时的项目数据版本
     report_revision: int | None = None  # 请求时最新报告的修订号, 没有报告为空; RPT-03 据此按非退回的重拟起草下一稿

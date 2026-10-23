@@ -411,8 +411,8 @@ async def test_demo_client_first_even_when_not_the_default(monkeypatch: pytest.M
         rows = (await client.get(f"{API}/clients")).json()
     flags = [(r["legal_name"], [(d["dataset"], d["default"], d["demo"]) for d in r["datasets"]]) for r in rows]
     assert flags[:2] == [
+        ("Numbat Electronic Components Pty Ltd", [("demo", True, False), ("demo-compact", False, True)]),
         ("Demo Company (AU) Pty Ltd", [(XERO_DATASET, False, True)]),
-        ("Numbat Electronic Components Pty Ltd", [("demo", True, False)]),
     ]
     assert ("Demo Company (AU)", [("xero/20261017-mock", False, False)]) in flags
 
@@ -557,7 +557,7 @@ async def assert_end_state(w: Walk) -> list[EvidencePointer]:
     assert Counter(r.procedure_id for r in runs) == DEMO_RUNS and {r.status for r in runs} == {RunStatus.succeeded}
     trail = await deps.trail.list(x.eid, limit=10_000)
     calls = [e for e in trail if e.kind is TrailKind.llm_call]
-    assert Counter(e.kind for e in trail) == DEMO_TRAIL
+    assert Counter(e.kind for e in trail if e.kind is not TrailKind.execution) == DEMO_TRAIL
     assert Counter((e.procedure_id, (e.run_id or "").startswith("UPLOAD-")) for e in calls) == DEMO_LLM_CALLS
     assert Counter(e.procedure_id for e in trail if e.kind is TrailKind.external_call) == {"ACC-04": 2, "CSH-04": 2}
     started = Started(x.runner, deps.output_store, deps.engagement_store)  # type: ignore[arg-type]

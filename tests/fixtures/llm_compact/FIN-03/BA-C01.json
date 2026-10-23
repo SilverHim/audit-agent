@@ -1,0 +1,145 @@
+{
+  "conclusion": "Misstatement: Interest income is understated by AUD 355.55 (completeness), arising in the current period because bank confirmation records interest earned by year-end that was not accrued in the books. It is factual because the amount is established by the external confirmation, rather than arising from an unreasonable management judgement. It is not indicative of fraud: the inputs show no sign of intentional omission or concealment, and RISK-REV-CUT and RISK-REV-OCC relate to revenue cutoff and occurrence rather than this routine interest accrual.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "The external bank confirmation records accrued interest of AUD 355.55 at the period end.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "accrued_interest_cents",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The source judgment identifies that confirmed interest as not accrued in the books; its cited supporting records include the confirmation's book balance and the trial balance cash balance.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "book_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "100",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "ASA450-A6 distinguishes factual misstatements, about which there is no doubt, from judgemental misstatements arising from unreasonable or inappropriate management judgements.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-A6",
+          "locator": "para A6",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The confirmed amount and its omission from accruals establish a factual misstatement; the inputs do not indicate that the amount arose from a management judgement or estimate.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "ASA240-P36 requires evaluation of whether an identified misstatement is indicative of fraud.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P36",
+          "locator": "para 36",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The omission of routine interest accrual, without evidence of concealment or intent, is not indicative of fraud. RISK-REV-CUT and RISK-REV-OCC concern revenue cutoff and occurrence and do not link this interest accrual to a fraud risk.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        4
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "accrued_interest_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "book_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "100",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-A6",
+      "locator": "para A6",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P36",
+      "locator": "para 36",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A management interest-accrual calculation showing that AUD 355.55 depended on an unreasonable recognition or measurement judgement would change the type classification; evidence of deliberate concealment or intentional omission would change the fraud assessment.",
+  "proposed_action": "accept",
+  "verdict": null,
+  "misstatement_draft": null,
+  "self_confidence": 0.94,
+  "nature": {
+    "type": "factual",
+    "fraud_indicative": false,
+    "fraud_reason": null
+  }
+}

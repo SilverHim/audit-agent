@@ -39,6 +39,7 @@ from backend.contracts.services import RuleResult
 from backend.contracts.state import EngagementState, StatePatch
 from backend.services.activities import ActivityBoard
 from backend.services.autonomy_policy import AutonomyPolicy
+from backend.services.execution import execution_step
 from backend.services.features import BASELINE
 from backend.services.judgment_engine import JudgmentEngine
 from backend.services.procedure_library import ProcedureLibrary
@@ -165,7 +166,8 @@ def finish_run(run: ProcedureRun, ended_at: datetime, outcomes: Sequence[RuleOut
 async def run_rules(deps: AgentDeps, ctx: RunContext) -> RuleResult:
     """执行程序 YAML 中的规则, 参数取本次执行的参数快照. RuleError 原样上抛, 由 A1 按执行失败处理. 纯规则程序 (A5
     的 GEN-07, A6 的 REV-08, CSH-05, GEN-05) 登记它作执行, A6 的混合程序取规则部分也用它."""
-    return await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
+    async with execution_step("rules"):
+        return await deps.rules.run(ctx.engagement.id, ctx.template, ctx.run, ctx.run.params_snapshot)
 
 
 def rule_patch(ctx: RunContext, findings: object) -> StatePatch:
@@ -206,8 +208,10 @@ class ProcedureAgent[F](ABC):
     async def outcome(self, ctx: RunContext) -> AgentOutput:
         """编排节点调用的入口: 先 execute, 再 interpret; 原始发现是规则引擎的结果 (RuleResult) 时另交回其被测总体
         (需求 R324)."""
-        findings = await self.execute(ctx)
-        patch = await self.interpret(ctx, findings)
+        async with execution_step("execute"):
+            findings = await self.execute(ctx)
+        async with execution_step("results"):
+            patch = await self.interpret(ctx, findings)
         return AgentOutput(patch, findings.populations if isinstance(findings, RuleResult) else None)
 
     async def run(self, ctx: RunContext) -> StatePatch:

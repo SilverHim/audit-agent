@@ -383,7 +383,7 @@ async def test_rule_model_materiality_and_open_items() -> None:
         "整体重要性为 AUD 120,000.00，执行重要性为 AUD 90,000.00，明显微小错报临界值为 AUD 6,000.00。"
     )
     items = await rule_ask("有什么需要我处理的？")
-    assert items.startswith("需要你处理的事项共 1 项：")
+    assert items.startswith("待处理事项共 1 项：")
     assert JUDGMENT.id in items
 
 
@@ -393,7 +393,7 @@ async def test_rule_model_lists_data_requests_before_reviews() -> None:
     chat = make_chat(RuleChatModel(), deps, state=project_state("zh"))
     answer = (await chat.ask(EID, USER, q("有什么需要我处理的？"))).answer
     lines = answer.splitlines()
-    assert lines[0] == "需要你处理的事项共 3 项："
+    assert lines[0] == "待处理事项共 3 项："
     assert lines[1:3] == ["1. 补交总账分录（REV-08 要用）", "2. 补交审批日志（REV-08、CSH-05 要用）"]
     assert lines[3].startswith("3. 复核 REV-02")
 

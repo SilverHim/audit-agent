@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowUp, ChevronUp, LayoutList, Loader2 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
@@ -11,10 +11,12 @@ import {
 import type {
   ConciergeCitation,
   EngagementOverview,
+  EvidenceRequest,
   GateView,
   ReviewTaskView,
   XeroProfileCheck,
 } from '@/client/types.gen'
+import { AssistantActions } from '@/components/assistant-actions'
 import { Code, StatusPill } from '@/components/chrome'
 import {
   ConciergeMessage,
@@ -28,15 +30,19 @@ import {
 import { CorrectionCard } from '@/components/correction-card'
 import { DataRequestCard } from '@/components/data-requests'
 import { EvidenceLink } from '@/components/evidence-link'
+import { EvidenceRequests } from '@/components/evidence-requests'
+import { ExecutionPanel } from '@/components/execution-panel'
 import { GateDecisionCard, GateMaterial, useGate } from '@/components/gate-form'
 import { StaleNotice } from '@/components/rerun'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { WorkbenchStatus } from '@/components/workbench-status'
 import { WorkingLanguageSelect } from '@/components/working-language'
 import { WorkpaperLinks } from '@/components/workpaper-links'
 import { XeroProfileCard } from '@/components/xero-profile'
 import { type DataRequest, useDataRequests, useDataSummary } from '@/lib/data-api'
-import { decisionCardKey, decisionsDisabled } from '@/lib/engagement'
+import { decisionCardKey, decisionsDisabled, invalidateEngagement } from '@/lib/engagement'
 import { errorText, isApiCode } from '@/lib/errors'
+import { useEvidenceRequests } from '@/lib/evidence-api'
 import { useI18n } from '@/lib/i18n'
 import { formatMoney } from '@/lib/money'
 import { deferralKey, NotAvailable, streamConcierge, useDeferrals, useSetDeferral } from '@/lib/new-api'
@@ -45,7 +51,6 @@ import { manualInstructions, procedureName, type RankedTask, rankTasks, splitMan
 import {
   buildTimeline,
   earlierCursor,
-  newestTrailId,
   TIMELINE_KINDS,
   type TimelineItem,
   TRAIL_PAGE,
@@ -79,6 +84,7 @@ type Current =
   | { kind: 'xero'; key: string; check: XeroProfileCheck; deferred: boolean }
   // 等待客户更正 (总览 awaiting_correction, 需求 R163): 等更正时没有复核任务与闸门, 不能稍后处理
   | { kind: 'correction'; key: string; ids: string[]; deferred: false }
+  | { kind: 'evidence'; key: string; requests: EvidenceRequest[]; deferred: false }
   | { kind: 'task'; key: string; ranked: RankedTask; deferred: boolean }
   // 人工程序的任务: 不出决定卡, 只给去人工程序页执行的入口 (需求 R303)
   | { kind: 'manual'; key: string; view: ReviewTaskView; deferred: boolean }
@@ -96,6 +102,7 @@ type Turn = {
 function Workspace() {
   const { eid } = Route.useParams()
   const { focus } = Route.useSearch()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { t, lang } = useI18n()
   const overview = useEngagement(eid).data
@@ -116,11 +123,20 @@ function Workspace() {
   })
   const deferrals = useDeferrals(eid)
   const setDeferral = useSetDeferral(eid)
+  const evidenceRequests = useEvidenceRequests(eid)
   const requests = useDataRequests(eid)
   const summary = useDataSummary(eid)
   const [turns, setTurns] = useState<Turn[]>([])
   const bottom = useRef<HTMLDivElement>(null)
   const currentRef = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
+  useEffect(() => {
+    const onScroll = () => {
+      following.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 180
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
 
   const deferredKeys = useMemo(() => new Set((deferrals.data ?? []).map(deferralKey)), [deferrals.data])
   const [reviewViews, manualViews] = useMemo(() => splitManual(tasks.data ?? []), [tasks.data])
@@ -156,16 +172,26 @@ function Workspace() {
       const key = `task:${item.view.task.id}`
       list.push({ kind: 'task', key, ranked: item, deferred: deferredKeys.has(key) })
     }
+    const openEvidence = (evidenceRequests.data ?? []).filter((r) => r.status === 'open')
+    if (openEvidence.length) list.push({ kind: 'evidence', key: 'evidence', requests: openEvidence, deferred: false })
     // 人工程序的任务排在复核任务之后
     for (const view of manualViews) {
       const key = `task:${view.task.id}`
       list.push({ kind: 'manual', key, view, deferred: deferredKeys.has(key) })
     }
     return list
-  }, [overview, gate.data, ranked, manualViews, deferredKeys, requests.data, summary.data])
+  }, [overview, gate.data, ranked, manualViews, deferredKeys, requests.data, evidenceRequests.data, summary.data])
 
   // 相关查询都返回之后才确定当前事项 (后端 R152: 免得先闪过一条复核任务, 给审计师并没打开的任务记一次呈递)
-  const ready = workspaceReady(overview, { gate, tasks, exceptions, deferrals, requests, summary })
+  const ready = workspaceReady(overview, {
+    gate,
+    tasks,
+    exceptions,
+    deferrals,
+    requests,
+    summary,
+    evidence: evidenceRequests,
+  })
   const current = ready ? pickCurrent(candidates, focus) : null
   const deferredCount = candidates.filter((item) => item.deferred).length
 
@@ -176,25 +202,22 @@ function Workspace() {
   const localTrailIds = new Set(turns.flatMap((turn) => (turn.trailId ? [turn.trailId] : [])))
   const history = timeline.filter((item) => item.kind !== 'qa' || !localTrailIds.has(item.id))
 
-  // 当前事项变化或有新事件时把它的开头滚到顶部; 判断详情异步加载会往下撑高, 所以不滚到底.
-  // 看的是最新一条留痕 (本页刚问的问答除外), 点 "更早" 加在前面的不触发, 不把人从刚翻出的记录拉走
-  const newest = newestTrailId(trail.data?.pages ?? [], localTrailIds)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 当前事项或最新一条留痕变化时重新定位
+  // 显式选择事项才定位处理卡, 后台事件不打断阅读.
   useEffect(() => {
-    currentRef.current?.scrollIntoView({ block: 'start' })
-  }, [current?.key, newest])
+    if (focus) currentRef.current?.scrollIntoView({ block: 'start' })
+  }, [focus])
 
   // 有新问答或回答在输出时滚到底部
   const lastAnswer = turns.at(-1)?.answer.length ?? 0
   // biome-ignore lint/correctness/useExhaustiveDependencies: 问答变化时滚到底部
   useEffect(() => {
-    if (turns.length) bottom.current?.scrollIntoView({ block: 'end' })
+    if (turns.length && following.current) bottom.current?.scrollIntoView({ block: 'end' })
   }, [turns.length, lastAnswer])
 
   const disabled = decisionsDisabled(overview)
 
   const defer = (item: Current) => {
-    if (item.kind === 'correction') return // 等更正不能稍后处理
+    if (item.kind === 'correction' || item.kind === 'evidence') return // 等更正不能稍后处理
     const targets =
       item.kind === 'gate'
         ? [{ target_type: 'gate' as const, target_id: item.view.gate }]
@@ -218,6 +241,7 @@ function Workspace() {
   }
 
   const ask = async (question: string, quick?: 'where' | 'what') => {
+    following.current = true
     const id = crypto.randomUUID()
     const update = (patch: Partial<Turn> | ((turn: Turn) => Partial<Turn>)) =>
       setTurns((list) =>
@@ -231,6 +255,9 @@ function Workspace() {
         eid,
         { question, lang },
         {
+          onAction: () => {
+            void invalidateEngagement(queryClient, eid)
+          },
           onTool: (label) => update({ tool: label }),
           onDelta: (text) => update((turn) => ({ answer: turn.answer + text, tool: null })),
           onCitations: (citations) => update({ citations }),
@@ -246,13 +273,15 @@ function Workspace() {
           answer: error instanceof NotAvailable ? t.ask.failed : askFailure(error, t),
           status: 'failed',
         })
+    } finally {
+      void invalidateEngagement(queryClient, eid)
     }
   }
 
   const formView =
     current?.kind === 'gate'
       ? '/engagements/$eid/gate'
-      : current?.kind === 'xero'
+      : current?.kind === 'xero' || current?.kind === 'evidence'
         ? '/engagements/$eid/data'
         : current?.kind === 'correction'
           ? '/engagements/$eid/misstatements'
@@ -304,29 +333,95 @@ function Workspace() {
         </div>
       </header>
 
-      <div className="flex-1 px-4 pt-7 pb-2 sm:px-7">
-        <div className="mx-auto flex max-w-[780px] flex-col gap-5">
-          {trail.hasNextPage ? (
-            <div className="flex justify-center">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={trail.isFetchingNextPage}
-                onClick={() => void trail.fetchNextPage()}
-              >
-                {trail.isFetchingNextPage ? (
-                  <Loader2 className="animate-spin" aria-hidden="true" />
-                ) : (
-                  <ChevronUp aria-hidden="true" />
-                )}
-                {t.workspace.earlier}
-              </Button>
+      {overview ? (
+        <WorkbenchStatus
+          eid={eid}
+          overview={overview}
+          openEvidence={(evidenceRequests.data ?? []).filter((r) => r.status === 'open').length}
+        />
+      ) : null}
+      <div className="mx-auto grid w-full max-w-[1600px] flex-1 grid-cols-1 items-start gap-5 px-4 py-5 sm:px-7 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+        <div className="flex min-w-0 flex-col gap-5">
+          <ExecutionPanel eid={eid} overview={overview} />
+          <AssistantActions eid={eid} />
+          <details className="rounded-xl border bg-card p-4">
+            <summary className="cursor-pointer font-medium text-sm">{t.workbench.history}</summary>
+            <div className="mt-4 flex flex-col gap-5">
+              {trail.hasNextPage ? (
+                <div className="flex justify-center">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={trail.isFetchingNextPage}
+                    onClick={() => void trail.fetchNextPage()}
+                  >
+                    {trail.isFetchingNextPage ? (
+                      <Loader2 className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <ChevronUp aria-hidden="true" />
+                    )}
+                    {t.workspace.earlier}
+                  </Button>
+                </div>
+              ) : null}
+              {history.map((item) => (
+                <HistoryItem key={item.key} item={item} overview={overview} eid={eid} />
+              ))}
             </div>
-          ) : null}
-          {history.map((item) => (
-            <HistoryItem key={item.key} item={item} overview={overview} eid={eid} />
+          </details>
+          {turns.map((turn) => (
+            <div key={turn.id} className="flex flex-col gap-4">
+              <QuestionBubble>{turn.question}</QuestionBubble>
+              <ConciergeMessage>
+                {turn.status === 'streaming' && !turn.answer ? (
+                  <span className="inline-flex items-center gap-2 text-muted-foreground text-sm">
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    {turn.tool ? t.ask.looking(turn.tool) : t.ask.answering}
+                  </span>
+                ) : (
+                  <ConciergeText>{turn.answer}</ConciergeText>
+                )}
+                <Citations eid={eid} citations={turn.citations} />
+              </ConciergeMessage>
+            </div>
           ))}
-
+          <div ref={bottom} className="scroll-mb-36" />
+          <Composer onAsk={ask} busy={turns.some((turn) => turn.status === 'streaming')} eid={eid} />
+        </div>
+        <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4" aria-label={t.workbench.current}>
+          <div className="rounded-xl border bg-card p-4">
+            <h2 className="m-0 mb-3 font-semibold text-sm">
+              {t.workbench.queue} · {candidates.length}
+            </h2>
+            <div className="flex max-h-52 flex-col gap-1 overflow-y-auto">
+              {candidates.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  aria-pressed={current?.key === item.key}
+                  className={`rounded-lg px-3 py-2 text-left text-sm ${current?.key === item.key ? 'bg-accent text-primary' : 'hover:bg-muted'} ${item.deferred ? 'text-muted-foreground' : ''}`}
+                  onClick={() =>
+                    void navigate({ to: '/engagements/$eid', params: { eid }, search: { focus: item.key } })
+                  }
+                >
+                  {item.kind === 'gate'
+                    ? t.gates[item.view.gate]
+                    : item.kind === 'task'
+                      ? `${item.ranked.view.task.procedure_id} ${procedureName(t, item.ranked.view.task.procedure_id, item.ranked.view.procedure_name)}`
+                      : item.kind === 'manual'
+                        ? `${item.view.task.procedure_id} ${procedureName(t, item.view.task.procedure_id, item.view.procedure_name)}`
+                        : item.kind === 'evidence'
+                          ? t.evidenceRequests.title
+                          : item.kind === 'requests'
+                            ? t.workbench.kinds.data_request
+                            : item.kind === 'correction'
+                              ? t.correction.title
+                              : t.xeroProfile.item}
+                  {item.deferred ? ` · ${t.workbench.actions.defer}` : ''}
+                </button>
+              ))}
+            </div>
+          </div>
           <div ref={currentRef} className="flex scroll-mt-6 flex-col gap-5">
             <StaleNotice eid={eid} overview={overview} />
             <CurrentItem
@@ -345,28 +440,8 @@ function Workspace() {
               }}
             />
           </div>
-
-          {turns.map((turn) => (
-            <div key={turn.id} className="flex flex-col gap-4">
-              <QuestionBubble>{turn.question}</QuestionBubble>
-              <ConciergeMessage>
-                {turn.status === 'streaming' && !turn.answer ? (
-                  <span className="inline-flex items-center gap-2 text-muted-foreground text-sm">
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    {turn.tool ? t.ask.looking(turn.tool) : t.ask.answering}
-                  </span>
-                ) : (
-                  <ConciergeText>{turn.answer}</ConciergeText>
-                )}
-                <Citations eid={eid} citations={turn.citations} />
-              </ConciergeMessage>
-            </div>
-          ))}
-          <div ref={bottom} className="scroll-mb-36" />
-        </div>
+        </aside>
       </div>
-
-      <Composer onAsk={ask} busy={turns.some((turn) => turn.status === 'streaming')} eid={eid} />
     </div>
   )
 }
@@ -665,6 +740,8 @@ function CurrentItem({
     )
   }
 
+  if (current.kind === 'evidence') return <EvidenceRequests eid={eid} />
+
   if (current.kind === 'correction') {
     return (
       <div className="flex flex-col gap-4">
@@ -861,8 +938,9 @@ function Composer({
     onAsk(question)
   }
   return (
-    <div className="sticky bottom-0 border-t bg-background/95 px-4 pt-3 pb-5 backdrop-blur sm:px-7">
-      <div className="mx-auto flex max-w-[780px] flex-col gap-2.5">
+    <div className="rounded-xl border bg-card px-4 py-4">
+      <div className="mx-auto flex max-w-full flex-col gap-2.5">
+        <p className="m-0 text-muted-foreground text-xs">{t.workbench.hint}</p>
         <div className="flex flex-wrap gap-2">
           <button
             type="button"

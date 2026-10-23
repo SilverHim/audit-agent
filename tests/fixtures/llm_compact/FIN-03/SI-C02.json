@@ -1,0 +1,211 @@
+{
+  "conclusion": "Misstatement: Revenue (400) is overstated by AUD 12,345.67 (cutoff). It arose in the current period because revenue was recorded on 29 June 2026 even though the contract required physical delivery and signed customer acceptance, which occurred on 3 July 2026; the misstatement is factual because the amount and cutoff follow the recorded transaction and contract evidence. It is indicative of fraud because it relates to RISK-REV-CUT, a significant fraud risk concerning revenue cutoff, although the journal description openly notes that the goods were invoiced before customer acceptance.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-C02 was posted on 29 June 2026 for AUD 12,345.67, and the related journal line credited account 400 with that amount and described the goods as invoiced before customer acceptance.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-C02",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-C02",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-002-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-002-2",
+          "locator": "description",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The contract provides that control transfers upon physical delivery and signed customer acceptance.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-495ec125fa53",
+          "locator": "CON-C02-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The delivery note records shipment and customer signature on 3 July 2026.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C02",
+          "locator": "shipped_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C02",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "ASA450-A6 distinguishes factual misstatements, about which there is no doubt, from judgemental misstatements arising from unreasonable or inappropriate management judgements.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-A6",
+          "locator": "para A6",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The revenue cutoff error is factual: the recorded amount is established by the invoice and journal line, and the contract and delivery note establish that the contractual delivery and acceptance condition was met after year-end.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "evidence": []
+    },
+    {
+      "kind": "standard",
+      "text": "ASA240-P36 requires the auditor to evaluate whether an identified misstatement is indicative of fraud.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P36",
+          "locator": "para 36",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The misstatement is indicative of fraud because it concerns the significant fraud risk RISK-REV-CUT for revenue cutoff. The openly worded journal description is a counter-indication but does not remove the fraud-risk linkage.",
+      "from_steps": [
+        0,
+        5
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-C02",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-C02",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-002-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-002-2",
+      "locator": "description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "CON-C02-T1",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C02",
+      "locator": "shipped_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C02",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-A6",
+      "locator": "para A6",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P36",
+      "locator": "para 36",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A contemporaneous customer acceptance record showing that acceptance occurred on or before 30 June 2026, or evidence that RISK-REV-CUT did not apply to this transaction, would change the cutoff or fraud-indicator assessment.",
+  "proposed_action": "accept",
+  "verdict": null,
+  "misstatement_draft": null,
+  "self_confidence": 0.88,
+  "nature": {
+    "type": "factual",
+    "fraud_indicative": true,
+    "fraud_reason": "The identified cutoff misstatement relates to RISK-REV-CUT, a significant fraud risk for revenue cutoff. The journal description openly notes that the goods were invoiced before customer acceptance, but the stated risk linkage makes the misstatement indicative of fraud for evaluation purposes."
+  }
+}

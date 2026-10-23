@@ -1,0 +1,8 @@
+code,name,type,category
+100,Cash at bank,asset,cash
+120,Trade receivables,asset,receivables
+300,Share capital,equity,share_capital
+310,Retained earnings,equity,retained_earnings
+400,Sales revenue,revenue,revenue
+410,Interest income,revenue,other_income
+500,Operating expenses,expense,operating_expenses

@@ -1,0 +1,44 @@
+{
+  "counterparty": "Synthetic Customer 2",
+  "counterparty_abn": null,
+  "amount_cents": 1234567,
+  "sign_date": "2026-05-01",
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "counterparty",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "amount_cents",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "sign_date",
+      "page": 1,
+      "reliability": "external_copy"
+    }
+  ],
+  "terms": [
+    {
+      "term_type": "control_transfer",
+      "text": "Control transfers only upon physical delivery and signed customer acceptance.",
+      "page": 1
+    },
+    {
+      "term_type": "payment",
+      "text": "Payment is due 30 days after acceptance.",
+      "page": 1
+    }
+  ]
+}

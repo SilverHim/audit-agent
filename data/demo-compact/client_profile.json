@@ -1,0 +1,14 @@
+{
+  "id": "CLIENT-001",
+  "version": 1,
+  "legal_name": "Numbat Electronic Components Pty Ltd",
+  "abn": "68900042015",
+  "entity_type": "small_proprietary",
+  "industry_anzsic": "3494",
+  "listed": false,
+  "directors": [
+    "Jordan Avery",
+    "Priya Raman"
+  ],
+  "notes": "Fictitious company for demonstration. Wholesale distributor of electronic components to manufacturers and retailers in NSW and VIC. Financial year ends 30 June. Audit requested by shareholders."
+}

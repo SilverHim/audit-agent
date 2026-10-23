@@ -1,0 +1,15 @@
+period,account_code,balance_cents
+prior,100,10000000
+prior,120,0
+prior,300,-7000000
+prior,310,0
+prior,400,-4000000
+prior,410,0
+prior,500,1000000
+current,100,12635802
+current,120,1234567
+current,300,-7000000
+current,310,-3000000
+current,400,-4691356
+current,410,0
+current,500,820987

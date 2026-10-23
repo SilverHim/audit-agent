@@ -1,0 +1,133 @@
+{
+  "conclusion": "Not a misstatement: control passes at a point in time, only upon physical delivery and signed customer acceptance (CON-C02-T1). Payment is due 30 days after acceptance (CON-C02-T2); the supplied terms do not address return rights, rebates, bill-and-hold, consignment, guarantees or related-party arrangements.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "CON-C02-T1 states: “Control transfers only upon physical delivery and signed customer acceptance.”",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-495ec125fa53",
+          "locator": "CON-C02-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "CON-C02-T2 states: “Payment is due 30 days after acceptance.”",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-495ec125fa53",
+          "locator": "CON-C02-T2",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when or as the customer obtains control of the promised good or service.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised over time only if at least one of the criteria in paragraph 35 is met; otherwise, the performance obligation is satisfied at a point in time, considering indicators of control transfer including physical possession and customer acceptance.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        },
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "limitation",
+      "text": "The supplied contract terms do not address return rights, rebates, bill-and-hold, consignment, guarantees or related-party arrangements, so their presence or absence cannot be confirmed beyond the terms provided.",
+      "evidence": []
+    },
+    {
+      "kind": "inference",
+      "text": "The stated control-transfer event is physical delivery together with signed customer acceptance under CON-C02-T1, indicating a point-in-time transfer rather than a transfer over time. CON-C02-T2 sets the payment timing after acceptance; no other relevant terms are identified in the supplied terms.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "CON-C02-T1",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "CON-C02-T2",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A conflicting executed contract term or amendment stating that control passes before physical delivery and signed customer acceptance would overturn the identified transfer point.",
+  "proposed_action": "accept",
+  "verdict": "not_misstatement",
+  "misstatement_draft": null,
+  "self_confidence": 0.94
+}

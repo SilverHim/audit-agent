@@ -176,6 +176,7 @@ class GraphStateQuery:
         return EngagementOverview(
             engagement=engagement,
             client_name=profile.legal_name,
+            model_mode="mock" if self.deps.fixed_language is not None else "live",
             running=running,
             run_error=self.runner.run_error(eid) or await self._resume_hint(eid),
             current_gate=current_gate(snapshot.next, values),

@@ -1,0 +1,3 @@
+id,invoice_no,customer,customer_abn,contract_id,invoice_date,posting_date,amount_cents,journal_entry_id
+SI-C01,INV-C01,Synthetic Customer 1,,CON-C01,2026-06-10,2026-06-10,3456789,CJ-001-2
+SI-C02,INV-C02,Synthetic Customer 2,,CON-C02,2026-06-29,2026-06-29,1234567,CJ-002-2

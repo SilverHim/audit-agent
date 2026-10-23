@@ -1,0 +1,403 @@
+{
+  "conclusion": "Not a misstatement: CJ-005 records an administration expense of AUD 555.55 paid from Cash at bank, and the transaction amount and date are supported. The same-person approval and single-preparer flags are explained as a control exception; they do not indicate an amount error.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "CJ-005 debits Operating expenses (500) and credits Cash at bank (100) for AUD 555.55 on 18 June 2026, with the description “Approved administration expense” and source document EXP-C02.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "debit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "R04 flags that director-a created and approved the entry. The journal lines confirm the same person created and approved both lines; the linked record also says “Recorded and approved by director-a” and characterises this as a same-person approval control exception.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "created_by",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "approved_by",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-ffff49d78be0",
+          "locator": "“Recorded and approved by director-a. This is a genuine business cost supported by the attached invoice.”",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "R07 flags a single preparer. Both journal lines name director-a as creator, and the linked record confirms director-a recorded the transaction; the inputs explain the single-preparer flag.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-2",
+          "locator": "created_by",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-ffff49d78be0",
+          "locator": "“Recorded and approved by director-a.”",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The linked expense record identifies Numbat Electronic Components Pty Ltd, administration services of AUD 555.55, and supply and payment on 18 June 2026; it describes the cost as genuine and supported by an attached invoice.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "document",
+          "source_id": "DOC-ffff49d78be0",
+          "locator": "“Numbat Electronic Components Pty Ltd / CJ-005 / EXP-C02: administration services, AUD 555.55, supplied and paid 18 June 2026.”",
+          "page": 1,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "Bank transaction BT-C03 is dated 18 June 2026, references EXP-C02, and records an outflow of AUD 555.55. Its balance after the transaction is AUD 126,358.02, matching the current Cash at bank trial balance.",
+      "evidence": [
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-C03",
+          "locator": "amount_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-C03",
+          "locator": "txn_date",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-C03",
+          "locator": "reference",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "bank",
+          "source_type": "bank_transaction",
+          "source_id": "BT-C03",
+          "locator": "balance_after_cents",
+          "page": null,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "100",
+          "locator": "current_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "The entry is dated 18 June 2026 and has is_adjustment false. Its description and linked record relate to an administration service, not a revenue entry; the inputs do not establish whether it was manually entered. No related journal entries are listed as reversals, reposts or offsets.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "is_adjustment",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-005-1",
+          "locator": "description",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Management override is a significant fraud risk in all entities, so the approval exception warrants consideration but does not by itself establish that an entry is misstated.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P32",
+          "locator": "para 32",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "The auditor is required to test journal-entry appropriateness, including enquiries about unusual processing, selection of period-end entries and consideration of testing entries throughout the period.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-P33",
+          "locator": "para 33",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "Relevant journal-entry assessment factors include fraud risks, controls, supporting evidence, entry characteristics, account nature and complexity, and whether processing is outside the normal course of business.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA240-A44",
+          "locator": "para A44",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The expense document and the matching dated bank outflow support the recorded expense and cash payment for the same amount. R04 and R07 identify a lack of independent preparation and approval, which the document explains as a control exception; they do not show an unsupported or erroneous amount. RISK-REV-CUT and RISK-REV-OCC concern revenue recognition and delivery; CJ-005 records an expense and cash outflow, and the bank line supports the cash movement. The supplied related-entry information gives no indication that CJ-005 reverses, reposts or offsets another entry.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Not a misstatement: CJ-005 is appropriate and supported for the administration expense and payment recorded, and the rule findings are explained.",
+      "evidence": [],
+      "from_steps": [
+        9
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "debit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "created_by",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "approved_by",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-ffff49d78be0",
+      "locator": "“Recorded and approved by director-a. This is a genuine business cost supported by the attached invoice.”",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-2",
+      "locator": "created_by",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-ffff49d78be0",
+      "locator": "“Recorded and approved by director-a.”",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "document",
+      "source_id": "DOC-ffff49d78be0",
+      "locator": "“Numbat Electronic Components Pty Ltd / CJ-005 / EXP-C02: administration services, AUD 555.55, supplied and paid 18 June 2026.”",
+      "page": 1,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-C03",
+      "locator": "amount_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-C03",
+      "locator": "txn_date",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-C03",
+      "locator": "reference",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "bank",
+      "source_type": "bank_transaction",
+      "source_id": "BT-C03",
+      "locator": "balance_after_cents",
+      "page": null,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "100",
+      "locator": "current_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "is_adjustment",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-005-1",
+      "locator": "description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P32",
+      "locator": "para 32",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-P33",
+      "locator": "para 33",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA240-A44",
+      "locator": "para A44",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that the administration service was not supplied, or an external bank record showing the AUD 555.55 outflow was reversed or did not relate to EXP-C02, would overturn this conclusion.",
+  "proposed_action": "accept",
+  "verdict": "not_misstatement",
+  "misstatement_draft": null,
+  "self_confidence": 0.94
+}

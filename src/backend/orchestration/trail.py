@@ -165,9 +165,12 @@ def run_finished(eid: str, template: ProcedureTemplate, run: ProcedureRun, resul
     return entry.model_copy(update={"payload": payload})
 
 
-async def record_transitions(trail: AuditTrail, entries: Iterable[TrailEntry]) -> None:
+async def record_transitions(trail: AuditTrail, entries: Iterable[TrailEntry], *, independent: bool = True) -> None:
     """依次写入留痕, 同键已有的跳过. transition, run 与确认数据已齐的 data 留痕共用."""
     for entry in entries:
         assert entry.idempotency_key is not None  # 这里写的留痕一律带键
         if await trail.find_success(entry.engagement_id, entry.idempotency_key) is None:
-            await trail.record(entry)
+            if independent:
+                await trail.record(entry)
+            else:
+                await trail.record(entry, independent=False)

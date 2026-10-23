@@ -3,8 +3,8 @@
 import { type DefaultError, type InfiniteData, infiniteQueryOptions, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetCurrency, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditEvidenceRequest, evidenceEditRegistryExtract, evidenceEvidenceUnavailable, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListEvidenceRequests, evidenceListRegistryExtracts, evidenceListScopeLimitations, evidenceRegisterManagementRepresentation, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListProcedures, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, reviewsWithdrawReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe, workpapersAmendWorkpaper, workpapersConcludeWorkpaper, workpapersDownloadArchive, workpapersDownloadWorkpaper, workpapersGetWorkpaper, workpapersListWorkpapers, workpapersNoteWorkpaper, workpapersSignWorkpaper } from '../sdk.gen';
-import type { AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetCurrencyData, EngagementsSetCurrencyError, EngagementsSetCurrencyResponse, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditEvidenceRequestData, EvidenceEditEvidenceRequestError, EvidenceEditEvidenceRequestResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceEvidenceUnavailableData, EvidenceEvidenceUnavailableError, EvidenceEvidenceUnavailableResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListEvidenceRequestsData, EvidenceListEvidenceRequestsError, EvidenceListEvidenceRequestsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceListScopeLimitationsData, EvidenceListScopeLimitationsError, EvidenceListScopeLimitationsResponse, EvidenceRegisterManagementRepresentationData, EvidenceRegisterManagementRepresentationError, EvidenceRegisterManagementRepresentationResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListProceduresData, ReviewsListProceduresError, ReviewsListProceduresResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, ReviewsWithdrawReviewRecordData, ReviewsWithdrawReviewRecordError, ReviewsWithdrawReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse, WorkpapersAmendWorkpaperData, WorkpapersAmendWorkpaperError, WorkpapersAmendWorkpaperResponse, WorkpapersConcludeWorkpaperData, WorkpapersConcludeWorkpaperError, WorkpapersConcludeWorkpaperResponse, WorkpapersDownloadArchiveData, WorkpapersDownloadArchiveError, WorkpapersDownloadArchiveResponse, WorkpapersDownloadWorkpaperData, WorkpapersDownloadWorkpaperError, WorkpapersDownloadWorkpaperResponse, WorkpapersGetWorkpaperData, WorkpapersGetWorkpaperError, WorkpapersGetWorkpaperResponse, WorkpapersListWorkpapersData, WorkpapersListWorkpapersError, WorkpapersListWorkpapersResponse, WorkpapersNoteWorkpaperData, WorkpapersNoteWorkpaperError, WorkpapersNoteWorkpaperResponse, WorkpapersSignWorkpaperData, WorkpapersSignWorkpaperError, WorkpapersSignWorkpaperResponse } from '../types.gen';
+import { assistantActionsCancelAssistantAction, assistantActionsExecuteAssistantAction, assistantActionsListAssistantPlans, assistantActionsProposeAssistantAction, authLogin, authRegister, clientsAbnLookup, clientsCreateClient, clientsListClients, conversationAskConcierge, conversationListConversation, correctionsListAdjustmentEntries, correctionsSubmitCorrectionNotice, dataAccountHistory, dataChangeImportSheet, dataCommitImport, dataConfirmBatch, dataDataRequests, dataDemoImport, dataEditBatchItem, dataGetBatch, dataListBatches, dataMarkRequestUnavailable, dataReady, dataRetryBatch, dataSetAccountCategory, datasetsListDatasets, dataStartBatch, dataStartImport, dataSummary, dataTablePage, dataTableSchemas, dataXeroConnect, dataXeroDisconnect, dataXeroProfileCheck, dataXeroSync, dataXeroTenant, dataXeroTenants, deferralsListDeferrals, deferralsSetDeferral, engagementsCreateEngagement, engagementsGetClientProfile, engagementsGetEngagement, engagementsGetPlan, engagementsListEngagements, engagementsResumeEngagement, engagementsSetCurrency, engagementsSetWorkingLanguage, evidenceContractHistory, evidenceDocumentHistory, evidenceEditConfirmation, evidenceEditContract, evidenceEditEvidenceRequest, evidenceEditRegistryExtract, evidenceEvidenceUnavailable, evidenceGetEvidence, evidenceGetRecord, evidenceListConfirmations, evidenceListContracts, evidenceListDocuments, evidenceListEvidenceRequests, evidenceListRegistryExtracts, evidenceListScopeLimitations, evidenceRegisterManagementRepresentation, evidenceRegistryExtractHistory, evidenceSetDocumentDetails, evidenceSetDocumentType, evidenceUploadDocuments, executionStreamExecution, gatesGetGate, gatesSubmitGateDecision, gatesUpdateClientProfile, healthHealth, integrationsXeroCallback, manualListManualTasks, type Options, reportsGetMisstatements, reportsGetReports, reportsGetTrail, reportsListTrail, reviewsGetJudgment, reviewsGetProcedure, reviewsListExceptions, reviewsListProcedures, reviewsListReviewTasks, reviewsPresentReviewTask, reviewsRerunProcedures, reviewsSubmitReviewRecord, reviewsWithdrawReviewRecord, settingsGetLlmSettings, settingsTestLlmSlot, settingsUpdateLlmSlot, standardsGetStandard, usersMe, workpapersAmendWorkpaper, workpapersConcludeWorkpaper, workpapersDownloadArchive, workpapersDownloadWorkpaper, workpapersGetWorkpaper, workpapersListWorkpapers, workpapersNoteWorkpaper, workpapersSignWorkpaper } from '../sdk.gen';
+import type { AssistantActionsCancelAssistantActionData, AssistantActionsCancelAssistantActionError, AssistantActionsCancelAssistantActionResponse, AssistantActionsExecuteAssistantActionData, AssistantActionsExecuteAssistantActionError, AssistantActionsExecuteAssistantActionResponse, AssistantActionsListAssistantPlansData, AssistantActionsListAssistantPlansError, AssistantActionsListAssistantPlansResponse, AssistantActionsProposeAssistantActionData, AssistantActionsProposeAssistantActionError, AssistantActionsProposeAssistantActionResponse, AuthLoginData, AuthLoginError, AuthLoginResponse, AuthRegisterData, AuthRegisterError, AuthRegisterResponse, ClientsAbnLookupData, ClientsAbnLookupError, ClientsAbnLookupResponse, ClientsCreateClientData, ClientsCreateClientError, ClientsCreateClientResponse, ClientsListClientsData, ClientsListClientsResponse, ConversationAskConciergeData, ConversationAskConciergeError, ConversationAskConciergeResponse, ConversationListConversationData, ConversationListConversationError, ConversationListConversationResponse, CorrectionsListAdjustmentEntriesData, CorrectionsListAdjustmentEntriesError, CorrectionsListAdjustmentEntriesResponse, CorrectionsSubmitCorrectionNoticeData, CorrectionsSubmitCorrectionNoticeError, CorrectionsSubmitCorrectionNoticeResponse, DataAccountHistoryData, DataAccountHistoryError, DataAccountHistoryResponse, DataChangeImportSheetData, DataChangeImportSheetError, DataChangeImportSheetResponse, DataCommitImportData, DataCommitImportError, DataCommitImportResponse, DataConfirmBatchData, DataConfirmBatchError, DataConfirmBatchResponse, DataDataRequestsData, DataDataRequestsError, DataDataRequestsResponse, DataDemoImportData, DataDemoImportError, DataDemoImportResponse, DataEditBatchItemData, DataEditBatchItemError, DataEditBatchItemResponse, DataGetBatchData, DataGetBatchError, DataGetBatchResponse, DataListBatchesData, DataListBatchesError, DataListBatchesResponse, DataMarkRequestUnavailableData, DataMarkRequestUnavailableError, DataMarkRequestUnavailableResponse, DataReadyData, DataReadyError, DataReadyResponse, DataRetryBatchData, DataRetryBatchError, DataRetryBatchResponse, DataSetAccountCategoryData, DataSetAccountCategoryError, DataSetAccountCategoryResponse, DatasetsListDatasetsData, DatasetsListDatasetsResponse, DataStartBatchData, DataStartBatchError, DataStartBatchResponse, DataStartImportData, DataStartImportError, DataStartImportResponse, DataSummaryData, DataSummaryError, DataSummaryResponse, DataTablePageData, DataTablePageError, DataTablePageResponse, DataTableSchemasData, DataTableSchemasResponse, DataXeroConnectData, DataXeroConnectError, DataXeroConnectResponse, DataXeroDisconnectData, DataXeroDisconnectError, DataXeroDisconnectResponse, DataXeroProfileCheckData, DataXeroProfileCheckError, DataXeroProfileCheckResponse, DataXeroSyncData, DataXeroSyncError, DataXeroSyncResponse, DataXeroTenantData, DataXeroTenantError, DataXeroTenantResponse, DataXeroTenantsData, DataXeroTenantsError, DataXeroTenantsResponse, DeferralsListDeferralsData, DeferralsListDeferralsError, DeferralsListDeferralsResponse, DeferralsSetDeferralData, DeferralsSetDeferralError, DeferralsSetDeferralResponse, EngagementsCreateEngagementData, EngagementsCreateEngagementError, EngagementsCreateEngagementResponse, EngagementsGetClientProfileData, EngagementsGetClientProfileError, EngagementsGetClientProfileResponse, EngagementsGetEngagementData, EngagementsGetEngagementError, EngagementsGetEngagementResponse, EngagementsGetPlanData, EngagementsGetPlanError, EngagementsGetPlanResponse, EngagementsListEngagementsData, EngagementsListEngagementsResponse, EngagementsResumeEngagementData, EngagementsResumeEngagementError, EngagementsSetCurrencyData, EngagementsSetCurrencyError, EngagementsSetCurrencyResponse, EngagementsSetWorkingLanguageData, EngagementsSetWorkingLanguageError, EngagementsSetWorkingLanguageResponse, EvidenceContractHistoryData, EvidenceContractHistoryError, EvidenceContractHistoryResponse, EvidenceDocumentHistoryData, EvidenceDocumentHistoryError, EvidenceDocumentHistoryResponse, EvidenceEditConfirmationData, EvidenceEditConfirmationError, EvidenceEditConfirmationResponse, EvidenceEditContractData, EvidenceEditContractError, EvidenceEditContractResponse, EvidenceEditEvidenceRequestData, EvidenceEditEvidenceRequestError, EvidenceEditEvidenceRequestResponse, EvidenceEditRegistryExtractData, EvidenceEditRegistryExtractError, EvidenceEditRegistryExtractResponse, EvidenceEvidenceUnavailableData, EvidenceEvidenceUnavailableError, EvidenceEvidenceUnavailableResponse, EvidenceGetEvidenceData, EvidenceGetEvidenceError, EvidenceGetEvidenceResponse, EvidenceGetRecordData, EvidenceGetRecordError, EvidenceGetRecordResponse, EvidenceListConfirmationsData, EvidenceListConfirmationsError, EvidenceListConfirmationsResponse, EvidenceListContractsData, EvidenceListContractsError, EvidenceListContractsResponse, EvidenceListDocumentsData, EvidenceListDocumentsError, EvidenceListDocumentsResponse, EvidenceListEvidenceRequestsData, EvidenceListEvidenceRequestsError, EvidenceListEvidenceRequestsResponse, EvidenceListRegistryExtractsData, EvidenceListRegistryExtractsError, EvidenceListRegistryExtractsResponse, EvidenceListScopeLimitationsData, EvidenceListScopeLimitationsError, EvidenceListScopeLimitationsResponse, EvidenceRegisterManagementRepresentationData, EvidenceRegisterManagementRepresentationError, EvidenceRegisterManagementRepresentationResponse, EvidenceRegistryExtractHistoryData, EvidenceRegistryExtractHistoryError, EvidenceRegistryExtractHistoryResponse, EvidenceSetDocumentDetailsData, EvidenceSetDocumentDetailsError, EvidenceSetDocumentDetailsResponse, EvidenceSetDocumentTypeData, EvidenceSetDocumentTypeError, EvidenceSetDocumentTypeResponse, EvidenceUploadDocumentsData, EvidenceUploadDocumentsError, EvidenceUploadDocumentsResponse, ExecutionStreamExecutionData, ExecutionStreamExecutionError, GatesGetGateData, GatesGetGateError, GatesGetGateResponse, GatesSubmitGateDecisionData, GatesSubmitGateDecisionError, GatesSubmitGateDecisionResponse, GatesUpdateClientProfileData, GatesUpdateClientProfileError, HealthHealthData, HealthHealthResponse, IntegrationsXeroCallbackData, IntegrationsXeroCallbackError, ManualListManualTasksData, ManualListManualTasksError, ManualListManualTasksResponse, ReportsGetMisstatementsData, ReportsGetMisstatementsError, ReportsGetMisstatementsResponse, ReportsGetReportsData, ReportsGetReportsError, ReportsGetReportsResponse, ReportsGetTrailData, ReportsGetTrailError, ReportsGetTrailResponse, ReportsListTrailData, ReportsListTrailError, ReportsListTrailResponse, ReviewsGetJudgmentData, ReviewsGetJudgmentError, ReviewsGetJudgmentResponse, ReviewsGetProcedureData, ReviewsGetProcedureError, ReviewsGetProcedureResponse, ReviewsListExceptionsData, ReviewsListExceptionsError, ReviewsListExceptionsResponse, ReviewsListProceduresData, ReviewsListProceduresError, ReviewsListProceduresResponse, ReviewsListReviewTasksData, ReviewsListReviewTasksError, ReviewsListReviewTasksResponse, ReviewsPresentReviewTaskData, ReviewsPresentReviewTaskError, ReviewsPresentReviewTaskResponse, ReviewsRerunProceduresData, ReviewsRerunProceduresError, ReviewsRerunProceduresResponse, ReviewsSubmitReviewRecordData, ReviewsSubmitReviewRecordError, ReviewsSubmitReviewRecordResponse, ReviewsWithdrawReviewRecordData, ReviewsWithdrawReviewRecordError, ReviewsWithdrawReviewRecordResponse, SettingsGetLlmSettingsData, SettingsGetLlmSettingsResponse, SettingsTestLlmSlotData, SettingsTestLlmSlotError, SettingsTestLlmSlotResponse, SettingsUpdateLlmSlotData, SettingsUpdateLlmSlotError, SettingsUpdateLlmSlotResponse, StandardsGetStandardData, StandardsGetStandardError, StandardsGetStandardResponse, UsersMeData, UsersMeResponse, WorkpapersAmendWorkpaperData, WorkpapersAmendWorkpaperError, WorkpapersAmendWorkpaperResponse, WorkpapersConcludeWorkpaperData, WorkpapersConcludeWorkpaperError, WorkpapersConcludeWorkpaperResponse, WorkpapersDownloadArchiveData, WorkpapersDownloadArchiveError, WorkpapersDownloadArchiveResponse, WorkpapersDownloadWorkpaperData, WorkpapersDownloadWorkpaperError, WorkpapersDownloadWorkpaperResponse, WorkpapersGetWorkpaperData, WorkpapersGetWorkpaperError, WorkpapersGetWorkpaperResponse, WorkpapersListWorkpapersData, WorkpapersListWorkpapersError, WorkpapersListWorkpapersResponse, WorkpapersNoteWorkpaperData, WorkpapersNoteWorkpaperError, WorkpapersNoteWorkpaperResponse, WorkpapersSignWorkpaperData, WorkpapersSignWorkpaperError, WorkpapersSignWorkpaperResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -56,6 +56,75 @@ export const healthHealthOptions = (options?: Options<HealthHealthData>) => quer
     },
     queryKey: healthHealthQueryKey(options)
 });
+
+export const assistantActionsListAssistantPlansQueryKey = (options: Options<AssistantActionsListAssistantPlansData>) => createQueryKey('assistantActionsListAssistantPlans', options);
+
+/**
+ * List Assistant Plans
+ */
+export const assistantActionsListAssistantPlansOptions = (options: Options<AssistantActionsListAssistantPlansData>) => queryOptions<AssistantActionsListAssistantPlansResponse, AssistantActionsListAssistantPlansError, AssistantActionsListAssistantPlansResponse, ReturnType<typeof assistantActionsListAssistantPlansQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await assistantActionsListAssistantPlans({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: assistantActionsListAssistantPlansQueryKey(options)
+});
+
+/**
+ * Propose Assistant Action
+ */
+export const assistantActionsProposeAssistantActionMutation = (options?: Partial<Options<AssistantActionsProposeAssistantActionData>>): UseMutationOptions<AssistantActionsProposeAssistantActionResponse, AssistantActionsProposeAssistantActionError, Options<AssistantActionsProposeAssistantActionData>> => {
+    const mutationOptions: UseMutationOptions<AssistantActionsProposeAssistantActionResponse, AssistantActionsProposeAssistantActionError, Options<AssistantActionsProposeAssistantActionData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await assistantActionsProposeAssistantAction({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Execute Assistant Action
+ */
+export const assistantActionsExecuteAssistantActionMutation = (options?: Partial<Options<AssistantActionsExecuteAssistantActionData>>): UseMutationOptions<AssistantActionsExecuteAssistantActionResponse, AssistantActionsExecuteAssistantActionError, Options<AssistantActionsExecuteAssistantActionData>> => {
+    const mutationOptions: UseMutationOptions<AssistantActionsExecuteAssistantActionResponse, AssistantActionsExecuteAssistantActionError, Options<AssistantActionsExecuteAssistantActionData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await assistantActionsExecuteAssistantAction({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
+/**
+ * Cancel Assistant Action
+ */
+export const assistantActionsCancelAssistantActionMutation = (options?: Partial<Options<AssistantActionsCancelAssistantActionData>>): UseMutationOptions<AssistantActionsCancelAssistantActionResponse, AssistantActionsCancelAssistantActionError, Options<AssistantActionsCancelAssistantActionData>> => {
+    const mutationOptions: UseMutationOptions<AssistantActionsCancelAssistantActionResponse, AssistantActionsCancelAssistantActionError, Options<AssistantActionsCancelAssistantActionData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await assistantActionsCancelAssistantAction({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 /**
  * Login
@@ -1126,6 +1195,87 @@ export const evidenceRegisterManagementRepresentationMutation = (options?: Parti
     return mutationOptions;
 };
 
+export const executionStreamExecutionQueryKey = (options: Options<ExecutionStreamExecutionData>) => createQueryKey('executionStreamExecution', options);
+
+/**
+ * Stream Execution
+ *
+ * SSE execution 事件含 TrailEntry, id 为留痕 ID; 首次回放最近 100 条, 每 10 秒发送心跳.
+ */
+export const executionStreamExecutionOptions = (options: Options<ExecutionStreamExecutionData>) => queryOptions<unknown, ExecutionStreamExecutionError, unknown, ReturnType<typeof executionStreamExecutionQueryKey>>({
+    queryFn: async ({ queryKey, signal }) => {
+        const { data } = await executionStreamExecution({
+            ...options,
+            ...queryKey[0],
+            signal,
+            throwOnError: true
+        });
+        return data;
+    },
+    queryKey: executionStreamExecutionQueryKey(options)
+});
+
+const createInfiniteParams = <K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>>(queryKey: QueryKey<Options>, page: K) => {
+    const params = { ...queryKey[0] };
+    if (page.body) {
+        params.body = {
+            ...queryKey[0].body as any,
+            ...page.body as any
+        };
+    }
+    if (page.headers) {
+        params.headers = {
+            ...queryKey[0].headers,
+            ...page.headers
+        };
+    }
+    if (page.path) {
+        params.path = {
+            ...queryKey[0].path as any,
+            ...page.path as any
+        };
+    }
+    if (page.query) {
+        params.query = {
+            ...queryKey[0].query as any,
+            ...page.query as any
+        };
+    }
+    return params as unknown as typeof page;
+};
+
+export const executionStreamExecutionInfiniteQueryKey = (options: Options<ExecutionStreamExecutionData>): QueryKey<Options<ExecutionStreamExecutionData>> => createQueryKey('executionStreamExecution', options, true);
+
+/**
+ * Stream Execution
+ *
+ * SSE execution 事件含 TrailEntry, id 为留痕 ID; 首次回放最近 100 条, 每 10 秒发送心跳.
+ */
+export const executionStreamExecutionInfiniteOptions = (options: Options<ExecutionStreamExecutionData>) => {
+    const opts = infiniteQueryOptions<unknown, ExecutionStreamExecutionError, InfiniteData<unknown>, QueryKey<Options<ExecutionStreamExecutionData>>, string | null | Pick<QueryKey<Options<ExecutionStreamExecutionData>>[0], 'body' | 'headers' | 'path' | 'query'>>(
+    // @ts-ignore
+    {
+        queryFn: async ({ pageParam, queryKey, signal }) => {
+            // @ts-ignore
+            const page: Pick<QueryKey<Options<ExecutionStreamExecutionData>>[0], 'body' | 'headers' | 'path' | 'query'> = typeof pageParam === 'object' ? pageParam : {
+                query: {
+                    after: pageParam
+                }
+            };
+            const params = createInfiniteParams(queryKey, page);
+            const { data } = await executionStreamExecution({
+                ...options,
+                ...params,
+                signal,
+                throwOnError: true
+            });
+            return data;
+        },
+        queryKey: executionStreamExecutionInfiniteQueryKey(options)
+    });
+    return opts as Omit<typeof opts, 'initialData'>;
+};
+
 /**
  * Start Import
  *
@@ -1354,35 +1504,6 @@ export const dataTablePageOptions = (options: Options<DataTablePageData>) => que
     },
     queryKey: dataTablePageQueryKey(options)
 });
-
-const createInfiniteParams = <K extends Pick<QueryKey<Options>[0], 'body' | 'headers' | 'path' | 'query'>>(queryKey: QueryKey<Options>, page: K) => {
-    const params = { ...queryKey[0] };
-    if (page.body) {
-        params.body = {
-            ...queryKey[0].body as any,
-            ...page.body as any
-        };
-    }
-    if (page.headers) {
-        params.headers = {
-            ...queryKey[0].headers,
-            ...page.headers
-        };
-    }
-    if (page.path) {
-        params.path = {
-            ...queryKey[0].path as any,
-            ...page.path as any
-        };
-    }
-    if (page.query) {
-        params.query = {
-            ...queryKey[0].query as any,
-            ...page.query as any
-        };
-    }
-    return params as unknown as typeof page;
-};
 
 export const dataTablePageInfiniteQueryKey = (options: Options<DataTablePageData>): QueryKey<Options<DataTablePageData>> => createQueryKey('dataTablePage', options, true);
 

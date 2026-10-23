@@ -4358,6 +4358,9 @@ async def api_client(
     app.state.runner = runner
     app.state.query = GraphStateQuery(runner.app, runner.deps, runner)
     app.state.decisions = GraphDecisionSubmit(runner.app, runner.deps, runner)
+    from backend.services.assistant_actions import AssistantActions
+
+    app.state.assistant_actions = AssistantActions(runner.deps, app.state.decisions)
     if xero is None:  # Xero 应用与主密钥一律置空, 不用开发者 .env 里的值 (connect 报 XERO_NOT_CONFIGURED)
         blank = get_settings().model_copy(
             update={"XERO_CLIENT_ID": "", "XERO_CLIENT_SECRET": "", "SETTINGS_SECRET_KEY": ""}

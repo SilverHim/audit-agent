@@ -22,7 +22,7 @@ import csv
 import hashlib
 import json
 from collections import Counter
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -102,6 +102,11 @@ class DemoSource(SupplementLoader, Protocol):
 def plan(loader: SupplementLoader, dataset: str) -> DemoPlan:
     """数据集的演示导入清单, 不连库. 先核对补造目录 (loader.supplement, 不符抛 SupplementMismatch); 没有补造目录抛
     FileNotFoundError. 清单内容不合规 (类型或登记途径不认识, index.csv 与 manifest 不符) 抛 ValueError, 见 uploads."""
+    compact: Callable[[str], DemoPlan | None] | None = getattr(loader, "demo_plan", None)
+    if compact is not None:
+        prepared = compact(dataset)
+        if prepared is not None:
+            return prepared
     found = loader.supplement(dataset)
     if found is None:
         raise FileNotFoundError(f"{dataset} 没有补造目录")

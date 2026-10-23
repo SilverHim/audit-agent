@@ -82,6 +82,7 @@ from backend.orchestration.trail import (
 from backend.orchestration.waits import correction_payload, data_payload, human_payload, inputs_payload, review_payload
 from backend.services.autonomy_policy import AutonomyDecision, assembly_level
 from backend.services.data_quality import request_id
+from backend.services.execution import execution_scope
 from backend.services.features import AUTONOMY, COLLAB, MISSTATEMENT, PLANNING
 from backend.services.procedure_library import ProcedureLibrary, highest_risk, manual_program, run_params
 from backend.services.review_queue import RERUNNABLE, ReviewQueue
@@ -700,7 +701,8 @@ class GraphNodes:
             ctx = RunContext(
                 engagement=engagement, procedure=procedure, template=template, run=procedure_run, state=state
             )
-            patch, writer, populations = await self.run_agent(agent, ctx)
+            with execution_scope(self.deps.trail, engagement.id, procedure_id, procedure_run.id, template.owner):
+                patch, writer, populations = await self.run_agent(agent, ctx)
             ended = next(r for r in patch["procedure_runs"] if r.id == procedure_run.id)
             population = run_population(template, ended, populations)
         else:
@@ -946,7 +948,7 @@ class GraphNodes:
         的结果相同); rerun 决定仍须按轮次交回 (read_rerun 只收针对本轮的)."""
         store = self.deps.output_store
         tasks = await store.latest(eid, ReviewTask, procedure_id=procedure_id)
-        if any(t.status is TaskStatus.pending for t in tasks):
+        if any(t.status in {TaskStatus.pending, TaskStatus.awaiting_evidence} for t in tasks):
             return True
         task_ids = {t.id for t in tasks}
         return any(r.task_id in task_ids and r.id not in read for r in await store.latest(eid, ReviewRecord))
@@ -1098,7 +1100,20 @@ class GraphNodes:
                 # 错报, 需求 R347): 本轮其余可重跑任务的 rerun 只重跑组内其余对象 (见 read_rerun), 同 DecisionSubmit
                 # 关闭整组时只取待决的
                 failed.pop(task.id, None)
-                merge_patch(result, await self.read_review(eid, procedure_id))
+                readback = await self.read_review(eid, procedure_id)
+                merge_patch(result, readback)
+                # 授权批次同事务提交多个普通决定. 整体读回的当前执行普通决定均已消费,
+                # 不应为第二项再次 interrupt; 人工结果与 rerun 仍须逐项整理或重跑.
+                normal_tasks = {
+                    t.id for t in readback.get("review_tasks", []) if t.kind is TaskKind.normal and t.run_id == run_id
+                }
+                delivered.extend(
+                    r.id
+                    for r in readback.get("review_records", [])
+                    if r.task_id in normal_tasks
+                    and r.decision in {Decision.confirm, Decision.misstatement}
+                    and r.id not in delivered
+                )
                 if task.kind is TaskKind.manual:  # 人工程序: owner 把结果整理成领域对象 (需求 R93)
                     # 只并入派发的执行记录与任务 (整理出的对象可引用它们), 不并入重放按 outputs 取回的对象: 写 Store
                     # 后被杀再重放时, 那里已有 collect 自己上次写的, owner 看到它们会算出不同的结果

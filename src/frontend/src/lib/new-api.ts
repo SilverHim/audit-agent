@@ -141,6 +141,7 @@ type StreamHandlers = {
   onDelta: (text: string) => void
   onCitations: (citations: ConciergeCitation[]) => void
   onTool?: (label: string) => void
+  onAction?: () => void
 }
 
 // 事件流: tool (正在查什么, 可多次), delta (多次), citations, done; 出错时 error. EventSource 不能带登录令牌, 用 fetch 读
@@ -184,7 +185,8 @@ export async function streamConcierge(
         else if (line.startsWith('data:')) data.push(line.slice(5).trimStart())
       }
       const payload: unknown = data.length ? JSON.parse(data.join('\n')) : null
-      if (event === 'tool') handlers.onTool?.((payload as { label: string }).label)
+      if (event === 'action') handlers.onAction?.()
+      else if (event === 'tool') handlers.onTool?.((payload as { label: string }).label)
       else if (event === 'delta') handlers.onDelta((payload as { text: string }).text)
       else if (event === 'citations') handlers.onCitations((payload as { citations: ConciergeCitation[] }).citations)
       else if (event === 'done') trailId = (payload as { trail_id?: string }).trail_id ?? null

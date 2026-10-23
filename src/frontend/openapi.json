@@ -30,6 +30,227 @@
         }
       }
     },
+    "/api/v1/engagements/{eid}/assistant-actions": {
+      "get": {
+        "tags": [
+          "assistant_actions"
+        ],
+        "summary": "List Assistant Plans",
+        "operationId": "assistant_actions-list_assistant_plans",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssistantPlan"
+                  },
+                  "title": "Response Assistant Actions-List Assistant Plans"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "assistant_actions"
+        ],
+        "summary": "Propose Assistant Action",
+        "operationId": "assistant_actions-propose_assistant_action",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantPlanIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantPlan"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/assistant-actions/{plan_id}/execute": {
+      "post": {
+        "tags": [
+          "assistant_actions"
+        ],
+        "summary": "Execute Assistant Action",
+        "operationId": "assistant_actions-execute_assistant_action",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantExecuteIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantReceipt"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/assistant-actions/{plan_id}/cancel": {
+      "post": {
+        "tags": [
+          "assistant_actions"
+        ],
+        "summary": "Cancel Assistant Action",
+        "operationId": "assistant_actions-cancel_assistant_action",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plan_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plan Id"
+            }
+          },
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -2965,6 +3186,79 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engagements/{eid}/execution/stream": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Stream Execution",
+        "description": "SSE execution 事件含 TrailEntry, id 为留痕 ID; 首次回放最近 100 条, 每 10 秒发送心跳.",
+        "operationId": "execution-stream_execution",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "eid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Eid"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
+          {
+            "name": "last-event-id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -6385,6 +6679,312 @@
         ],
         "title": "Assertion",
         "description": "审计认定."
+      },
+      "AssistantExecuteIn": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AssistantExecuteIn"
+      },
+      "AssistantPlan": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "evidence_unavailable",
+              "defer",
+              "resume",
+              "confirm_reviews",
+              "recognize_misstatements",
+              "rerun_stale"
+            ],
+            "title": "Action"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/AssistantTarget"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Targets"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "instruction": {
+            "type": "string",
+            "title": "Instruction"
+          },
+          "proposed_for": {
+            "type": "string",
+            "title": "Proposed For"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "completed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "default": "proposed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "targets",
+          "instruction",
+          "proposed_for",
+          "created_at"
+        ],
+        "title": "AssistantPlan"
+      },
+      "AssistantPlanIn": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "evidence_unavailable",
+              "defer",
+              "resume",
+              "confirm_reviews",
+              "recognize_misstatements",
+              "rerun_stale"
+            ],
+            "title": "Action"
+          },
+          "target_kind": {
+            "type": "string",
+            "enum": [
+              "evidence_request",
+              "review_task",
+              "data_request",
+              "procedure"
+            ],
+            "title": "Target Kind",
+            "default": "evidence_request"
+          },
+          "target_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Target Ids"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "title": "AssistantPlanIn"
+      },
+      "AssistantReceipt": {
+        "properties": {
+          "plan_id": {
+            "type": "string",
+            "title": "Plan Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "evidence_unavailable",
+              "defer",
+              "resume",
+              "confirm_reviews",
+              "recognize_misstatements",
+              "rerun_stale"
+            ],
+            "title": "Action"
+          },
+          "target_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Target Ids"
+          },
+          "authorized_by": {
+            "type": "string",
+            "title": "Authorized By"
+          },
+          "executed_by": {
+            "type": "string",
+            "const": "audit_assistant",
+            "title": "Executed By",
+            "default": "audit_assistant"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "status": {
+            "type": "string",
+            "const": "completed",
+            "title": "Status",
+            "default": "completed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "plan_id",
+          "action",
+          "target_ids",
+          "authorized_by",
+          "completed_at"
+        ],
+        "title": "AssistantReceipt"
+      },
+      "AssistantTarget": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "evidence_request",
+              "review_task",
+              "data_request",
+              "procedure"
+            ],
+            "title": "Kind"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "conclusion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conclusion"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion"
+          },
+          "procedure_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedure Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "id",
+          "fingerprint",
+          "label"
+        ],
+        "title": "AssistantTarget"
       },
       "AuditException": {
         "properties": {
@@ -10457,6 +11057,15 @@
           "client_name": {
             "type": "string",
             "title": "Client Name"
+          },
+          "model_mode": {
+            "type": "string",
+            "enum": [
+              "mock",
+              "live"
+            ],
+            "title": "Model Mode",
+            "default": "mock"
           },
           "running": {
             "type": "boolean",
@@ -17428,6 +18037,8 @@
           "data",
           "presentation",
           "archive",
+          "assistant_action",
+          "execution",
           "run"
         ],
         "title": "TrailKind",

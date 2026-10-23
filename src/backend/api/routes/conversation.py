@@ -1,7 +1,8 @@
 """审计助理对话: GET, POST /engagements/{eid}/conversation 与 POST .../conversation/stream.
 
-只读问答 (规格书 5.2 节, UC-08): 回答不写任何判断字段, 不改流程状态. 已锁定 (归档) 的项目照样能问.
-流式接口返回 text/event-stream: delta (多条), tool (可选, 正在查什么), citations, done; 出错为 error.
+查询与操作提案; 明确的批量无法取得指令可授权服务端执行, 其他操作先生成方案. 归档项目可查询, 不接受操作.
+流式接口返回 text/event-stream: delta (多条), tool (可选, 正在查什么), action (操作方案或回执), citations, done;
+出错为 error.
 项目不存在 404, 问题超长或为空 422, 正在回答上一个问题 409 CONVERSATION_BUSY, 都在开始输出之前返回.
 """
 

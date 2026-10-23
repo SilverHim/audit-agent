@@ -195,7 +195,7 @@ def test_new_enum_values() -> None:
     ]
     assert [k.value for k in TaskKind] == ["normal", "unattributed", "failed", "dispute", "manual"]
     assert [c.value for c in CriticTrigger] == ["main", "internal_copy", "assumption", "unsupported", "sample"]
-    assert [k.value for k in TrailKind][-3:] == ["presentation", "archive", "run"]
+    assert [k.value for k in TrailKind][-5:] == ["presentation", "archive", "assistant_action", "execution", "run"]
     assert [s.value for s in ProcedureStatus] == [
         "planned",
         "executing",

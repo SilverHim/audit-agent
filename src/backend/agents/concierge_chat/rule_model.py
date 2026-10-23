@@ -87,7 +87,7 @@ def progress(data: dict[str, Any], lang: Lang) -> str:
     if lang == "zh":
         text = f"项目目前处于{phase}阶段，{done}/{total} 个审计程序已完成，{pending} 项复核任务待处理。"
         if gate:
-            text += f"流程停在{GATES.get(gate, {'zh': gate})['zh']}，等你作出决定。"
+            text += f"流程停在{GATES.get(gate, {'zh': gate})['zh']}，等待审计人员作出决定。"
         if data.get("running"):
             text += "后台正在执行审计程序。"
         return text
@@ -134,8 +134,8 @@ def materiality(data: dict[str, Any], lang: Lang) -> str:
 def open_items(data: dict[str, Any], lang: Lang) -> str:
     items = data.get("items", [])
     if not items:
-        return "目前没有需要你处理的事项。" if lang == "zh" else "Nothing is waiting for you at the moment."
-    lines = [f"需要你处理的事项共 {len(items)} 项：" if lang == "zh" else f"{len(items)} items are waiting for you:"]
+        return "目前没有待处理事项。" if lang == "zh" else "There are no pending items."
+    lines = [f"待处理事项共 {len(items)} 项：" if lang == "zh" else f"{len(items)} items are pending:"]
     for n, item in enumerate(items, start=1):
         later = ("（已标记稍后处理）" if lang == "zh" else " (marked for later)") if item.get("deferred") else ""
         if item["type"] == "gate_decision":
@@ -157,19 +157,15 @@ def open_items(data: dict[str, Any], lang: Lang) -> str:
 
 
 APPROVE: dict[Lang, str] = {
-    "zh": (
-        "确认、批准这类决定要由你本人在该事项的决定卡片上作出，我不能代为确认或记录决定。"
-        "需要的话，我可以先把这个事项的依据讲一遍。"
-    ),
-    "en": (
-        "Confirming or approving is your decision and is made on the item's decision card;"
-        " I cannot confirm or record a decision for you."
-        " I can walk you through the basis for the item first if that helps."
-    ),
+    "zh": "复核事项可在工作台生成固定范围的操作方案, 核对结论后授权助理批量执行。"
+    "阶段审批与报告签发通过对应决定卡片办理。",
+    "en": "Review items can be prepared as a fixed-scope action proposal and executed after authorisation. "
+    "Stage approvals and report sign-off use their decision cards.",
 }
+
 OTHER: dict[Lang, str] = {
     "zh": "这个问题我暂时回答不了，请换一种问法，例如问项目进度、待处理事项或重要性水平。",
-    "en": "I can't answer that one yet. Try asking about progress, the items waiting for you, or materiality.",
+    "en": "I can't answer that one yet. Try asking about progress, pending items, or materiality.",
 }
 
 

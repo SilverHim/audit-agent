@@ -49,6 +49,17 @@ Engagement terms and appointment (checked at ACC-08):
 Engagement terms: not checked in this engagement. Do not state the applicable financial reporting framework or the date of the engagement letter.
 {% endif %}
 
+{% if materiality is defined and materiality.materiality_cents is defined %}
+Amounts below are in cents in the JSON inputs. Use these values in accounting currency for narrative comparisons:
+- Overall materiality: {{ "%.2f" | format(materiality.materiality_cents / 100) }}.
+- Performance materiality: {{ "%.2f" | format(materiality.performance_materiality_cents / 100) }}.
+- Clearly trivial threshold: {{ "%.2f" | format(materiality.clearly_trivial_cents / 100) }}.
+{% for row in trial_balance %}
+- Account {{ row.code }} ({{ row.name }}): {{ "%.2f" | format(row.balance_cents / 100) }}; absolute balance {{ "%.2f" | format((row.balance_cents | abs) / 100) }}; at or above overall materiality: {{ "yes" if (row.balance_cents | abs) >= materiality.materiality_cents else "no" }}.
+{% endfor %}
+Do not compare a currency amount in dollars with a raw number in cents.
+{% endif %}
+
 Materiality (decided at PLN-01/03): basis {{ materiality.choice.basis }} at {{ materiality.choice.pct }}; overall materiality {{ materiality.materiality_cents }} cents, performance materiality {{ materiality.performance_materiality_cents }} cents ({{ materiality.choice.performance_pct }} of overall), clearly trivial threshold {{ materiality.clearly_trivial_cents }} cents ({{ materiality.choice.clearly_trivial_pct }} of overall).
 
 Audit objectives:

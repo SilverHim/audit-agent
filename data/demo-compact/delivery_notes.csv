@@ -1,0 +1,3 @@
+id,delivery_no,invoice_id,shipped_date,signed_date,signed_by
+DN-C01,DN-C01,SI-C01,2026-06-10,2026-06-10,Synthetic receiver 1
+DN-C02,DN-C02,SI-C02,2026-07-03,2026-07-03,Synthetic receiver 2

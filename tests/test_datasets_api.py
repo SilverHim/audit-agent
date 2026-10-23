@@ -214,7 +214,7 @@ async def test_unreadable_period_row_is_skipped(tmp_path: Path) -> None:
         synthetic_snapshot(tmp_path, name, text)
     datasets = loaders(get_settings().DATASET_ROOT, tmp_path)
     rows = {d["dataset"]: d for d in (await get_datasets(datasets)).json()}
-    assert sorted(rows) == ["demo", "xero/good"]
+    assert sorted(rows) == ["demo", "demo-compact", "xero/good"]
     assert (rows["xero/good"]["period_start"], rows["xero/good"]["period_end"]) == ("2026-01-01", "2026-03-31")
     runner, _ = make_runner()
     deps = replace(runner.deps, datasets=datasets)

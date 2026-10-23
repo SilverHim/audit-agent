@@ -195,15 +195,20 @@ async def catch_up_rerun(
             "confirmations": await confirmations_from_store(store, eid),
             "phase": engagement.phase,
         }
-        if request.evidence_request_id:
-            evidence_request = await store.get(eid, EvidenceRequest, request.evidence_request_id)
+        request_ids = list(
+            dict.fromkeys(
+                [*request.evidence_request_ids, *([request.evidence_request_id] if request.evidence_request_id else [])]
+            )
+        )
+        for request_id in request_ids:
+            evidence_request = await store.get(eid, EvidenceRequest, request_id)
             if evidence_request:
                 task = tasks.get(evidence_request.task_id)
                 if task:
-                    patch["review_tasks"] = list({t.id: t for t in [*closed, task]}.values())
+                    patch["review_tasks"] = list({t.id: t for t in [*patch.get("review_tasks", []), task]}.values())
                 old_judgment = await store.get(eid, Judgment, evidence_request.judgment_id)
                 if old_judgment:
-                    patch["judgments"] = [old_judgment]
+                    patch["judgments"] = list({j.id: j for j in [*patch.get("judgments", []), old_judgment]}.values())
         await app.aupdate_state(config, patch, as_node="fan_in")
         snapshot = await app.aget_state(config)
     return snapshot
@@ -304,6 +309,19 @@ async def catch_up_review(
         await record_once(deps, review_trail(eid, record, task, closed))
     await backfill_transitions(deps, engagement, snapshot, None)  # 复核决定不改阶段
     if node == "await_events":
+        return Command(resume=min(r.id for r in missing))
+    # 当前执行的普通批量决定由 execute.read_review 一次整体消费.
+    # 不能逐项重新恢复, 否则第一项已越过等待, 第二项会错误投递给后续人工任务.
+    first_task = tasks[missing[0].task_id]
+    if all(
+        tasks[r.task_id].kind is TaskKind.normal
+        and tasks[r.task_id].run_id == first_task.run_id
+        and tasks[r.task_id].procedure_id == first_task.procedure_id
+        and r.decision in {Decision.confirm, Decision.misstatement}
+        for r in records
+    ):
+        if any(t.interrupts and t.error for t in snapshot.tasks):
+            await app.aupdate_state(GraphRunner.config(eid), None, as_node="__copy__")
         return Command(resume=min(r.id for r in missing))
     table = node_table(deps.features)
     if node not in table:
