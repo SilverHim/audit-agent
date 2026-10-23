@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoice ORC1023 belongs to the period ending 30 September 2026: no contract is linked, and service completion record SR-ORC1023 shows the service provided from 1 to 30 September 2026 and confirmed complete on 30 September 2026; control of a service provided through the month transfers over time as it is provided, all within the period.",
+  "conclusion": "Not a misstatement. Invoice ORC1023 belongs to the period ending 30 September 2026: no contract is linked, and service completion record SR-ORC1023 shows the service provided from 1 to 30 September 2026 and confirmed complete on 30 September 2026; control of a service provided through the month transfers over time as it is provided, all within the period.",
   "reasoning_chain": [
     {
       "kind": "fact",

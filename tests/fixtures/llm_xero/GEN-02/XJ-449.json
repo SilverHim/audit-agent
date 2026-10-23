@@ -1,5 +1,5 @@
 {
-  "conclusion": "Credit note CR1005 (journal entry XJ-449, 31 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Bank West. Of the six AUD 550.00 invoices it matches by amount, ORC1005 is the only one to Bank West: it was raised the same day, 31 July 2026, and has no service-completion record, while the other five are to other customers. CR1005 cancels ORC1005 in full, so net revenue from the invoice and the credit note is nil and revenue is not affected; no misstatement arises.",
+  "conclusion": "Not a misstatement. Credit note CR1005 (journal entry XJ-449, 31 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Bank West. Of the six AUD 550.00 invoices it matches by amount, ORC1005 is the only one to Bank West: it was raised the same day, 31 July 2026, and has no service-completion record, while the other five are to other customers. CR1005 cancels ORC1005 in full, so net revenue from the invoice and the credit note is nil and revenue is not affected; no misstatement arises.",
   "reasoning_chain": [
     {
       "kind": "fact",

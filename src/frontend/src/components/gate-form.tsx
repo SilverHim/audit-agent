@@ -35,6 +35,7 @@ import { AbnLookupNote } from '@/components/abn-lookup-note'
 import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
 import { DecisionFrame, OptionCard, ReasonField } from '@/components/concierge'
+import { EvidenceFollowupSummary } from '@/components/evidence-followup-summary'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { ExceptionDetail } from '@/components/exception-detail'
 import { MisstatementList } from '@/components/misstatement-lifecycle'
@@ -347,12 +348,18 @@ export function hasPlanningAnalytics(analytics: AnalyticsResult): boolean {
 // 初步分析的三步结果 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用. 推荐为空 (纯规则或退回规则) 时不显示
 // 推荐卡片; 退回规则时只显示退回提示; screening 为空时不显示复筛各块
 export function PlanningAnalytics({ eid, analytics }: { eid: string; analytics: AnalyticsResult }) {
+  const { t } = useI18n()
   const recommendation = analytics.recommendation ?? null
   const screening = analytics.screening
   if (!hasPlanningAnalytics(analytics)) return null
   return (
     <div className="flex flex-col gap-3" data-testid="planning-analytics">
       {analytics.fallback ? <FallbackNote reason={analytics.fallback_reason} /> : null}
+      {analytics.materiality_stale ? (
+        <p role="status" className="rounded-lg border border-warn p-3 text-warn">
+          {t.planning.analysis.stale}
+        </p>
+      ) : null}
       {recommendation ? <RecommendationNote eid={eid} recommendation={recommendation} /> : null}
       {screeningShown(screening) && screening ? <ScreeningBlocks eid={eid} screening={screening} /> : null}
     </div>
@@ -525,6 +532,10 @@ export function GateMaterial({ eid, view }: { eid: string; view: GateView }) {
           <dt className="text-muted-foreground">{t.completion.materiality}</dt>
           <dd className="m-0 font-mono">{formatMoney(material.schedule.materiality_cents)}</dd>
         </dl>
+        <EvidenceFollowupSummary
+          requests={material.open_evidence_requests ?? []}
+          limitations={material.scope_limitations ?? []}
+        />
         <FinStaleAlert eid={eid} ids={material.stale_procedure_ids ?? []} />
         <UnrecognisedSuggestions eid={eid} items={material.schedule.unrecognised ?? []} />
         <span className="text-[13px] text-muted-foreground">{t.completion.count(material.misstatements.length)}</span>
@@ -668,7 +679,9 @@ export function GateDecisionCard({
   const [verdict, setVerdict] = useState<GateVerdict | null>(null)
   const [reason, setReason] = useState('')
   const [choice, setChoice] = useState<MaterialityChoice | null>(
-    view.material.kind === 'PLN-01/03' ? initialChoice(view.material.candidates) : null,
+    view.material.kind === 'PLN-01/03'
+      ? initialChoice(view.material.candidates, view.material.analytics.recommendation)
+      : null,
   )
   const [levels, setLevels] = useState<Record<string, RiskLevel>>(() =>
     view.material.kind === 'PLN-01/03'

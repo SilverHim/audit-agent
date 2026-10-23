@@ -19,6 +19,7 @@ from backend.contracts.models import (
 )
 from backend.services.procedure_library import render_text
 from backend.services.workpaper_decisions import decision_sections
+from backend.services.workpaper_followup import analytics_details, evidence_tables
 from backend.services.workpaper_judgments import detail_sections
 from backend.services.workpaper_labels import (
     AGENTS,
@@ -332,7 +333,11 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
     specialized = (
         misstatement_section(view, sources)
         if template.id == "FIN-04"
-        else (decision_sections(view, sources, workpaper) or detail_sections(view, sources))
+        else (
+            analytics_details(view, table)
+            or decision_sections(view, sources, workpaper)
+            or detail_sections(view, sources)
+        )
     )
     details = section(
         "details",
@@ -342,6 +347,10 @@ def build_content(view: "View", sources: "Sources", workpaper: Workpaper) -> Wor
     )
     if specialized is not None:
         details = specialized
+    if template.id != "FIN-04":
+        details = details.model_copy(
+            update={"tables": [*details.tables, *evidence_tables(sources, procedure_id=template.id)]}
+        )
     return WorkpaperContent(
         header=header,
         sections=[

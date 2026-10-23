@@ -9,6 +9,7 @@
 """
 
 import shutil
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,7 @@ from backend.contracts.models import (
 )
 from backend.contracts.ports import LLMResponse
 from backend.contracts.records import Account, DatasetTraits, TrialBalanceRow
-from backend.contracts.services import ValidationContext
+from backend.contracts.services import RuleResult, ValidationContext
 from backend.contracts.state import initial_state
 from backend.services.analytic_benchmarks import load_benchmarks
 from backend.services.procedure_library import run_params
@@ -582,3 +583,85 @@ async def test_screening_rejects_unresolvable_evidence() -> None:
 
     assert report.level_failed == "reference"
     assert any("9999" in error for error in report.errors)
+
+
+def test_net_assets_does_not_subtract_equity_twice() -> None:
+    """净资产为资产减负债, 权益不能再抵销一次; 防止可用基准变成零."""
+    from backend.services.analytic_benchmarks import totals_from_rows
+
+    accounts = [Account(code=c, name=c, type=t) for c, t in (("A", "asset"), ("L", "liability"), ("E", "equity"))]
+    rows = [
+        TrialBalanceRow(period="current", account_code=c, balance_cents=v)
+        for c, v in (("A", 1500000), ("L", -1000000), ("E", -500000))
+    ]
+    assert totals_from_rows(accounts, rows)["net_assets"] == 500000
+
+
+async def test_changed_materiality_is_persisted_and_analytics_is_in_workpaper() -> None:
+    """推荐与人工选择不同时写出过期版本; A-4 保存推荐和被排除的原因, 不只存原始规则例外."""
+    from backend.contracts.models import (
+        AnalyticsScreeningItem,
+        GateDecision,
+        GateId,
+        GateVerdict,
+        MaterialityChoice,
+        Workpaper,
+    )
+    from backend.orchestration.decisions import new_versions
+    from backend.orchestration.gates import pln_apply
+    from backend.services.workpapers import refresh
+
+    deps = numbat_deps()
+    ctx = await context(deps)
+    agent = RiskAssessorAgent(deps)
+    patch = await agent.run(ctx)
+    a = patch["analytics"]
+    excluded = AnalyticsScreeningItem(
+        account_code="1100",
+        account_name="Receivables",
+        reason="Resolved with the settlement record",
+        risk_or_assertion="Existence",
+    )
+    a = a.model_copy(update={"screening": a.screening.model_copy(update={"focus": [], "excluded": [excluded]})})
+    await deps.output_store.put(
+        ctx.engagement.id, [ctx.procedure, a, *patch["procedure_runs"], *patch["exceptions"]], actor="A4"
+    )
+    material_ctx = replace(
+        ctx,
+        state={**ctx.state, "analytics": a},
+        run=ctx.run.model_copy(
+            update={
+                "params_snapshot": {
+                    "candidates": [{"basis": "revenue", "pct_low": 0.005, "pct_high": 0.01}],
+                    "performance_pct_range": [0.5, 0.75],
+                    "clearly_trivial_pct": 0.05,
+                }
+            }
+        ),
+    )
+    candidate_patch = agent.materiality(
+        material_ctx, RuleResult(exceptions=[], rows={"M01": [{"basis": "revenue", "base_amount_cents": 1200000000}]})
+    )
+    candidates = candidate_patch["materiality_candidates"]
+    await deps.output_store.put(ctx.engagement.id, [candidates], actor="A4")
+    decision = GateDecision(
+        id="D-CHANGED",
+        gate=GateId.PLN_01_03,
+        target_id=candidates.id,
+        target_version=1,
+        decision=GateVerdict.approve,
+        decided_by="U-1",
+        decided_at=ctx.run.started_at,
+        materiality=MaterialityChoice(basis="revenue", pct=0.005, performance_pct=0.5, clearly_trivial_pct=0.05),
+    )
+    effects, sources = await pln_apply(deps, ctx.engagement.id, decision, candidates, [], ctx.run.started_at)
+    assert effects["analytics"].materiality_stale is True
+    created = new_versions(effects, sources)
+    assert effects["analytics"] in created
+    await deps.output_store.put(ctx.engagement.id, created, actor="A1")
+    await refresh(deps, ctx.engagement.id)
+    paper = await deps.output_store.get(ctx.engagement.id, Workpaper, "WP-A-4")
+    assert paper and paper.content
+    payload = paper.content.model_dump_json()
+    assert excluded.reason in payload and a.recommendation.rationale in payload
+    assert (await deps.output_store.get(ctx.engagement.id, AnalyticsResult, "ANALYTICS")).materiality_stale

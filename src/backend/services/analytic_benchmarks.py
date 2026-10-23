@@ -2,7 +2,7 @@
 
 基准清单与比例范围在 knowledge/analytic_benchmarks.json, 出处以 ASA 320 第 A4-A8 段为准: A8 只给税前利润 5% 与收入或
 总费用 1% 两个例子, 其余范围是惯例 (配置里逐项写明). 汇总口径与 PLN-01 M01, PLN-07 A01 一致: 试算表余额借方为正,
-收入取贷减借 (取正), 税前利润剔除所得税, 净资产为资产, 负债与权益三类余额之和.
+收入取贷减借 (取正), 税前利润剔除所得税, 净资产为资产与负债两类余额之和 (借方为正, 负债贷方为负).
 """
 
 from collections.abc import Iterable, Mapping, Sequence
@@ -107,7 +107,7 @@ def totals_from_rows(
                 income_tax += amount
         if account.type == "asset":
             assets += amount
-        if account.type in ("asset", "liability", "equity"):
+        if account.type in ("asset", "liability"):
             net_assets += amount
     profit_before_tax = -(
         sum(

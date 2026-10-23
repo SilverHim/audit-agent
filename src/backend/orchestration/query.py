@@ -139,6 +139,8 @@ class GraphStateQuery:
         ordered = sorted(procedures, key=lambda p: (PHASE_ORDER.index(p.phase), p.id))
         changes = await self.deps.data.changes(eid)
         stale = set(stale_procedures(ordered, runs, changes, self.deps.library, superseded))
+        if values["analytics"] and values["analytics"].materiality_stale:
+            stale.add("PLN-07")
         allowed = set(rerunnable(ordered, stale))
 
         summaries = []

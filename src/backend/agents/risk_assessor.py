@@ -511,6 +511,23 @@ class RiskAssessorAgent(ProcedureAgent[Findings]):
         状态中还没有风险清单时, 一并带出数据集预置的审计目标与风险清单 (第 1 版); 已有时不带, 以免覆盖闸门改过的版本.
         """
         candidates, performance, trivial = materiality_candidates(findings.rows.get("M01", []), ctx.run.params_snapshot)
+        # 推荐的六种配置基准均可在人工闸门确认; 非推荐的旧候选保留原区间.
+        analytics = ctx.state["analytics"]
+        recommendation = analytics.recommendation if analytics and PLANNING in self.deps.features else None
+        if recommendation is not None:
+            config = load_benchmarks(self.deps.library.root).get(recommendation.basis)
+            assert config is not None
+            recommended = MaterialityCandidate(
+                basis=recommendation.basis,
+                base_amount_cents=recommendation.base_amount_cents,
+                pct_low=config.pct_min,
+                pct_high=config.pct_max,
+                low_cents=scaled(recommendation.base_amount_cents, config.pct_min),
+                high_cents=scaled(recommendation.base_amount_cents, config.pct_max),
+            )
+            candidates = [recommended if c.basis == recommended.basis else c for c in candidates]
+            if not any(c.basis == recommended.basis for c in candidates):
+                candidates.append(recommended)
         previous = ctx.state["materiality_candidates"]
         result = MaterialityCandidates(
             id="MATERIALITY",

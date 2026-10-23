@@ -11,6 +11,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from pydantic import BaseModel, ValidationError
 from backend.contracts.models import LlmProvider
 from backend.contracts.ports import EngagementStore, LLMClient, LLMRequest, LLMResponse, T_out
 from backend.core.config import Settings
+from backend.services.currency import format_money
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"  # 未配置 LLM_BASE_URL 时的接口地址
 MAX_RETRIES = 3  # 传输层最多重试次数, 不占校验重试 (JudgmentEngine.call_llm)
@@ -116,6 +118,13 @@ class MockLLMClient:
                 output=None, raw="", model="mock", input_tokens=0, output_tokens=0, error="fixture_not_found"
             )
         raw = path.read_text(encoding="utf-8")
+        if req.currency != "AUD":
+            # 固定输出里的 AUD 金额只是演示的显示形式; 按项目币种重新格式化, 不改变结构化金额或作汇率换算.
+            raw = re.sub(
+                r"\bAUD (-?[\d,]+\.\d{2})",
+                lambda m: format_money(int(Decimal(m[1].replace(",", "")) * 100), req.currency),
+                raw,
+            )
         try:
             output: BaseModel | None = output_model.model_validate_json(raw)
             error = None

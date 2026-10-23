@@ -1,5 +1,5 @@
 {
-  "conclusion": "Alex Morgan, the sole director and 85% shareholder of Demo Company (AU) Pty Ltd, is the director of Morgan Advisory Pty Ltd and holds 100% of its shares, so it is a related party; it is in management's declaration of related parties. No transactions with it were found in the period or in the 30 days after it.",
+  "conclusion": "Not a misstatement. Alex Morgan, the sole director and 85% shareholder of Demo Company (AU) Pty Ltd, is the director of Morgan Advisory Pty Ltd and holds 100% of its shares, so it is a related party; it is in management's declaration of related parties. No transactions with it were found in the period or in the 30 days after it.",
   "reasoning_chain": [
     {
       "kind": "fact",

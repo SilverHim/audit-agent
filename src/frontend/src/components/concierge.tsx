@@ -25,6 +25,7 @@ import type {
 } from '@/client/types.gen'
 import { BusyNote } from '@/components/activity-bar'
 import { Code, SectionLabel, StatusPill } from '@/components/chrome'
+import { CorrectionEditor } from '@/components/correction-editor'
 import { EvidenceLink, PointerList } from '@/components/evidence-link'
 import { RejudgeNotice } from '@/components/evidence-requests'
 import { ExceptionDetail } from '@/components/exception-detail'
@@ -719,10 +720,9 @@ export function ReviewDecisionCard({
   // 后端给出可选的裁决; A7 推理链没通过校验时不能采用独立复核的结论
   const allowedResolutions = new Set<DisputeChoice>(view.allowed_resolutions ?? DISPUTE_CHOICES)
   const set = (patch: Partial<ReviewDraft>) => setDraft((current) => ({ ...current, ...patch }))
-  // 改了错报字段的 "同意" 即 "修改后认定为错报"; AI 建议的更正分录按原金额与方向校验, 改过数据后不再带, 重新
-  // "复制建议数据" 会再带出 (需求 R367, R368)
+  // 更正建议保留供审计师一起修订, 最终提交前校验借贷与错报的一致性.
   const setFigures = (patch: Partial<ReviewDraft>) => {
-    setDraft((current) => ({ ...current, ...patch, correction: [] }))
+    setDraft((current) => ({ ...current, ...patch }))
     if (choice === 'agree_misstatement') setChoice('amend_misstatement')
   }
   // 选 "同意" 时错报字段回到 AI 草稿; 选 "不是错报" (推翻) 时结论为空则预填一句, 可改
@@ -1014,6 +1014,11 @@ export function ReviewDecisionCard({
               </select>
             </Field>
           </div>
+          <CorrectionEditor
+            entries={draft.correction}
+            accounts={codes}
+            onChange={(correction) => set({ correction })}
+          />
         </div>
       ) : null}
 

@@ -1,5 +1,5 @@
 {
-  "conclusion": "Credit note CR1003 (journal entry XJ-430, 26 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Hamilton Smith Pty. Of the five AUD 550.00 invoices it matches by amount, only ORC1003 and ORC1008 are to Hamilton Smith Pty, and finding X-GEN-05-1-R12-1 identifies ORC1003 as a duplicate of ORC1008 (paired invoices) with XJ-430 as its full credit; ORC1003 has no service-completion record, while ORC1008 has SR-ORC1008. CR1003 therefore cancels the duplicate invoice ORC1003 in full, which is appropriate, and no misstatement arises.",
+  "conclusion": "Not a misstatement. Credit note CR1003 (journal entry XJ-430, 26 July 2026) reverses AUD 550.00 of revenue, GST and receivables for Hamilton Smith Pty. Of the five AUD 550.00 invoices it matches by amount, only ORC1003 and ORC1008 are to Hamilton Smith Pty, and finding X-GEN-05-1-R12-1 identifies ORC1003 as a duplicate of ORC1008 (paired invoices) with XJ-430 as its full credit; ORC1003 has no service-completion record, while ORC1008 has SR-ORC1008. CR1003 therefore cancels the duplicate invoice ORC1003 in full, which is appropriate, and no misstatement arises.",
   "reasoning_chain": [
     {
       "kind": "fact",

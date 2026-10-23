@@ -1,5 +1,5 @@
 {
-  "conclusion": "The bank confirms AUD 1,208,400.00 at 30 June 2026 against a book balance of AUD 1,258,400.00. The AUD 50,000.00 difference is a deposit in transit: receipt CR-SI-2026-0547 was recorded in the ledger on 30 June 2026 and the bank credited it on 2 July 2026 (BT-01-20260702-01). It is a timing difference, not a misstatement.",
+  "conclusion": "Not a misstatement. The bank confirms AUD 1,208,400.00 at 30 June 2026 against a book balance of AUD 1,258,400.00. The AUD 50,000.00 difference is a deposit in transit: receipt CR-SI-2026-0547 was recorded in the ledger on 30 June 2026 and the bank credited it on 2 July 2026 (BT-01-20260702-01). It is a timing difference, not a misstatement.",
   "reasoning_chain": [
     {
       "kind": "fact",

@@ -175,6 +175,7 @@ class GraphRunner:
         self.busy: set[str] = set()  # 持有项目锁的项目编号
         self.tasks: dict[str, asyncio.Task[None]] = {}  # 项目编号 -> 后台任务; 保留引用, 防止任务未完成即被回收
         self.errors: dict[str, str] = {}  # 项目编号 -> 最近一次后台执行的异常, 成功推进后清除
+        self.closing = False
         self.acquired: dict[str, int] = {}  # 项目编号 -> 取得项目锁的累计次数, 读者据此判断期间有没有写入
 
     @staticmethod
@@ -248,11 +249,49 @@ class GraphRunner:
             if task is not None:
                 self._forget(eid, task)
 
+        if eid not in self.errors and not self.closing:
+            await self.rejudge_evidence(eid)
+
+    async def rejudge_evidence(self, eid: str) -> bool:
+        """持久化 received 请求是待重判队列; 文件作业完成、图空闲或启动恢复时各尝试一次, 无超时丢弃."""
+        from backend.agents.ingest import unfinished
+        from backend.contracts.models import EvidenceRequest
+        from backend.orchestration.decisions import GraphDecisionSubmit
+        from backend.services.features import MORE_EVIDENCE
+
+        if self.closing or self.is_running(eid) or MORE_EVIDENCE not in self.deps.features:
+            return False
+        engagement = await self.deps.engagement_store.get(eid)
+        if engagement is None or engagement.locked:
+            return False
+        requests = await self.deps.output_store.latest(eid, EvidenceRequest)
+        documents = {d.id: d for d in await self.deps.financial_store.documents(eid)} if requests else {}
+        for request in sorted(requests, key=lambda r: (r.requested_at, r.id)):
+            if request.status != "received" or request.rejudged_judgment_id or not request.document_ids:
+                continue
+            if any(
+                i not in documents or unfinished(documents[i]) or documents[i].failed_step is not None
+                for i in request.document_ids
+            ):
+                continue
+            try:
+                await GraphDecisionSubmit(self.app, self.deps, self).rejudge_after_evidence(
+                    eid, request.id, actor=request.resolved_by or request.requested_by
+                )
+            except DecisionRejected as error:
+                if error.code in {"ENGAGEMENT_BUSY", "NOT_RERUNNABLE", "RESUME_REQUIRED", "FEATURES_MISMATCH"}:
+                    return False
+                self.errors[eid] = f"补证重判失败: {error.code}"
+                return False
+            return True
+        return False
+
     async def shutdown(self) -> None:
         """应用退出前调用: 取消全部后台任务并等它们结束. 返回时没有运行中的任务, 项目锁都已释放.
 
         被取消的执行停在最近的检查点, 下次启动由 recover 继续.
         """
+        self.closing = True
         running = list(self.tasks.items())
         for _, task in running:
             task.cancel()
@@ -409,12 +448,14 @@ class GraphRunner:
         停在闸门或等人, 或已结束时不改状态, 不持锁."""
         self.acquire(eid)
         await self._proceed(eid)
+        await self.rejudge_evidence(eid)
 
     async def proceed(self, eid: str) -> None:
         """已持项目锁时按 recover 规则处理一个项目 (见 _proceed), 锁随之交出或释放; 出错记入 run_error, 不抛出 (取消
         照常抛出, 锁已释放). DataService.recover 补做完上传文件后经此带动图继续."""
         try:
             await self._proceed(eid)
+            await self.rejudge_evidence(eid)
         except Exception as e:
             self.errors[eid] = f"{type(e).__name__}: {e}"
 
@@ -430,5 +471,6 @@ class GraphRunner:
             try:
                 self.acquire(engagement.id)
                 await self._proceed(engagement.id)
+                await self.rejudge_evidence(engagement.id)
             except Exception as e:
                 self.errors[engagement.id] = f"{type(e).__name__}: {e}"

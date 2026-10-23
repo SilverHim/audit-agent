@@ -137,3 +137,14 @@ def test_legacy_account_resolution_requires_an_unambiguous_match() -> None:
     assert account_code("Interest income (010)", None, accounts) == "010"
     assert account_code("Interest income", "020", accounts) == "020"
     assert account_code("Interest income (010)", "999", accounts) is None
+
+
+def test_classification_acceptance_does_not_mean_no_misstatement() -> None:
+    """接受已认定错报的分类与判为不是错报含义不同, 底稿不能用同一句话表示."""
+    from backend.contracts.models import Judgment, ProposedAction, Verdict
+    from backend.services.workpaper_judgments import action_label
+
+    classification = Judgment.model_construct(verdict=None, proposed_action=ProposedAction.accept)
+    assert action_label(classification).en == "Accept"
+    clear = classification.model_copy(update={"verdict": Verdict.not_misstatement})
+    assert action_label(clear).en == "Not a misstatement"

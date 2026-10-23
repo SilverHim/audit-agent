@@ -361,6 +361,13 @@ export const en = {
   },
   // AI 建议的更正分录 (需求 R367, R368): 判断卡片, 复核卡片与错报列表共用; 每行只记借方或贷方一方
   correctionEntry: {
+    edit: 'Edit correction entries',
+    account: 'Account',
+    description: 'Entry description',
+    add: 'Add entry',
+    remove: 'Remove entry',
+    invalid: 'Enter balanced entries, with an account, description, and one positive debit or credit on each line.',
+
     title: 'AI-suggested correcting entry',
     debit: 'Debit',
     credit: 'Credit',
@@ -738,6 +745,8 @@ export const en = {
     },
     // 推荐重要性与三步复筛 (需求 R371, R372): PLN-01/03 闸门材料与审计计划页共用
     analysis: {
+      stale:
+        'The approved materiality differs from this recommendation. This preliminary analysis is stale and must be reassessed.',
       screening: 'Screening result',
       threshold: (amount: string) => `Threshold ${amount}`,
       hits: (n: number) => `${n} account${n === 1 ? '' : 's'} over the threshold`,
@@ -2054,6 +2063,8 @@ export const en = {
   },
   // 补充证据请求 (后端需求 R369, 页面 R370): 数据管理页的区块, 复核队列与判断详情里的状态与链接
   evidenceRequests: {
+    decisionNotice: 'Outstanding evidence and scope limitations to consider before deciding the opinion',
+    scopeTitle: 'Scope limitations',
     title: 'Supplementary evidence requests',
     intro: (n: number) =>
       `${n} review task${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} more evidence. The tasks wait without blocking the process.`,
@@ -2103,6 +2114,8 @@ export const en = {
   },
   // 登记管理层说明 (后端需求 R369, 页面 R370): 证据页的表单
   managementRepresentation: {
+    related: 'Related object IDs (comma separated, optional)',
+    attachments: 'Attachments (optional, registered project files)',
     title: 'Management representation',
     intro:
       'Record a written or oral representation from management as evidence. It is kept as a management representation, below external evidence.',

@@ -31,6 +31,13 @@ const CORRECTION = [
     credit_cents: 0,
     description: 'Reverse the depreciation credited to accumulated depreciation.',
   },
+  {
+    account_code: '710',
+    account_name: 'Office Equipment',
+    debit_cents: 0,
+    credit_cents: 75000,
+    description: 'Reverse equipment recognised without basis.',
+  },
 ]
 const NORMAL = ['confirm', 'override', 'misstatement']
 

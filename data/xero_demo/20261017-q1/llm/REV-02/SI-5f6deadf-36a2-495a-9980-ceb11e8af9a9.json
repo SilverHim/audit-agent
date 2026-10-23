@@ -1,5 +1,5 @@
 {
-  "conclusion": "Invoice ORC1020 belongs to the period ending 30 September 2026: it bills the support provided under CON-X02, whose clause 4.1 (CON-X02-T1) transfers control over time as the support is provided, and service completion record SR-ORC1020 shows the service from 1 to 30 September 2026, all within the period.",
+  "conclusion": "Not a misstatement. Invoice ORC1020 belongs to the period ending 30 September 2026: it bills the support provided under CON-X02, whose clause 4.1 (CON-X02-T1) transfers control over time as the support is provided, and service completion record SR-ORC1020 shows the service from 1 to 30 September 2026, all within the period.",
   "reasoning_chain": [
     {
       "kind": "fact",

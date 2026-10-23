@@ -590,6 +590,8 @@ class EvidenceUnavailableIn(BaseModel):
 class ManagementRepresentationIn(BaseModel):
     """登记管理层说明为证据 (需求 R369)."""
 
+    attachment_ids: list[str] = []  # 本项目已登记的可选附件
+    related_object_ids: list[str] = []  # 对象关联, 供判断读取
     person: str  # 说明人
     stated_on: str  # 说明的日期或时间 (原文)
     content: str  # 说明内容

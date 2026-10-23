@@ -1169,9 +1169,30 @@ class JudgmentEngine:
         outbound["output_language"] = run.language
         # 记账币种 (需求 R366): 模板过滤器 money 缺省按它写金额; 取项目当前的值, 调用方给的同名变量不算
         currency = await self.currency(eid)
+        system += f"\n\nAccounting currency: {currency}. Use this currency for every narrative amount."
         outbound["currency"] = currency
         ctx = ctx.model_copy(update={"language": run.language, "currency": currency})
-        messages = [LLMMessage(role="user", content=self.render(template, outbound))]
+        prompt = self.render(template, outbound)
+        if issubclass(model, JudgmentDraft):
+            # 更正建议须引用真实科目; 只给判断对象的余额行会迫使模型猜测对方科目.
+            accounts = await self.validator.financial.accounts(eid)
+            prompt += (
+                "\n\nAvailable chart of accounts for correction entries (use exact codes and names):\n"
+                + json.dumps(
+                    [{"code": a.code, "name": a.name, "type": a.type} for a in accounts],
+                    ensure_ascii=False,
+                )
+                + "\nIf verdict is misstatement, include balanced correction entries using these accounts."
+            )
+        extra_documents = (
+            outbound.get("data", {}).get("supplementary_documents") if isinstance(outbound.get("data"), dict) else None
+        )
+        if extra_documents:
+            prompt += (
+                "\n\nSupplementary evidence received for this object (cite document IDs and pages):\n"
+                + json.dumps(extra_documents, ensure_ascii=False, indent=2)
+            )
+        messages = [LLMMessage(role="user", content=prompt)]
         trail_ids: list[str] = []
         for attempt in range(1, MAX_ATTEMPTS + 1):
             request = LLMRequest(
@@ -1182,6 +1203,7 @@ class JudgmentEngine:
                 max_tokens=template.llm.max_tokens,
                 fixture_key=fixture_key,
                 eid=eid,
+                currency=currency,
             )
             response = await client.complete(request, model)
             report = await self.validator.validate(eid, template, response, ctx)

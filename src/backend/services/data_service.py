@@ -530,6 +530,8 @@ class DataService:
         finally:
             if not handed:
                 self.runner.release(eid)
+        if not handed:
+            await self.runner.rejudge_evidence(eid)
 
     async def launch(
         self,
@@ -1458,10 +1460,7 @@ class DataService:
             await self.backfill_trails(eid)
             saved = await self.register_uploads(eid, names, [data for _, data in files], actor, request_id)
             self.jobs[eid][key] = frozenset(d.id for d in saved.fresh)
-            try:  # 按补充证据请求上传时登记到请求 (需求 R369), 请求已结或没有该请求时原样返回; 失败不影响上传
-                await link_uploaded_documents(self.deps, eid, request_id, saved.documents, actor=actor)
-            except Exception:
-                logger.exception("补充证据请求登记上传文件失败: %s", request_id)
+            await link_uploaded_documents(self.deps, eid, request_id, saved.documents, actor=actor)
         except BaseException:
             self._unregister(eid, key)
             self.runner.release(eid)
@@ -1469,6 +1468,7 @@ class DataService:
         if not saved.fresh and saved.requested is None:  # 都是已处理完的文件: 不再处理
             self._unregister(eid, key)
             self.runner.release(eid)
+            await self.runner.rejudge_evidence(eid)
             return saved.documents
         self._spawn(eid, key, self._intake(eid, engagement, saved.fresh, saved.jobs, saved.wanted))
         return saved.documents

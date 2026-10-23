@@ -1,5 +1,5 @@
 {
-  "conclusion": "Control of the Module passes to DIISR - Small Business Services on the Completion Date, when the Module has been deployed to the customer's environment and the customer's Project Sponsor has signed the Completion Certificate (CON-X01-T1), so revenue is recognised at that point in time (AASB15-P38). Under clause 7.2 (CON-X01-T3) the Supplier is not entitled to payment for the Module if the Statement of Work is terminated before the Completion Date, so the over-time criteria in paragraph 35(b) and (c) are not met. The Supplier may invoice on or after the Completion Date, with payment due within 30 days (CON-X01-T2).",
+  "conclusion": "Not a misstatement. Control of the Module passes to DIISR - Small Business Services on the Completion Date, when the Module has been deployed to the customer's environment and the customer's Project Sponsor has signed the Completion Certificate (CON-X01-T1), so revenue is recognised at that point in time (AASB15-P38). Under clause 7.2 (CON-X01-T3) the Supplier is not entitled to payment for the Module if the Statement of Work is terminated before the Completion Date, so the over-time criteria in paragraph 35(b) and (c) are not met. The Supplier may invoice on or after the Completion Date, with payment due within 30 days (CON-X01-T2).",
   "reasoning_chain": [
     {
       "kind": "fact",

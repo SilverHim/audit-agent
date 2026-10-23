@@ -63,6 +63,16 @@ SECTIONS = {
     "review": words("复核意见", "Review comments"),
 }
 FIELDS = {
+    "requested_from": ("证据来源", "Requested from"),
+    "document_ids": ("收到的文件", "Received documents"),
+    "judgment_id": ("原判断", "Original judgment"),
+    "rejudged_judgment_id": ("重判结果", "Rejudged judgment"),
+    "recorded_by": ("记录人", "Recorded by"),
+    "recorded_at": ("记录时间", "Recorded at"),
+    "percentage": ("比例", "Percentage"),
+    "threshold_cents": ("重要性金额", "Materiality threshold"),
+    "counter_argument": ("反方论证", "Counter argument"),
+    "risk_or_assertion": ("风险或认定", "Risk or assertion"),
     "unaudited_cents": ("本期未审数", "Unaudited balance"),
     "adjustments_cents": ("已更正调整", "Verified adjustments"),
     "audited_cents": ("审定数", "Audited balance"),

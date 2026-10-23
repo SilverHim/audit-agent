@@ -1923,3 +1923,17 @@ async def test_dependent_of_program_rerun_into_no_data_stays_stale_until_rerun()
     second = await material()
     assert [n.procedure_id for n in second.not_executed] == ["CSH-04", "DOC-06"]
     assert not {"CSH-04", "DOC-06"} & set(second.stale_procedure_ids)
+
+
+def test_single_subject_rejudgment_drops_its_old_misstatement_only() -> None:
+    """补证取代单对象判断时, 不取代整次执行, 仍须去掉该判断的旧错报."""
+    from backend.contracts.models import ReviewStatus
+
+    state = results_state([])
+    original = state["judgments"][0]
+    state["judgments"][0] = original.model_copy(
+        update={"review_status": ReviewStatus.superseded, "superseded_by": "J-REV-02-2-SI-2026-0612"}
+    )
+    active = current_results(state)
+    assert "M-1" not in {m.id for m in active.misstatements}
+    assert {m.id for m in active.misstatements} == {"M-1H", "M-1X", "M-2", "M-2X", "M-LOST"}

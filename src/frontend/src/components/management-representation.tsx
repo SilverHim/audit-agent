@@ -1,5 +1,7 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { evidenceListDocumentsOptions } from '@/client/@tanstack/react-query.gen'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,6 +15,9 @@ import { useI18n } from '@/lib/i18n'
 export function ManagementRepresentationForm({ eid, disabled }: { eid: string; disabled: boolean }) {
   const { t } = useI18n()
   const register = useRegisterManagementRepresentation(eid)
+  const documents = useQuery(evidenceListDocumentsOptions({ path: { eid } }))
+  const [attachments, setAttachments] = useState<string[]>([])
+  const [related, setRelated] = useState('')
   const [draft, setDraft] = useState(emptyRepresentation)
   const set = (patch: Partial<typeof draft>) => setDraft((current) => ({ ...current, ...patch }))
   const labels = t.managementRepresentation
@@ -20,11 +25,23 @@ export function ManagementRepresentationForm({ eid, disabled }: { eid: string; d
     const body = representationBody(draft, t)
     if (typeof body === 'string') return toast.error(body)
     register.mutate(
-      { path: { eid }, body },
+      {
+        path: { eid },
+        body: {
+          ...body,
+          attachment_ids: attachments,
+          related_object_ids: related
+            .split(/[,，]/)
+            .map((s) => s.trim())
+            .filter(Boolean),
+        },
+      },
       {
         onSuccess: () => {
           toast.success(labels.registered)
           setDraft(emptyRepresentation())
+          setAttachments([])
+          setRelated('')
         },
         onError: (error) => toast.error(errorText(error, t)),
       },
@@ -74,6 +91,31 @@ export function ManagementRepresentationForm({ eid, disabled }: { eid: string; d
           onChange={(event) => set({ content: event.target.value })}
         />
       </label>
+      <label htmlFor="mr-related" className="text-sm">
+        {labels.related}
+        <Input
+          id="mr-related"
+          value={related}
+          disabled={disabled}
+          onChange={(e) => setRelated(e.target.value)}
+          aria-label={labels.related}
+        />
+      </label>
+      <fieldset disabled={disabled} className="flex flex-col gap-2">
+        <legend>{labels.attachments}</legend>
+        {(documents.data ?? []).map((d) => (
+          <label key={d.id} className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={attachments.includes(d.id)}
+              onChange={(e) =>
+                setAttachments((ids) => (e.target.checked ? [...ids, d.id] : ids.filter((i) => i !== d.id)))
+              }
+            />
+            {d.file_name}
+          </label>
+        ))}
+      </fieldset>
       <div className="flex flex-wrap items-center gap-3">
         <Button type="button" disabled={disabled || register.isPending} onClick={submit}>
           {register.isPending ? labels.registering : labels.register}

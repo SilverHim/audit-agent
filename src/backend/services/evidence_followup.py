@@ -6,14 +6,18 @@
 from datetime import UTC, datetime
 
 from backend.agents.base import AgentDeps
-from backend.contracts.errors import VersionConflict
+from backend.contracts.errors import DataRejected, VersionConflict
 from backend.contracts.models import (
     AgentId,
+    Assertion,
+    AuditException,
+    AuditObjective,
     DocumentRef,
     DocumentType,
     EvidenceRequest,
     Judgment,
     MisstatementDraft,
+    Procedure,
     Reliability,
     ReviewRecord,
     ReviewTask,
@@ -22,7 +26,7 @@ from backend.contracts.models import (
     TrailEntry,
     TrailKind,
 )
-from backend.services.review_queue import evidence_description, evidence_source
+from backend.services.review_queue import evidence_description, evidence_source, judgment_amount, subject_amount
 
 
 def request_of(record: ReviewRecord, task: ReviewTask, judgment: Judgment, *, now: datetime) -> EvidenceRequest:
@@ -70,7 +74,14 @@ def evidence_trail(eid: str, request: EvidenceRequest, action: str, actor: str, 
 
 
 def scope_limitation(
-    request: EvidenceRequest, judgment: Judgment, *, actor: str, now: datetime, reason: str | None
+    request: EvidenceRequest,
+    judgment: Judgment,
+    *,
+    actor: str,
+    now: datetime,
+    reason: str | None,
+    amount_cents: int | None = None,
+    assertion: Assertion | None = None,
 ) -> ScopeLimitation:
     """无法取得证据时记的范围受限 (需求 R369): 对象, 金额, 认定取自判断的错报草稿 (没有时为空), 不自动改意见."""
     draft: MisstatementDraft | None = judgment.misstatement_draft
@@ -80,8 +91,10 @@ def scope_limitation(
         judgment_id=judgment.id,
         procedure_id=request.procedure_id,
         subject_id=request.subject_id,
-        assertion=draft.assertion if draft is not None else None,
-        amount_cents=abs(draft.amount_cents) if draft is not None else None,
+        assertion=draft.assertion if draft is not None else assertion,
+        amount_cents=abs(draft.amount_cents)
+        if draft is not None
+        else (abs(amount_cents) if amount_cents is not None else None),
         reason=reason,
         recorded_by=actor,
         recorded_at=now,
@@ -107,13 +120,23 @@ async def link_uploaded_documents(
         update={
             "version": request.version + 1,
             "status": "received",
-            "document_ids": [*request.document_ids, *[d.id for d in documents]],
+            "document_ids": list(dict.fromkeys([*request.document_ids, *[d.id for d in documents]])),
             "resolved_at": now,
             "resolved_by": actor,
         }
     )
     reopened = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.pending})
     async with store.transaction(eid):
+        for document in documents:
+            await deps.evidence_store.update_details(
+                eid,
+                document.id,
+                reliability=None,
+                document_date=None,
+                related_ids=list(
+                    dict.fromkeys([*document.related_ids, request.subject_id, *request.related_object_ids])
+                ),
+            )
         saved = await store.put(eid, [updated, reopened], actor=AgentId.A1)
         if saved != [updated, reopened]:
             raise VersionConflict(f"补充证据请求 {request_id} 或任务 {task.id} 已有新版本")
@@ -144,22 +167,48 @@ async def unavailable(deps: AgentDeps, eid: str, request_id: str, *, actor: str,
             "resolved_by": actor,
         }
     )
-    limitation = scope_limitation(updated, judgment, actor=actor, now=now, reason=reason)
+    exceptions = {x.id: x for x in await store.latest(eid, AuditException)}
+    amount = judgment_amount(judgment, exceptions, await subject_amount(deps.financial_store, eid, judgment))
+    procedure = await store.get(eid, Procedure, request.procedure_id)
+    objectives = await store.latest(eid, AuditObjective)
+    assertion = next((o.assertion for o in objectives if procedure and o.id in procedure.objective_ids), None)
+    if assertion is None:
+        assertion = next(iter(deps.library.load(request.procedure_id).assertions), None)
+    limitation = scope_limitation(
+        updated, judgment, actor=actor, now=now, reason=reason, amount_cents=amount, assertion=assertion
+    )
     reopened = task.model_copy(update={"version": task.version + 1, "status": TaskStatus.pending})
     async with store.transaction(eid):
         saved = await store.put(eid, [updated, limitation, reopened], actor=AgentId.A1)
         if saved != [updated, limitation, reopened]:
             raise VersionConflict(f"{request_id} 或任务 {task.id} 已有新版本")
-    await deps.trail.record(evidence_trail(eid, updated, "unavailable", actor, reason=reason))
+    await deps.trail.record(evidence_trail(eid, updated, "unavailable", actor, reason=reason), independent=False)
     return updated
 
 
 async def register_representation(
-    deps: AgentDeps, eid: str, *, person: str, stated_on: str, content: str, actor: str
+    deps: AgentDeps,
+    eid: str,
+    *,
+    person: str,
+    stated_on: str,
+    content: str,
+    actor: str,
+    attachment_ids: list[str] | None = None,
+    related_object_ids: list[str] | None = None,
 ) -> DocumentRef:
     """登记管理层说明为证据 (需求 R369): 写成一份文本文件登记入证据库, 可靠性为管理层说明 (低于外部证据), 判断引用时
     看得出是管理层说明. 判断可以用 document 指针引用它."""
-    text = f"Management representation\nPerson: {person}\nStated on: {stated_on}\n\n{content}\n".encode()
+    if not all(v.strip() for v in (person, stated_on, content)):
+        raise DataRejected("MISSING_FIELD", "person, stated_on, content")
+    attachments = attachment_ids or []
+    known = {d.id for d in await deps.financial_store.documents(eid)}
+    if any(i not in known for i in attachments):
+        raise DataRejected("INVALID_VALUE", "附件须为本项目已登记的文件")
+    text = (
+        f"Management representation\nPerson: {person}\nStated on: {stated_on}\n"
+        f"Attachments: {', '.join(attachments)}\n\n{content}\n"
+    ).encode()
     document = await deps.evidence_store.save(
         eid,
         f"management-representation-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}.txt",
@@ -168,14 +217,26 @@ async def register_representation(
         reliability=Reliability.management_representation,
         media_type="text/plain",
         uploaded_by=actor,
+        status="classified",
     )
+    if related_object_ids:
+        document = await deps.evidence_store.update_details(
+            eid, document.id, reliability=None, document_date=None, related_ids=related_object_ids
+        )
     await deps.trail.record(
         TrailEntry(
             engagement_id=eid,
             kind=TrailKind.data,
             actor=actor,
             summary=f"登记管理层说明 {document.id}",
-            payload={"action": "management_representation", "document_id": document.id, "person": person},
-        )
+            payload={
+                "action": "management_representation",
+                "document_id": document.id,
+                "person": person,
+                "attachment_ids": attachments,
+                "related_object_ids": related_object_ids or [],
+            },
+        ),
+        independent=False,
     )
     return document if isinstance(document, DocumentRef) else DocumentRef.model_validate(document)

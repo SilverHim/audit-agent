@@ -31,6 +31,7 @@ const result = {
   troubled: {}, // 任务 ID → [程序, 对象, 类型]
   decisions: [], // [任务 ID, 决定]
   corrections: [], // [种类, 错报 ID, 更正分录] (功能 misstatement 打开时, 等更正处提交的更正通知)
+  evidence_followup: { requested: false, received: false, unavailable: false },
   workpapers: null, // 档案页预览、编辑、历史与下载, 复用 mock 走通.
   currency: null, // 币种确认与锁定后的显示核对 (R366), 共用原有走通.
   withdrawal_totals: [], // Issue #67: 初次同意, 撤回后改判不是错报, 再撤回并同意的未更正合计
@@ -411,6 +412,7 @@ async function optionFor(view, plan) {
     plan.decision === 'confirm' && !byAction.confirm
       ? { ...plan, decision: 'override', conclusion, reason: plan.reason ?? conclusion }
       : plan
+  if (await page.locator(`[id="decision-${id}-${want.decision}"]`).count()) return { option: want.decision, plan: want }
   const option = byAction[want.decision]
   if (!option) throw new Error(`${id} 的卡片没有对应 ${plan.decision} 的选项 (AI 结论 ${view.target.proposed_action})`)
   return { option, plan: want }
@@ -424,9 +426,9 @@ async function fillDraft(id, draft) {
   await selectById(`ms-direction-${id}`, draft.direction)
 }
 
-async function decideTask(view, pending) {
+async function decideTask(view, pending, forcedPlan = null) {
   const id = view.task.id
-  let plan = reviewPlan(view, pending)
+  let plan = forcedPlan ?? reviewPlan(view, pending)
   if (plan.error) {
     issue(plan.error, '每个对象至多重跑一次, 任务类型在决定表的范围内')
     throw new Stuck(plan.error)
@@ -435,9 +437,9 @@ async function decideTask(view, pending) {
   await recordButton().waitFor()
   let byDefault = false
   if (view.allowed_decisions.length > 1 || plan.decision !== 'dispute_resolution') {
-    if (!view.allowed_decisions.includes(plan.decision)) throw new Error(`${id} 不能选 ${plan.decision} (可选 ${view.allowed_decisions})`)
     const chosen = await optionFor(view, plan)
     plan = chosen.plan
+    if (!view.allowed_decisions.includes(plan.decision)) throw new Error(`${id} 不能选 ${plan.decision} (可选 ${view.allowed_decisions})`)
     byDefault = chosen.option === 'agree_misstatement'
     const radio = page.locator(`[id="decision-${id}-${chosen.option}"]`)
     if (byDefault && !(await radio.isChecked())) issue(`${id} 的 "同意, 认定为错报" 没有默认选中`, 'AI 判为错报时默认选中同意 (需求 R364)')
@@ -452,6 +454,20 @@ async function decideTask(view, pending) {
   if (plan.conclusion && plan.decision !== 'confirm') await fillById(`conclusion-${id}`, plan.conclusion)
   if (plan.draft && !byDefault) await fillDraft(id, plan.draft)
   if (plan.reason) await fillById(`reason-${id}`, plan.reason)
+  if (config.evidence_followup && subjectOf(view) === 'XJ-499' && view.task.procedure_id === 'GEN-02' && byDefault) {
+    const editor = page.getByTestId('correction-editor')
+    const descriptions = editor.locator('input[aria-label^="Entry description "]')
+    const count = await descriptions.count()
+    if (!count) throw new Error('更正建议没有可编辑分录')
+    const amount = page.locator(`[id="ms-amount-${id}"]`)
+    const original = await amount.inputValue()
+    await amount.fill('749.99')
+    await amount.fill(original)
+    if (await descriptions.count() !== count) throw new Error('修改错报金额清空了更正建议')
+    const first = descriptions.first()
+    await first.fill(`Auditor reviewed: ${await first.inputValue()}`)
+    result.correction_edited = true
+  }
   await snap('form')
   const button = recordButton()
   if (await button.isDisabled()) throw new Error(`${id} 的记录按钮不可点`)
@@ -628,6 +644,38 @@ async function editWorkpaper() {
   result.workpapers = { edited: true, previewed: false, downloaded: false }
 }
 
+async function requestEvidence(view, pending, unavailable = false) {
+  await decideTask(view, pending, { decision: 'more_evidence', reason: 'Obtain additional evidence for this object.' })
+  await idle('要求补证之后')
+  if (!unavailable) { result.evidence_followup.requested = true; return }
+  await goto(`${base}/engagements/${result.eid}/data`)
+  const row = page.locator('[data-testid^="evidence-request-ER-"]').filter({ hasText: subjectOf(view) }).first()
+  await row.getByRole('button', { name: 'Mark unavailable', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: 'Mark unavailable', exact: true }).click()
+  await waitFor(async () => ((await api(`/engagements/${result.eid}/evidence-requests`)).body ?? []).some(r => r.subject_id === subjectOf(view) && r.status === 'unavailable'), timeouts.action_ms, '范围受限未保存')
+  result.evidence_followup.unavailable = true
+}
+
+async function uploadLateEvidence() {
+  await goto(`${base}/engagements/${result.eid}/gate`)
+  const summary = page.getByTestId('evidence-followup-summary')
+  await summary.waitFor()
+  const summaryText = await summary.innerText()
+  for (const expected of ['XJ-397', 'XJ-575', '296.95']) {
+    if (!summaryText.includes(expected)) throw new Error(`FIN-01 补证摘要缺少 ${expected}`)
+  }
+  await snap('FIN-01-followup-summary')
+  await goto(`${base}/engagements/${result.eid}/data`)
+  const row = page.locator('[data-testid^="evidence-request-ER-"]').filter({ hasText: 'XJ-397' }).first()
+  await row.locator('input[type="file"]').setInputFiles(config.evidence_followup)
+  await waitFor(async () => {
+    const requests = (await api(`/engagements/${result.eid}/evidence-requests`)).body ?? []
+    return requests.some(r => r.subject_id === 'XJ-397' && r.rejudged_judgment_id)
+  }, timeouts.idle_ms, 'FIN-01 收到补证后未自动重判')
+  result.evidence_followup.received = true
+}
+
 async function checkAuditFile() {
   await goto(`${base}/engagements/${result.eid}/workpapers?ref=D-3`)
   await page.getByTestId('workpaper-preview').waitFor()
@@ -701,6 +749,16 @@ async function main() {
       action = () => doManual(task)
     } else if (pending.length) {
       const task = pending[0]
+      if (config.evidence_followup && task.task.kind === 'normal' && task.task.procedure_id === 'GEN-02') {
+        if (subjectOf(task) === 'XJ-397' && !result.evidence_followup.requested) {
+          if (!(await step('要求 XJ-397 补充证据', async () => { await requestEvidence(task, pending); await idle('补证请求之后') }))) return
+          continue
+        }
+        if (subjectOf(task) === 'XJ-575' && !result.evidence_followup.unavailable) {
+          if (!(await step('无法取得 XJ-575 补证并记录范围受限', async () => { await requestEvidence(task, pending, true); await idle('范围受限之后') }))) return
+          continue
+        }
+      }
       name = `复核 ${task.task.procedure_id} ${subjectOf(task)}`
       action = () => decideTask(task, pending)
     } else if (suggested) {
@@ -715,6 +773,10 @@ async function main() {
       name = '确认数据已齐'
       action = confirmReady
     } else if (view.current_gate) {
+      if (config.evidence_followup && view.current_gate === 'FIN-01' && !result.evidence_followup.received) {
+        if (!(await step('FIN-01 上传补证并自动回到执行阶段', async () => { await uploadLateEvidence(); await idle('补证重判之后') }))) return
+        continue
+      }
       name = `闸门 ${view.current_gate}`
       action = config.review_withdrawal && view.current_gate === 'FIN-01' ? checkWithdrawal : () => decideGate(view.current_gate)
     } else if (view.awaiting_correction) {

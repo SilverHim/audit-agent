@@ -18,6 +18,7 @@ from backend.contracts.models import (
 from backend.services.materiality import materiality_amounts
 from backend.services.staleness import current_misstatements, superseded_runs
 from backend.services.workpaper_files import relative_filename
+from backend.services.workpaper_followup import corrections, evidence_tables
 from backend.services.workpaper_labels import ASSERTIONS, CATEGORIES, NOT_AVAILABLE, PROCEDURE_NAMES, SCOPES, words
 from backend.services.workpaper_leads import lead_content
 from backend.services.workpaper_tables import column, section, unsigned
@@ -146,7 +147,12 @@ def misstatement_section(view: "View", sources: "Sources") -> WorkpaperSection:
     )
     return section(
         "details",
-        tables=[totals, table],
+        tables=[
+            totals,
+            table,
+            *[corrections(m.correction, m.id) for m in kept if m.correction],
+            *evidence_tables(sources),
+        ],
         paragraphs=[
             last.reason
             if last and last.reason

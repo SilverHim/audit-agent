@@ -1,5 +1,5 @@
 {
-  "conclusion": "The bank confirms AUD 11,581.23 for account 12345679 at 30 September 2026, which agrees with GL account 091, and accrued interest of AUD 48.53 earned up to 30 September 2026 that is not yet credited to the account. No GL entry on any account from 25 to 30 September 2026 records that amount (X-CSH-02-1-D04-1), so interest income and the interest receivable are understated by AUD 48.53. The amount exceeds the clearly trivial threshold of AUD 16.22 and is accumulated as a misstatement (ASA 450 para 5).",
+  "conclusion": "Misstatement: Interest income is understated by AUD 48.53 (Completeness). The bank confirms AUD 11,581.23 for account 12345679 at 30 September 2026, which agrees with GL account 091, and accrued interest of AUD 48.53 earned up to 30 September 2026 that is not yet credited to the account. No GL entry on any account from 25 to 30 September 2026 records that amount (X-CSH-02-1-D04-1), so interest income and the interest receivable are understated by AUD 48.53. The amount exceeds the clearly trivial threshold of AUD 16.22 and is accumulated as a misstatement (ASA 450 para 5).",
   "reasoning_chain": [
     {
       "kind": "fact",

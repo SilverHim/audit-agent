@@ -161,7 +161,9 @@ def current_misstatements(
 ) -> list[Misstatement]:
     """来源判断或例外不属于被取代执行, 且没有作废 (认定它的复核决定已撤回, withdrawn, 需求 R363) 的错报, 保持原顺序.
     人工判断 (-H) 的 run_id 是其任务所属的执行, 随之取代. 来源查不到 (状态与 Store 对不上) 的照旧计入, 不悄悄丢掉."""
-    kept = [m for m in misstatements if m.status is not MisstatementStatus.withdrawn]
+    judgments = list(judgments)
+    replaced = {j.id for j in judgments if j.review_status is ReviewStatus.superseded and j.superseded_by}
+    kept = [m for m in misstatements if m.status is not MisstatementStatus.withdrawn and m.judgment_id not in replaced]
     if not superseded:
         return kept
     runs = {j.id: j.run_id for j in judgments} | {x.id: x.run_id for x in exceptions}

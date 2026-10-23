@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 
 BASES = {
     "revenue": words("收入", "Revenue"),
+    "gross_profit": words("毛利", "Gross profit"),
+    "total_expenses": words("总费用", "Total expenses"),
+    "net_assets": words("净资产", "Net assets"),
     "total_assets": words("总资产", "Total assets"),
     "profit_before_tax": words("税前利润", "Profit before tax"),
 }

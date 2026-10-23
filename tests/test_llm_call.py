@@ -589,3 +589,14 @@ async def test_prompt_hash_ignores_eid() -> None:
     [req], [entry] = llm.requests, trail.entries
     assert entry.prompt_hash == prompt_hash(req.system, req.messages)
     assert "eid" not in entry.payload
+
+
+async def test_judgment_prompt_contains_the_available_correction_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """真实调用应能选择对方科目, 无须从单个对象的余额行猜测代码或名称."""
+    llm = ScriptedLLM({"SI-2026-0612": [GOOD.model_dump_json()]})
+    _, judge = rev02_judge(llm, monkeypatch)
+    await judge()
+    prompt = llm.requests[0].messages[0].content
+    assert "Available chart of accounts for correction entries" in prompt
+    for account in await FakeFinancialStore(list(NUMBAT_CONTRACTS)).accounts(EID):
+        assert json.dumps(account.code) in prompt and json.dumps(account.name) in prompt

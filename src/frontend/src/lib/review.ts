@@ -333,10 +333,23 @@ export function buildRecord(
 }
 
 // 表单里的错报字段 → 错报草稿; 科目或金额缺失时返回错误文案. 科目代码可空 (空为不填; 后端查它在本项目科目表中).
-// AI 建议的更正分录随草稿提交, 由后端按借贷平衡与科目核对 (需求 R367); 改了错报数据后表单已清空, 不提交
+// 更正分录随草稿提交, 修改错报字段时保留供一起修订, 由后端按借贷平衡与科目核对 (需求 R367).
 export function misstatementDraft(input: ReviewDraft, t: Messages): MisstatementDraft | string {
   const cents = moneyToCents(input.amount)
   if (cents == null || !input.account.trim()) return t.errors.misstatementRequired
+  if (input.correction.length) {
+    const bad = input.correction.some(
+      (e) =>
+        !e.account_code ||
+        !e.account_name ||
+        !e.description.trim() ||
+        (e.debit_cents ?? 0) > 0 === (e.credit_cents ?? 0) > 0 ||
+        (e.debit_cents ?? 0) < 0 ||
+        (e.credit_cents ?? 0) < 0,
+    )
+    const net = input.correction.reduce((n, e) => n + (e.debit_cents ?? 0) - (e.credit_cents ?? 0), 0)
+    if (bad || net !== 0) return t.correctionEntry.invalid
+  }
   return {
     type: input.kind,
     account: input.account.trim(),
