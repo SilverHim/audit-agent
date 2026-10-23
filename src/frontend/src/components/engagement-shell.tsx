@@ -190,7 +190,7 @@ export function EngagementShell({
   const items: NavItem[] = [
     {
       to: '/engagements/$eid',
-      label: t.nav.concierge,
+      label: t.workbench.title,
       icon: <MessageCircle className={icon} aria-hidden="true" />,
       exact: true,
     },

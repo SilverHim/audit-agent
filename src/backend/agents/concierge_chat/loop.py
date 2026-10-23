@@ -4,7 +4,8 @@
                 └──没有──▶ END
 
 - call_model: 流式调对话模型, 逐段经 LangGraph 的自定义输出通道 (stream_mode="custom") 推 delta 事件.
-- run_tools: 执行模型要求的工具 (只读, 并发), 结果作为 role=tool 消息接回; 推 tool 事件 (正在查什么).
+- run_tools: 执行模型要求的工具 (查询与提案, 并发; 不执行审计决定), 结果作为 role=tool 消息接回;
+  推 tool 事件 (正在查什么).
 - 步数: 每调一次模型记一步; 到 max_steps 时以 tool_choice=none 再调一次收尾, 不再调工具. recursion_limit 只作兜底.
 - 回答: 各步的文本按顺序拼接, 步与步之间补一个空行; delta 事件同样补, 所以界面上看到的就是留痕里的回答.
 - 不带检查点: 历史以审计留痕为准 (memory.py), 状态只活一轮.

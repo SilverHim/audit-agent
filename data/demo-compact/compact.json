@@ -1,0 +1,145 @@
+{
+  "notice": "Synthetic - for demonstration only",
+  "period_start": "2025-07-01",
+  "period_end": "2026-06-30",
+  "documents": [
+    {
+      "path": "acceptance/appointment.pdf",
+      "file_name": "appointment.pdf",
+      "stage": "acceptance",
+      "document_type": "minutes",
+      "reliability": "internal_original",
+      "document_date": "2026-06-30",
+      "related_ids": [],
+      "document_id": "DOC-8cfe3c668367"
+    },
+    {
+      "path": "acceptance/engagement_letter.pdf",
+      "file_name": "engagement_letter.pdf",
+      "stage": "acceptance",
+      "document_type": "engagement_letter",
+      "reliability": "internal_original",
+      "document_date": "2026-06-30",
+      "related_ids": [],
+      "document_id": "DOC-3a3e890c02be"
+    },
+    {
+      "path": "contracts/CON-C01.pdf",
+      "file_name": "CON-C01.pdf",
+      "stage": "fieldwork",
+      "document_type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-06-30",
+      "related_ids": [
+        "CON-C01",
+        "SI-C01"
+      ],
+      "document_id": "DOC-3515e6c314b2"
+    },
+    {
+      "path": "contracts/CON-C02.pdf",
+      "file_name": "CON-C02.pdf",
+      "stage": "fieldwork",
+      "document_type": "contract",
+      "reliability": "external_copy",
+      "document_date": "2026-06-30",
+      "related_ids": [
+        "CON-C02",
+        "SI-C02"
+      ],
+      "document_id": "DOC-495ec125fa53"
+    },
+    {
+      "path": "support/expense.pdf",
+      "file_name": "expense.pdf",
+      "stage": "fieldwork",
+      "document_type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-06-30",
+      "related_ids": [
+        "CJ-003",
+        "CJ-005"
+      ],
+      "document_id": "DOC-ffff49d78be0"
+    },
+    {
+      "path": "support/representation_letter.pdf",
+      "file_name": "representation_letter.pdf",
+      "stage": "manual",
+      "document_type": "representation_letter",
+      "reliability": "internal_original",
+      "document_date": "2026-06-30",
+      "related_ids": [],
+      "document_id": "DOC-49bf6854b795"
+    },
+    {
+      "path": "support/management_response.pdf",
+      "file_name": "management_response.pdf",
+      "stage": "manual",
+      "document_type": "internal_record",
+      "reliability": "internal_original",
+      "document_date": "2026-06-30",
+      "related_ids": [
+        "SI-C02",
+        "BA-C01"
+      ],
+      "document_id": "DOC-e55c3865404b"
+    }
+  ],
+  "files": {
+    "README.md": "9293bef0d036482ac4e068e92c5a16baf19853aa27715ec53191670b0aac0511",
+    "acceptance/appointment.pdf": "8cfe3c66836736df02207aeee30ed995407beffbab612d12caee5f564779f163",
+    "acceptance/engagement_letter.pdf": "3a3e890c02be2eeb7ddcd1b7eec881886732d8cedd1ce94f0e5804a2dfbff106",
+    "accounts.csv": "a1b2261464fcc3a90e1a3b64add680e839e694c767b27ece9020d64032b23d87",
+    "adjustments/journal_entries.csv": "63ba1e3e60e3d670a6afb451ae32f4263aaa0e3c4c09a07cc6ac7e70850591f4",
+    "approval_log.csv": "4d2902933124c6bb5351b5eaa9fba8a3dc21db11f6bed25e68709c5ec011b216",
+    "bank_accounts.csv": "b75da46d6c6be7e68cc385ea1296ac99a5d7cf6748da94cebed9bcf20b16cc70",
+    "bank_transactions.csv": "c1a163ddc18d418b6d0a460daccd0cf4e62c6cedee58058144f6aea7ba9404e6",
+    "client_profile.json": "7291fc2a88799ef2cdabb2ceac79f2fe87cf827d56bf4eafbaef5a325d7c7ac6",
+    "confirmations/88000101.pdf": "ae6e1641da5dcf871faee1ec16aebca4c00e432bf95114172406f92899807699",
+    "confirmations/receipts.json": "c944907eba747b92680f4c5927e228e0cbfa03802330dc946c15b99c0dee650d",
+    "contracts/CON-C01.pdf": "3515e6c314b22c10b7dd1190662093968ed392a3afef1ec9c69d9f0dde0e2272",
+    "contracts/CON-C02.pdf": "495ec125fa53953a497cfd8a718a507beac33ace956e9d2d1b6b91299f6238c5",
+    "delivery_notes.csv": "edc85100921c3797168b9b30b53d79e8acd11d146054a5a32a4ea70afa05d4b1",
+    "journal_entries.csv": "b2ba0449f04f6dc972668239be93c513042fefdd920743b5bdd340201fdbf197",
+    "llm/CSH-02/BA-C01.json": "f6e0d465f36375748eafb1f1dc216d3221658c53756c9c8ae289e5afae56b155",
+    "llm/DOC-04/CON-C01.json": "df145eccd7172248a7d76317a76d6cffbc96072d90d7f58bd9dc7829e3dd051c",
+    "llm/DOC-04/CON-C02.json": "f22bbb5a147944334ef2987a4cd2c3b3a8ff215843666e52d87a5b4e1a05731a",
+    "llm/DOC-06/BA-C01.json": "219a9ccd1ac127c9938c0bf5f6fe587024e8c81f440d53495b9187429f213f79",
+    "llm/DOC-CLASSIFY/CON-C01.json": "f1afb76d06d9040069cecfe80632cdba028e919514769c589480562f9b4dbe6d",
+    "llm/DOC-CLASSIFY/CON-C02.json": "c33b4fd88ff6f97e4d3fe893f6905e541bba6b4b45342d24f5cee4ff72cdf1ef",
+    "llm/DOC-CLASSIFY/appointment.json": "2af10db8834d4ec9f2ddca162123d01aea493c48147f32bdaec115aa6d5708bb",
+    "llm/DOC-CLASSIFY/engagement_letter.json": "dd6eec4c8891ef6f46d5f07dc94e9b991e262e2b94e8999aa440fa21874a3501",
+    "llm/DOC-CLASSIFY/expense.json": "1bc3a4afb11a557daeab43d73b1efc0e5a5631c47f0114835a55a6d715bdf6d3",
+    "llm/DOC-CLASSIFY/management_response.json": "5432e8c07f3d6c12bd64aa241aa2baf179d899e8eeefe24985edd0c6c3c56e8e",
+    "llm/DOC-CLASSIFY/representation_letter.json": "6cbe142d9676231fc0ebdd1919163cacf4dc4304acca0c48c3cdae53c09b9b49",
+    "llm/FIN-03/BA-C01.json": "03b5e6d466fab8c48c42a2f9a50bb604f2572180d69d62deedc99bf573eb67b7",
+    "llm/FIN-03/SI-C02.json": "2d036cb469ae0ce0629f085d4fdc1470a76906bbd903fe13986480cc956595a2",
+    "llm/FIN-09/BA-C01.json": "3642597a6290cef10658f4c8281f6db6721608578571552f3ce679ad6757ddf6",
+    "llm/FIN-09/SI-C02.json": "3518f32826bf2ef05512e255f647c37cd0e4cc2cd80f4b521e5954d968e50ae5",
+    "llm/GEN-02/CJ-005.json": "a469234ec34c420b541bb6cc64c93d6d8b1488ca6e1d3cb22d3b6c87bc59b765",
+    "llm/PLN-07/basis.json": "859e637bdf2d13e02c3418fa4adb00a49ccfb99ee02dbe1ff12e4c3d391bc9f9",
+    "llm/PLN-07/screen.json": "d1a68bac9cbb32907ba96c1e8174cbb475b7b812f067c84a386ce723d63884c3",
+    "llm/PLN-15/r1.json": "ddbe0fa18d7ba2269ed12785537797b89feeabbf5323de7f4faf2c21c0d94a3c",
+    "llm/PLN-15/r2.json": "5df71cc68d44ff69c53ed05fc70035721421ff897f7a90852237b3c1be1cfa3e",
+    "llm/README.md": "eb0ac296b14733c9d554a78cab921ba36b7ed0a2904597b8ef40e58afe9029ba",
+    "llm/REV-02/SI-C01.json": "02a61e758c959ce0234fc650853fc0cdc616bc1215c09748c07dc5d095205fc7",
+    "llm/REV-02/SI-C02.json": "7eaf88cde3c10861676a6eae44455720013ba540692e680bc765b6a4a3afcf89",
+    "llm/REV-03/CON-C01.json": "505934e4042fc7cc5863068f0515087eb078f742b002e45ac2dd285534044fb7",
+    "llm/REV-03/CON-C02.json": "5bba79fec99ce15d91980b33152dae660fc69e3614df8df280d3446d3873fcfe",
+    "llm/RPT-03/qualified-r1.json": "cf46a15ca93b237b1584277f8ba58645b9a65761a8b9584ab6266693397f061a",
+    "llm/RPT-03/qualified-r2.json": "f3f9eaeaa1023c96cea5bfcbbd4acc78846d8c90f6d728a78fa5b5e618203dcb",
+    "llm/RPT-03/unqualified-r1.json": "e891f2c05b10a75517a19618f9bb723d3b16eca1f3b5064d02a82ecc736d99ba",
+    "llm/RPT-03/unqualified-r2.json": "5177c10cb1637bb18af8a7d2663424abd103fd5b0b358beeebb0ff0b41f918a4",
+    "planning/audit_objectives.json": "2b3d87a17df590d617cd83c13207d8f2a4e8366c43e9aea49ca8de78c36af468",
+    "planning/risk_register.json": "53f31942280983f8f5865f8b66206c365f65b86d19eabe190d879ab525a4736c",
+    "registry/abn.json": "698209541ab03fef43ac2aebe14241ea423b8af44f96a5c5e5a6974c3aede9b5",
+    "registry/asic.json": "fdabbfe9e4162240b800d3a4d2286d20eac2c111106681f92750e927cb2ad96e",
+    "sales_invoices.csv": "bc8499908b497d307d50c877f120adcd5a393deeea1ef38b8b82697b7d87061d",
+    "supplier_bills.csv": "9e2e15e15243a35b1cf9fcd0ad8348ee33adc62484a4c492bb6241bef93a7bfe",
+    "support/expense.pdf": "ffff49d78be0c5117ad345ea678990d0aad5ea0ebda9d5c9175ee1df869e0e7a",
+    "support/management_response.pdf": "e55c3865404b718a4ca41908c1987ebe166b2ac30d1001b754d0b880609db28e",
+    "support/representation_letter.pdf": "49bf6854b7956ab38c122297a241af8e48c2dd12b75cbde269dca8cf482985b3",
+    "trial_balance.csv": "af311d21a2e5e1b6268a70efbaa4f23b887e996677b74316cce57479ef392552"
+  }
+}

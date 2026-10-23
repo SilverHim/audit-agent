@@ -79,6 +79,7 @@ from backend.contracts.services import (
 from backend.services.analytic_benchmarks import load_benchmarks, period_totals
 from backend.services.correction_entries import correction_problems
 from backend.services.currency import default_currency, format_money
+from backend.services.execution import execution_step
 from backend.services.procedure_library import ProcedureLibrary, prompt_env
 
 Level = Literal["syntax", "structure", "reference", "semantic"]
@@ -1205,8 +1206,10 @@ class JudgmentEngine:
                 eid=eid,
                 currency=currency,
             )
-            response = await client.complete(request, model)
-            report = await self.validator.validate(eid, template, response, ctx)
+            async with execution_step("model", subject_id=subject_id or fixture_key, attempt=attempt):
+                response = await client.complete(request, model)
+            async with execution_step("validation", subject_id=subject_id or fixture_key, attempt=attempt):
+                report = await self.validator.validate(eid, template, response, ctx)
             trail_ids.append(await self.record(eid, actor, request, response, report, attempt, subject_id))
             if not report.retryable or attempt == MAX_ATTEMPTS:
                 break

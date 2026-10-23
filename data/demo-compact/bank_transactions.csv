@@ -1,0 +1,4 @@
+id,bank_account_id,txn_date,amount_cents,balance_after_cents,description,reference
+BT-C01,BA-C01,2026-05-19,-765432,9234568,Synthetic bank movement,EXP-C01
+BT-C02,BA-C01,2026-06-12,3456789,12691357,Synthetic bank movement,INV-C01
+BT-C03,BA-C01,2026-06-18,-55555,12635802,Synthetic bank movement,EXP-C02

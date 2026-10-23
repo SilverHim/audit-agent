@@ -1,0 +1,35 @@
+[
+  {
+    "id": "RISK-REV-OCC",
+    "version": 1,
+    "objective_id": "OBJ-REV-OCC",
+    "assertion": "Occurrence",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Synthetic compact audit: evaluate revenue recognition and period-end delivery, and confirm cash.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-REV-CUT",
+    "version": 1,
+    "objective_id": "OBJ-REV-CUT",
+    "assertion": "Cutoff",
+    "level": "significant",
+    "fraud_related": true,
+    "description": "Synthetic compact audit: evaluate revenue recognition and period-end delivery, and confirm cash.",
+    "revision_reason": null,
+    "approved_by": null
+  },
+  {
+    "id": "RISK-CASH-EXI",
+    "version": 1,
+    "objective_id": "OBJ-CASH-EXI",
+    "assertion": "Existence",
+    "level": "high",
+    "fraud_related": false,
+    "description": "Synthetic compact audit: evaluate revenue recognition and period-end delivery, and confirm cash.",
+    "revision_reason": null,
+    "approved_by": null
+  }
+]

@@ -189,11 +189,11 @@ describe('要求补充证据 (需求 R369)', () => {
     })
   })
 
-  test('选项文案按判断用语给, 说明任务转等待证据不阻塞流程 (中英文齐)', () => {
+  test('补证选项保留证据请求入口与复核说明 (中英文齐)', () => {
     expect(en.card.choices.more_evidence.label).toContain('more evidence')
-    expect(en.card.choices.more_evidence.hint).toContain('does not block')
+    expect(en.card.choices.more_evidence.hint).toContain('review')
     expect(zh.card.choices.more_evidence.label).toContain('补充证据')
-    expect(zh.card.choices.more_evidence.hint).toContain('不阻塞')
+    expect(zh.card.choices.more_evidence.hint).toContain('复核')
     expect(zh.decisions.more_evidence).toBe('要求补充证据')
   })
 })

@@ -126,7 +126,16 @@ async def test_clients_are_listed_per_client() -> None:
         "abn": "68900042015",
         "origin": "dataset",
         "latest_version": None,
-        "datasets": [{"dataset": "demo", "period_start": None, "period_end": None, "default": False, "demo": False}],
+        "datasets": [
+            {"dataset": "demo", "period_start": None, "period_end": None, "default": False, "demo": False},
+            {
+                "dataset": "demo-compact",
+                "period_start": "2025-07-01",
+                "period_end": "2026-06-30",
+                "default": False,
+                "demo": True,
+            },
+        ],
     }
     assert len(rows) == len(by_id)  # 每个客户一行
     if optional(snapshot_dir, "20261017-q1") is not None:  # 有 Xero 快照时另核对它的一行

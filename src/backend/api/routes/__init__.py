@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from backend.api.routes import (
+    assistant_actions,
     auth,
     clients,
     conversation,
@@ -10,6 +11,7 @@ from backend.api.routes import (
     deferrals,
     engagements,
     evidence,
+    execution,
     gates,
     health,
     integrations,
@@ -25,6 +27,7 @@ from backend.api.routes import (
 api_router = APIRouter()
 for module in (
     health,
+    assistant_actions,
     auth,
     users,
     datasets,
@@ -36,6 +39,7 @@ for module in (
     deferrals,
     conversation,
     evidence,
+    execution,
     data,
     reports,
     corrections,

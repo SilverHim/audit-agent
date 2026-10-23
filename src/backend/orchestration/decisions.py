@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from backend.agents.base import AgentDeps, RunContext
 from backend.agents.workpaper import rule_fields
+from backend.contracts.assistant_actions import AssistantPlan, AssistantPlanIn, AssistantReceipt
 from backend.contracts.errors import AbnTaken, DataRejected, DecisionRejected, VersionConflict
 from backend.contracts.manual_results import result_model
 from backend.contracts.models import (
@@ -95,6 +96,7 @@ from backend.orchestration.runner import (
 from backend.orchestration.trail import phase_transition, procedure_transitions, record_transitions, rewinds
 from backend.orchestration.waits import accepts
 from backend.services.abn import abn_problem, dataset_profiles, normalize_abn
+from backend.services.assistant_actions import current_targets
 from backend.services.correction_entries import correction_problems
 from backend.services.data_quality import OnHand
 from backend.services.evidence_followup import awaiting_task, evidence_trail, request_of
@@ -1036,7 +1038,9 @@ class GraphDecisionSubmit:
             raise DecisionRejected("RESUME_REQUIRED", missing)
 
     @asynccontextmanager
-    async def _deciding(self, eid: str, resume: str | None = None) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
+    async def _deciding(
+        self, eid: str, resume: str | None = None, *, continue_graph: Callable[[], bool] | None = None
+    ) -> AsyncIterator[tuple[Engagement, StateSnapshot]]:
         """submit, update_client_profile 与 rerun_stale 共用的外壳,
         用法: async with self._deciding(eid) as (engagement, snapshot).
 
@@ -1072,6 +1076,9 @@ class GraphDecisionSubmit:
         except BaseException:
             self.runner.release(eid)  # 后台任务尚未启动, 须在此释放
             raise
+        if continue_graph is not None and not continue_graph():
+            self.runner.release(eid)
+            return
         self.runner.launch(eid, None if resume is None else Command(resume=resume))
 
     async def _check_decision_id(self, eid: str, decision_id: str) -> None:
@@ -1277,52 +1284,227 @@ class GraphDecisionSubmit:
     async def mark_evidence_unavailable(
         self, eid: str, request_id: str, reason: str | None, *, actor: str
     ) -> EvidenceRequest:
-        """审计师标补充证据无法取得 (需求 R369): 请求置 unavailable, 复核任务回待处理, 记一条范围受限.
-        校验项目锁定与项目锁; 请求不存在 404, 已不是待补的 409."""
-        async with self._deciding(eid) as (_, snapshot):
-            if not at_rerun_point(snapshot):
-                raise DecisionRejected("NOT_RERUNNABLE", "请在程序等复核或报告签字前的闸门处理")
+        return (await self._unavailable_batch(eid, [request_id], reason, actor=actor))[0]
+
+    async def _unavailable_batch(
+        self, eid: str, request_ids: list[str], reason: str | None, *, actor: str, plan: AssistantPlan | None = None
+    ) -> list[EvidenceRequest]:
+        """同批请求在一个事务提交, 全部校验后只更新一次检查点并启动一次流程."""
+        local_wait = False
+        async with self._deciding(eid, continue_graph=lambda: not local_wait) as (_, snapshot):
             values = fill_defaults(snapshot.values)
             store = self.deps.output_store
-            async with store.transaction(eid):
-                request = await evidence_unavailable(self.deps, eid, request_id, actor=actor, reason=reason)
-                procedure = await store.get(eid, Procedure, request.procedure_id)
-                assert procedure is not None
-                updated = procedure.model_copy(
-                    update={"version": procedure.version + 1, "status": ProcedureStatus.awaiting_human}
+            # 完成阶段等人节点继续等待本程序的补证, 无需回退到 P2.
+            requests_before = [await store.get(eid, EvidenceRequest, rid) for rid in request_ids]
+            tasks_before = [await store.get(eid, ReviewTask, r.task_id) if r else None for r in requests_before]
+            local_wait = (
+                bool(tasks_before)
+                and not any(task.error for task in snapshot.tasks)
+                and all(
+                    t is not None and any(accepts(w, t, values["procedure_pack"]) for w in review_waits(snapshot))
+                    for t in tasks_before
                 )
+                and not at_rerun_point(snapshot)
+            )
+            if not at_rerun_point(snapshot) and not local_wait:
+                raise DecisionRejected("NOT_RERUNNABLE", "请在相关程序等复核或报告签字前的闸门处理")
+            if plan is not None:
+                await self._check_assistant_plan(eid, plan, actor)
+            async with store.transaction(eid):
+                requests = [
+                    await evidence_unavailable(self.deps, eid, rid, actor=actor, reason=reason) for rid in request_ids
+                ]
+                pids = list(dict.fromkeys(r.procedure_id for r in requests))
+                updated = []
+                for pid in pids:
+                    procedure = await store.get(eid, Procedure, pid)
+                    assert procedure is not None
+                    updated.append(
+                        procedure.model_copy(
+                            update={"version": procedure.version + 1, "status": ProcedureStatus.awaiting_human}
+                        )
+                    )
+                if local_wait:
+                    await store.put(eid, updated, actor=actor)
+                    await record_transitions(
+                        self.deps.trail, await procedure_transitions(store, eid, updated), independent=False
+                    )
+                    if plan is not None:
+                        await self._record_assistant_receipt(eid, plan, actor)
+                    return requests
                 reports = await store.latest(eid, AuditReportVersion)
                 rewind = RerunRequest(
-                    id=f"RR-UNAVAILABLE-{request.id}",
-                    procedure_ids=[procedure.id],
+                    id=f"RR-UNAVAILABLE-{plan.id if plan else requests[0].id}",
+                    procedure_ids=pids,
                     superseded_run_ids=[],
-                    evidence_request_id=request.id,
+                    evidence_request_id=requests[0].id,
+                    evidence_request_ids=request_ids if plan else [],
                     data_version=(await self.deps.data.readiness(eid)).data_version,
                     report_revision=max((r.revision for r in reports), default=None),
                     requested_by=actor,
                     requested_at=self.now(),
                 )
-                await store.put(eid, [updated, rewind], actor=actor)
+                saved = await store.put(eid, [*updated, rewind], actor=actor)
+                if saved != [*updated, rewind]:
+                    raise VersionConflict("批量处理的程序或流程恢复请求已有新版本")
                 if values["phase"] is not Phase.P2_Executing:
                     await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
+                if plan is not None:
+                    await self._record_assistant_receipt(eid, plan, actor)
             await self.deps.trail.record(rerun_trail(eid, rewind))
-            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, [updated]))
+            await record_transitions(self.deps.trail, await procedure_transitions(store, eid, updated))
             await record_transitions(
                 self.deps.trail,
-                phase_transition(eid, values["phase"], Phase.P2_Executing, procedure.id, reruns=rewinds(values) + 1),
+                phase_transition(eid, values["phase"], Phase.P2_Executing, None, reruns=rewinds(values) + 1),
             )
-            task = await store.get(eid, ReviewTask, request.task_id)
+            tasks = [await store.get(eid, ReviewTask, r.task_id) for r in requests]
             await self.app.aupdate_state(
                 GraphRunner.config(eid),
                 {
                     "phase": Phase.P2_Executing,
                     "rerun_requests": [rewind],
                     "procedure_pack": latest_in_order(values["procedure_pack"], await store.latest(eid, Procedure)),
-                    "review_tasks": [task] if task else [],
+                    "review_tasks": [t for t in tasks if t is not None],
                 },
                 as_node="fan_in",
             )
-        return request
+        return requests
+
+    async def _check_assistant_plan(self, eid: str, plan: AssistantPlan, actor: str) -> None:
+        if plan.proposed_for != actor:
+            raise DecisionRejected("INVALID_VALUE", "操作方案不属于当前授权人")
+        if await self.deps.trail.find_success(eid, f"{plan.id}:cancelled"):
+            raise DecisionRejected("INVALID_VALUE", "该操作方案已取消")
+        body = AssistantPlanIn(
+            action=plan.action, target_kind=plan.targets[0].kind, target_ids=[t.id for t in plan.targets]
+        )
+        fresh = {t.id: t for t in await current_targets(self.deps, eid, body)}
+        if any(fresh[t.id].fingerprint != t.fingerprint for t in plan.targets):
+            raise DecisionRejected("VERSION_MISMATCH", "事项已变化, 请重新生成操作方案")
+
+    async def _record_assistant_receipt(self, eid: str, plan: AssistantPlan, actor: str) -> AssistantReceipt:
+        receipt = AssistantReceipt(
+            plan_id=plan.id,
+            action=plan.action,
+            target_ids=[t.id for t in plan.targets],
+            authorized_by=actor,
+            reason=plan.reason,
+            completed_at=self.now(),
+        )
+        await self.deps.trail.record(
+            TrailEntry(
+                engagement_id=eid,
+                kind=TrailKind.assistant_action,
+                actor=actor,
+                summary=f"审计助理已执行授权操作: {plan.action}, {len(plan.targets)} 项",
+                idempotency_key=f"{plan.id}:completed",
+                payload={
+                    "action": "completed",
+                    "plan_id": plan.id,
+                    "receipt": receipt.model_dump(mode="json"),
+                    "instruction": plan.instruction,
+                    "targets": [t.model_dump(mode="json") for t in plan.targets],
+                },
+            ),
+            independent=False,
+        )
+        return receipt
+
+    async def execute_assistant(self, eid: str, plan: AssistantPlan, *, actor: str) -> AssistantReceipt:
+        """授权人的限定批次: 重试返回原回执, 状态或版本变化则整批拒绝."""
+        if plan.proposed_for != actor:
+            raise DecisionRejected("INVALID_VALUE", "操作方案不属于当前授权人")
+        cached = await self.deps.trail.find_success(eid, f"{plan.id}:completed")
+        if cached is not None:
+            return AssistantReceipt.model_validate(cached.payload["receipt"])
+        if plan.action == "evidence_unavailable":
+            await self._unavailable_batch(eid, [t.id for t in plan.targets], plan.reason, actor=actor, plan=plan)
+            cached = await self.deps.trail.find_success(eid, f"{plan.id}:completed")
+            assert cached is not None
+            return AssistantReceipt.model_validate(cached.payload["receipt"])
+        if plan.action in {"confirm_reviews", "recognize_misstatements"}:
+            first_id = f"AR-{plan.id}-0"
+            async with self._deciding(eid, resume=first_id) as (_, snapshot):
+                await self._check_assistant_plan(eid, plan, actor)
+                async with self.deps.output_store.transaction(eid):
+                    for index, target in enumerate(plan.targets):
+                        task = await self.deps.output_store.get(eid, ReviewTask, target.id)
+                        assert task is not None
+                        judgment = await self.deps.output_store.get(eid, Judgment, task.target_id)
+                        assert judgment is not None
+                        record = ReviewRecord(
+                            id=f"AR-{plan.id}-{index}",
+                            task_id=task.id,
+                            target_version=task.target_version,
+                            decision=Decision.confirm if plan.action == "confirm_reviews" else Decision.misstatement,
+                            misstatement_draft=judgment.misstatement_draft
+                            if plan.action == "recognize_misstatements"
+                            else None,
+                            reason=plan.reason,
+                            reviewed_by=actor,
+                            decided_at=self.now(),
+                        )
+                        checked_task, checked = await self.check_review_record(eid, record, snapshot)
+                        timed = await self.timed(eid, checked)
+                        await self._apply_review(eid, timed, checked_task, snapshot, independent_trail=False)
+                    receipt = await self._record_assistant_receipt(eid, plan, actor)
+            return receipt
+        if plan.action == "rerun_stale":
+            await self.rerun_stale(
+                eid, f"RR-{plan.id}", [t.id for t in plan.targets], requested_by=actor, assistant_plan=plan
+            )
+            cached = await self.deps.trail.find_success(eid, f"{plan.id}:completed")
+            assert cached is not None
+            return AssistantReceipt.model_validate(cached.payload["receipt"])
+        self.runner.acquire(eid)
+        try:
+            engagement = await self._engagement(eid)
+            if engagement.locked:
+                raise DecisionRejected("ENGAGEMENT_LOCKED", eid)
+            await self._check_assistant_plan(eid, plan, actor)
+            async with self.deps.output_store.transaction(eid):
+                for target in plan.targets:
+                    await self.deps.trail.record(
+                        TrailEntry(
+                            engagement_id=eid,
+                            kind=TrailKind.deferral,
+                            actor=actor,
+                            summary=f"审计助理授权{'暂缓' if plan.action == 'defer' else '恢复'}: {target.id}",
+                            created_at=self.now(),
+                            payload={
+                                "target_type": target.kind,
+                                "target_id": target.id,
+                                "deferred": plan.action == "defer",
+                                "plan_id": plan.id,
+                            },
+                        ),
+                        independent=False,
+                    )
+                return await self._record_assistant_receipt(eid, plan, actor)
+        finally:
+            self.runner.release(eid)
+
+    async def cancel_assistant(self, eid: str, plan: AssistantPlan, *, actor: str) -> None:
+        if plan.proposed_for != actor:
+            raise DecisionRejected("INVALID_VALUE", "操作方案不属于当前授权人")
+        self.runner.acquire(eid)
+        try:
+            if await self.deps.trail.find_success(eid, f"{plan.id}:completed"):
+                raise DecisionRejected("INVALID_VALUE", "操作已经完成, 请使用相应业务更正入口")
+            if await self.deps.trail.find_success(eid, f"{plan.id}:cancelled"):
+                return
+            await self.deps.trail.record(
+                TrailEntry(
+                    engagement_id=eid,
+                    kind=TrailKind.assistant_action,
+                    actor=actor,
+                    summary="审计助理操作方案已取消",
+                    idempotency_key=f"{plan.id}:cancelled",
+                    payload={"action": "cancelled", "plan_id": plan.id},
+                )
+            )
+        finally:
+            self.runner.release(eid)
 
     async def edit_evidence_request(
         self,
@@ -1365,7 +1547,15 @@ class GraphDecisionSubmit:
         finally:
             self.runner.release(eid)
 
-    async def _apply_review(self, eid: str, record: ReviewRecord, task: ReviewTask, snapshot: StateSnapshot) -> None:
+    async def _apply_review(
+        self,
+        eid: str,
+        record: ReviewRecord,
+        task: ReviewTask,
+        snapshot: StateSnapshot,
+        *,
+        independent_trail: bool = True,
+    ) -> None:
         """写入已通过校验的复核决定: 一个事务内写决定, 效果, 任务 decided 与程序新版本, 提交后写 decision 留痕.
         rerun 时连同同程序其余待决的可重跑任务 (failed, unattributed) 一并置 decided (一轮失败算一组, 见 rerun_group).
 
@@ -1420,8 +1610,14 @@ class GraphDecisionSubmit:
                 clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
                 raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
         # 留痕在业务事务提交后写, 防重复键为决定 ID; 写失败时再提交报 RESUME_REQUIRED (同闸门决定)
-        await self.deps.trail.record(review_trail(eid, record, task, [t.id for t in group[1:]]))
-        await record_transitions(self.deps.trail, await procedure_transitions(store, eid, saved))
+        entry = review_trail(eid, record, task, [t.id for t in group[1:]])
+        if independent_trail:
+            await self.deps.trail.record(entry)
+        else:
+            await self.deps.trail.record(entry, independent=False)
+        await record_transitions(
+            self.deps.trail, await procedure_transitions(store, eid, saved), independent=independent_trail
+        )
 
     async def _write_gate(
         self,
@@ -1473,7 +1669,13 @@ class GraphDecisionSubmit:
         return {**effects, **stored}
 
     async def rerun_stale(
-        self, eid: str, request_id: str, procedure_ids: list[str] | None, *, requested_by: str
+        self,
+        eid: str,
+        request_id: str,
+        procedure_ids: list[str] | None,
+        *,
+        requested_by: str,
+        assistant_plan: AssistantPlan | None = None,
     ) -> RerunRequest:
         """用新数据重跑过期的 P2 程序 (需求 R274, 第 7 节). procedure_ids 为空时取全部可重跑的过期程序.
 
@@ -1488,6 +1690,8 @@ class GraphDecisionSubmit:
         async with self._deciding(eid) as (_, snapshot):
             if not at_rerun_point(snapshot):
                 raise DecisionRejected("NOT_RERUNNABLE", "只能在等复核, FIN-01 或 RPT-01 闸门处重跑过期程序")
+            if assistant_plan is not None:
+                await self._check_assistant_plan(eid, assistant_plan, requested_by)
             values = fill_defaults(snapshot.values)
             store = self.deps.output_store
             pack = values["procedure_pack"]
@@ -1539,6 +1743,8 @@ class GraphDecisionSubmit:
                 if saved != created:
                     clashes = [f"{o.id} v{o.version}" for o, c in zip(saved, created, strict=True) if o != c]
                     raise VersionConflict(f"Store 已有内容不同的同版本: {', '.join(clashes)}")
+                if assistant_plan is not None:
+                    await self._record_assistant_receipt(eid, assistant_plan, requested_by)
                 if phase is not Phase.P2_Executing:
                     await self.deps.engagement_store.update(eid, phase=Phase.P2_Executing)
             # 留痕在业务事务提交后写, 防重复键为请求 ID; 写失败时再提交报 RESUME_REQUIRED, 由恢复补做补写

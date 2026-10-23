@@ -7,3 +7,5 @@
 /data/xero_demo_spec.json text eol=lf
 /data/external/xero/** -text
 /docker/initdb/*.sh text eol=lf
+/data/demo-compact/** -text
+/data/demo-compact/**/*.pdf binary

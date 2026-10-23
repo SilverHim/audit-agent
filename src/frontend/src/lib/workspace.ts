@@ -12,6 +12,7 @@ export type WorkspaceQueries = {
   exceptions: Loading // 例外 (复核任务的金额与档位要用)
   deferrals: Loading // 稍后处理的标记
   requests: Loading // 补交资料请求
+  evidence?: Loading
   summary: Loading // 数据概览 (Xero 组织信息核对)
 }
 
@@ -19,6 +20,7 @@ export type WorkspaceQueries = {
 export function workspaceReady(overview: EngagementOverview | undefined, queries: WorkspaceQueries): boolean {
   if (!overview) return false
   if (overview.current_gate && queries.gate.isPending) return false
+  if (queries.evidence?.isPending) return false
   const { tasks, exceptions, deferrals, requests, summary } = queries
   return [tasks, exceptions, deferrals, requests, summary].every((query) => !query.isPending)
 }

@@ -1,0 +1,206 @@
+{
+  "conclusion": "Misstatement: Revenue (400) is overstated by AUD 12,345.67 (cutoff). Under the contract, control transferred only upon physical delivery and signed customer acceptance, which occurred on 2026-07-03; the invoice therefore belongs in the year ending 2027-06-30, not the year ended 2026-06-30.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Invoice SI-C02 was posted on 2026-06-29.",
+      "evidence": [
+        {
+          "type": "invoice",
+          "source_type": "sales_invoice",
+          "source_id": "SI-C02",
+          "locator": "posting_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "Contract term CON-C02-T1 states: \"Control transfers only upon physical delivery and signed customer acceptance.\"",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-495ec125fa53",
+          "locator": "CON-C02-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The delivery note records shipment and signed customer acceptance on 2026-07-03.",
+      "evidence": [
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C02",
+          "locator": "signed_date",
+          "page": null,
+          "reliability": "internal_original"
+        },
+        {
+          "type": "delivery",
+          "source_type": "delivery_note",
+          "source_id": "DN-C02",
+          "locator": "shipped_date",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The posting credits Sales revenue for 1,234,567 cents.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "CJ-002-2",
+          "locator": "credit_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control of the promised asset.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "For a point-in-time obligation, the timing of control is assessed using the requirements for control and indicators including physical possession and customer acceptance.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The contract requires both physical delivery and signed acceptance, and the delivery note dates those events after year-end. This explains the rule finding comparing the 2026-06-29 posting date with the 2026-07-03 signed date and addresses RISK-REV-CUT: revenue was posted before control transferred.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        4,
+        5
+      ],
+      "evidence": []
+    },
+    {
+      "kind": "inference",
+      "text": "Because the invoice was posted in the year ended 2026-06-30 but control transferred on 2026-07-03, the revenue is a cutoff misstatement. The revenue credit is AUD 12,345.67, so Revenue is overstated by AUD 12,345.67 in the year ended 2026-06-30.",
+      "from_steps": [
+        0,
+        2,
+        3,
+        6
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "invoice",
+      "source_type": "sales_invoice",
+      "source_id": "SI-C02",
+      "locator": "posting_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-495ec125fa53",
+      "locator": "CON-C02-T1",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C02",
+      "locator": "signed_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "delivery",
+      "source_type": "delivery_note",
+      "source_id": "DN-C02",
+      "locator": "shipped_date",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "CJ-002-2",
+      "locator": "credit_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "Evidence that the customer physically received and signed acceptance for the goods on or before 2026-06-30, or a contract amendment establishing an earlier control-transfer point, would overturn the cutoff conclusion.",
+  "proposed_action": "misstatement",
+  "verdict": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Revenue",
+    "assertion": "Cutoff",
+    "amount_cents": 1234567,
+    "direction": "overstated",
+    "account_code": "400",
+    "correction": [
+      {
+        "account_code": "400",
+        "account_name": "Sales revenue",
+        "debit_cents": 1234567,
+        "credit_cents": 0,
+        "description": "Reverse revenue recorded before control transferred."
+      },
+      {
+        "account_code": "120",
+        "account_name": "Trade receivables",
+        "debit_cents": 0,
+        "credit_cents": 1234567,
+        "description": "Reverse receivable recorded before control transferred."
+      }
+    ]
+  },
+  "self_confidence": 0.99
+}

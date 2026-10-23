@@ -141,6 +141,7 @@ XERO_PREFIX = "xero/"  # Xero 数据集名的前缀 (同 XeroDatasetLoader.PREFI
 class DatasetFixtureLLMClient(MockLLMClient):
     """mock 模式的客户端: 按请求所属项目 (LLMRequest.eid) 的数据集选 fixture 目录, 目录内读法同 MockLLMClient.
 
+    数据集为 demo-compact 时仅使用其专属 llm/; 缺文件时返回 fixture_not_found.
     数据集为 xero/<快照> 且 dataset_root/xero_demo/<快照>/llm 存在时, 读该目录 (生成脚本从 tests/fixtures/llm_xero
     复制的运行副本); 其余 (demo, 没有补造 llm/ 的 Xero 快照, 没有数据集的新客户, eid 为空, 查不到项目) 读 fixtures_root
     (LLM_FIXTURES_ROOT). engagements 为空时总读 fixtures_root.
@@ -156,6 +157,14 @@ class DatasetFixtureLLMClient(MockLLMClient):
         if not eid or self.engagements is None:
             return self.root
         engagement = await self.engagements.get(eid)
+        if (
+            engagement is not None
+            and engagement.dataset is not None
+            and engagement.dataset.startswith("demo-compact")
+            and "/" not in engagement.dataset
+            and "\\" not in engagement.dataset
+        ):
+            return self.dataset_root / engagement.dataset / "llm"
         if engagement is None or engagement.dataset is None or not engagement.dataset.startswith(XERO_PREFIX):
             return self.root
         snapshot = engagement.dataset.removeprefix(XERO_PREFIX)

@@ -1,0 +1,182 @@
+{
+  "conclusion": "Misstatement: Interest income is understated by AUD 355.55 (completeness). The confirmed bank balance agrees with the book balance, but the bank confirms AUD 355.55 of interest earned by year-end that was not accrued in the books.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "At 30 June 2026, the confirmed balance and book balance are both AUD 126,358.02, and the confirmation date is the reporting date.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "confirmed_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "book_balance_cents",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "balance_date",
+          "page": 1,
+          "reliability": "external_original"
+        },
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "100",
+          "locator": "balance_cents",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "The bank confirmation states that AUD 355.55 of interest was earned up to 30 June 2026 and had not yet been credited or charged to the account. The D04 search reports no GL line of that amount in its search window.",
+      "evidence": [
+        {
+          "type": "external",
+          "source_type": "document",
+          "source_id": "DOC-ae6e1641da5d",
+          "locator": "accrued_interest_cents",
+          "page": 1,
+          "reliability": "external_original"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "ASA 505 paragraph 14 requires the auditor to investigate exceptions to determine whether they indicate misstatements.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA505-P14",
+          "locator": "para 14",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "ASA 450 paragraph 5 requires the auditor to accumulate identified misstatements other than those that are clearly trivial.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P05",
+          "locator": "para 5",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "The bank balance difference is nil, but the confirmed accrued interest was not recorded in the books. AUD 355.55 exceeds the clearly trivial threshold of AUD 23.46, so Interest income is understated by AUD 355.55 and should be accumulated as a factual misstatement.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "confirmed_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "book_balance_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "balance_date",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "trial_balance",
+      "source_id": "100",
+      "locator": "balance_cents",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "external",
+      "source_type": "document",
+      "source_id": "DOC-ae6e1641da5d",
+      "locator": "accrued_interest_cents",
+      "page": 1,
+      "reliability": "external_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA505-P14",
+      "locator": "para 14",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P05",
+      "locator": "para 5",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "A GL posting in the search window recording the AUD 355.55 of accrued interest would overturn the conclusion that the interest was unrecorded.",
+  "proposed_action": "misstatement",
+  "verdict": "misstatement",
+  "misstatement_draft": {
+    "type": "factual",
+    "account": "Interest income",
+    "assertion": "Completeness",
+    "amount_cents": 35555,
+    "direction": "understated",
+    "account_code": "410",
+    "correction": [
+      {
+        "account_code": "100",
+        "account_name": "Cash at bank",
+        "debit_cents": 35555,
+        "credit_cents": 0,
+        "description": "Accrue bank interest earned by 30 June 2026: AUD 355.55."
+      },
+      {
+        "account_code": "410",
+        "account_name": "Interest income",
+        "debit_cents": 0,
+        "credit_cents": 35555,
+        "description": "Recognise bank interest earned by 30 June 2026: AUD 355.55."
+      }
+    ]
+  },
+  "self_confidence": 0.98
+}

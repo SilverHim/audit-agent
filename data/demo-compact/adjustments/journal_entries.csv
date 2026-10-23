@@ -1,0 +1,5 @@
+id,entry_no,posting_date,created_at,created_by,approved_by,approved_at,account_code,debit_cents,credit_cents,description,source_doc,is_adjustment
+AJE-C01-1,AJE-C01,2026-06-30,2026-07-20T06:00:00Z,staff-a,manager-b,2026-07-20T07:00:00Z,400,1234567,0,Reverse revenue before customer acceptance,SI-C02,True
+AJE-C01-2,AJE-C01,2026-06-30,2026-07-20T06:00:00Z,staff-a,manager-b,2026-07-20T07:00:00Z,120,0,1234567,Reverse revenue before customer acceptance,SI-C02,True
+AJE-C02-1,AJE-C02,2026-06-30,2026-07-20T06:00:00Z,staff-a,manager-b,2026-07-20T07:00:00Z,120,35555,0,Record accrued interest receivable,BA-C01,True
+AJE-C02-2,AJE-C02,2026-06-30,2026-07-20T06:00:00Z,staff-a,manager-b,2026-07-20T07:00:00Z,410,0,35555,Record accrued interest receivable,BA-C01,True

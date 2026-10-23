@@ -1,0 +1,143 @@
+{
+  "conclusion": "Not a misstatement: the terms establish the transfer point as physical delivery and signed customer acceptance under CON-C01-T1. CON-C01-T2 makes payment due 30 days after acceptance; no return rights, rebates, additional acceptance conditions, bill-and-hold, consignment, guarantee or related-party terms are stated in the supplied terms.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "Term CON-C01-T1 states: \"Control transfers only upon physical delivery and signed customer acceptance.\"",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3515e6c314b2",
+          "locator": "CON-C01-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "standard",
+      "text": "Revenue is recognised when the customer obtains control; where the performance obligation is not satisfied over time, the entity identifies the point in time of control transfer using the relevant control indicators.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P31",
+          "locator": "para 31",
+          "page": null,
+          "reliability": null
+        },
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P35",
+          "locator": "para 35",
+          "page": null,
+          "reliability": null
+        },
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "AASB15-P38",
+          "locator": "para 38",
+          "page": null,
+          "reliability": null
+        }
+      ]
+    },
+    {
+      "kind": "fact",
+      "text": "Term CON-C01-T2 states: \"Payment is due 30 days after acceptance.\"",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3515e6c314b2",
+          "locator": "CON-C01-T2",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "limitation",
+      "text": "The supplied terms do not state whether return rights, rebates, bill-and-hold, consignment, guarantees or related-party terms apply; no further terms on these matters are available to assess.",
+      "evidence": [
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3515e6c314b2",
+          "locator": "CON-C01-T1",
+          "page": 1,
+          "reliability": "external_copy"
+        },
+        {
+          "type": "contract",
+          "source_type": "document",
+          "source_id": "DOC-3515e6c314b2",
+          "locator": "CON-C01-T2",
+          "page": 1,
+          "reliability": "external_copy"
+        }
+      ]
+    },
+    {
+      "kind": "inference",
+      "text": "Control passes at a point in time, only after both physical delivery and signed customer acceptance, as specified in CON-C01-T1. The payment term is linked to acceptance but does not change that transfer event; no other relevant terms are identified in the supplied terms.",
+      "from_steps": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "evidence": []
+    }
+  ],
+  "evidence": [
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3515e6c314b2",
+      "locator": "CON-C01-T1",
+      "page": 1,
+      "reliability": "external_copy"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P31",
+      "locator": "para 31",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P35",
+      "locator": "para 35",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "AASB15-P38",
+      "locator": "para 38",
+      "page": null,
+      "reliability": null
+    },
+    {
+      "type": "contract",
+      "source_type": "document",
+      "source_id": "DOC-3515e6c314b2",
+      "locator": "CON-C01-T2",
+      "page": 1,
+      "reliability": "external_copy"
+    }
+  ],
+  "counter_argument": "A further contract term stating that control, title or risk passes at a different event, or that an over-time criterion applies, would change the transfer-point conclusion.",
+  "proposed_action": "accept",
+  "verdict": "not_misstatement",
+  "misstatement_draft": null,
+  "self_confidence": 0.94
+}

@@ -176,7 +176,11 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
     ''
   const selected = options.find((item) => item.client_id === chosen)
   // 数据集客户发数据集 (默认的或第一个; 现在每个客户只有一个, 有多个时再出数据集选择), 没有数据集的客户发 client_id
-  const dataset = selected?.datasets.find((d) => d.default) ?? selected?.datasets[0]
+  const [datasetId, setDatasetId] = useState('')
+  const dataset =
+    selected?.datasets.find((d) => d.dataset === datasetId) ??
+    selected?.datasets.find((d) => d.default) ??
+    selected?.datasets[0]
   const fixedStart = dataset?.period_start ?? null
   const fixedEnd = dataset?.period_end ?? null
   const note = clientNote(selected, t)
@@ -232,6 +236,25 @@ function CreateForm({ onCancel }: { onCancel: () => void }) {
                   {note}
                 </span>
               ) : null}
+            </div>
+          ) : null}
+          {selected && selected.datasets.length > 1 ? (
+            <div className="flex flex-[1_1_200px] flex-col gap-1.5">
+              <label htmlFor="demo-profile" className="text-sm">
+                {t.projectsPage.demoProfile}
+              </label>
+              <select
+                id="demo-profile"
+                value={dataset?.dataset ?? ''}
+                onChange={(event) => setDatasetId(event.target.value)}
+                className="min-h-10 rounded-lg border bg-card px-3 text-sm"
+              >
+                {selected.datasets.map((item) => (
+                  <option key={item.dataset} value={item.dataset}>
+                    {item.dataset === 'demo-compact' ? t.projectsPage.compactProfile : item.dataset}
+                  </option>
+                ))}
+              </select>
             </div>
           ) : null}
           {clients.isError ? (

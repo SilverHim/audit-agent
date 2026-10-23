@@ -1,0 +1,49 @@
+{
+  "decisions": [
+    {
+      "account_code": "100",
+      "verdict": "focus",
+      "reason": "Cash at bank increased by AUD 26,358.02 from the opening balance of AUD 100,000.00 to AUD 126,358.02. The increase exceeds the AUD 469.14 threshold and is 26.36% of the opening balance. The supplied information does not explain the movement, so it remains an audit focus.",
+      "risk_or_assertion": "Existence and accuracy of cash",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "100",
+          "locator": "amount_cents, account_name, basis, current_cents, prior_cents, opening_cents, change_pct",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    },
+    {
+      "account_code": "120",
+      "verdict": "focus",
+      "reason": "Trade receivables have a current balance of AUD 12,345.67 and an opening balance of AUD 0.00. This new balance exceeds the AUD 469.14 threshold, and there is no supplied explanation for it. It remains an audit focus.",
+      "risk_or_assertion": "Existence and valuation of receivables",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "trial_balance",
+          "source_id": "120",
+          "locator": "amount_cents, account_name, basis, current_cents, prior_cents, opening_cents, change_pct",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ]
+    }
+  ],
+  "additions": [
+    {
+      "account_code": "400",
+      "reason": "The monthly trend reports no revenue from July 2025 through May 2026 and AUD 46,913.56 in June 2026. This concentration in the final month warrants attention to whether revenue is recorded in the correct period and is supported by valid transactions, although the account was not reported as a rule hit.",
+      "risk_or_assertion": "Revenue occurrence and cut-off"
+    },
+    {
+      "account_code": "500",
+      "reason": "The monthly trend reports operating expenses only in May 2026 and June 2026, totalling AUD 8,209.87, with no expenses reported in the preceding months. This year-end concentration warrants attention to whether expenses are complete and recorded in the correct period, although the account was not reported as a rule hit.",
+      "risk_or_assertion": "Completeness and cut-off of operating expenses"
+    }
+  ],
+  "observations": []
+}

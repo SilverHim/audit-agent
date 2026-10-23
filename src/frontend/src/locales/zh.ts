@@ -1,7 +1,9 @@
 // 中文界面文案, 与 en.ts 逐键对应
 import type { Messages } from './en'
+import { workbenchZh } from './workbench'
 
 export const zh: Messages = {
+  workbench: workbenchZh,
   workpapers: {
     title: '审计档案',
     archive: '整套下载 (ZIP)',
@@ -48,7 +50,7 @@ export const zh: Messages = {
   lang: { label: '语言', en: 'EN', zh: '中文' },
   nav: {
     stages: '审计阶段',
-    workspace: '工作区',
+    workspace: '审计工作台',
     concierge: '审计助理',
     decisions: '待决定',
     reviews: '复核队列',
@@ -214,12 +216,12 @@ export const zh: Messages = {
   },
   decisionHints: {
     confirm: '采用 AI 的结论',
-    override: '用你的结论替换',
+    override: '替换为复核结论',
     misstatement: '将该金额记为错报',
     rerun: '重新执行该程序',
-    manual_result: '由你直接给出结果',
+    manual_result: '登记人工执行结果',
     dispute_resolution: '决定采用哪个结论',
-    more_evidence: '生成补交请求并等待证据，不阻塞流程',
+    more_evidence: '生成补证请求，相关结论待证据处理后复核',
   },
   taskKinds: {
     normal: '',
@@ -252,7 +254,7 @@ export const zh: Messages = {
     decided: '已决定',
     confirmed: '已确认',
     // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
-    awaitingEvidence: '等待证据（不阻塞）',
+    awaitingEvidence: '等待补充证据',
   },
   checks: {
     abn_active: 'ABN 处于有效状态',
@@ -455,9 +457,9 @@ export const zh: Messages = {
     completed: (list) => `已完成 · ${list}`,
     deferredEvent: (target) => `${target} 已移至待决定队列 · 稍后处理`,
     resumedEvent: (target) => `${target} 已从待决定队列取回`,
-    you: '你',
+    you: '审计人员',
     decisionRecorded: (target) => `已记录决定 · ${target}`,
-    running: '系统正在处理（见上方状态条），完成后会把下一项交给你。',
+    running: '系统正在执行相关程序，完成后将显示结果及待复核事项。',
     nothingPending: '目前没有待人工处理的事项。',
     loadingItems: '正在读取待处理的事项…',
     deferredWaiting: (n) => `目前没有新的事项。待决定队列里有 ${n} 项稍后处理。`,
@@ -470,7 +472,7 @@ export const zh: Messages = {
     gateIntro: {
       'ACC-01': (passed, total, exceptions, manual) =>
         manual
-          ? `可以作出承接决定了。ACC-04 的 ${total} 项检查中 ${passed} 项通过，${manual} 项待你对照 ABN Lookup 或 ASIC 人工确认${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
+          ? `可以作出承接决定了。ACC-04 的 ${total} 项检查中 ${passed} 项通过，${manual} 项需对照 ABN Lookup 或 ASIC 人工核验${exceptions ? `，产生 ${exceptions} 项例外` : ''}。`
           : `可以作出承接决定了。ACC-04 已将该公司与 ABN 登记册和 ASIC 公司登记册核对，${total} 项检查通过 ${passed} 项，${exceptions ? `产生 ${exceptions} 项例外` : '没有例外事项'}。`,
       'PLN-01/03': '初步分析已完成。请选定重要性水平并确认风险清单，审计程序将据此装配。',
       'FIN-01': (count, total, skipped) =>
@@ -478,9 +480,9 @@ export const zh: Messages = {
       'PLN-15': (revision) => `总体审计计划第 ${revision} 修订已起草。批准后开始外勤，也可以退回修订。`,
       'RPT-01': (revision) => `第 ${revision} 稿审计报告已生成。请签字，或附批注退回修订。`,
     },
-    reviewIntro: (total, tier) => `有 ${total} 项需要你复核。这一项属于"${tier}"档。`,
+    reviewIntro: (total, tier) => `共 ${total} 项待复核，当前事项的自主等级为 ${tier}。`,
     deferredIntro: (n) => `另有 ${n} 项稍后处理。`,
-    manualIntro: (procedure) => `这条程序要你人工执行：${procedure}。请在人工程序页附上证据并记录结果。`,
+    manualIntro: (procedure) => `当前程序需人工执行：${procedure}。人工程序页提供证据上传和结果登记入口。`,
     performManual: '去执行',
     afterDefer: '已移至待决定队列。',
     quick: {
@@ -538,7 +540,7 @@ export const zh: Messages = {
     decideLater: '稍后处理',
     attachMisstatement: '同时登记错报',
     disputeUnavailable: '独立复核的推理链未通过校验，不能直接采用',
-    conclusion: '你的结论',
+    conclusion: '复核结论',
     conclusionHint: '（必填，保存为该判断的新版本）',
     conclusionHintDispute: '（必填，保存为新的人工判断，原判断标为已推翻）',
     misstatement: '错报',
@@ -588,7 +590,7 @@ export const zh: Messages = {
       // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
       more_evidence: {
         label: '要求补充证据，生成补交请求',
-        hint: '任务转等待证据，不阻塞流程',
+        hint: '任务转为等待证据，资料处理后继续复核',
       },
     },
   },
@@ -730,7 +732,7 @@ export const zh: Messages = {
   },
   withdraw: {
     action: '撤回复核决定',
-    intro: '撤回后该判断回到待复核，由你重新选择；原决定与撤回都留痕。认定的错报随之作废，并重新累计。',
+    intro: '撤回后该判断回到待复核，需重新作出复核决定；原决定与撤回都留痕。认定的错报随之作废，并重新累计。',
     confirm: '撤回',
     cancel: '取消',
     done: '已撤回，该判断回到待复核',
@@ -807,7 +809,7 @@ export const zh: Messages = {
   },
   queuePage: {
     title: '复核队列',
-    next: '让助理带你复核下一项',
+    next: '处理下一项复核',
     all: '全部',
     pending: '待人工处理',
     decided: '已决定',
@@ -824,13 +826,13 @@ export const zh: Messages = {
     confirmSelected: (n) => `确认所选（${n}）`,
     sideBySide: '并排查看',
     keyEvidence: '关键证据',
-    review: '让助理带你复核',
+    review: '打开复核工作台',
     viewRecord: '在表单视图中打开',
     selectHint: '选择一项，查看结论和证据。',
   },
   manualPage: {
     title: '人工程序',
-    subtitle: '交给你执行的程序：完成后附上证据，记下结果。',
+    subtitle: '人工执行程序：执行完成后上传证据并登记结果。',
     empty: '本项目没有人工程序。',
     cols: { procedure: '程序', instructions: '要做什么', status: '状态', assigned: '派发时间' },
     pending: '待执行',
@@ -998,6 +1000,8 @@ export const zh: Messages = {
     notRecorded: '未记录',
   },
   projectsPage: {
+    demoProfile: '演示数据配置',
+    compactProfile: '精简合成演示 · 每个程序 1–2 项复核',
     title: '审计项目',
     subtitle: '每个客户、每个财务年度一个项目。',
     newEngagement: '新建项目',
@@ -1016,7 +1020,7 @@ export const zh: Messages = {
     gate: (gate) => `${gate} 待人工处理`,
     datasetsFailed: '客户清单读取失败，暂不能新建项目。',
     newClient: '新建客户…',
-    noDataset: '该客户没有演示数据集：ACC-04 的登记核查留待你人工确认，客户数据在项目里导入。',
+    noDataset: '该客户没有演示数据集：ACC-04 的登记核查需人工核验，客户数据在项目里导入。',
     demoTag: '演示',
     demoNote: '演示公司：建项目后，在数据管理页按审计进行到的位置逐阶段载入合成演示资料。',
   },
@@ -1030,16 +1034,16 @@ export const zh: Messages = {
     notFound: 'ABN Lookup 查无此 ABN，承接时 ACC-04 会提出例外。',
     nameMismatch: '登记名称与填写的法定名称不一致。',
     unavailable: {
-      no_source: '没有可查的登记来源，承接时 ACC-04 的 ABN 核查留待你人工确认。',
-      not_configured: '未配置 ABN Lookup，承接时 ACC-04 的 ABN 核查留待你人工确认。',
-      unreachable: '暂时连不上 ABN Lookup；承接时 ACC-04 会再查，仍查不了即留待你人工确认。',
-      rejected: 'ABN Lookup 不认可所配的 GUID，承接时 ACC-04 的 ABN 核查留待你人工确认。',
-      service_error: 'ABN Lookup 出错；承接时 ACC-04 会再查，仍查不了即留待你人工确认。',
+      no_source: '没有可查的登记来源，承接时 ACC-04 的 ABN 核查需人工核验。',
+      not_configured: '未配置 ABN Lookup，承接时 ACC-04 的 ABN 核查需人工核验。',
+      unreachable: '暂时连不上 ABN Lookup；承接时 ACC-04 会再查，仍查不了即需人工核验。',
+      rejected: 'ABN Lookup 不认可所配的 GUID，承接时 ACC-04 的 ABN 核查需人工核验。',
+      service_error: 'ABN Lookup 出错；承接时 ACC-04 会再查，仍查不了即需人工核验。',
     },
   },
   newClient: {
     title: '新建客户',
-    intro: '登记一个没有演示数据集的客户。画像存为第 1 版，来源为你的手工录入。',
+    intro: '登记一个没有演示数据集的客户。画像存为第 1 版，来源为人工录入。',
     optional: '选填 · 客户没有申报的留空',
     yearEnd: '财年末（MM-DD）',
     approvalLimit: '付款审批限额',
@@ -1052,7 +1056,7 @@ export const zh: Messages = {
       spfr: '特殊目的财报',
     },
     abnHint: '11 位数字，可带空格',
-    registryNote: '新建的客户暂未接入 ASIC 公司摘录，承接时 ACC-04 的 ASIC 核查留待你人工确认。',
+    registryNote: '新建的客户暂未接入 ASIC 公司摘录，承接时 ACC-04 的 ASIC 核查需人工核验。',
     save: '保存客户',
     created: (name) => `客户 ${name} 已保存`,
     taken: (name, id) => `该 ABN 已登记为 ${name}（${id}）。`,
@@ -1114,7 +1118,7 @@ export const zh: Messages = {
     model: '模型',
     modelPlaceholder: '服务商提供的模型名称',
     apiKey: 'API 密钥',
-    keyPlaceholder: '粘贴你的密钥',
+    keyPlaceholder: '填写 API 密钥',
     keyKeep: '留空则沿用当前的密钥',
     keyLocal: '本机运行的模型不需要密钥',
     keySaved: (last4) => `已保存 · 末四位 ${last4}`,
@@ -1235,7 +1239,7 @@ export const zh: Messages = {
     staleHint: '本程序读的数据在上次执行之后有改动，或它依赖的程序重跑过。用新数据重跑后以新结果为准，旧结果留作历史。',
     one: '用新数据重跑',
     all: (n) => `全部重跑（${n}）`,
-    started: '已开始重跑，新结果会交给你复核。',
+    started: '已开始重跑，新结果生成后进入复核队列。',
     notice: (n) => `数据已更新，${n} 条程序的结果已过期：`,
     groups: {
       rerunnable: (n, ids) => `${n} 条可用新数据重跑：${ids}。`,
@@ -1889,7 +1893,7 @@ export const zh: Messages = {
     decisionNotice: '决定审计意见前需考虑的未结证据与范围受限',
     scopeTitle: '审计范围受限',
     title: '补充证据请求',
-    intro: (n) => `有 ${n} 项复核任务需要补充证据。任务在等待证据期间不阻塞流程。`,
+    intro: (n) => `有 ${n} 项复核任务需要补充证据。相关结论待证据处理后复核。`,
     closed: '补充证据请求都已处理。',
     separator: '、',
     statuses: { open: '等待证据', received: '已收到', unavailable: '无法取得' },
@@ -1916,7 +1920,7 @@ export const zh: Messages = {
     saved: '已保存补充证据请求',
     uploaded: (n) => `已上传 ${n} 份文件，原复核任务回到待处理`,
     unavailableDone: '已标为无法取得，原复核任务回到待处理',
-    awaitingHint: '这条任务在等补充证据，不阻塞流程的其他部分。',
+    awaitingHint: '当前事项等待补充证据，相关结论将在资料处理后继续复核。',
     openBlock: '打开补充证据请求',
     rejudged: (id) => `由补充证据请求 ${id} 重判`,
     errors: {

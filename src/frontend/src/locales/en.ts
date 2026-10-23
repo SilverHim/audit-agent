@@ -1,11 +1,13 @@
 // 英文界面文案. 键结构即 Messages 类型, zh.ts 必须逐键对应
 import type { CriticReasonCode, DocumentRef } from '@/client/types.gen'
+import { workbenchEn } from './workbench'
 
 // 没有上传人的文件在上传人一栏显示的来源 (需求 R306): 渠道 auditor_upload 而没有上传人的是系统存档 (systemArchive, 如
 // 数据集载入的合同), 其余按渠道
 type DocumentSource = 'systemArchive' | Exclude<NonNullable<DocumentRef['channel']>, 'auditor_upload'>
 
 export const en = {
+  workbench: workbenchEn,
   workpapers: {
     title: 'Audit file',
     archive: 'Download all (ZIP)',
@@ -230,7 +232,7 @@ export const en = {
     rerun: 'Run the procedure again',
     manual_result: 'Give the result yourself',
     dispute_resolution: 'Choose which conclusion stands',
-    more_evidence: 'Create a request and wait for the evidence without blocking the process',
+    more_evidence: 'Request supplementary evidence before completing the related review',
   } as Record<string, string>,
   taskKinds: {
     normal: '',
@@ -263,7 +265,7 @@ export const en = {
     decided: 'Decided',
     confirmed: 'Confirmed',
     // 复核任务的状态: 等补充证据 (需求 R369), 不算待处理, 不阻塞流程
-    awaitingEvidence: 'Waiting for evidence (does not block)',
+    awaitingEvidence: 'Waiting for evidence',
   },
   checks: {
     abn_active: 'ABN is active',
@@ -643,7 +645,7 @@ export const en = {
       // 要求补充证据 (需求 R369, R370): 任务转等待证据, 不阻塞流程; 提交后生成补交请求
       more_evidence: {
         label: 'Ask for more evidence, raising a request',
-        hint: 'The task waits for the evidence and does not block the process',
+        hint: 'The related review continues after the evidence is addressed',
       },
     },
   },
@@ -1107,6 +1109,8 @@ export const en = {
     notRecorded: 'Not recorded',
   },
   projectsPage: {
+    demoProfile: 'Demonstration dataset',
+    compactProfile: 'Compact synthetic demo · 1–2 review items per procedure',
     title: 'Engagements',
     subtitle: 'One engagement per client and financial year.',
     newEngagement: 'New engagement',
@@ -2079,7 +2083,7 @@ export const en = {
     scopeTitle: 'Scope limitations',
     title: 'Supplementary evidence requests',
     intro: (n: number) =>
-      `${n} review task${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} more evidence. The tasks wait without blocking the process.`,
+      `${n} review task${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} more evidence. The related conclusions await an evidence decision.`,
     closed: 'All supplementary evidence requests are resolved.',
     separator: ', ',
     statuses: {
@@ -2116,7 +2120,7 @@ export const en = {
     saved: 'Evidence request saved',
     uploaded: (n: number) => `${n} file${n === 1 ? '' : 's'} uploaded; the review task is back in review`,
     unavailableDone: 'Marked unavailable; the review task is back in review',
-    awaitingHint: 'This task waits for supplementary evidence and does not block the rest of the process.',
+    awaitingHint: 'This item awaits supplementary evidence before the related review can continue.',
     openBlock: 'Open the evidence requests',
     rejudged: (id: string) => `Rejudged from supplementary evidence request ${id}`,
     errors: {

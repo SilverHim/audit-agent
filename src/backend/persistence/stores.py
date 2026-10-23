@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from backend.adapters.xero_dataset import Snapshot, build_tables, snapshot_currency, snapshot_period
 from backend.adapters.xero_dataset import client_profile as xero_client_profile
-from backend.adapters.xero_supplements import DemoTable, Supplements
+from backend.adapters.xero_supplements import DemoPlan, DemoTable, Supplements
 from backend.contracts import records
 from backend.contracts.data import ContractVersion, DataInput, TableKind
 from backend.contracts.errors import AbnTaken, DataRejected, EngagementLocked, VersionConflict
@@ -785,12 +785,26 @@ class CsvDatasetLoader(TableLoader):
         return subdirectories(self.root, "client_profile.json")
 
     def period(self, dataset: str) -> tuple[date, date] | None:
-        """CSV 数据集不自带期间 (Numbat 由审计师填)."""
+        directory = safe_child(self.root, dataset)
+        if (directory / "compact.json").is_file():
+            from backend.adapters.compact_demo import period
+
+            return period(directory)
         return None
 
     def currency(self, dataset: str) -> str | None:
-        """CSV 数据集不带记账币种 (建项目时取缺省澳元)."""
         return None
+
+    def has_supplement(self, dataset: str) -> bool:
+        return (safe_child(self.root, dataset) / "compact.json").is_file()
+
+    def demo_plan(self, dataset: str) -> DemoPlan | None:
+        directory = safe_child(self.root, dataset)
+        if not self.has_supplement(dataset):
+            return None
+        from backend.adapters.compact_demo import read_plan
+
+        return read_plan(directory, dataset)
 
 
 class XeroDatasetLoader(TableLoader):
@@ -982,6 +996,10 @@ class RoutingDatasetLoader:
         """演示数据导入的清单来源 (具体方法, 不在 DatasetLoader 协议里, 需求 R269): 所选载入器已核对的补造目录;
         载入器没有这个方法 (Numbat 的 CSV 载入器) 时为 None."""
         method: Callable[[str], Supplements | None] | None = getattr(self.pick(dataset), "supplement", None)
+        return method(dataset) if method is not None else None
+
+    def demo_plan(self, dataset: str) -> DemoPlan | None:
+        method: Callable[[str], DemoPlan | None] | None = getattr(self.pick(dataset), "demo_plan", None)
         return method(dataset) if method is not None else None
 
     def has_supplement(self, dataset: str) -> bool:

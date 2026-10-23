@@ -1,0 +1,95 @@
+{
+  "conclusion": "Not a misstatement: AJE-C01 debited Sales revenue (400) by AUD 12,345.67, fully reversing the overstatement, with a residual of AUD 0; no misstatement remains in Revenue. AJE-C01 also credited Trade receivables (120) by AUD 12,345.67, appropriately reversing the receivable recorded with the premature revenue.",
+  "reasoning_chain": [
+    {
+      "kind": "fact",
+      "text": "AJE-C01-1 debits Sales revenue (400) by AUD 12,345.67 to reverse revenue before customer acceptance.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-C01-1",
+          "locator": "account_code, account_name, debit_cents, entry_no, description",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "fact",
+      "text": "AJE-C01-2 credits Trade receivables (120) by AUD 12,345.67 as the other side of the adjustment.",
+      "evidence": [
+        {
+          "type": "voucher",
+          "source_type": "journal_entry",
+          "source_id": "AJE-C01-2",
+          "locator": "account_code, account_name, credit_cents, entry_no, description",
+          "page": null,
+          "reliability": "internal_original"
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "standard",
+      "text": "ASA450-P07 requires the auditor to perform additional audit procedures to determine whether misstatements remain after management corrects detected misstatements at the auditor’s request.",
+      "evidence": [
+        {
+          "type": "standard",
+          "source_type": "standard",
+          "source_id": "ASA450-P07",
+          "locator": "para 7",
+          "page": null,
+          "reliability": null
+        }
+      ],
+      "from_steps": []
+    },
+    {
+      "kind": "inference",
+      "text": "The supplied matching result reports a corrected amount of AUD 12,345.67 and a residual of AUD 0. The debit to Sales revenue removes the full overstatement, and the credit to Trade receivables is appropriate because it reverses the receivable associated with the premature revenue; no misstatement remains.",
+      "evidence": [],
+      "from_steps": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-C01-1",
+      "locator": "account_code, account_name, debit_cents, entry_no, description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "voucher",
+      "source_type": "journal_entry",
+      "source_id": "AJE-C01-2",
+      "locator": "account_code, account_name, credit_cents, entry_no, description",
+      "page": null,
+      "reliability": "internal_original"
+    },
+    {
+      "type": "standard",
+      "source_type": "standard",
+      "source_id": "ASA450-P07",
+      "locator": "para 7",
+      "page": null,
+      "reliability": null
+    }
+  ],
+  "counter_argument": "If the supplied residual were greater than AUD 0, or the debit to Sales revenue were less than AUD 12,345.67, a misstatement would remain; the supplied residual is AUD 0 and the adjustment debits the full amount.",
+  "proposed_action": "accept",
+  "verdict": "not_misstatement",
+  "misstatement_draft": null,
+  "self_confidence": 0.99,
+  "fully_corrected": true,
+  "other_accounts": [
+    "120"
+  ]
+}

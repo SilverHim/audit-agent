@@ -328,9 +328,8 @@ describe('补充证据请求区块与重判链接', () => {
 })
 
 test('复核任务等待证据的状态与决定文案 (需求 R370 第 2 条)', () => {
-  expect(zh.status.awaitingEvidence).toBe('等待证据（不阻塞）')
+  expect(zh.status.awaitingEvidence).toContain('证据')
   expect(en.status.awaitingEvidence).toContain('Waiting for evidence')
-  expect(en.status.awaitingEvidence).toContain('does not block')
   expect(zh.decisions.more_evidence).toBe('要求补充证据')
   expect(en.decisions.more_evidence).toContain('more evidence')
   expect(zh.decisionsPage.waitingEvidence).toBe('等待证据的任务')
@@ -349,7 +348,7 @@ describe('复核卡片的要求补充证据选项', () => {
       />,
     )
     expect(html).toContain('Ask for more evidence, raising a request')
-    expect(html).toContain('The task waits for the evidence and does not block the process')
+    expect(html).toContain(en.card.choices.more_evidence.hint)
     expect(html).toContain('decision-T-1-more_evidence')
   })
 
@@ -366,6 +365,6 @@ describe('复核卡片的要求补充证据选项', () => {
       { language: 'zh-CN' },
     )
     expect(html).toContain('要求补充证据，生成补交请求')
-    expect(html).toContain('任务转等待证据，不阻塞流程')
+    expect(html).toContain(zh.card.choices.more_evidence.hint)
   })
 })

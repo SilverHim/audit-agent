@@ -1,0 +1,11 @@
+id,entry_no,posting_date,created_at,created_by,approved_by,approved_at,account_code,debit_cents,credit_cents,description,source_doc,is_adjustment
+CJ-001-1,CJ-001,2026-06-10,2026-06-10T05:00:00Z,staff-a,manager-b,2026-06-10T06:00:00Z,120,3456789,0,Goods sold and accepted,INV-C01,False
+CJ-001-2,CJ-001,2026-06-10,2026-06-10T05:00:00Z,staff-a,manager-b,2026-06-10T06:00:00Z,400,0,3456789,Goods sold and accepted,INV-C01,False
+CJ-002-1,CJ-002,2026-06-29,2026-06-29T05:00:00Z,staff-a,manager-b,2026-06-29T06:00:00Z,120,1234567,0,Goods invoiced before customer acceptance,INV-C02,False
+CJ-002-2,CJ-002,2026-06-29,2026-06-29T05:00:00Z,staff-a,manager-b,2026-06-29T06:00:00Z,400,0,1234567,Goods invoiced before customer acceptance,INV-C02,False
+CJ-003-1,CJ-003,2026-05-19,2026-05-19T05:00:00Z,staff-a,manager-b,2026-05-19T06:00:00Z,500,765432,0,Operating costs,EXP-C01,False
+CJ-003-2,CJ-003,2026-05-19,2026-05-19T05:00:00Z,staff-a,manager-b,2026-05-19T06:00:00Z,100,0,765432,Operating costs,EXP-C01,False
+CJ-004-1,CJ-004,2026-06-12,2026-06-12T05:00:00Z,staff-a,manager-b,2026-06-12T06:00:00Z,100,3456789,0,Customer receipt,INV-C01,False
+CJ-004-2,CJ-004,2026-06-12,2026-06-12T05:00:00Z,staff-a,manager-b,2026-06-12T06:00:00Z,120,0,3456789,Customer receipt,INV-C01,False
+CJ-005-1,CJ-005,2026-06-18,2026-06-18T05:00:00Z,director-a,director-a,2026-06-18T06:00:00Z,500,55555,0,Approved administration expense,EXP-C02,False
+CJ-005-2,CJ-005,2026-06-18,2026-06-18T05:00:00Z,director-a,director-a,2026-06-18T06:00:00Z,100,0,55555,Approved administration expense,EXP-C02,False

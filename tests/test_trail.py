@@ -491,7 +491,7 @@ async def test_attempt_writes_started_before_the_agent_and_finished_after_commit
     assert run_keys(trail) == [started, ended]
     assert trail.at_write == {started: (False, True), ended: (True, True)}
     # PLN-07 planned → completed 的 transition 在结束留痕之后
-    order = [(e.kind, e.payload.get("id")) for e in trail.entries]
+    order = [(e.kind, e.payload.get("id")) for e in trail.entries if e.kind is not TrailKind.execution]
     assert order == [(TrailKind.run, None), (TrailKind.run, None), (TrailKind.transition, "PLN-07")]
 
 

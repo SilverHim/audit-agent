@@ -459,6 +459,156 @@ export type Annotation = {
 export type Assertion = 'Occurrence' | 'Completeness' | 'Accuracy' | 'Cutoff' | 'Existence' | 'Valuation' | 'Rights';
 
 /**
+ * AssistantExecuteIn
+ */
+export type AssistantExecuteIn = {
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
+ * AssistantPlan
+ */
+export type AssistantPlan = {
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Action
+     */
+    action: 'evidence_unavailable' | 'defer' | 'resume' | 'confirm_reviews' | 'recognize_misstatements' | 'rerun_stale';
+    /**
+     * Targets
+     */
+    targets: Array<AssistantTarget>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Instruction
+     */
+    instruction: string;
+    /**
+     * Proposed For
+     */
+    proposed_for: string;
+    /**
+     * Created At
+     */
+    created_at: string;
+    /**
+     * Completed At
+     */
+    completed_at?: string | null;
+    /**
+     * Status
+     */
+    status?: 'proposed' | 'completed' | 'cancelled';
+};
+
+/**
+ * AssistantPlanIn
+ */
+export type AssistantPlanIn = {
+    /**
+     * Action
+     */
+    action: 'evidence_unavailable' | 'defer' | 'resume' | 'confirm_reviews' | 'recognize_misstatements' | 'rerun_stale';
+    /**
+     * Target Kind
+     */
+    target_kind?: 'evidence_request' | 'review_task' | 'data_request' | 'procedure';
+    /**
+     * Target Ids
+     */
+    target_ids?: Array<string>;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+};
+
+/**
+ * AssistantReceipt
+ */
+export type AssistantReceipt = {
+    /**
+     * Plan Id
+     */
+    plan_id: string;
+    /**
+     * Action
+     */
+    action: 'evidence_unavailable' | 'defer' | 'resume' | 'confirm_reviews' | 'recognize_misstatements' | 'rerun_stale';
+    /**
+     * Target Ids
+     */
+    target_ids: Array<string>;
+    /**
+     * Authorized By
+     */
+    authorized_by: string;
+    /**
+     * Executed By
+     */
+    executed_by?: 'audit_assistant';
+    /**
+     * Completed At
+     */
+    completed_at: string;
+    /**
+     * Reason
+     */
+    reason?: string | null;
+    /**
+     * Status
+     */
+    status?: 'completed';
+};
+
+/**
+ * AssistantTarget
+ */
+export type AssistantTarget = {
+    /**
+     * Kind
+     */
+    kind: 'evidence_request' | 'review_task' | 'data_request' | 'procedure';
+    /**
+     * Id
+     */
+    id: string;
+    /**
+     * Version
+     */
+    version?: number | null;
+    /**
+     * Fingerprint
+     */
+    fingerprint: string;
+    /**
+     * Label
+     */
+    label: string;
+    /**
+     * Conclusion
+     */
+    conclusion?: string | null;
+    /**
+     * Suggestion
+     */
+    suggestion?: string | null;
+    /**
+     * Procedure Id
+     */
+    procedure_id?: string | null;
+};
+
+/**
  * AuditException
  *
  * 例外: 规则程序查出的异常, 如跨期发票, 余额不符. 规格书中叫 Exception, 改名避开 Python 内置名.
@@ -2586,6 +2736,10 @@ export type EngagementOverview = {
      * Client Name
      */
     client_name: string;
+    /**
+     * Model Mode
+     */
+    model_mode?: 'mock' | 'live';
     /**
      * Running
      */
@@ -6286,7 +6440,7 @@ export type TrailEntry = {
  *
  * 留痕类型.
  */
-export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'archive' | 'run';
+export type TrailKind = 'llm_call' | 'external_call' | 'decision' | 'transition' | 'deferral' | 'conversation' | 'conversation_summary' | 'data' | 'presentation' | 'archive' | 'assistant_action' | 'execution' | 'run';
 
 /**
  * UncorrectedItem
@@ -7138,6 +7292,136 @@ export type HealthHealthResponses = {
 };
 
 export type HealthHealthResponse = HealthHealthResponses[keyof HealthHealthResponses];
+
+export type AssistantActionsListAssistantPlansData = {
+    body?: never;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/assistant-actions';
+};
+
+export type AssistantActionsListAssistantPlansErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AssistantActionsListAssistantPlansError = AssistantActionsListAssistantPlansErrors[keyof AssistantActionsListAssistantPlansErrors];
+
+export type AssistantActionsListAssistantPlansResponses = {
+    /**
+     * Response Assistant Actions-List Assistant Plans
+     *
+     * Successful Response
+     */
+    200: Array<AssistantPlan>;
+};
+
+export type AssistantActionsListAssistantPlansResponse = AssistantActionsListAssistantPlansResponses[keyof AssistantActionsListAssistantPlansResponses];
+
+export type AssistantActionsProposeAssistantActionData = {
+    body: AssistantPlanIn;
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/assistant-actions';
+};
+
+export type AssistantActionsProposeAssistantActionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AssistantActionsProposeAssistantActionError = AssistantActionsProposeAssistantActionErrors[keyof AssistantActionsProposeAssistantActionErrors];
+
+export type AssistantActionsProposeAssistantActionResponses = {
+    /**
+     * Successful Response
+     */
+    200: AssistantPlan;
+};
+
+export type AssistantActionsProposeAssistantActionResponse = AssistantActionsProposeAssistantActionResponses[keyof AssistantActionsProposeAssistantActionResponses];
+
+export type AssistantActionsExecuteAssistantActionData = {
+    body: AssistantExecuteIn;
+    path: {
+        /**
+         * Plan Id
+         */
+        plan_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/assistant-actions/{plan_id}/execute';
+};
+
+export type AssistantActionsExecuteAssistantActionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AssistantActionsExecuteAssistantActionError = AssistantActionsExecuteAssistantActionErrors[keyof AssistantActionsExecuteAssistantActionErrors];
+
+export type AssistantActionsExecuteAssistantActionResponses = {
+    /**
+     * Successful Response
+     */
+    200: AssistantReceipt;
+};
+
+export type AssistantActionsExecuteAssistantActionResponse = AssistantActionsExecuteAssistantActionResponses[keyof AssistantActionsExecuteAssistantActionResponses];
+
+export type AssistantActionsCancelAssistantActionData = {
+    body?: never;
+    path: {
+        /**
+         * Plan Id
+         */
+        plan_id: string;
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: never;
+    url: '/api/v1/engagements/{eid}/assistant-actions/{plan_id}/cancel';
+};
+
+export type AssistantActionsCancelAssistantActionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type AssistantActionsCancelAssistantActionError = AssistantActionsCancelAssistantActionErrors[keyof AssistantActionsCancelAssistantActionErrors];
+
+export type AssistantActionsCancelAssistantActionResponses = {
+    /**
+     * Successful Response
+     */
+    204: void;
+};
+
+export type AssistantActionsCancelAssistantActionResponse = AssistantActionsCancelAssistantActionResponses[keyof AssistantActionsCancelAssistantActionResponses];
 
 export type AuthLoginData = {
     body: BodyAuthLogin;
@@ -8788,6 +9072,45 @@ export type EvidenceRegisterManagementRepresentationResponses = {
 };
 
 export type EvidenceRegisterManagementRepresentationResponse = EvidenceRegisterManagementRepresentationResponses[keyof EvidenceRegisterManagementRepresentationResponses];
+
+export type ExecutionStreamExecutionData = {
+    body?: never;
+    headers?: {
+        /**
+         * Last-Event-Id
+         */
+        'last-event-id'?: string | null;
+    };
+    path: {
+        /**
+         * Eid
+         */
+        eid: string;
+    };
+    query?: {
+        /**
+         * After
+         */
+        after?: string | null;
+    };
+    url: '/api/v1/engagements/{eid}/execution/stream';
+};
+
+export type ExecutionStreamExecutionErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ExecutionStreamExecutionError = ExecutionStreamExecutionErrors[keyof ExecutionStreamExecutionErrors];
+
+export type ExecutionStreamExecutionResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type DataStartImportData = {
     body: BodyDataStartImport;

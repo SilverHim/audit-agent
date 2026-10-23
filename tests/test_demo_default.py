@@ -1,4 +1,5 @@
-"""演示默认数据集 (R79): 配置项 DEMO_DATASET 缺省为 xero/20261017-q1, 用它建项目 (不连库: 假存储, 真实载入器读文件,
+"""演示默认数据集 (R79): 配置项 DEMO_DATASET 缺省为 demo-compact; 原 Xero 数据集继续回归.
+用它建项目 (不连库: 假存储, 真实载入器读文件,
 按项目数据集定位的登记 mock) 跑到 ACC-01; 种子审计师名为 Jordan Ellis. 需要本地 Xero 快照的用例在没有时跳过."""
 
 from collections.abc import Callable
@@ -70,9 +71,9 @@ def demo_runner(
     return GraphRunner(app, deps)
 
 
-def test_demo_dataset_defaults_to_xero() -> None:
-    """验收 1: 配置项缺省为 xero/20261017-q1."""
-    assert Settings.model_fields["DEMO_DATASET"].default == DEFAULT
+def test_demo_dataset_defaults_to_compact() -> None:
+    """精简演示成为缺省, 原数据集仍可选."""
+    assert Settings.model_fields["DEMO_DATASET"].default == "demo-compact"
 
 
 DEMO_BODY = {"period_start": "2024-01-01", "period_end": "2024-12-31", "dataset": "demo"}  # 与任何数据集都无关的期间
@@ -128,12 +129,12 @@ async def test_demo_created_in_chinese(fixed: Literal["en"] | None, generated: L
 
 
 @needs_snapshot
-async def test_default_dataset_runs_to_acc01() -> None:
+async def test_xero_dataset_runs_to_acc01() -> None:
     """验收 5: GET /datasets 的默认行带出期间, 按它建项目: 总览客户名为 Demo Company (AU) Pty Ltd; ACC-04 的三项登记
     核对都通过, external_call 2 行; 停在 ACC-01 闸门."""
     runner = demo_runner()
     async with api_client(runner) as client:
-        [default] = [d for d in (await client.get("/api/v1/datasets")).json() if d["default"]]
+        [default] = [d for d in (await client.get("/api/v1/datasets")).json() if d["dataset"] == DEFAULT]
         assert (default["dataset"], default["period_start"], default["period_end"]) == (
             DEFAULT,
             "2026-07-01",

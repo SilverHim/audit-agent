@@ -357,7 +357,7 @@ def trail_rows(s: Started) -> list[dict[str, Any]]:
     比较时置空."""
     trail = s.runner.deps.trail
     assert isinstance(trail, FakeTrail)
-    rows = [e.model_dump() for e in trail.entries]
+    rows = [e.model_dump() for e in trail.entries if e.kind is not TrailKind.execution]
     for row in rows:
         if row["kind"] is TrailKind.data:
             row["created_at"] = row["idempotency_key"] = None

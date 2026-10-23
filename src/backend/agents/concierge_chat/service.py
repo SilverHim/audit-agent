@@ -53,6 +53,7 @@ from backend.agents.concierge_chat.memory import (
 )
 from backend.agents.concierge_chat.rule_model import RuleChatSource
 from backend.agents.concierge_chat.tools import StateReader, ToolBox, ToolEnv
+from backend.contracts.assistant_actions import AssistantPlan, AssistantPlanIn
 from backend.contracts.conversation import (
     AssistantTurn,
     ChatMessage,
@@ -68,6 +69,7 @@ from backend.contracts.ports import ChatModel, ChatModelSource, XeroConnections
 from backend.contracts.views import EngagementOverview
 from backend.core.config import Settings
 from backend.core.security import SecretKeyError
+from backend.services.assistant_actions import AssistantActions, direct_instruction
 from backend.services.llm_settings import LlmSettingsService
 from backend.services.procedure_library import prompt_env
 
@@ -251,6 +253,7 @@ class ConciergeChat:
         self.turns: set[ChatTurn] = set()  # 进行中的各轮, shutdown 时取消
         self.writes: set[asyncio.Task[Any]] = set()  # 写 conversation 留痕的独立任务, shutdown 时等它们写完
         self.persisting: dict[str, asyncio.Task[Any]] = {}  # 项目 -> 最近一轮还在写的留痕; 下一轮读历史前等它
+        self.actions: AssistantActions | None = None
         self.xero: XeroConnections | None = None  # Xero 连接记录, 组装根在建好 XeroLink 后接上 (待办的组织信息核对)
 
     async def history(self, eid: str) -> list[ConversationTurn]:
@@ -385,6 +388,9 @@ class ConciergeChat:
         previous = self.persisting.get(eid)
         if previous is not None and not previous.done():  # 上一轮的留痕还在写 (如中断后立即追问): 等它进历史
             await asyncio.wait([previous])
+        direct = direct_instruction(question.question)
+        if direct is not None and self.actions is not None:
+            return await self._direct_action(turn, eid, user_id, question, direct.body, direct.expected_count)
         model = await self.source.current()
         overview = await self.state.overview(eid)
         # 回答语言取项目的工作语言 (需求 R342); 提问带的 lang 是界面语言, 只管工具提示 (见 _converse)
@@ -415,6 +421,58 @@ class ConciergeChat:
         turn.emit("citations", {"citations": [c.model_dump(mode="json") for c in citations]})
         turn.emit("done", {"trail_id": trail_id})
         return ConciergeAnswer(answer=answer, citations=citations, trail_id=trail_id)
+
+    async def _direct_action(
+        self,
+        turn: ChatTurn,
+        eid: str,
+        user_id: str,
+        question: ConciergeQuestion,
+        body: AssistantPlanIn,
+        count: int | None,
+    ) -> ConciergeAnswer:
+        """明确的完整指令可直接授权, 范围数量不符时仅提出方案. 后台执行不随聊天连接取消."""
+        assert self.actions is not None
+        turn.answer_lang = await self._working_language(eid)
+        plan = await self.actions.propose(eid, user_id, body, question.question)
+        turn.emit("action", {"plan": plan.model_dump(mode="json")})
+        if count is not None and count != len(plan.targets):
+            answer = (
+                (
+                    f"当前符合条件的补充证据请求为 {len(plan.targets)} 项, 与指令中的 {count} 项不一致。"
+                    "已生成待核对方案, 尚未执行。"
+                )
+                if turn.answer_lang == "zh"
+                else (
+                    f"There are {len(plan.targets)} eligible evidence requests, rather than {count}. "
+                    "The proposal is ready for review and has not been executed."
+                )
+            )
+        else:
+            turn.emit(
+                "tool", {"label": "执行已授权的批量操作" if question.lang == "zh" else "Executing the authorised batch"}
+            )
+            receipt = await self.actions.execute(eid, plan.id, user_id)
+            answer = (
+                (
+                    f"已按授权将 {len(receipt.target_ids)} 项补充证据请求标记为无法取得。"
+                    "已记录对应范围限制并重新打开相关复核。其他事项保持原状态。"
+                    "处理明细已记录在操作回执中。"
+                )
+                if turn.answer_lang == "zh"
+                else (
+                    f"Marked {len(receipt.target_ids)} evidence requests as unavailable, "
+                    "recorded the scope limitations and reopened the related reviews. "
+                    "Other items are unchanged. The action receipt lists each affected request."
+                )
+            )
+        turn.parts.append(answer)
+        turn.emit("delta", {"text": answer})
+        turn.record = self._persist(eid, self._record_turn(turn, eid, user_id, question, answer, [], aborted=False))
+        trail_id = cast(str, await asyncio.shield(turn.record))
+        turn.emit("citations", {"citations": []})
+        turn.emit("done", {"trail_id": trail_id})
+        return ConciergeAnswer(answer=answer, citations=[], trail_id=trail_id)
 
     def system_prompt(self, overview: EngagementOverview, answer_lang: Lang, summary: str) -> str:
         """系统提示词; answer_lang 为回答语言 (项目的工作语言), 写在 "Language:" 一行与末尾的语言要求里."""
@@ -452,11 +510,26 @@ class ConciergeChat:
             turn.count(result)
             await self._record_llm(eid, sent, new, result, "conversation", step, choice)
 
+        async def propose(body: AssistantPlanIn) -> AssistantPlan:
+            if self.actions is None:
+                raise ConversationFailed("CONVERSATION_FAILED", "操作方案服务尚未配置")
+            plan = await self.actions.propose(eid, turn.user_id, body, question.question)
+            turn.emit("action", {"plan": plan.model_dump(mode="json")})
+            return plan
+
         limits = self.limits
         ctx = ChatContext(
             model=model,
             tools=self.tools,
-            env=ToolEnv(eid, self.deps, self.state, limits.tool_result_chars, self.xero, turn.currency),
+            env=ToolEnv(
+                eid,
+                self.deps,
+                self.state,
+                limits.tool_result_chars,
+                xero=self.xero,
+                currency=turn.currency,
+                propose=propose,
+            ),
             ui_lang=question.lang,  # 界面语言: 工具提示文字按它, 回答语言另在系统提示里
             max_steps=limits.max_steps,
             max_tokens=limits.max_tokens,

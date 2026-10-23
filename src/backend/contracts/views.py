@@ -130,6 +130,7 @@ class EngagementOverview(Model):
 
     engagement: Engagement  # 项目
     client_name: str  # 客户画像的 legal_name, 供页面显示
+    model_mode: Literal["mock", "live"] = "mock"  # 当前模型调用模式, 演示输出与真实 API 明确区分
     running: bool  # 后台是否正在推进
     run_error: str | None  # 最近一次后台执行的异常, 成功推进后清空; Store 领先检查点时为 RESUME_REQUIRED 提示;
     # 功能集与项目冻结的不同时为 FEATURES_MISMATCH (runner.features_mismatch)

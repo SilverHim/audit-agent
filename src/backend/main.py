@@ -42,6 +42,8 @@ from backend.persistence.stores import (
     XeroDatasetLoader,
 )
 from backend.persistence.xero_connections import PostgresXeroConnectionStore
+from backend.services.activities import ActivityBoard
+from backend.services.assistant_actions import AssistantActions
 from backend.services.audit_trail import PostgresAuditTrail
 from backend.services.autonomy_policy import AutonomyPolicy
 from backend.services.currency import engagement_currency
@@ -101,6 +103,7 @@ def build_deps(settings: Settings) -> AgentDeps:
         queue=ReviewQueue(library),
         library=library,
         trail=trail,
+        activities=ActivityBoard(trail=trail),
         # 新客户的 ASIC 取上传的 ASIC 摘录的最新抽取结果 (需求 R290)
         registry=CompositeRegistrySource(
             engagement_store,
@@ -163,9 +166,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.runner = GraphRunner(graph, deps, llm_settings.versions)
             app.state.query = GraphStateQuery(graph, deps, app.state.runner)
             app.state.decisions = GraphDecisionSubmit(graph, deps, app.state.runner)
+            app.state.assistant_actions = AssistantActions(deps, app.state.decisions)
             app.state.concierge = ConciergeChat(
                 deps, app.state.query, make_chat_source(settings, llm_settings), ChatLimits.from_settings(settings)
             )
+            app.state.concierge.actions = app.state.assistant_actions
             # Xero 网页连接 (需求 R279): 概览的 sources.xero 读连接表, 连接, 同步与断开经 XeroLink
             xero_store = PostgresXeroConnectionStore(engine)
             # 演示数据导入 (需求 R269) 的清单按数据集取补造目录
@@ -179,8 +184,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 # Stop jobs before closing their checkpoint connections, including startup failures.
                 await app.state.concierge.shutdown()
+                await app.state.assistant_actions.shutdown()
                 await app.state.data_service.shutdown()
                 await app.state.runner.shutdown()
+                await deps.activities.settle()
     finally:
         await engine.dispose()
 
